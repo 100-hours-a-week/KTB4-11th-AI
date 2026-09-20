@@ -27,7 +27,7 @@ shared datastores rather than through each other.
 
 | Module | Kind | Trigger | Depends on |
 |---|---|---|---|
-| `news-preprocesser` | service | cron | `core` |
+| `news-preprocessor` | service | cron | `core` |
 | `news-clusterer` | service | FastAPI (HTTP) | `core` |
 | `portfolio-builder` | service | work-queue consumer | `core`, `market-analyzer` |
 | `market-analyzer` | library | imported | `core`, TA-Lib |
@@ -37,7 +37,7 @@ No LLM.
 
 ### Data stores as the contract
 
-- **PostgreSQL** — news data. `news-preprocesser` writes; `news-clusterer` and
+- **PostgreSQL** — news data. `news-preprocessor` writes; `news-clusterer` and
   `portfolio-builder` read.
 - **QuestDB** — market time-series. **None of these four modules writes to it**;
   ingestion is owned outside this repository. These modules read only, over the
@@ -74,9 +74,9 @@ KTB4-11th-AI/
       src/ktb_market_analyzer/__init__.py
       tests/
   services/
-    news-preprocesser/
+    news-preprocessor/
       pyproject.toml
-      src/news_preprocesser/{__init__.py,__main__.py}
+      src/news_preprocessor/{__init__.py,__main__.py}
       tests/
     news-clusterer/
       pyproject.toml
@@ -87,21 +87,21 @@ KTB4-11th-AI/
       src/portfolio_builder/{__init__.py,__main__.py}
       tests/
   docker/
-    news-preprocesser.Dockerfile
+    news-preprocessor.Dockerfile
     news-clusterer.Dockerfile
     portfolio-builder.Dockerfile
   .github/workflows/ci.yaml
   docs/superpowers/specs/
 ```
 
-Distribution names are `ktb-core`, `ktb-market-analyzer`, `news-preprocesser`,
+Distribution names are `ktb-core`, `ktb-market-analyzer`, `news-preprocessor`,
 `news-clusterer`, `portfolio-builder`. Import names use underscores as shown.
 
 ### Why `market-analyzer` is a package, not a folder inside `portfolio-builder`
 
 It has exactly one consumer, so the default answer would be to fold it in. It stays
 separate because TA-Lib is a C extension: as a distinct workspace member, `core`,
-`news-preprocesser` and `news-clusterer` never resolve it, and `uv sync --package
+`news-preprocessor` and `news-clusterer` never resolve it, and `uv sync --package
 news-clusterer` never downloads it. This is dependency isolation, not speculative
 modularity.
 
@@ -178,7 +178,7 @@ against an empty database. No table migrations are written.
 Each service is a skeleton: it loads settings via `ktb_core.settings`, calls
 `setup_logging()`, emits one startup log line, and then does its module-shaped minimum.
 
-- **`news-preprocesser`** — `__main__.py` runs once and exits 0. Cron-shaped; no loop,
+- **`news-preprocessor`** — `__main__.py` runs once and exits 0. Cron-shaped; no loop,
   no scheduler in-process. Scheduling is the platform's job.
 - **`news-clusterer`** — FastAPI app in `app.py` exposing `GET /health` returning
   `{"status": "ok"}`. `__main__.py` runs uvicorn. Deliberately thin: one endpoint.
@@ -200,7 +200,7 @@ Each Dockerfile is multi-stage with a two-step sync for layer caching:
 COPY pyproject.toml uv.lock ./
 COPY packages/core/pyproject.toml packages/core/
 COPY packages/market-analyzer/pyproject.toml packages/market-analyzer/
-COPY services/news-preprocesser/pyproject.toml services/news-preprocesser/
+COPY services/news-preprocessor/pyproject.toml services/news-preprocessor/
 COPY services/news-clusterer/pyproject.toml services/news-clusterer/
 COPY services/portfolio-builder/pyproject.toml services/portfolio-builder/
 RUN uv sync --package <name> --locked --no-dev --no-install-workspace
@@ -278,7 +278,7 @@ smallest check that fails if the scaffold breaks:
 - `market-analyzer` — `import talib` succeeds and one indicator returns a finite value
   on synthetic input. This is the TA-Lib wheel resolution check, and it is the reason
   the test exists.
-- `news-preprocesser`, `portfolio-builder` — entrypoint imports and runs to completion.
+- `news-preprocessor`, `portfolio-builder` — entrypoint imports and runs to completion.
 - `news-clusterer` — `GET /health` returns 200 via `TestClient`.
 
 These prove that a clean checkout survives `uv sync` → `pytest`. Nothing more is
@@ -297,6 +297,6 @@ On a clean checkout:
    near-vacuous check with zero revisions — it confirms Alembic is installed and can
    connect, not that the harness is correctly wired. Acceptable at initialization.
 6. All three service images build.
-7. Each service image runs: preprocesser and builder exit 0; clusterer answers
+7. Each service image runs: preprocessor and builder exit 0; clusterer answers
    `GET /health` with 200.
 8. CI passes on a pull request.
