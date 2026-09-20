@@ -39,8 +39,9 @@ No LLM.
 
 - **PostgreSQL** — news data. `news-preprocessor` writes; `news-clusterer` and
   `portfolio-builder` read.
-- **QuestDB** — market time-series. **None of these four modules writes to it**;
-  ingestion is owned outside this repository. These modules read only, over the
+- **QuestDB** — market time-series. **Neither its data nor its schema is owned by this
+  repository.** Ingestion and schema lifecycle both live outside it; these modules read
+  only, and never create, alter or drop a table. Reads go over the
   Postgres wire protocol (port 8812, plain `psycopg`). The ILP write path and the
   `questdb` client are recorded here because read and write are two distinct paths and
   the distinction is easy to lose — not because anything here uses the write path. No
@@ -57,6 +58,7 @@ KTB4-11th-AI/
   pyproject.toml            # workspace root: [tool.uv.workspace], ruff + pytest config
   uv.lock                   # single lockfile for every member
   .python-version           # 3.13
+  alembic.ini               # at the root: alembic resolves it from CWD
   .gitignore                # .venv/, __pycache__/, *.egg-info, .pytest_cache/, .ruff_cache/
   .dockerignore
   compose.yaml              # postgres + questdb + redis
@@ -67,7 +69,7 @@ KTB4-11th-AI/
         __init__.py
         settings.py
         logging.py
-      migrations/           # Alembic: env.py, alembic.ini, versions/
+      migrations/           # Alembic: env.py, versions/ (script_location target)
       tests/
     market-analyzer/
       pyproject.toml
@@ -121,7 +123,7 @@ Checked against PyPI on 2026-09-20:
 
 | Package | Version | Added at init | Member | Notes |
 |---|---|---|---|---|
-| `ta-lib` | 0.8.0 | yes | `market-analyzer` | Prebuilt wheels cp39–cp314 for manylinux/musllinux (x86_64, aarch64), macOS arm64, Windows. No C library install needed. **No macOS x86_64 wheels** — Intel Mac contributors build from source. **No cp315 wheels**, which is why §4 pins 3.13. |
+| `ta-lib` | 0.8.0 | yes | `market-analyzer` | Prebuilt wheels cp39–cp314 on every platform the team uses: Linux x86_64 and aarch64 (manylinux and musllinux), macOS x86_64 (≥13.0) and arm64 (≥14.0), Windows win32/amd64/arm64. No C library install, no source build, on any developer machine or CI runner. **No cp315 wheels**, which is why §4 pins 3.13. |
 | `psycopg` | 3.3.6 | yes | `core` | Alembic's driver at init; later also QuestDB reads |
 | `questdb` | 5.0.0 | no | — | ILP ingestion. Recorded only; nothing here writes to QuestDB (§2) |
 | `redis` | 8.1.0 | no | — | Dev queue backend; arrives with the `Queue` abstraction (§5) |
@@ -132,8 +134,10 @@ because initialization installs them. They enter `uv.lock` when the module spec 
 needs them lands.
 
 Everything else the workspace needs at init — `pydantic-settings` and `alembic` in
-`core`, `fastapi` and `uvicorn` in `news-clusterer`, `pytest` and `ruff` in the root
-dev group — resolves normally and is pinned by `uv.lock`.
+`core`, `fastapi` and `uvicorn` in `news-clusterer`, `pytest`, `httpx` and `ruff` in
+the root dev group — resolves normally and is pinned by `uv.lock`. `httpx` is there
+because `fastapi.testclient.TestClient` is built on it and raises at import without
+it; it is a test dependency only and must not reach the `news-clusterer` image.
 
 ## 5. `packages/core`
 
@@ -164,11 +168,19 @@ than one implementation and a hypothetical.
 ### Schema ownership
 
 Three services share PostgreSQL, so migrations need a single owner or the schema drifts.
-Alembic lives in `packages/core/migrations/`. Migrations are applied by a dedicated
-job — **never** by a service at boot. Services read and write rows; nothing mutates
-schema as a side effect of starting.
+Migration scripts live in `packages/core/migrations/` (`env.py` and `versions/`), but
+**`alembic.ini` sits at the repository root**, with `script_location` pointing at
+`packages/core/migrations`. Alembic resolves its config from the current working
+directory unless given `-c`, so a root-level `alembic.ini` means `alembic upgrade head`
+works from the repo root — where everyone already is — instead of requiring a `cd` or
+a `-c` flag nobody remembers.
 
-QuestDB tables are declared implicitly at ingest, so there is nothing to migrate there.
+Migrations are applied by a dedicated job — **never** by a service at boot. Services
+read and write rows; nothing mutates schema as a side effect of starting.
+
+QuestDB has no migration story here at all: its schema lifecycle is owned outside this
+repository, along with its ingestion (§2). Nothing in this repo creates, alters or
+drops a QuestDB table.
 
 At initialization the migration harness exists and `alembic upgrade head` succeeds
 against an empty database. No table migrations are written.
@@ -293,7 +305,8 @@ On a clean checkout:
 2. `ruff check .` and `ruff format --check .` pass.
 3. `pytest` passes.
 4. `docker compose up -d` brings postgres, questdb and redis to healthy.
-5. `alembic upgrade head` succeeds against the compose Postgres. Note this is a
+5. `alembic upgrade head`, run from the repository root with no `-c` flag, succeeds
+   against the compose Postgres. Note this is a
    near-vacuous check with zero revisions — it confirms Alembic is installed and can
    connect, not that the harness is correctly wired. Acceptable at initialization.
 6. All three service images build.
