@@ -206,7 +206,7 @@ Checked against PyPI on 2026-09-20:
 
 | Package | Version | Added at init | Where | Notes |
 |---|---|---|---|---|
-| `ta-lib` | 0.8.0 | yes | `market-analyzer` | Prebuilt wheels cp39–cp314 on every platform the team uses: Linux x86_64 and aarch64 (manylinux and musllinux), macOS x86_64 (≥13.0) and arm64 (≥14.0), Windows win32/amd64/arm64. No C library install, no source build, on any developer machine or CI runner. **No cp315 wheels**, which is why `requires-python` excludes 3.15. `numpy` arrives as its dependency and is not declared directly. |
+| `ta-lib` | 0.8.0 | yes | `market-analyzer` | Prebuilt wheels cp39–cp314 on every platform the team uses: Linux x86_64 and aarch64 (manylinux and musllinux), macOS x86_64 (≥13.0) and arm64 (≥14.0), Windows win32/amd64/arm64. No C library install, no source build, on any developer machine or CI runner. **No cp315 wheels**, which is why `requires-python` excludes 3.15. **Superseded by the implementation plan:** `numpy` is declared explicitly in `market-analyzer`, because that package imports it directly. Declaring what you import is the discipline the §10 isolation job exists to enforce. |
 | `uv-build` | 0.12.17 | yes | every member's `[build-system]` | Production/Stable |
 | `alembic` + `psycopg` | — / 3.3.6 | yes | root `migrations` group | `psycopg` is Alembic's driver at init; later also QuestDB reads |
 | `ty` | 0.0.82 | yes | root `dev` group | **Beta, pre-1.0.** Pinned to an exact version — 0.0.x releases can change diagnostics between patches, and an unpinned type checker turns an unrelated CI run red. Bumped deliberately, never by range. |
