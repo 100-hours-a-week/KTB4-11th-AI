@@ -407,11 +407,16 @@ Importing `<mod>.__main__` pulls in the service's whole import graph without exe
 `main()` — the `if __name__ == "__main__"` guard does not fire when the module is
 imported under its real name. An undeclared dependency fails here with `ModuleNotFound`.
 
-The implementation plan must confirm empirically that `uv run --isolated --package`
-scopes the environment to that member alone. If it does not, the fallback is `uv sync
---package "$pkg" --locked --no-dev` followed by `uv run --no-sync`, which is documented
-to rewrite the environment to that subset — at the cost of clobbering the developer's
-`.venv`, which is acceptable on a CI runner.
+**Confirmed empirically, 2026-09-20**, on a throwaway two-member workspace:
+
+- In the shared `--all-packages` environment, a member declaring **zero** dependencies
+  imported `talib` successfully — pulled in by a sibling member. The leak is real, not
+  theoretical.
+- `uv run --isolated --package <member>` on that same member raised `ModuleNotFoundError`
+  for `talib`. `--isolated` does scope to the member alone.
+- `import <mod>.__main__` did not execute `main()`, as expected.
+
+No fallback is needed; the command above is the one to use.
 
 Not asserted: that a service *cannot* import a package it has no business importing
 (e.g. `import talib` failing inside `news-clusterer`). Tests that assert absence break
