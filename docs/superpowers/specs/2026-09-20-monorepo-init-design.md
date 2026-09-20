@@ -22,14 +22,14 @@ module gets its own spec → plan → implementation cycle afterwards.
 
 ## 2. System shape
 
-Four modules, three of them independently deployable services, communicating through
-shared datastores rather than through each other.
+Four modules, three of them independently deployable services. Most coupling runs
+through shared datastores; there is exactly one direct service-to-service call.
 
 | Module | Kind | Trigger | Depends on |
 |---|---|---|---|
 | `news-preprocessor` | service | cron | `core` |
 | `news-clusterer` | service | FastAPI (HTTP) | `core` |
-| `portfolio-builder` | service | work-queue consumer | `core`, `market-analyzer` |
+| `portfolio-builder` | service | work-queue consumer | `core`, `market-analyzer`, `news-clusterer` (HTTP) |
 | `market-analyzer` | library | imported | `core`, TA-Lib |
 
 `market-analyzer` is deterministic — TA-Lib feature extraction driving template selection.
@@ -49,7 +49,24 @@ No LLM.
 - **Work queue** — Amazon SQS in production, Redis in development. Producer is the
   backend service; `portfolio-builder` is the sole consumer.
 
-Services never call one another directly.
+### The one synchronous edge
+
+`portfolio-builder` calls `news-clusterer` over HTTP before building a portfolio. It is
+the only direct service-to-service call in the system, and it is synchronous: a
+portfolio build blocks on the clustering response.
+
+Two consequences to design against, both deferred to the `portfolio-builder` spec but
+recorded now so they are not discovered late:
+
+- **`news-clusterer` becomes a latency and availability dependency of portfolio
+  builds.** Its FastAPI surface is therefore not just `/health` — it carries a real
+  clustering endpoint, and it needs a timeout and a failure policy on the caller side.
+  Deciding what a portfolio build does when clustering is slow or down belongs in that
+  spec; the answer must not be "retry forever inside the queue consumer".
+- **`portfolio-builder` gains `httpx` as a runtime dependency**, not merely a test one.
+  This is separate from the root dev-group `httpx` that `TestClient` needs (§4).
+
+Every other pair of services communicates only through PostgreSQL.
 
 ## 3. Repository layout
 
@@ -195,7 +212,8 @@ Each service is a skeleton: it loads settings via `ktb_core.settings`, calls
 - **`news-clusterer`** — FastAPI app in `app.py` exposing `GET /health` returning
   `{"status": "ok"}`. `__main__.py` runs uvicorn. Deliberately thin: one endpoint.
 - **`portfolio-builder`** — `__main__.py` logs startup and exits 0. It does not poll,
-  because there is no `Queue` abstraction yet by the decision in §5. It declares a
+  because there is no `Queue` abstraction yet by the decision in §5, and it does not
+  call `news-clusterer`, because there is no clustering endpoint yet. It declares a
   dependency on `ktb-market-analyzer` so the workspace edge is real and CI exercises the
   TA-Lib resolution path.
 
@@ -304,7 +322,12 @@ On a clean checkout:
    (`.gitignore` covers `.venv/` and the caches).
 2. `ruff check .` and `ruff format --check .` pass.
 3. `pytest` passes.
-4. `docker compose up -d` brings postgres, questdb and redis to healthy.
+4. `docker compose up -d` brings postgres, questdb and redis to healthy, **and all
+   three hold healthy for at least 30 seconds**. Reaching healthy once is not the bar:
+   a container that passes its first probe and then crash-loops or flaps would satisfy
+   a point-in-time check while being useless to develop against. Verify by sleeping 30s
+   after the first all-healthy reading and re-reading `docker compose ps`, confirming
+   no restart count has incremented.
 5. `alembic upgrade head`, run from the repository root with no `-c` flag, succeeds
    against the compose Postgres. Note this is a
    near-vacuous check with zero revisions — it confirms Alembic is installed and can
