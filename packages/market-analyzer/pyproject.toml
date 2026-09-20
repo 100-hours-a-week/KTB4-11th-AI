@@ -1,0 +1,13 @@
+[project]
+name = "ktb-market-analyzer"
+version = "0.1.0"
+description = "Deterministic TA-Lib feature extraction and template selection"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "ta-lib>=0.8.0",
+    "numpy>=2.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
