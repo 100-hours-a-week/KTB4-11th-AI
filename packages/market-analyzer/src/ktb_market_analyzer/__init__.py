@@ -1,5 +1,5 @@
 """Deterministic TA-Lib feature extraction for 척척개미단."""
 
-from ktb_market_analyzer.indicators import MacdResult, macd, rsi
+from ktb_market_analyzer.indicators import MacdResult, StochasticResult, macd, rsi, stochastic
 
-__all__ = ["MacdResult", "macd", "rsi"]
+__all__ = ["MacdResult", "StochasticResult", "macd", "rsi", "stochastic"]

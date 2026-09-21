@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import talib
 
-__all__ = ["MacdResult", "macd", "rsi"]
+__all__ = ["MacdResult", "StochasticResult", "macd", "rsi", "stochastic"]
 
 
 def rsi(
@@ -36,3 +36,27 @@ def macd(
         close, fastperiod=fastperiod, slowperiod=slowperiod, signalperiod=signalperiod
     )
     return MacdResult(macd=macd_line, signal=signal_line, histogram=histogram)
+
+
+class StochasticResult(NamedTuple):
+    k: npt.NDArray[np.float64]
+    d: npt.NDArray[np.float64]
+
+
+def stochastic(
+    high: npt.NDArray[np.float64],
+    low: npt.NDArray[np.float64],
+    close: npt.NDArray[np.float64],
+    fastk_period: int = 14,
+    slowk_period: int = 3,
+    slowd_period: int = 3,
+) -> StochasticResult:
+    k, d = talib.STOCH(
+        high,
+        low,
+        close,
+        fastk_period=fastk_period,
+        slowk_period=slowk_period,
+        slowd_period=slowd_period,
+    )
+    return StochasticResult(k=k, d=d)
