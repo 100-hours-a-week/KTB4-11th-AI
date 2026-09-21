@@ -13,7 +13,11 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-packages --locked
+      # --group migrations: alembic and sqlalchemy live in that non-default
+      # group, and ty cannot resolve infrastructure/postgres/migrations/env.py
+      # without them. Images are unaffected — they sync with --package --no-dev,
+      # which excludes dependency groups entirely.
+      - run: uv sync --all-packages --locked --group migrations
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run ty check
@@ -77,5 +81,5 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-packages --locked --python 3.14
+      - run: uv sync --all-packages --locked --group migrations --python 3.14
       - run: uv run --python 3.14 pytest
