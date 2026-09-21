@@ -118,10 +118,14 @@ def test_macd_is_deterministic():
     assert np.array_equal(first.histogram, second.histogram, equal_nan=True)
 
 
-def test_macd_histogram_is_macd_minus_signal():
+def test_macd_signal_and_histogram_are_not_swapped():
     close = (100 + np.cumsum(np.random.default_rng(1).normal(0, 1, 120))).astype(np.float64)
+
     r = macd(close)
-    assert np.allclose(r.histogram[40:], r.macd[40:] - r.signal[40:], atol=1e-9)
+
+    valid = ~np.isnan(r.signal)
+    assert np.allclose(r.histogram[valid], r.macd[valid] - r.signal[valid], atol=1e-9)
+    assert np.var(r.signal[valid]) > np.var(r.histogram[valid])
 
 
 def test_stochastic_returns_arrays_matching_input_length():
