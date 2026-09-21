@@ -1,7 +1,15 @@
 import math
 
 import numpy as np
-from ktb_market_analyzer import rsi
+from ktb_market_analyzer import MacdResult, macd, rsi
+
+
+def _close(n: int = 50) -> np.ndarray:
+    return np.linspace(100.0, 120.0, n, dtype=np.float64)
+
+
+def _high_low(close: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    return close + 1.0, close - 1.0
 
 
 def test_rsi_matches_the_input_length():
@@ -66,3 +74,36 @@ def test_rsi_uses_wilder_smoothing_not_a_simple_average():
         simple[i] = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
 
     assert not np.allclose(rsi(close)[14:], simple[14:], atol=1e-6)
+
+
+def test_macd_returns_arrays_matching_input_length():
+    close = _close()
+    result = macd(close)
+
+    assert isinstance(result, MacdResult)
+    assert result.macd.shape == close.shape
+    assert result.signal.shape == close.shape
+    assert result.histogram.shape == close.shape
+
+
+def test_macd_warmup_period_is_nan():
+    close = _close()
+    result = macd(close, fastperiod=12, slowperiod=26, signalperiod=9)
+
+    assert np.isnan(result.macd[:33]).all()
+    assert np.isnan(result.signal[:33]).all()
+    assert np.isnan(result.histogram[:33]).all()
+    assert math.isfinite(result.macd[33])
+    assert math.isfinite(result.signal[33])
+    assert math.isfinite(result.histogram[33])
+
+
+def test_macd_is_deterministic():
+    close = _close()
+
+    first = macd(close)
+    second = macd(close)
+
+    assert np.array_equal(first.macd, second.macd, equal_nan=True)
+    assert np.array_equal(first.signal, second.signal, equal_nan=True)
+    assert np.array_equal(first.histogram, second.histogram, equal_nan=True)
