@@ -368,6 +368,31 @@ Three flag choices carry weight:
   source tree. Copying only the venv into the runtime stage would then yield dangling
   paths. Non-editable makes the venv self-contained and copyable.
 
+## 8a. Image dependencies: exported requirements, not a workspace sync
+
+The workspace keeps one lockfile, which is what makes `uv run pytest` and a single
+`uv sync` work across all five members. Images do **not** consume that lockfile
+directly.
+
+A workspace sync inside an image needs every member's `pyproject.toml` in the build
+context, because `--locked` validates the single lockfile against the whole workspace
+(verified 2026-09-21: removing a sibling manifest fails with "missing a
+`pyproject.toml`"; removing the sibling directory instead fails with "the lockfile
+needs to be updated"). The consequence is that changing any one service's dependencies
+invalidates the cached dependency layer of all three images.
+
+Instead, `uv export --package <svc> --no-dev --no-emit-workspace` writes a hash-pinned
+requirements file per service to `docker/requirements/<svc>.txt`, committed to the
+repository. Each Dockerfile copies only its own file, so its dependency layer depends
+on nothing else and stays cached when a sibling changes (measured 2026-09-21: the layer
+reports `CACHED` after a sibling manifest edit, where the workspace-sync version
+rebuilds). First-party packages are then installed from source with `--no-deps`.
+
+This buys isolation at the cost of a generated artifact that can go stale, so CI's
+`verify-exported-requirements` job re-exports and runs `git diff --exit-code`. Note
+that `uv export` records its own invoking command in the file header, so the check must
+export to the same canonical path or it reports a permanent false difference.
+
 ## 9. Local development
 
 `compose.yaml` runs `postgres`, `questdb` and `redis` with healthchecks and named

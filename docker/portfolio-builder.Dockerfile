@@ -1,20 +1,20 @@
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    VIRTUAL_ENV=/app/.venv
 
 WORKDIR /app
+RUN uv venv "$VIRTUAL_ENV"
 
-COPY pyproject.toml uv.lock ./
-COPY packages/core/pyproject.toml packages/core/
-COPY packages/market-analyzer/pyproject.toml packages/market-analyzer/
-COPY services/news-preprocessor/pyproject.toml services/news-preprocessor/
-COPY services/news-clusterer/pyproject.toml services/news-clusterer/
-COPY services/portfolio-builder/pyproject.toml services/portfolio-builder/
-RUN uv sync --package portfolio-builder --locked --no-dev --no-install-workspace
+COPY docker/requirements/portfolio-builder.txt ./requirements.txt
+RUN uv pip install --require-hashes --requirement requirements.txt
 
-COPY . .
-RUN uv sync --package portfolio-builder --locked --no-dev --no-editable
+COPY pyproject.toml ./
+COPY packages/core packages/core
+COPY packages/market-analyzer packages/market-analyzer
+COPY services/portfolio-builder services/portfolio-builder
+RUN uv pip install --no-deps ./packages/core ./packages/market-analyzer ./services/portfolio-builder
 
 FROM python:3.13-slim-bookworm AS runtime
 
