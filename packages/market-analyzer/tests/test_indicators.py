@@ -1,7 +1,7 @@
 import math
 
 import numpy as np
-from ktb_market_analyzer import MacdResult, macd, rsi
+from ktb_market_analyzer import MacdResult, StochasticResult, macd, rsi, stochastic
 
 
 def _close(n: int = 50) -> np.ndarray:
@@ -107,3 +107,49 @@ def test_macd_is_deterministic():
     assert np.array_equal(first.macd, second.macd, equal_nan=True)
     assert np.array_equal(first.signal, second.signal, equal_nan=True)
     assert np.array_equal(first.histogram, second.histogram, equal_nan=True)
+
+
+def test_stochastic_returns_arrays_matching_input_length():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = stochastic(high, low, close)
+
+    assert isinstance(result, StochasticResult)
+    assert result.k.shape == close.shape
+    assert result.d.shape == close.shape
+
+
+def test_stochastic_warmup_period_is_nan():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = stochastic(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3)
+
+    assert np.isnan(result.k[:17]).all()
+    assert np.isnan(result.d[:17]).all()
+    assert math.isfinite(result.k[17])
+    assert math.isfinite(result.d[17])
+
+
+def test_stochastic_is_bounded_after_warmup():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = stochastic(high, low, close)
+
+    assert np.nanmin(result.k) >= 0.0
+    assert np.nanmax(result.k) <= 100.0
+    assert np.nanmin(result.d) >= 0.0
+    assert np.nanmax(result.d) <= 100.0
+
+
+def test_stochastic_is_deterministic():
+    close = _close()
+    high, low = _high_low(close)
+
+    first = stochastic(high, low, close)
+    second = stochastic(high, low, close)
+
+    assert np.array_equal(first.k, second.k, equal_nan=True)
+    assert np.array_equal(first.d, second.d, equal_nan=True)
