@@ -27,10 +27,53 @@ def test_rsi_is_bounded_and_finite_after_warmup():
     assert 0.0 <= last <= 100.0
 
 
-def test_rsi_is_deterministic():
-    close = np.linspace(100.0, 120.0, 50, dtype=np.float64)
+def _wilder_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
+    """Wilder's RSI, implemented independently of TA-Lib.
 
-    first = rsi(close)
-    second = rsi(close)
+    Exists so the test below checks the FORMULA rather than merely checking
+    that the output is bounded and finite. Bounds-and-finiteness assertions
+    pass against a simple-moving-average variant; this does not.
+    """
+    delta = np.diff(close)
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
 
-    assert np.array_equal(first, second, equal_nan=True)
+    out = np.full(close.shape, np.nan)
+    avg_gain = gain[:period].mean()
+    avg_loss = loss[:period].mean()
+    out[period] = 100.0 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+
+    for i in range(period, len(delta)):
+        avg_gain = (avg_gain * (period - 1) + gain[i]) / period
+        avg_loss = (avg_loss * (period - 1) + loss[i]) / period
+        out[i + 1] = 100.0 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+
+    return out
+
+
+def test_rsi_matches_an_independent_wilder_implementation():
+    rng = np.random.default_rng(42)
+    close = (100 + np.cumsum(rng.normal(0, 1, 60))).astype(np.float64)
+
+    assert np.allclose(rsi(close)[14:], _wilder_rsi(close)[14:], atol=1e-9)
+
+
+def test_rsi_uses_wilder_smoothing_not_a_simple_average():
+    """A simple moving average of gains and losses is the classic wrong RSI.
+
+    It satisfies every other assertion in this file — same length, NaN warmup,
+    bounded, finite — so without this test a smoothing bug would ship.
+    """
+    rng = np.random.default_rng(7)
+    close = (100 + np.cumsum(rng.normal(0, 1, 60))).astype(np.float64)
+
+    delta = np.diff(close)
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+    simple = np.full(close.shape, np.nan)
+    for i in range(14, len(delta) + 1):
+        ag = gain[i - 14 : i].mean()
+        al = loss[i - 14 : i].mean()
+        simple[i] = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+    assert not np.allclose(rsi(close)[14:], simple[14:], atol=1e-6)
