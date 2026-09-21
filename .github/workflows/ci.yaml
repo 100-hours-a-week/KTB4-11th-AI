@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  NEVER_DIALED_POSTGRES_DSN: postgresql://unused@unused.invalid:5432/unused
+  NEVER_DIALED_QUESTDB_DSN: postgresql://unused@unused.invalid:8812/unused
+  NEVER_DIALED_CLUSTERER_URL: http://unused.invalid:8000
+
+jobs:
+  lint-types-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --locked --group migrations
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run ty check
+      - run: uv run pytest
+
+  verify-dependency-isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Each service imports using only its own declared dependencies
+        run: |
+          set -euo pipefail
+          for pkg in news-preprocessor news-clusterer portfolio-builder; do
+            mod="${pkg//-/_}"
+            echo "::group::$pkg"
+            uv run --isolated --package "$pkg" --locked --no-dev \
+              python -c "import ${mod}.__main__"
+            echo "::endgroup::"
+          done
+
+  verify-exported-requirements:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Exported requirements still match uv.lock
+        run: |
+          set -euo pipefail
+          for pkg in news-preprocessor news-clusterer portfolio-builder; do
+            uv export --package "$pkg" --no-dev --no-emit-workspace \
+              --format requirements-txt -o "docker/requirements/${pkg}.txt"
+          done
+          git diff --exit-code -- docker/requirements/
+
+  build-and-run-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build all three images
+        run: |
+          set -euo pipefail
+          for svc in news-preprocessor news-clusterer portfolio-builder; do
+            docker build -f "docker/${svc}.Dockerfile" -t "ktb-${svc}" .
+          done
+      - name: One-shot services exit 0 with networking disabled
+        run: |
+          set -euo pipefail
+          docker run --rm --network none \
+            -e NEWS_PREPROCESSOR_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
+            ktb-news-preprocessor
+          docker run --rm --network none \
+            -e PORTFOLIO_BUILDER_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
+            -e PORTFOLIO_BUILDER_QUESTDB_DSN="$NEVER_DIALED_QUESTDB_DSN" \
+            -e PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL="$NEVER_DIALED_CLUSTERER_URL" \
+            ktb-portfolio-builder
+      - name: Clusterer answers /health
+        run: |
+          set -euo pipefail
+          docker run -d --name clusterer -p 8001:8000 \
+            -e NEWS_CLUSTERER_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
+            ktb-news-clusterer
+          clusterer_became_ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS localhost:8001/health >/dev/null 2>&1; then
+              clusterer_became_ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$clusterer_became_ready" -ne 1 ]; then
+            docker logs clusterer || true
+            docker rm -f clusterer || true
+            exit 1
+          fi
+          curl -fsS localhost:8001/health | grep -q '"status":"ok"'
+          docker rm -f clusterer
+
+  python-314-compatibility:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --locked --group migrations --python 3.14
+      - run: uv run --python 3.14 pytest
