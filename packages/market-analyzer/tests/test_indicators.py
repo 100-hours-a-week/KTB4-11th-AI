@@ -1,7 +1,7 @@
 import math
 
 import numpy as np
-from ktb_market_analyzer import MacdResult, StochasticResult, macd, rsi, stochastic
+from ktb_market_analyzer import MacdResult, StochasticResult, macd, roc, rsi, stochastic
 
 
 def _close(n: int = 50) -> np.ndarray:
@@ -153,3 +153,27 @@ def test_stochastic_is_deterministic():
 
     assert np.array_equal(first.k, second.k, equal_nan=True)
     assert np.array_equal(first.d, second.d, equal_nan=True)
+
+
+def test_roc_returns_array_matching_input_length():
+    close = _close()
+
+    assert roc(close).shape == close.shape
+
+
+def test_roc_warmup_period_is_nan():
+    close = _close()
+
+    result = roc(close, timeperiod=10)
+
+    assert np.isnan(result[:10]).all()
+    assert math.isfinite(result[10])
+
+
+def test_roc_is_deterministic():
+    close = _close()
+
+    first = roc(close)
+    second = roc(close)
+
+    assert np.array_equal(first, second, equal_nan=True)
