@@ -1,7 +1,15 @@
 import math
 
 import numpy as np
-from ktb_market_analyzer import MacdResult, StochasticResult, macd, roc, rsi, stochastic
+from ktb_market_analyzer import (
+    MacdResult,
+    StochasticResult,
+    macd,
+    roc,
+    rsi,
+    stochastic,
+    williams_r,
+)
 
 
 def _close(n: int = 50) -> np.ndarray:
@@ -175,5 +183,42 @@ def test_roc_is_deterministic():
 
     first = roc(close)
     second = roc(close)
+
+    assert np.array_equal(first, second, equal_nan=True)
+
+
+def test_williams_r_returns_array_matching_input_length():
+    close = _close()
+    high, low = _high_low(close)
+
+    assert williams_r(high, low, close).shape == close.shape
+
+
+def test_williams_r_warmup_period_is_nan():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = williams_r(high, low, close, timeperiod=14)
+
+    assert np.isnan(result[:13]).all()
+    assert math.isfinite(result[13])
+
+
+def test_williams_r_is_bounded_after_warmup():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = williams_r(high, low, close)
+
+    assert np.nanmin(result) >= -100.0
+    assert np.nanmax(result) <= 0.0
+
+
+def test_williams_r_is_deterministic():
+    close = _close()
+    high, low = _high_low(close)
+
+    first = williams_r(high, low, close)
+    second = williams_r(high, low, close)
 
     assert np.array_equal(first, second, equal_nan=True)
