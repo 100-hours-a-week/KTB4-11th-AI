@@ -1109,7 +1109,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - postgres-data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ktb -d news"]
       interval: 5s
@@ -1121,13 +1121,14 @@ services:
     image: questdb/questdb:10.0.1
     ports:
       - "8812:8812"   # Postgres wire protocol — how this repo reads QuestDB
-      - "9000:9000"   # HTTP console and health endpoint
+      - "9000:9000"   # HTTP console
+      - "9003:9003"   # min health server (/status)
     volumes:
       - questdb-data:/var/lib/questdb
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9000/ || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9003/status || exit 1"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 12
       start_period: 20s
 
@@ -1145,6 +1146,16 @@ volumes:
   postgres-data:
   questdb-data:
 ```
+
+Two corrections applied during execution, both verified 2026-09-21:
+
+- **Postgres 18 changed the data-directory convention.** The volume mounts at
+  `/var/lib/postgresql`, NOT `/var/lib/postgresql/data`. With the old path the container
+  exits 1 and tells you to use a single mount at the parent.
+- **QuestDB's healthcheck uses port 9003 `/status`, not 9000 `/`.** Port 9000 serves the
+  web console; `curl` connects but the response takes longer than the healthcheck timeout,
+  so the container sits `unhealthy` forever while the database is fine. Port 9003 is
+  QuestDB's dedicated min health server and returns `Status: Healthy` immediately.
 
 The QuestDB tag is load-bearing. Verified 2026-09-21: `questdb/questdb:10.0.1` ships `curl`, and `questdb/questdb:9.1.0` does **not**. Downgrading the tag silently breaks this healthcheck — the container reports unhealthy forever while the database is fine. If the tag must change, re-probe first:
 
