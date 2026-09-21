@@ -1,9 +1,4 @@
-"""Configuration for the news preprocessor.
-
-Settings live in the service, not in ktb-core: a cron job, an HTTP server and
-a queue consumer share almost no configuration, and a shared base class would
-make all three redeploy whenever one of them needs a new field.
-"""
+"""Configuration for the news-preprocessor."""
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

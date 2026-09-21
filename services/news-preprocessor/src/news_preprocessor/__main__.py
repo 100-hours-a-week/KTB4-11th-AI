@@ -1,8 +1,4 @@
-"""Entry point for the news preprocessor.
-
-Runs once and exits. Cron-shaped on purpose: no loop and no in-process
-scheduler, because scheduling is the platform's job.
-"""
+"""Entry point for the news-preprocessor."""
 
 import logging
 

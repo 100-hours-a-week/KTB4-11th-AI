@@ -21,9 +21,9 @@ services:
   questdb:
     image: questdb/questdb:10.0.1
     ports:
-      - "8812:8812"   # Postgres wire protocol — how this repo reads QuestDB
-      - "9000:9000"   # HTTP console
-      - "9003:9003"   # min health server (/status)
+      - "8812:8812"
+      - "9000:9000"
+      - "9003:9003"
     volumes:
       - questdb-data:/var/lib/questdb
     healthcheck:

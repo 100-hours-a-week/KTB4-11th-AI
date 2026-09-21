@@ -1630,6 +1630,11 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  NEVER_DIALED_POSTGRES_DSN: postgresql://unused@unused.invalid:5432/unused
+  NEVER_DIALED_QUESTDB_DSN: postgresql://unused@unused.invalid:8812/unused
+  NEVER_DIALED_CLUSTERER_URL: http://unused.invalid:8000
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -1638,10 +1643,6 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      # --group migrations: alembic and sqlalchemy live in that non-default
-      # group, and ty cannot resolve infrastructure/postgres/migrations/env.py
-      # without them. Images are unaffected — they sync with --package --no-dev,
-      # which excludes dependency groups entirely.
       - run: uv sync --all-packages --locked --group migrations
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -1655,7 +1656,7 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - name: Each service imports with only its declared dependencies
+      - name: Each service imports using only its own declared dependencies
         run: |
           set -euo pipefail
           for pkg in news-preprocessor news-clusterer portfolio-builder; do
@@ -1676,42 +1677,32 @@ jobs:
           for svc in news-preprocessor news-clusterer portfolio-builder; do
             docker build -f "docker/${svc}.Dockerfile" -t "ktb-${svc}" .
           done
-      # NOTE ON THE DSNs BELOW: there are no `db`/`qdb`/`clusterer` service
-      # containers in this workflow, and there deliberately are none. At this
-      # stage every service treats its DSN as an opaque `str` (pydantic
-      # validates the type and nothing dials it), so these values are never
-      # resolved. They use the RFC 2606 `.invalid` TLD, which can never
-      # resolve, so the intent is unmistakable and a real connection attempt
-      # fails loudly instead of silently reaching something.
-      #
-      # WHEN A SERVICE FIRST OPENS A CONNECTION, THIS BREAKS ON PURPOSE.
-      # At that point add `services:` containers to this job and point these
-      # variables at them. Verified 2026-09-21: both one-shot images exit 0
-      # under `docker run --network none`.
-      - name: One-shot services exit 0
+      - name: One-shot services exit 0 with networking disabled
         run: |
           set -euo pipefail
           docker run --rm --network none \
-            -e NEWS_PREPROCESSOR_POSTGRES_DSN=postgresql://unused@unused.invalid:5432/news \
+            -e NEWS_PREPROCESSOR_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
             ktb-news-preprocessor
           docker run --rm --network none \
-            -e PORTFOLIO_BUILDER_POSTGRES_DSN=postgresql://unused@unused.invalid:5432/news \
-            -e PORTFOLIO_BUILDER_QUESTDB_DSN=postgresql://unused@unused.invalid:8812/qdb \
-            -e PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL=http://unused.invalid:8000 \
+            -e PORTFOLIO_BUILDER_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
+            -e PORTFOLIO_BUILDER_QUESTDB_DSN="$NEVER_DIALED_QUESTDB_DSN" \
+            -e PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL="$NEVER_DIALED_CLUSTERER_URL" \
             ktb-portfolio-builder
       - name: Clusterer answers /health
         run: |
           set -euo pipefail
           docker run -d --name clusterer -p 8001:8000 \
-            -e NEWS_CLUSTERER_POSTGRES_DSN=postgresql://unused@unused.invalid:5432/news \
+            -e NEWS_CLUSTERER_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
             ktb-news-clusterer
-          ok=0
+          clusterer_became_ready=0
           for _ in $(seq 1 30); do
-            if curl -fsS localhost:8001/health >/dev/null 2>&1; then ok=1; break; fi
+            if curl -fsS localhost:8001/health >/dev/null 2>&1; then
+              clusterer_became_ready=1
+              break
+            fi
             sleep 1
           done
-          if [ "$ok" -ne 1 ]; then
-            echo "clusterer never became ready; container logs:"
+          if [ "$clusterer_became_ready" -ne 1 ]; then
             docker logs clusterer || true
             docker rm -f clusterer || true
             exit 1

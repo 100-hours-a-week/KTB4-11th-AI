@@ -28,12 +28,6 @@ def test_rsi_is_bounded_and_finite_after_warmup():
 
 
 def _wilder_rsi(close: np.ndarray, period: int = 14) -> np.ndarray:
-    """Wilder's RSI, implemented independently of TA-Lib.
-
-    Exists so the test below checks the FORMULA rather than merely checking
-    that the output is bounded and finite. Bounds-and-finiteness assertions
-    pass against a simple-moving-average variant; this does not.
-    """
     delta = np.diff(close)
     gain = np.where(delta > 0, delta, 0.0)
     loss = np.where(delta < 0, -delta, 0.0)
@@ -59,11 +53,6 @@ def test_rsi_matches_an_independent_wilder_implementation():
 
 
 def test_rsi_uses_wilder_smoothing_not_a_simple_average():
-    """A simple moving average of gains and losses is the classic wrong RSI.
-
-    It satisfies every other assertion in this file — same length, NaN warmup,
-    bounded, finite — so without this test a smoothing bug would ship.
-    """
     rng = np.random.default_rng(7)
     close = (100 + np.cumsum(rng.normal(0, 1, 60))).astype(np.float64)
 

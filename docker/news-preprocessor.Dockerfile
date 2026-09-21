@@ -5,7 +5,6 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# Manifests only: this layer survives every source edit.
 COPY pyproject.toml uv.lock ./
 COPY packages/core/pyproject.toml packages/core/
 COPY packages/market-analyzer/pyproject.toml packages/market-analyzer/
