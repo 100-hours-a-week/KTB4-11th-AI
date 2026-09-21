@@ -11,7 +11,7 @@ env:
   NEVER_DIALED_CLUSTERER_URL: http://unused.invalid:8000
 
 jobs:
-  check:
+  lint-types-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -24,7 +24,7 @@ jobs:
       - run: uv run ty check
       - run: uv run pytest
 
-  isolation:
+  verify-dependency-isolation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -42,7 +42,7 @@ jobs:
             echo "::endgroup::"
           done
 
-  images:
+  build-and-run-images:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -85,7 +85,7 @@ jobs:
           curl -fsS localhost:8001/health | grep -q '"status":"ok"'
           docker rm -f clusterer
 
-  py314:
+  python-314-compatibility:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:

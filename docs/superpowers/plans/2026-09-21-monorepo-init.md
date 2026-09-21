@@ -1618,7 +1618,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–8.
-- Produces: four jobs — `check`, `isolation`, `images`, `py314` (non-blocking).
+- Produces: four jobs — `lint-types-tests`, `verify-dependency-isolation`, `build-and-run-images`, `python-314-compatibility` (non-blocking).
 
 - [ ] **Step 1: Write `.github/workflows/ci.yaml`**
 
@@ -1636,7 +1636,7 @@ env:
   NEVER_DIALED_CLUSTERER_URL: http://unused.invalid:8000
 
 jobs:
-  check:
+  lint-types-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -1649,7 +1649,7 @@ jobs:
       - run: uv run ty check
       - run: uv run pytest
 
-  isolation:
+  verify-dependency-isolation:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -1667,7 +1667,7 @@ jobs:
             echo "::endgroup::"
           done
 
-  images:
+  build-and-run-images:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -1710,7 +1710,7 @@ jobs:
           curl -fsS localhost:8001/health | grep -q '"status":"ok"'
           docker rm -f clusterer
 
-  py314:
+  python-314-compatibility:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
@@ -1724,9 +1724,9 @@ jobs:
 
 Why each job exists:
 
-- **`check`** runs in the shared workspace environment. `--locked` doubles as the lockfile-freshness check: a dependency change without a relocked `uv.lock` fails here.
-- **`isolation`** is the one job `check` cannot replace. In the shared environment every member's dependencies are installed together, so a service importing something it never declared still passes — a sibling pulled it in. Verified on 2026-09-20: a member declaring *zero* dependencies imported `talib` successfully in a shared `--all-packages` venv, and failed with `ModuleNotFoundError` under `uv run --isolated --package`. Importing `<mod>.__main__` walks the service's whole import graph without executing `main()`, because the `if __name__ == "__main__"` guard does not fire under the module's real name.
-- **`images`** is a second, independent isolation proof, since each image is built from a single-package sync — and it is the only job that exercises the runtime stage.
+- **`lint-types-tests`** runs in the shared workspace environment. `--locked` doubles as the lockfile-freshness check: a dependency change without a relocked `uv.lock` fails here.
+- **`verify-dependency-isolation`** is the one job `check` cannot replace. In the shared environment every member's dependencies are installed together, so a service importing something it never declared still passes — a sibling pulled it in. Verified on 2026-09-20: a member declaring *zero* dependencies imported `talib` successfully in a shared `--all-packages` venv, and failed with `ModuleNotFoundError` under `uv run --isolated --package`. Importing `<mod>.__main__` walks the service's whole import graph without executing `main()`, because the `if __name__ == "__main__"` guard does not fire under the module's real name.
+- **`build-and-run-images`** is a second, independent isolation proof, since each image is built from a single-package sync — and it is the only job that exercises the runtime stage.
 
   Its DSNs use the RFC 2606 `.invalid` TLD and the one-shot containers run with
   `--network none`. There are deliberately NO `services:` containers: at this stage
@@ -1735,7 +1735,7 @@ Why each job exists:
   service exists. Verified 2026-09-21 — both one-shot images exit 0 with no network at
   all. **When a service first opens a real connection this job breaks on purpose**,
   which is the signal to add `services:` containers and repoint these variables.
-- **`py314`** is `continue-on-error: true` on purpose. 3.14 is inside the declared `requires-python` range and TA-Lib ships cp314 wheels, so this is real signal about the next upgrade — but 3.14 is not a supported target, and a transitive dependency lagging there must not block a merge. A red `py314` is a ticket, not a rollback.
+- **`python-314-compatibility`** is `continue-on-error: true` on purpose. 3.14 is inside the declared `requires-python` range and TA-Lib ships cp314 wheels, so this is real signal about the next upgrade — but 3.14 is not a supported target, and a transitive dependency lagging there must not block a merge. A red `py314` is a ticket, not a rollback.
 
 No per-service matrix on `check`: four members sharing one lockfile check together in seconds. Add path filtering when CI is measurably slow, not before.
 
@@ -1780,7 +1780,7 @@ git push -u origin HEAD
 
 - [ ] **Step 5: Confirm CI is green**
 
-Expected: `check`, `isolation` and `images` pass. `py314` may fail without blocking; if it does, open an issue rather than changing the pin.
+Expected: `lint-types-tests`, `verify-dependency-isolation` and `build-and-run-images` pass. `python-314-compatibility` may fail without blocking; if it does, open an issue rather than changing the pin.
 
 ---
 
