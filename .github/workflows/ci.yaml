@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run ty check
+      - run: uv run pytest
+
+  isolation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Each service imports with only its declared dependencies
+        run: |
+          set -euo pipefail
+          for pkg in news-preprocessor news-clusterer portfolio-builder; do
+            mod="${pkg//-/_}"
+            echo "::group::$pkg"
+            uv run --isolated --package "$pkg" --locked --no-dev \
+              python -c "import ${mod}.__main__"
+            echo "::endgroup::"
+          done
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build all three images
+        run: |
+          set -euo pipefail
+          for svc in news-preprocessor news-clusterer portfolio-builder; do
+            docker build -f "docker/${svc}.Dockerfile" -t "ktb-${svc}" .
+          done
+      - name: One-shot services exit 0
+        run: |
+          set -euo pipefail
+          docker run --rm -e NEWS_PREPROCESSOR_POSTGRES_DSN=postgresql://ktb:ktb@db/news \
+            ktb-news-preprocessor
+          docker run --rm \
+            -e PORTFOLIO_BUILDER_POSTGRES_DSN=postgresql://ktb:ktb@db/news \
+            -e PORTFOLIO_BUILDER_QUESTDB_DSN=postgresql://admin:quest@qdb:8812/qdb \
+            -e PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL=http://clusterer:8000 \
+            ktb-portfolio-builder
+      - name: Clusterer answers /health
+        run: |
+          set -euo pipefail
+          docker run -d --name clusterer -p 8001:8000 \
+            -e NEWS_CLUSTERER_POSTGRES_DSN=postgresql://ktb:ktb@db/news \
+            ktb-news-clusterer
+          for _ in $(seq 1 30); do
+            curl -fsS localhost:8001/health && break || sleep 1
+          done
+          curl -fsS localhost:8001/health | grep -q '"status":"ok"'
+          docker rm -f clusterer
+
+  py314:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --locked --python 3.14
+      - run: uv run --python 3.14 pytest
