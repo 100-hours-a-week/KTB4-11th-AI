@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+import talib
 from ktb_market_analyzer import (
     MacdResult,
     StochasticResult,
@@ -117,6 +118,12 @@ def test_macd_is_deterministic():
     assert np.array_equal(first.histogram, second.histogram, equal_nan=True)
 
 
+def test_macd_histogram_is_macd_minus_signal():
+    close = (100 + np.cumsum(np.random.default_rng(1).normal(0, 1, 120))).astype(np.float64)
+    r = macd(close)
+    assert np.allclose(r.histogram[40:], r.macd[40:] - r.signal[40:], atol=1e-9)
+
+
 def test_stochastic_returns_arrays_matching_input_length():
     close = _close()
     high, low = _high_low(close)
@@ -161,6 +168,12 @@ def test_stochastic_is_deterministic():
 
     assert np.array_equal(first.k, second.k, equal_nan=True)
     assert np.array_equal(first.d, second.d, equal_nan=True)
+
+
+def test_stochastic_d_is_the_smoothed_k():
+    close = (100 + np.cumsum(np.random.default_rng(2).normal(0, 1, 120))).astype(np.float64)
+    r = stochastic(close + 1.0, close - 1.0, close)
+    assert np.allclose(r.d[30:], talib.SMA(r.k, timeperiod=3)[30:], atol=1e-9)
 
 
 def test_roc_returns_array_matching_input_length():
