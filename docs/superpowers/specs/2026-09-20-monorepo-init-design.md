@@ -281,6 +281,12 @@ working directory unless given `-c`, so a root-level `alembic.ini` means `alembi
 upgrade head` works from the repo root — where everyone already is — instead of
 requiring a `cd` or a `-c` flag nobody remembers.
 
+Note the limit, verified 2026-09-21: from a **subdirectory** the bare command still
+fails with `No 'script_location' key found in configuration`, because alembic resolves
+its config from the current working directory and finds no `alembic.ini` there. From a
+subdirectory you must pass `-c` — and `%(here)s` in `script_location` is exactly what
+makes that work, since a plain relative path would resolve against the caller's CWD.
+
 `alembic` and `psycopg` live in the root `migrations` dependency group (§4), so they
 are available to the migration job and to CI, and reach no service image.
 

@@ -1254,7 +1254,13 @@ script_location = %(here)s/infrastructure/postgres/migrations
 prepend_sys_path = .
 ```
 
-**Keep `%(here)s` as generated.** It resolves relative to `alembic.ini` itself rather than to the current directory, so `alembic upgrade head` works from anywhere in the tree, not only from the root. A plain relative path would be strictly worse.
+**Keep `%(here)s` as generated.** It resolves `script_location` relative to `alembic.ini` itself rather than to the caller's current directory.
+
+Be precise about what this does and does not buy, verified 2026-09-21:
+
+- From the repo root, bare `alembic upgrade head` works (exit 0).
+- From a subdirectory, bare `alembic upgrade head` **fails** with `No 'script_location' key found in configuration` — alembic looks for `alembic.ini` in the CWD and finds none. `%(here)s` cannot help here; it resolves a path *after* the ini is found, it does not help alembic find the ini.
+- From a subdirectory **with `-c`**, e.g. `alembic -c ../alembic.ini upgrade head`, it works (exit 0). This is where `%(here)s` earns its place: a plain relative `script_location` would resolve against the caller's CWD and fail.
 
 The one required edit: **delete the generated `sqlalchemy.url` line.** Verified 2026-09-21 — `alembic init` writes `sqlalchemy.url = driver://user:pass@localhost/dbname` at roughly line 89. The URL comes from the environment instead (Step 3), so no developer's DSN is ever committed and CI can point at its own database.
 
