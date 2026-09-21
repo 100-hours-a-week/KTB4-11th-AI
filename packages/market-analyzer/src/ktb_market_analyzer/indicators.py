@@ -10,7 +10,7 @@ import numpy as np
 import numpy.typing as npt
 import talib
 
-__all__ = ["MacdResult", "StochasticResult", "macd", "rsi", "stochastic"]
+__all__ = ["MacdResult", "StochasticResult", "macd", "roc", "rsi", "stochastic"]
 
 
 def rsi(
@@ -60,3 +60,10 @@ def stochastic(
         slowd_period=slowd_period,
     )
     return StochasticResult(k=k, d=d)
+
+
+def roc(
+    close: npt.NDArray[np.float64],
+    timeperiod: int = 10,
+) -> npt.NDArray[np.float64]:
+    return talib.ROC(close, timeperiod=timeperiod)
