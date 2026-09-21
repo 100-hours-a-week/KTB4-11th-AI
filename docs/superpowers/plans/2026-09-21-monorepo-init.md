@@ -58,7 +58,7 @@ The spec's §4 version table says `numpy` "arrives as [TA-Lib's] dependency and 
 | `services/<svc>/src/<svc>/__main__.py` | `main()`, exported as a console script. |
 | `services/news-clusterer/src/news_clusterer/app.py` | FastAPI app. Separate from `__main__.py` so tests import it without starting uvicorn. |
 | `docker/<svc>.Dockerfile` | Two-step sync build, one per service. |
-| `compose.yaml` | postgres + questdb + redis for local development. |
+| `compose.dev.yaml` | postgres + questdb + redis for local development. |
 | `.github/workflows/ci.yaml` | `check`, `isolation`, `images`, `py314`. |
 
 ---
@@ -1088,13 +1088,13 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ### Task 6: Local datastore stack
 
 **Files:**
-- Create: `compose.yaml`
+- Create: `compose.dev.yaml`
 
 **Interfaces:**
 - Consumes: nothing.
 - Produces: PostgreSQL on `localhost:5432` (user `ktb`, password `ktb`, database `news`), QuestDB with its Postgres wire protocol on `localhost:8812` and HTTP console on `9000`, Redis on `localhost:6379`. Task 7 runs Alembic against the Postgres DSN `postgresql+psycopg://ktb:ktb@localhost:5432/news`.
 
-- [ ] **Step 1: Write `compose.yaml`**
+- [ ] **Step 1: Write `compose.dev.yaml`**
 
 ```yaml
 name: ktb4-ai
@@ -1168,8 +1168,8 @@ Application services are deliberately absent from this file. Adding them means r
 - [ ] **Step 2: Bring the stack up**
 
 ```bash
-docker compose up -d
-docker compose ps
+docker compose -f compose.dev.yaml up -d
+docker compose -f compose.dev.yaml ps
 ```
 Expected: three services, all eventually `healthy`.
 
@@ -1178,11 +1178,11 @@ Expected: three services, all eventually `healthy`.
 Reaching healthy once is not the bar — a container that passes its first probe and then crash-loops would satisfy a point-in-time check.
 
 ```bash
-docker compose ps --format '{{.Service}} {{.Health}}'
-before=$(docker compose ps -q | xargs docker inspect -f '{{.Name}}={{.RestartCount}}')
+docker compose -f compose.dev.yaml ps --format '{{.Service}} {{.Health}}'
+before=$(docker compose -f compose.dev.yaml ps -q | xargs docker inspect -f '{{.Name}}={{.RestartCount}}')
 sleep 30
-docker compose ps --format '{{.Service}} {{.Health}}'
-after=$(docker compose ps -q | xargs docker inspect -f '{{.Name}}={{.RestartCount}}')
+docker compose -f compose.dev.yaml ps --format '{{.Service}} {{.Health}}'
+after=$(docker compose -f compose.dev.yaml ps -q | xargs docker inspect -f '{{.Name}}={{.RestartCount}}')
 [ "$before" = "$after" ] && echo "STABLE" || { echo "FLAPPED: $before -> $after"; exit 1; }
 ```
 Expected: all three `healthy` in both readings, and `STABLE`.
@@ -1190,13 +1190,13 @@ Expected: all three `healthy` in both readings, and `STABLE`.
 - [ ] **Step 4: Verify both datastores answer on the ports this repo actually uses**
 
 ```bash
-docker compose exec -T postgres psql -U ktb -d news -c 'select 1'
+docker compose -f compose.dev.yaml exec -T postgres psql -U ktb -d news -c 'select 1'
 uv run --isolated --with 'psycopg[binary]>=3.3.6' python -c "
 import psycopg
 with psycopg.connect('postgresql://admin:quest@localhost:8812/qdb') as c:
     print('questdb pg-wire ok:', c.execute('select 1').fetchone())
 "
-docker compose exec -T redis redis-cli ping
+docker compose -f compose.dev.yaml exec -T redis redis-cli ping
 ```
 Expected: `1`, `questdb pg-wire ok: (1,)`, `PONG`.
 
@@ -1205,7 +1205,7 @@ The QuestDB check goes over port 8812 with `psycopg`, not over the HTTP console,
 - [ ] **Step 5: Commit**
 
 ```bash
-git add compose.yaml
+git add compose.dev.yaml
 git commit -m "feat: compose stack for postgres, questdb and redis
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
@@ -1391,7 +1391,7 @@ addopts = "-q"
 Run from the repository root, with no `-c` flag — that is the property this layout buys:
 
 ```bash
-docker compose up -d postgres
+docker compose -f compose.dev.yaml up -d postgres
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news \
   uv run --group migrations alembic upgrade head
 echo "exit=$?"
@@ -1440,7 +1440,7 @@ __pycache__/
 .ty_cache/
 docs/
 .github/
-compose.yaml
+compose.dev.yaml
 ```
 
 - [ ] **Step 2: Write `docker/news-preprocessor.Dockerfile`**
@@ -1809,7 +1809,7 @@ Run against a clean checkout, mapping directly to the spec's §12 done criteria.
 - [ ] `uv run pytest` passes
 - [ ] `uv run news-preprocessor` and `uv run portfolio-builder` exit 0; `uv run news-clusterer` serves `GET /health`
 - [ ] The isolation loop passes for all three services
-- [ ] `docker compose up -d` brings all three datastores healthy, and they hold healthy for 30s with no restart-count change
+- [ ] `docker compose -f compose.dev.yaml up -d` brings all three datastores healthy, and they hold healthy for 30s with no restart-count change
 - [ ] `alembic upgrade head` succeeds from the repository root with no `-c` flag
 - [ ] All three images build, and each runs as described in Task 8 Step 6
 - [ ] CI is green, with `py314` permitted to fail

@@ -8,5 +8,5 @@ __pycache__/
 .ty_cache/
 docs/
 .github/
-compose.yaml
+compose.dev.yaml
 .superpowers/

@@ -76,7 +76,7 @@ KTB4-11th-AI/
   .gitignore                # .venv/, __pycache__/, *.egg-info, .pytest_cache/, .ruff_cache/
   .dockerignore
   alembic.ini               # at the root: alembic resolves it from CWD
-  compose.yaml              # postgres + questdb + redis
+  compose.dev.yaml              # postgres + questdb + redis
   infrastructure/
     postgres/
       migrations/           # Alembic env.py + versions/
@@ -395,10 +395,23 @@ export to the same canonical path or it reports a permanent false difference.
 
 ## 9. Local development
 
-`compose.yaml` runs `postgres`, `questdb` and `redis` with healthchecks and named
-volumes. Application services are **not** in compose — they run from the developer's
-shell against those containers. Putting them in compose means rebuilding an image on
-every edit, which reliably ends in nobody using compose.
+`compose.dev.yaml` runs `postgres`, `questdb` and `redis` with healthchecks and named
+volumes. The filename carries the scope: this stack is for development only and is
+never the deployment topology.
+
+That name is also what justifies `redis` being here. Nothing in this repository depends
+on `redis` at initialization — no member declares it, no source imports it, and it is
+absent from `uv.lock`. It is present because the work queue is SQS in production and
+Redis in development (§2), so Redis is a development-environment concern rather than a
+dependency of any service. It belongs to the dev stack, not to the code.
+
+Application services are **not** in this file — they run from the developer's shell
+against these containers. Putting them in compose means rebuilding an image on every
+edit, which reliably ends in nobody using compose.
+
+Because the file is not named `compose.yaml`, it is not picked up by a bare
+`docker compose up`. Every invocation passes `-f compose.dev.yaml`, which is the point:
+there is no ambiguity about which environment you just started.
 
 ## 10. CI
 
@@ -503,11 +516,11 @@ On a clean checkout:
 4. Each of the three services runs via its console script: `uv run news-preprocessor`,
    `uv run portfolio-builder` exit 0; `uv run news-clusterer` serves `GET /health`.
 5. The `isolation` loop passes for all three services.
-6. `docker compose up -d` brings postgres, questdb and redis to healthy, **and all three
+6. `docker compose -f compose.dev.yaml up -d` brings postgres, questdb and redis to healthy, **and all three
    hold healthy for at least 30 seconds**. Reaching healthy once is not the bar: a
    container that passes its first probe and then crash-loops or flaps would satisfy a
    point-in-time check while being useless to develop against. Verify by sleeping 30s
-   after the first all-healthy reading and re-reading `docker compose ps`, confirming no
+   after the first all-healthy reading and re-reading `docker compose -f compose.dev.yaml ps`, confirming no
    restart count has incremented.
 7. `alembic upgrade head`, run from the repository root with no `-c` flag, succeeds
    against the compose Postgres. Note this is a near-vacuous check with zero revisions —
