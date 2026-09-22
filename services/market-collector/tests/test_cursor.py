@@ -1,4 +1,5 @@
 import json
+import threading
 
 from market_collector.cursor import Cursor, CursorStore
 
@@ -75,3 +76,33 @@ def test_a_corrupt_file_is_replaced_rather_than_crashing_the_job(tmp_path):
     store = CursorStore(path)
 
     assert store.get("005930", "1m").pages == 0
+
+
+def test_concurrent_advances_on_different_pairs_do_not_lose_data(tmp_path):
+    path = tmp_path / "c.json"
+    store = CursorStore(path)
+
+    def worker(symbol_idx, timeframe_idx):
+        symbol = f"symbol{symbol_idx}"
+        timeframe = f"tf{timeframe_idx}"
+        store.advance(symbol, timeframe, f"key{symbol_idx}", "20260921104300")
+        store.finish(symbol, timeframe)
+
+    threads = []
+    for i in range(5):
+        for j in range(2):
+            t = threading.Thread(target=worker, args=(i, j))
+            threads.append(t)
+            t.start()
+
+    for t in threads:
+        t.join()
+
+    reloaded = CursorStore(path)
+    for i in range(5):
+        for j in range(2):
+            symbol = f"symbol{i}"
+            timeframe = f"tf{j}"
+            cursor = reloaded.get(symbol, timeframe)
+            assert cursor.done is True, f"Missing or incomplete: {symbol}, {timeframe}"
+            assert cursor.pages == 1, f"Wrong page count for {symbol}, {timeframe}"
