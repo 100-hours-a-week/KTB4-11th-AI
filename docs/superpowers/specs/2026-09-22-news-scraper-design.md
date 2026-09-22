@@ -104,7 +104,9 @@ Measured against that server:
 >   below; `embed()` reads `KTB_EMBEDDING_BASE_URI` itself. `EMBEDDING_BASE_URI_ENV` and the
 >   service's `embedding_base_uri` setting are gone. The `vector(2000)` column is still fixed
 >   by the migration, so changing `KTB_EMBEDDING_DIMENSIONS` still requires a migration; the
->   drift test fails if the two disagree.
+>   drift test fails if the two disagree. The config lives in `ktb_core.embedding.config` and
+>   the client in `ktb_core.embedding.embed`, so `storage.py` can size its column without
+>   depending on the HTTP client; a test in a fresh interpreter enforces that split.
 > - `ArticleBodyParser` is gone. Each publisher's `parser.py` is a `parse_article_body(html)`
 >   function over BeautifulSoup; feeds are parsed with `BeautifulSoup(..., "xml")`. Both were
 >   checked against a billion-laughs payload and an external-entity (XXE) payload: neither
@@ -118,11 +120,10 @@ Measured against that server:
 
 ```
 packages/core/src/ktb_core/
-  embedding.py
-    EMBEDDING_MODEL        KTB_EMBEDDING_MODEL, default "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
-    EMBEDDING_DIMENSIONS   KTB_EMBEDDING_DIMENSIONS, default 2000
-    EMBEDDING_MAX_TOKENS   KTB_EMBEDDING_MAX_TOKENS, default 16384
-    embed(texts, timeout=120) -> list[list[float]]   reads KTB_EMBEDDING_BASE_URI (required)
+  embedding/
+    config.py              KTB_EMBEDDING_MODEL / _DIMENSIONS / _MAX_TOKENS, with defaults (os only)
+    embed.py               embed(texts, timeout=120); reads KTB_EMBEDDING_BASE_URI (required)
+    __init__.py            empty: importing the config must not pull in the client
   utils/http.py            fetch(url, content_type, data=None) — 5 MiB response cap
 
 services/news-preprocessor/src/news_preprocessor/

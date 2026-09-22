@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from dataclasses import asdict
 
 import sqlalchemy as sa
-from ktb_core.embedding import EMBEDDING_DIMENSIONS
+from ktb_core.embedding.config import EMBEDDING_DIMENSIONS
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy.dialects.postgresql import insert
 

@@ -2,7 +2,7 @@ import logging
 import sys
 
 import sqlalchemy as sa
-from ktb_core.embedding import embed
+from ktb_core.embedding.embed import embed
 from ktb_core.logging import setup_logging
 
 from news_preprocessor.embed_pending import embed_pending

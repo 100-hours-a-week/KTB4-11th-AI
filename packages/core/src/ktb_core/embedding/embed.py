@@ -2,11 +2,8 @@ import json
 import math
 import os
 
+from ktb_core.embedding.config import EMBEDDING_DIMENSIONS, EMBEDDING_MAX_TOKENS, EMBEDDING_MODEL
 from ktb_core.utils import fetch
-
-EMBEDDING_MODEL = os.environ.get("KTB_EMBEDDING_MODEL", "mlx-community/Qwen3-Embedding-4B-4bit-DWQ")
-EMBEDDING_DIMENSIONS = int(os.environ.get("KTB_EMBEDDING_DIMENSIONS", "2000"))
-EMBEDDING_MAX_TOKENS = int(os.environ.get("KTB_EMBEDDING_MAX_TOKENS", "16384"))
 
 
 def embed(texts: list[str], timeout: float = 120) -> list[list[float]]:
