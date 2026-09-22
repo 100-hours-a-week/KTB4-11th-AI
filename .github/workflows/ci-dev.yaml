@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v7
 
       # uv를 설치하고 의존성 캐시를 활성화합니다.
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
 
