@@ -86,12 +86,13 @@ jobs:
           for svc in news-preprocessor news-clusterer portfolio-builder; do
             docker build -f "docker/${svc}.Dockerfile" -t "ktb-${svc}" .
           done
-      - name: One-shot services exit 0 with networking disabled
+      - name: Preprocessor image carries every runtime dependency
+        run: |
+          docker run --rm --network none --entrypoint python \
+            ktb-news-preprocessor -c "import news_preprocessor.__main__"
+      - name: Portfolio builder exits 0 with networking disabled
         run: |
           set -euo pipefail
-          docker run --rm --network none \
-            -e NEWS_PREPROCESSOR_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
-            ktb-news-preprocessor
           docker run --rm --network none \
             -e PORTFOLIO_BUILDER_POSTGRES_DSN="$NEVER_DIALED_POSTGRES_DSN" \
             -e PORTFOLIO_BUILDER_QUESTDB_DSN="$NEVER_DIALED_QUESTDB_DSN" \
