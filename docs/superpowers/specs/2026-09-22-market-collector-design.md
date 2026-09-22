@@ -96,6 +96,49 @@ ka10081: dt, open_pric, high_pric, low_pric, cur_prc,
          trde_qty, trde_prica, pred_pre, pred_pre_sig, trde_tern_rt
 ```
 
+### Theme endpoints
+
+Both are `POST /api/dostk/thme`, measured 2026-09-22.
+
+`ka90001` (테마그룹별요청) returns theme groups, 100 per page, **142 in total** across two
+pages. Fields: `thema_grp_cd`, `thema_nm`, `stk_num`, `flu_rt`, `flu_sig`,
+`rising_stk_num`, `fall_stk_num`, `dt_prft_rt`, `main_stk`.
+
+`ka90002` (테마구성종목요청) takes a `thema_grp_cd` and returns that theme's constituents:
+`stk_cd`, `stk_nm`, `cur_prc`, `flu_rt`, `acc_trde_qty`, `sel_bid`, `buy_bid`, `sel_req`,
+`buy_req`, `dt_prft_rt_n`.
+
+`date_tp` accepts at least 3, 5, 10, 20, 60, 90 and 120, and changes `dt_prft_rt`. Results
+are **ordered by that figure**, so which 100 themes land on page one depends on `date_tp`.
+
+Walking all 142 themes gives **898 memberships over 639 unique symbols**, so a symbol
+belongs to several themes (091700 appears in six). Of those 639, **300 are KOSPI-listed**
+and the rest are KOSDAQ or other boards. Within the 300, KRX size classes split 60
+대형주 / 98 중형주 / 142 소형주. Since KRX defines 대형주 as ranks 1–100 by market
+capitalisation and 중형주 as 101–300, and the KOSPI 200 is drawn from those 300, the
+intersection between theme constituents and the KOSPI 200 is roughly **60 to 158
+symbols** — over half the index appears in at least one theme, so theme-to-stock
+drill-down has real coverage.
+
+**`dt_prft_rt`'s meaning is unresolved.** For 태양광 (103) it reads +299.34 at
+`date_tp=3` and +68.45 at `date_tp=120` — decreasing as the window lengthens, which a
+plain "return over N days" cannot explain, and +299% over three days is not credible.
+Until it is confirmed against Kiwoom's own documentation or HTS screens, the column keeps
+the upstream name `dt_prft_rt` rather than being renamed to something like
+`period_return`, and its description says the semantics are unconfirmed. Naming it after
+a guess would invite the LLM to reason on a misunderstanding.
+
+### The KOSPI 200 constituent list is not available from Kiwoom
+
+`ka10099` returns all 2,486 KOSPI-listed stocks but carries no index-membership field.
+`ka10101` lists 31 sector codes — 대형주/중형주/소형주, 코스피고배당50,
+코스피배당성장50, 변동성지수 — with **no KOSPI 200 entry**. Approximating the index from
+`upSizeName` would be wrong, since the 200 are selected from 300 candidates by further
+rules.
+
+The list therefore comes from KRX and is committed to the repository as a static file.
+Constituents change twice a year, which the user has accepted as not worth automating.
+
 ### Rate limiting
 
 Limits are enforced per `api-id`, and exceeding one returns `return_code=5`
@@ -114,15 +157,32 @@ would not hold for five keys on one account.
   as 100 per `grp_no`), whether one connection can carry several groups, the trade-tick
   field set, and delivery latency. §7 is written against the 100-per-group figure and
   must be re-checked before implementation.
-- The precise per-`api-id` request ceiling.
+- The precise per-`api-id` request ceiling, and whether it is enforced per account. The
+  five accounts are separate, so independence is expected but unproven.
 - Whether the extra candles beyond the regular session are exclusively
   시간외단일가, or also include 장전 시간외.
+- What `dt_prft_rt` measures.
+- The exact KOSPI 200 intersection with theme constituents, which needs the real
+  constituent list rather than the 대형주/중형주 approximation used in §2.
 
 ## 3. Scope
 
-In scope: four timeframes (1m, 15m, 1h, 1d) for the KOSPI 200, a one-shot backfill to
-the upstream limit, live collection during market hours with sub-minute freshness,
-indicator computation over regular-session candles, and QuestDB schema ownership.
+In scope: four timeframes (1m, 15m, 1h, 1d) for the KOSPI 200, a one-shot backfill,
+live collection during market hours with sub-minute freshness, indicator computation over
+regular-session candles, daily theme snapshots and theme membership, and QuestDB schema
+ownership.
+
+**Candle history is one year for every timeframe.** Minute candles cannot reach further
+back (§2), and daily candles are deliberately cut to match even though they are available
+to 1985. The asymmetry that makes this safe is worth stating: minute history is a rolling
+window, so anything not collected now is lost permanently, whereas daily history is
+static and can be extended later at any time with no loss. One year of daily candles fits
+in a **single** 600-record response.
+
+**Candles are collected for the KOSPI 200 only.** Theme metadata covers all 142 themes and
+all 639 constituent symbols, but OHLCV and indicators are collected only for constituents
+that intersect the KOSPI 200. The KOSPI 200 is the tradeable universe, so a judgement
+about a stock outside it could not be acted on.
 
 Out of scope: order placement or any authenticated trading call; serving this data over
 HTTP (consumers read QuestDB directly); the LLM tool surface over these indicators;
@@ -144,15 +204,19 @@ services/
   market-collector/
     pyproject.toml
     src/market_collector/
-      __main__.py            subcommands: backfill, live, reconcile
+      __main__.py            subcommands: backfill, preopen, live, themes, reconcile
       settings.py            MARKET_COLLECTOR_ prefix
+      universe/
+        kospi200.csv         static constituent list from KRX, reviewed twice a year
+        __init__.py          loads and validates it
       kiwoom/
         auth.py              token issue and refresh, one per account
         rest.py              ka10080 / ka10081, cont-yn paging, rate limiting
+        themes.py            ka90001 / ka90002
         ws.py                real-time trade subscription, group allocation
         parse.py             sign-prefixed numbers, KST timestamps, session tagging
       bars.py                trade ticks -> 1-minute candles
-      indicators.py          regular-session series -> the eight indicator fields
+      indicators.py          rolling window -> the eight indicator fields
       store.py               QuestDB write (ILP) and read (Postgres wire)
       cursor.py              per-symbol backfill progress
     tests/
@@ -182,22 +246,26 @@ Service dependencies: `ktb-core` (logging only, unchanged), `ktb-market-analyzer
 
 ## 5. Data model
 
-Four tables, one per timeframe: `bars_1m`, `bars_15m`, `bars_1h`, `bars_1d`.
+Six tables: four candle tables and two theme tables.
+
+### Candle tables
+
+One table per timeframe: `bars_1m`, `bars_15m`, `bars_1h`, `bars_1d`.
 
 Splitting by timeframe rather than adding a `timeframe` column is deliberate. Candle
-density differs by two orders of magnitude, so a shared table would make a 41-year daily
-query scan partitions dominated by 20 million 1-minute rows. Separate tables also allow
+density differs by two orders of magnitude, so a shared table would make a daily query
+scan partitions dominated by 20 million 1-minute rows. Separate tables also allow
 partition granularity to match density, and keep the dedup key to two columns instead of
 three.
 
-| Table | Partition | Rows for 200 symbols |
-| --- | --- | --- |
-| `bars_1m` | `DAY` | ≈20.0 M (100,044 × 200) |
-| `bars_15m` | `MONTH` | ≈1.4 M |
-| `bars_1h` | `MONTH` | ≈0.4 M |
-| `bars_1d` | `YEAR` | ≈2.2 M |
+| Table | Partition | Rows per symbol | Rows for 200 symbols |
+| --- | --- | --- | --- |
+| `bars_1m` | `DAY` | 100,044 | ≈20.0 M |
+| `bars_15m` | `MONTH` | 7,076 | ≈1.4 M |
+| `bars_1h` | `MONTH` | 1,836 | ≈0.4 M |
+| `bars_1d` | `YEAR` | ≈245 | ≈0.05 M |
 
-About 24 million rows and roughly 2.9 GB uncompressed in total.
+About 21.9 million rows and roughly 2.6 GB uncompressed.
 
 Columns, identical across the four tables:
 
@@ -242,6 +310,73 @@ saving, so the regular session 09:00–15:30 KST maps to 00:00–06:30 UTC and a
 trading day never straddles a UTC date boundary — `PARTITION BY DAY` stays aligned with
 trading days.
 
+### Theme tables
+
+```
+theme_snapshot
+  ts            TIMESTAMP   designated timestamp, UTC, one row per theme per snapshot
+  theme_code    SYMBOL INDEX   thema_grp_cd
+  theme_name    SYMBOL         thema_nm
+  date_tp       INT            the period parameter this row was requested with
+  dt_prft_rt    DOUBLE         upstream name kept on purpose; semantics unconfirmed (§2)
+  change_rate   DOUBLE         flu_rt, same-day
+  stock_count   INT            stk_num
+  rising_count  INT            rising_stk_num
+  falling_count INT            fall_stk_num
+  main_stocks   STRING         main_stk, as returned
+  PARTITION BY MONTH, DEDUP UPSERT KEYS(ts, theme_code, date_tp)
+
+theme_members
+  ts            TIMESTAMP   designated timestamp, UTC, one row per membership per snapshot
+  theme_code    SYMBOL INDEX
+  symbol        SYMBOL INDEX
+  stock_name    SYMBOL
+  in_universe   BOOLEAN     true when this symbol is in the KOSPI 200, i.e. has candles
+  PARTITION BY MONTH, DEDUP UPSERT KEYS(ts, theme_code, symbol)
+```
+
+`theme_snapshot` is keyed on `date_tp` as well as theme, because the same theme yields a
+different `dt_prft_rt` per period and all the collected periods are worth keeping.
+
+`theme_members` records **every** membership — all 898 across 639 symbols — not just the
+KOSPI 200 intersection. Recording the full theme composition keeps `stock_count` and
+`dt_prft_rt` interpretable, since Kiwoom computes them over all members. `in_universe`
+tells a consumer which members it can actually drill into, so the LLM can distinguish
+"no data" from "no signal" rather than silently reasoning over an empty join.
+
+### The relationship, and what QuestDB does not enforce
+
+```
+theme_snapshot ──┐
+                 │ theme_code
+theme_members ───┤
+                 │ symbol (in_universe = true)
+                 └──> bars_1m / bars_15m / bars_1h / bars_1d
+                            (ts, symbol)
+```
+
+QuestDB has **no foreign keys and no constraints**. This diagram is a query convention,
+not something the database will enforce; the collector is solely responsible for keeping
+`theme_members.symbol` and the candle tables in agreement. `theme_code` and `symbol` are
+`SYMBOL` columns with indexes so that both directions — theme to stocks, stock to themes
+— filter quickly.
+
+A stock belongs to many themes and a theme holds many stocks, so `theme_members` is a
+genuine many-to-many junction; 091700 sits in six themes.
+
+### Crossing datastores
+
+Theme selection will not be driven by `dt_prft_rt` alone. News is part of the decision,
+and news lives in **PostgreSQL**, written by `news-preprocessor` and clustered by
+`news-clusterer`. So the consumer that picks a theme reads QuestDB for theme metrics and
+Postgres for news, and correlates them itself.
+
+`market-collector` does not attempt that correlation; it makes theme data available and
+stops. What it owes the consumer is a stable join key, which is why `theme_name` is stored
+verbatim alongside `theme_code` — matching news text to a theme will most likely go
+through the name, and a normalised or translated name would break that. How news is
+actually mapped to themes belongs to the consumer's own spec.
+
 ## 6. Candles and indicators
 
 **All four timeframes are fetched directly from Kiwoom. Nothing is resampled locally.**
@@ -269,6 +404,12 @@ tag defers that decision at no cost. Whether extended candles are shown to users
 open product question, and storing them means the answer can change without a
 re-collection.
 
+**Extended-session candles are collected by a pre-open batch, not by the live path.** The
+previous session's extended candles are fetched from `ka10080` once before the market
+opens. This keeps the live path concerned with the regular session alone — no session
+classification inside the WebSocket loop, no partial extended candle to maintain — and
+extended data is never needed with sub-minute freshness.
+
 Concretely: filter to `session='regular'`, order by `ts` ascending, pass the resulting
 close/high/low arrays to `ktb_market_analyzer`, and write the results back onto those
 same rows.
@@ -280,13 +421,49 @@ a window of at least 300 preceding regular-session candles and only the newest v
 are written. The measured history supports this everywhere: the shallowest series,
 60-minute candles, still has 1,836 of them.
 
+### The window lives in memory, and indicators are not computed incrementally
+
+During live collection the last 300 regular-session candles per symbol are held in
+memory, seeded once from QuestDB at startup. Each time a candle closes it is pushed into
+that window, TA-Lib runs over the window, and only the newest value is written. QuestDB
+is not read again.
+
+Updating each indicator from its own previously stored value — cheaper in principle —
+was considered and rejected on two grounds.
+
+It does not work for most of them. Stochastic %K and Williams %R need the rolling 14-bar
+high/low range, and ROC needs the close from ten bars earlier; none of those are
+recoverable from a stored indicator value, so a lookback window is required regardless.
+RSI needs Wilder's `avg_gain` and `avg_loss`, but inverting RSI recovers only their
+ratio, and MACD is `EMA12 - EMA26`, one equation in two unknowns. Both would need extra
+hidden state columns. Only the MACD signal line updates cleanly from its stored value.
+
+And it buys nothing. Recomputing all eight indicators over a 300-candle window for all
+200 symbols was measured at **1.7 ms** — 0.003% of a one-minute budget. A 1,000-candle
+window costs 4.6 ms and a 5,000-candle window 21 ms.
+
+| Work | Measured |
+| --- | --- |
+| One symbol, eight indicators, 300 candles | 0.009 ms |
+| 200 symbols, 300-candle window | 1.741 ms |
+| 200 symbols, 1,000-candle window | 4.638 ms |
+| 200 symbols, 5,000-candle window | 21.257 ms |
+
+So the incremental version would trade four extra state columns and a hand-written
+reimplementation of TA-Lib's recursions — which can drift from the batch path and
+produce two subtly different answers — for a saving measured in microseconds. The
+in-memory window keeps one implementation and one definition. Memory is not a
+constraint either: 200 symbols × 300 candles × three arrays of float64 is about 1.4 MB.
+
 ## 7. Collection
 
 ### Backfill — one shot, before deployment
 
-Walk each symbol to the upstream limit on each timeframe. Measured cost for one symbol
-is 142 pages and about 3.8 minutes (112 + 8 + 3 pages on `ka10080`, 19 on `ka10081`, at
-1.3 s between requests). Spread over five accounts, 200 symbols take **about 2.5 hours**.
+Walk each symbol back one year on each timeframe. Measured page counts are 112, 8 and 3
+on `ka10080` for 1-, 15- and 60-minute candles, plus **one** page on `ka10081` — a year of
+daily candles is about 245 records and a response carries 600. That is 124 pages, roughly
+3.3 minutes per symbol at 1.3 s between requests. Spread over five accounts, 200 symbols
+take **about 2.2 hours**.
 
 Runtime is not a constraint here — this runs once. The binding constraint is the
 upstream window: minute candles older than roughly one year cannot be retrieved at all,
@@ -337,6 +514,32 @@ cadence rather than derived from the aggregated 1-minute stream. At 200 symbols 
 15 minutes this is about 13 requests per minute, which is affordable, and it keeps the
 "no local resampling" rule intact.
 
+### Pre-open batch
+
+Before the market opens, two jobs run. The previous session's extended-session candles
+are fetched from `ka10080` and written with `session='extended'`. The live path's
+in-memory indicator windows are then seeded from QuestDB, so the first candle of the day
+has full warm-up behind it rather than 300 candles of `NaN`.
+
+### Themes — daily snapshot
+
+Once per day, after the close:
+
+1. `ka90001` is paged to collect all 142 themes, once per configured `date_tp`. With a
+   handful of periods this is a few dozen requests.
+2. `ka90002` is called once per theme code, 142 requests, to collect memberships.
+3. Each membership row is tagged `in_universe` by testing the symbol against the static
+   KOSPI 200 list.
+
+At 1.3 s per request this is a few minutes on a single account and needs no coordination
+with the candle collectors, which use a different `api-id` and therefore a different rate
+limiter.
+
+Theme snapshots are daily, not intraday. `flu_rt` does move during the session, but theme
+selection is a research-grade decision informed by news, not a per-minute trading signal.
+If the trading screen later needs live theme movement, an intraday refresh is a small
+addition on top of this schema.
+
 ### Reconciliation — after the close
 
 WebSocket aggregation drifts: ticks are dropped under backpressure, and reconnections
@@ -358,8 +561,9 @@ MARKET_COLLECTOR_LOG_LEVEL          default INFO
 MARKET_COLLECTOR_QUESTDB_DSN        Postgres wire, port 8812, for reads
 MARKET_COLLECTOR_QUESTDB_ILP_HOST   ILP ingestion endpoint
 MARKET_COLLECTOR_KIWOOM_ACCOUNTS    the five key pairs
-MARKET_COLLECTOR_SYMBOLS_SOURCE     how the KOSPI 200 membership is obtained
 MARKET_COLLECTOR_REQUEST_INTERVAL   default 1.3 (seconds), the measured-safe value
+MARKET_COLLECTOR_THEME_DATE_TPS     which dt_prft_rt periods to snapshot, e.g. 5,20,60
+MARKET_COLLECTOR_INDICATOR_WINDOW   default 300 candles held in memory per symbol
 ```
 
 Five key pairs cannot be expressed as two scalars. They are supplied as a single
@@ -367,7 +571,11 @@ JSON-encoded list of `{app_key, secret_key}` objects and parsed by a validator, 
 adding a sixth account is a configuration change. Secrets stay in `.env`, which is
 already ignored at `.gitignore:296`; the repository holds none of them.
 
-How KOSPI 200 membership is obtained is unresolved — see §12.
+The KOSPI 200 list is **not** configuration. It is a file in the package
+(`universe/kospi200.csv`), because it is data the code is correct or incorrect against
+rather than something an operator tunes per environment, and because a constituent change
+should arrive as a reviewed commit with a date attached. Kiwoom does not serve this list
+(§2), so it is maintained by hand from KRX twice a year.
 
 ## 9. Failure handling
 
@@ -402,8 +610,15 @@ Backfill resumption is tested by interrupting a paging loop against a fake REST 
 and asserting that resuming from the cursor produces the same set of candles as an
 uninterrupted run.
 
-Schema tests assert that every table declares `DEDUP UPSERT KEYS(ts, symbol)` and a
-partition clause — the two properties the live path silently depends on.
+Theme parsing is tested on the recorded shapes of `ka90001` and `ka90002`, including
+that `in_universe` is true exactly for symbols in `universe/kospi200.csv`, and that a
+theme whose members are all outside the index still produces a `theme_snapshot` row —
+the metrics stay interpretable even when nothing is drillable.
+
+Schema tests assert that every table declares a `DEDUP UPSERT KEYS` clause and a
+partition clause — the properties the live path and the reconciliation silently depend
+on. The candle tables key on `(ts, symbol)`, `theme_snapshot` on
+`(ts, theme_code, date_tp)`, and `theme_members` on `(ts, theme_code, symbol)`.
 
 Live WebSocket behaviour is tested against a fake server, not Kiwoom. Nothing in CI
 touches the real API, which has no sandbox for market data on these credentials and is
@@ -430,11 +645,13 @@ migrations do.
 
 ## 12. Open questions
 
-1. **How is KOSPI 200 membership obtained, and how often does it change?** Constituents
-   are reviewed periodically. A hardcoded list will drift. Whether Kiwoom exposes an
-   index-constituent endpoint is unverified.
+1. **What does `dt_prft_rt` actually measure?** Resolved as deferred: the column keeps
+   the upstream name and an explicitly unconfirmed description until it is checked
+   against Kiwoom's documentation or HTS. Nothing else in this design depends on the
+   answer, but the consumer's prompt must not present it as a plain period return.
 2. **WebSocket limits.** The 100-symbols-per-group figure, multi-group connections, the
-   trade-tick field set, and observed latency.
+   trade-tick field set, and observed latency. This is the only unmeasured input that
+   Phase 2 rests on.
 3. **Are extended candles only 시간외단일가, or also 장전 시간외?** This changes what
    `session` should record — a two-value column may need three.
 4. **Should users see extended-session candles?** Deferred by the user. Storage already
@@ -442,13 +659,19 @@ migrations do.
 5. **Indicator parameters.** `ktb_market_analyzer` defaults to RSI 14, MACD 12/26/9,
    Stochastic 14/3/3, ROC 10, Williams %R 14. Whether these should differ per timeframe
    is unaddressed; the defaults are assumed for all four.
+6. **Which `date_tp` periods to snapshot.** 3, 5, 10, 20, 60, 90 and 120 all work. More
+   periods cost one `ka90001` page-walk each, so this is a cheap decision to revisit.
+7. **How many themes contain at least one KOSPI 200 member?** The intersection is
+   estimated at 60–158 symbols, but the per-theme distribution is unknown. Themes with
+   zero in-universe members are dead ends for the LLM's theme-to-stock step, and the
+   count is worth measuring once the real constituent list is in place.
 
 ## 13. Schedule risk
 
 Six days to 2026-09-28, and the critical path runs through things that are not code:
-IP registration across five accounts plus the deployment target, a fixed egress IP, and
-the unmeasured WebSocket limits. The backfill itself is 2.5 hours and can run the day
-before.
+IP registration across five accounts plus the deployment target, a fixed egress IP, the
+KOSPI 200 constituent list from KRX, and the unmeasured WebSocket limits. The backfill
+itself is 2.2 hours and can run the day before.
 
 The live path is the largest piece of new code and the only one with no measured
 foundation yet. If WebSocket work slips, a degraded fallback exists: poll `ka10080` for
@@ -460,12 +683,14 @@ be a deliberate decision, not a discovery on Sunday night.
 This design is larger than one implementation plan should be, and the two halves have
 very different risk profiles. They should ship as two plans, in this order.
 
-**Phase 1 — historical data in QuestDB.** Schema, the REST client, the backfill job
-with cursors, indicator computation, and the store. Every number this rests on has been
-measured, so the work is estimable. It is independently valuable: once it lands, the
-LLM side has a year of minute candles and 41 years of daily candles with indicators to
-read, which is most of what issue #1 asks for. It also has a hard deadline of its own —
-the minute window slides daily, so any delay permanently narrows what can be collected.
+**Phase 1 — historical and theme data in QuestDB.** Schema for all six tables, the REST
+client, the backfill job with cursors, indicator computation, the store, the pre-open
+extended-session batch, and the daily theme snapshot. Every number this rests on has been
+measured, so the work is estimable. It is independently valuable: once it lands, the LLM
+side has a year of candles at four timeframes with indicators, plus 142 themes with
+membership and metrics, which is most of what issue #1 asks for. It also has a hard
+deadline of its own — the minute window slides daily, so any delay permanently narrows
+what can be collected.
 
 **Phase 2 — the live path.** WebSocket subscription, group allocation, tick
 aggregation, and post-close reconciliation. This rests on the one set of numbers nobody
