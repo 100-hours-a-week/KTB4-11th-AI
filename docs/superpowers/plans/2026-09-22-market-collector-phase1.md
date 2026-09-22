@@ -1886,7 +1886,7 @@ if __name__ == "__main__":
 - [ ] **Step 6: Run the unit tests**
 
 Run: `uv run pytest infrastructure/questdb/tests/test_schema.py -v`
-Expected: PASS, ten tests.
+Expected: PASS, nine tests.
 
 - [ ] **Step 7: Apply it against the development QuestDB**
 
