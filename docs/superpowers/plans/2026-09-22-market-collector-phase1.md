@@ -629,6 +629,14 @@ Expected: collection error, `ModuleNotFoundError: No module named 'market_collec
 
 - [ ] **Step 3: Obtain the constituent list**
 
+> **Deferred.** The KRX export is not available yet, so ship the loader and a
+> placeholder CSV holding only the header line, and skip the 200-count assertion.
+> Mark the first test with
+> `@pytest.mark.skip(reason="awaiting the KRX KOSPI 200 export")`. Every other task
+> depends on `load_kospi200()` existing, not on its contents. Remove the skip and
+> drop in the real CSV when the export arrives; the assertion is what proves it
+> landed intact.
+
 Kiwoom does not serve KOSPI 200 membership. `ka10099` returns all 2,486 KOSPI-listed stocks with no index field, and `ka10101`'s 31 sector codes contain 대형주/중형주/소형주, 코스피고배당50 and 코스피배당성장50 but no KOSPI 200. Approximating from `upSizeName` is wrong, because the 200 are selected from 300 size-class candidates by further rules.
 
 Get the list from KRX 정보데이터시스템 (`http://data.krx.co.kr`) → 기본통계 → 지수 → 주가지수 → 지수구성종목, selecting 코스피 200, and export it. Save it as exactly two columns with a header:
@@ -1556,6 +1564,8 @@ import importlib.util
 import pathlib
 import re
 
+import pytest
+
 REPO_ROOT = next(
     parent
     for parent in pathlib.Path(__file__).resolve().parents
@@ -1651,10 +1661,23 @@ def test_statements_splits_and_drops_comments_and_blanks():
     assert apply_mod.statements(sql) == ["CREATE TABLE a (x INT)", "CREATE TABLE b (y INT)"]
 
 
-def test_no_dsn_is_committed():
+def test_no_dsn_is_baked_into_the_schema():
     assert "postgresql://" not in _all_sql()
-    assert "postgresql://" not in (QUESTDB_DIR / "apply.py").read_text(encoding="utf-8")
+
+
+def test_the_dsn_is_read_from_the_environment(monkeypatch):
+    assert apply_mod.DSN_ENV == "KTB_QUESTDB_DSN"
+
+    monkeypatch.delenv(apply_mod.DSN_ENV, raising=False)
+    with pytest.raises(SystemExit):
+        apply_mod.main()
 ```
+
+`apply.py`'s docstring carries an example DSN, exactly as
+`infrastructure/postgres/migrations/env.py` already does, so a substring ban on
+`postgresql://` in that file would fail on documentation. What matters is that no
+connection is hardcoded, which is what asserting on `DSN_ENV` and the missing-variable
+exit actually tests.
 
 - [ ] **Step 2: Run it and confirm it fails**
 
@@ -1863,7 +1886,7 @@ if __name__ == "__main__":
 - [ ] **Step 6: Run the unit tests**
 
 Run: `uv run pytest infrastructure/questdb/tests/test_schema.py -v`
-Expected: PASS, nine tests.
+Expected: PASS, ten tests.
 
 - [ ] **Step 7: Apply it against the development QuestDB**
 
@@ -3485,8 +3508,9 @@ def test_shard_rejects_zero_buckets():
 
 
 def test_previous_session_start_is_the_prior_kst_midnight_in_utc():
-    # 2026-09-22 07:00 UTC is 16:00 KST on the 22nd.
-    start = cli.previous_session_start(datetime(2026, 9, 22, 7, 0, tzinfo=UTC))
+    # A realistic pre-open moment: 2026-09-22 23:00 UTC is 08:00 KST on the 23rd,
+    # so the session to write is the 22nd, starting at 2026-09-22 00:00 KST.
+    start = cli.previous_session_start(datetime(2026, 9, 22, 23, 0, tzinfo=UTC))
 
     assert start == datetime(2026, 9, 21, 15, 0, tzinfo=UTC)  # 2026-09-22 00:00 KST
 
@@ -3921,15 +3945,20 @@ class FakeTransport:
 def test_a_rate_limited_response_is_retried_and_then_succeeds():
     transport = FakeTransport(({}, TOKEN_OK), LIMITED, LIMITED, CHART_OK)
     slept = []
+    # interval=0.0 so the per-request pacing sleeps are zero and filter out below;
+    # a retry re-enters the attempt and therefore paces again, which is intended.
     client = ChartClient(
-        TokenStore(ACCOUNT, transport), transport, sleep=slept.append, backoff_base=2.0
+        TokenStore(ACCOUNT, transport),
+        transport,
+        interval=0.0,
+        sleep=slept.append,
+        backoff_base=2.0,
     )
 
     page = client.minute_page("005930", 1)
 
     assert len(page.rows) == 1
-    # One pacing sleep is skipped on the first call; the rest are the backoff waits.
-    assert slept == [2.0, 4.0]
+    assert [wait for wait in slept if wait] == [2.0, 4.0]
 
 
 def test_backoff_gives_up_after_max_retries_and_raises():
@@ -3959,13 +3988,17 @@ def test_the_theme_client_backs_off_the_same_way():
     transport = FakeTransport(({}, TOKEN_OK), LIMITED, GROUP_OK)
     slept = []
     client = ThemeClient(
-        TokenStore(ACCOUNT, transport), transport, sleep=slept.append, backoff_base=3.0
+        TokenStore(ACCOUNT, transport),
+        transport,
+        interval=0.0,
+        sleep=slept.append,
+        backoff_base=3.0,
     )
 
     groups = client.groups(date_tp=10)
 
     assert len(groups) == 1
-    assert slept == [3.0]
+    assert [wait for wait in slept if wait] == [3.0]
 ```
 
 - [ ] **Step 2: Run it and confirm it fails**
