@@ -13,6 +13,23 @@ env:
 jobs:
   lint-types-tests:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg18-trixie
+        env:
+          POSTGRES_USER: ktb
+          POSTGRES_PASSWORD: ktb
+          POSTGRES_DB: news
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ktb -d news"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
@@ -22,6 +39,7 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run ty check
+      - run: uv run alembic upgrade head
       - run: uv run pytest
 
   verify-dependency-isolation:
@@ -104,10 +122,28 @@ jobs:
   python-314-compatibility:
     runs-on: ubuntu-latest
     continue-on-error: true
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg18-trixie
+        env:
+          POSTGRES_USER: ktb
+          POSTGRES_PASSWORD: ktb
+          POSTGRES_DB: news
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ktb -d news"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync --all-packages --locked --group migrations --python 3.14
+      - run: uv run --python 3.14 alembic upgrade head
       - run: uv run --python 3.14 pytest
