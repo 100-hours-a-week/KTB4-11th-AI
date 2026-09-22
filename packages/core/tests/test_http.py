@@ -1,14 +1,12 @@
 import io
 
 import pytest
-from news_preprocessor.sources import http
-from news_preprocessor.sources.http import MAX_RESPONSE_BYTES, USER_AGENT, fetch_bytes
+from ktb_core.utils import http
+from ktb_core.utils.http import MAX_RESPONSE_BYTES, USER_AGENT, fetch_bytes
 
 
 @pytest.fixture
 def served(monkeypatch):
-    """Replace urlopen with one that serves `served.body`; records the requests."""
-
     class Server:
         body = b""
         requests: list = []

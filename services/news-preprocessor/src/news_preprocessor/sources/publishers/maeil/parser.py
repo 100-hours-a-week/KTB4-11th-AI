@@ -1,8 +1,6 @@
-"""Extracts the article body from Maeil Business's page markup."""
-
-from news_preprocessor.sources import ArticleBodyParser
+from bs4 import BeautifulSoup
 
 
-class MaeilBusinessEconomyParser(ArticleBodyParser):
-    def __init__(self) -> None:
-        super().__init__("news_cnt_detail_wrap")
+def parse_article_body(html: bytes) -> str:
+    body = BeautifulSoup(html, "html.parser").select_one(".news_cnt_detail_wrap")
+    return " ".join(body.get_text().split()) if body else ""

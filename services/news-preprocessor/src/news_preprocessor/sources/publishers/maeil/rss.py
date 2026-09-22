@@ -1,26 +1,14 @@
-"""Maeil Business's economy RSS feed.
-
-Items carry `no`, `title`, `link`, `category`, `author`, `pubDate`, `description` and
-`media:content`, and no `guid`. `pubDate` writes its offset as `+09:00`, which is not
-RFC 822: `parsedate_to_datetime` accepts it but returns a naive datetime, so the offset
-is rewritten to `+0900` first.
-"""
-
 import logging
 import re
 from collections.abc import Callable
 from dataclasses import asdict
 from email.utils import parsedate_to_datetime
-from xml.etree import ElementTree
 
-from news_preprocessor.sources import (
-    EmptyBodyError,
-    FeedEntry,
-    NewsItem,
-    fetch_bytes,
-    parse_article_text,
-)
-from news_preprocessor.sources.publishers.maeil.parser import MaeilBusinessEconomyParser
+from bs4 import BeautifulSoup, Tag
+from ktb_core.utils import fetch_bytes
+
+from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
+from news_preprocessor.sources.publishers.maeil.parser import parse_article_body
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +23,9 @@ class MaeilBusinessEconomyRSS:
         self._fetch = fetch
 
     def entries(self) -> list[FeedEntry]:
-        root = ElementTree.fromstring(self._fetch(self.feed_url))
+        feed = BeautifulSoup(self._fetch(self.feed_url), "xml")
         entries = []
-        for item in root.findall("./channel/item"):
+        for item in feed.select("channel > item"):
             try:
                 entries.append(self._entry(item))
             except ValueError as error:
@@ -45,17 +33,18 @@ class MaeilBusinessEconomyRSS:
         return entries
 
     def article(self, entry: FeedEntry) -> NewsItem:
-        body = parse_article_text(self._fetch(entry.url), MaeilBusinessEconomyParser())
+        body = parse_article_body(self._fetch(entry.url))
         if not body:
             raise EmptyBodyError(entry.url)
         return NewsItem(**asdict(entry), body=body)
 
-    def _entry(self, item: ElementTree.Element) -> FeedEntry:
-        link = (item.findtext("link") or "").strip()
-        title = (item.findtext("title") or "").strip()
-        pub_date = (item.findtext("pubDate") or "").strip()
+    def _entry(self, item: Tag) -> FeedEntry:
+        link = _text(item, "link")
+        title = _text(item, "title")
+        pub_date = _text(item, "pubDate")
         if not (link and title and pub_date):
             raise ValueError(f"missing link, title or pubDate: {link or title!r}")
+        # Maeil writes the offset as "+09:00"; parsedate_to_datetime then drops the timezone.
         published_at = parsedate_to_datetime(_COLON_OFFSET.sub(r"\1\2", pub_date))
         if published_at.tzinfo is None:
             raise ValueError(f"pubDate has no timezone: {pub_date!r}")
@@ -65,5 +54,10 @@ class MaeilBusinessEconomyRSS:
             url=link,
             title=title,
             published_at=published_at,
-            raw_payload=ElementTree.tostring(item, encoding="unicode"),
+            raw_payload=str(item),
         )
+
+
+def _text(item: Tag, name: str) -> str:
+    element = item.find(name)
+    return element.get_text(strip=True) if element else ""

@@ -1,5 +1,3 @@
-"""One subpackage per news outlet. Add an outlet by adding a subpackage and an entry here."""
-
 from news_preprocessor.sources import NewsSource
 from news_preprocessor.sources.publishers.hankyung import HankyungEconomyRSS
 from news_preprocessor.sources.publishers.maeil import MaeilBusinessEconomyRSS

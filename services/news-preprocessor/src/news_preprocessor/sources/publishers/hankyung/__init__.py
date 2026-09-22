@@ -1,6 +1,4 @@
-"""Hankyung (한국경제) economy section."""
-
-from news_preprocessor.sources.publishers.hankyung.parser import HankyungEconomyParser
+from news_preprocessor.sources.publishers.hankyung.parser import parse_article_body
 from news_preprocessor.sources.publishers.hankyung.rss import HankyungEconomyRSS
 
-__all__ = ["HankyungEconomyParser", "HankyungEconomyRSS"]
+__all__ = ["HankyungEconomyRSS", "parse_article_body"]

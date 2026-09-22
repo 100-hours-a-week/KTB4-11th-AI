@@ -1,8 +1,6 @@
-"""Extracts the article body from Hankyung's page markup."""
-
-from news_preprocessor.sources import ArticleBodyParser
+from bs4 import BeautifulSoup
 
 
-class HankyungEconomyParser(ArticleBodyParser):
-    def __init__(self) -> None:
-        super().__init__("article-body")
+def parse_article_body(html: bytes) -> str:
+    body = BeautifulSoup(html, "html.parser").select_one(".article-body")
+    return " ".join(body.get_text().split()) if body else ""

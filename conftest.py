@@ -1,5 +1,3 @@
-"""Database fixtures shared by every package's tests."""
-
 import os
 
 import pytest

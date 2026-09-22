@@ -1,6 +1,3 @@
-"""Queries against `articles`. The schema is owned by the Alembic migrations in
-infrastructure/postgres; this Table mirrors it for queries only and never issues DDL."""
-
 from collections.abc import Sequence
 from dataclasses import asdict
 
@@ -11,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from news_preprocessor.sources import NewsItem
 
+# Mirrors infrastructure/postgres/migrations for queries only; the migrations own the schema.
 metadata = sa.MetaData()
 
 articles = sa.Table(
@@ -52,7 +50,7 @@ def known_external_ids(conn: sa.Connection, source: str, external_ids: list[str]
 
 
 def insert_new(conn: sa.Connection, item: NewsItem) -> bool:
-    """Insert unless (source, external_id) already exists. Returns whether a row was added."""
+    # ON CONFLICT DO NOTHING reports rowcount -1 either way; RETURNING tells inserted from skipped.
     statement = (
         insert(articles)
         .values(**asdict(item))

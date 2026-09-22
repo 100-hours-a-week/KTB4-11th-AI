@@ -31,7 +31,8 @@ import, vendor, or link to the prototype.
 |---|---|---|
 | Sources | Hankyung economy, Maeil Business economy | The two sites this product targets |
 | Source code layout | One adapter class + one parser class per site | The two feeds differ in item fields, date format and page markup (§3.2); a shared config-driven adapter would not fit both |
-| Body extraction | Per-site parser on a shared stdlib `html.parser` base | No new dependency; two sites don't justify a generic extractor |
+| Body extraction | Each publisher's own `parse_article_body()` using BeautifulSoup `select_one` | Per-site CSS selector; no shared parser abstraction (review of PR #19) |
+| Feed parsing | BeautifulSoup with the `xml` (lxml) parser | HTML parsers lowercase `pubDate` and treat `<link>` as empty (review of PR #19) |
 | Embedding backend | vLLM, OpenAI-compatible `POST /v1/embeddings` | Already serving the model on the embedding host |
 | Embedding model | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` (Q4 MLX build of Qwen3-Embedding-4B) | Strong multilingual (Korean) quality; native size 2560 needs only a small cut to reach 2000, versus 4096 for the 8B |
 | Embedding size | 2000: first 2000 of 2560 components, L2-renormalised, in the client | Qwen3 is Matryoshka-trained; 2000 is pgvector's HNSW limit for `vector`; client-side so the result does not depend on server launch flags (verified identical to the server's own `dimensions`, §2.2) |
@@ -39,7 +40,7 @@ import, vendor, or link to the prototype.
 | Embedded text | `f"{title}\n\n{body}"`, one vector per article | Whole articles fit in 16k tokens; one vector per article is what clustering needs |
 | DB access | SQLAlchemy Core (`Table` + expressions, no ORM) | Chosen during design |
 | Failure model | Store first, embed separately; NULL embedding = pending | An embedding-server outage never loses articles that would otherwise age out of the feed |
-| Shared embedding contract | Constants + client in `ktb_core.embedding` | Every service that embeds must produce comparable vectors |
+| Shared embedding contract | Client in `ktb_core.embedding`, configured from `KTB_EMBEDDING_*` env vars with defaults | Every service that embeds must produce comparable vectors; one place reads the config (review of PR #19) |
 
 ### 2.1 Carried over from the prototype, and reversed
 
@@ -96,34 +97,50 @@ Measured against that server:
 
 ## 3. Components
 
+> **Revised after the PR #19 review (2026-09-23).** Where §3.1, §3.2 and §7 below disagree
+> with this box and the tree, this box wins:
+> - The embedding model, dimensions and token limit come from `KTB_EMBEDDING_MODEL`,
+>   `KTB_EMBEDDING_DIMENSIONS` and `KTB_EMBEDDING_MAX_TOKENS`, defaulting to the values
+>   below; `embed()` reads `KTB_EMBEDDING_BASE_URI` itself. `EMBEDDING_BASE_URI_ENV` and the
+>   service's `embedding_base_uri` setting are gone. The `vector(2000)` column is still fixed
+>   by the migration, so changing `KTB_EMBEDDING_DIMENSIONS` still requires a migration; the
+>   drift test fails if the two disagree.
+> - `ArticleBodyParser` is gone. Each publisher's `parser.py` is a `parse_article_body(html)`
+>   function over BeautifulSoup; feeds are parsed with `BeautifulSoup(..., "xml")`. Both were
+>   checked against a billion-laughs payload and an external-entity (XXE) payload: neither
+>   expands nor leaks.
+> - `fetch_bytes` moved to `ktb_core.utils`.
+> - `run()` is gone; `main()` calls `scrape()` (`scrape.py`) for each source and then
+>   `embed_pending()` (`embed_pending.py`). Tests follow the modules: `test_scrape.py`,
+>   `test_embed_pending.py`, `test_main.py` (exit codes).
+
 ```
 packages/core/src/ktb_core/
   embedding.py
-    EMBEDDING_MODEL = "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
-    EMBEDDING_DIMENSIONS = 2000
-    EMBEDDING_MAX_TOKENS = 16384
-    EMBEDDING_BASE_URI_ENV = "KTB_EMBEDDING_BASE_URI"
-    embed(texts, *, base_uri, timeout=120) -> list[list[float]]
+    EMBEDDING_MODEL        KTB_EMBEDDING_MODEL, default "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
+    EMBEDDING_DIMENSIONS   KTB_EMBEDDING_DIMENSIONS, default 2000
+    EMBEDDING_MAX_TOKENS   KTB_EMBEDDING_MAX_TOKENS, default 16384
+    embed(texts, timeout=120) -> list[list[float]]   reads KTB_EMBEDDING_BASE_URI (required)
+  utils/http.py            fetch_bytes() — GET with a 5 MiB response cap
 
 services/news-preprocessor/src/news_preprocessor/
-  __main__.py        main(): scrape → embed → exit code
-  settings.py        existing + embedding_base_uri (from KTB_EMBEDDING_BASE_URI),
-                     embed_batch_limit (default 100)
+  __main__.py        main(): scrape each source → embed_pending → exit code
+  scrape.py          scrape(engine, source) -> bool
+  embed_pending.py   embed_pending(engine, embedder, limit) -> bool
+  settings.py        existing + embed_batch_limit (default 100)
   sources/
     __init__.py              re-exports NewsSource, NewsItem, FeedEntry, EmptyBodyError
     news_source.py           NewsSource protocol
     news_item.py             FeedEntry, NewsItem dataclasses
     empty_body_error.py      EmptyBodyError
-    http.py                  fetch_bytes()
-    article_body_parser.py   ArticleBodyParser base
     publishers/              one subpackage per news outlet
       __init__.py            SOURCES
       hankyung/
         rss.py               HankyungEconomyRSS
-        parser.py            HankyungEconomyParser
+        parser.py            parse_article_body()
       maeil/
         rss.py               MaeilBusinessEconomyRSS
-        parser.py            MaeilBusinessEconomyParser
+        parser.py            parse_article_body()
   storage.py         `articles` Table, insert_new(), known_external_ids(),
                      pending_embedding(), set_embedding()
 ```
