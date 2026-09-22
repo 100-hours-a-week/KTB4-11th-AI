@@ -1,0 +1,24 @@
+[project]
+name = "market-collector"
+version = "0.1.0"
+description = "Kiwoom OHLCV and theme ingestion into QuestDB"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "ktb-core",
+    "ktb-market-analyzer",
+    "pydantic-settings>=2.7",
+    "httpx>=0.28",
+    "questdb>=5.0",
+    "psycopg[binary]>=3.3.6",
+]
+
+[project.scripts]
+market-collector = "market_collector.__main__:main"
+
+[tool.uv.sources]
+ktb-core = { workspace = true }
+ktb-market-analyzer = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
