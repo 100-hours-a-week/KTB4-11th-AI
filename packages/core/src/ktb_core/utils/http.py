@@ -8,7 +8,6 @@ def fetch(
     url: str, content_type: str | None = None, data: bytes | None = None, timeout: float = 30
 ) -> str:
     if data is not None and content_type is None:
-        # urllib would send application/x-www-form-urlencoded instead.
         raise ValueError(f"a request body to {url} needs a content type")
 
     headers = {"User-Agent": USER_AGENT}
