@@ -9,9 +9,12 @@ Turn the `news-preprocessor` skeleton into a working cron job: collect articles 
 Korean economy RSS feeds, fetch each article's body, store it in PostgreSQL, and attach a
 Qwen3-Embedding-8B vector (served by vLLM) so `news-clusterer` can compare articles.
 
-The feed adapters and body parser are ported from `seheon99/economy_news`. Its LangGraph
-orchestration, LLM event extraction, retry state machine, adaptive polling, and SQLite
-storage are **not** ported. The body parser is ported **with a bug fix** (§3.2).
+The feed handling and body parser are adapted from an earlier personal prototype. **This
+spec is self-contained**: that prototype may become private or be deleted, so every fact
+this work depends on — feed URLs, item fields, body selectors, parser algorithm, and the
+prototype decisions kept or reversed — is recorded here (§2.1, §3.2) and was re-verified
+against the live sites on 2026-09-22. Nothing in the implementation or its tests may
+import, vendor, or link to the prototype.
 
 ### Non-goals
 
@@ -26,7 +29,7 @@ storage are **not** ported. The body parser is ported **with a bug fix** (§3.2)
 
 | Decision | Choice | Why |
 |---|---|---|
-| Sources | Hankyung economy, Maeil Business economy | The two sites this product targets; parsers already exist upstream |
+| Sources | Hankyung economy, Maeil Business economy | The two sites this product targets |
 | Body extraction | Per-site CSS class, stdlib `html.parser` | No new dependency; two sites don't justify a generic extractor |
 | Embedding backend | vLLM, OpenAI-compatible `POST /v1/embeddings` | Already serving the model on the embedding host |
 | Embedding model | `mlx-community/Qwen3-Embedding-8B-4bit-DWQ` | Strong multilingual (Korean) quality |
@@ -37,7 +40,24 @@ storage are **not** ported. The body parser is ported **with a bug fix** (§3.2)
 | Failure model | Store first, embed separately; NULL embedding = pending | An embedding-server outage never loses articles that would otherwise age out of the feed |
 | Shared embedding contract | Constants + client in `ktb_core.embedding` | Every service that embeds must produce comparable vectors |
 
-Verified against the embedding host `100.77.120.106` on 2026-09-22:
+### 2.1 Carried over from the prototype, and reversed
+
+| Prototype decision | Here | Reason |
+|---|---|---|
+| Every source emits one normalised item; downstream code never branches per source | **Kept** (`NewsItem`) | Adding a source must not touch storage or embedding |
+| Full body scraped immediately on discovery | **Kept** | RSS carries only a summary; pages can change or disappear |
+| One adapter class + one parser class per site, explicitly "not a config-only URL swap", to exercise real structural differences | **Reversed**: one `RssSource`, two config instances | That rule served the prototype's goal of *validating the abstraction*. Here the goal is production ingestion, and the live differences between the two sites reduce to the body CSS class (§3.2). A site that needs different code gets its own class then. |
+| Append-only `reference` table of every raw item seen, including duplicates, "since duplication frequency is itself a signal" | **Reversed**: first `raw_payload` only | No consumer of that signal exists or is planned in this repo. Re-adding it is an additive migration; nothing is lost by waiting except history from before it exists. |
+| `pubDate` stored as the raw string | **Reversed**: `timestamptz` | Clustering needs time-ordering; see the `+09:00` pitfall in §3.2 |
+| LLM event extraction with a 3-attempt retry state machine | **Dropped** | Non-goal (§1) |
+| Adaptive polling toward a 1–10% new-item ratio | **Dropped** | The service is cron-triggered and exits; interval tuning is the scheduler's concern |
+| Infrastructure hosts only in env vars, never in version control | **Kept** | The embedding host's address appears nowhere in this repo, this spec included |
+| Known limitation: two RSS feeds prove parsing-level portability only, not other delivery models (push, non-prose, no per-item URL) | **Kept** | Still true; `NewsItem.url` is required here because both sources have one |
+
+### 2.2 Embedding host — verified 2026-09-22
+
+The host is a dedicated machine on the Tailscale tailnet, not the Fedora server. Its
+address is supplied only through `KTB_EMBEDDING_BASE_URL`.
 
 - vLLM 0.29.0 on `:8000` serves `mlx-community/Qwen3-Embedding-8B-4bit-DWQ`, returning
   4096-dimension vectors with L2 norm 1.0.
@@ -88,7 +108,7 @@ decides which text a vector represents, so it must also match across services. A
 migration in one reviewed PR, never a per-service env var that can silently diverge.
 
 `embedding_base_url` is deployment configuration and is read from
-`KTB_EMBEDDING_BASE_URL` (e.g. `http://100.77.120.106:8000`). It
+`KTB_EMBEDDING_BASE_URL` (the vLLM server's `http://<host>:8000`). It
 uses the shared `KTB_` prefix, not a per-service one, because it names one shared host.
 `EmbeddingSettings` is a standalone object a service instantiates only if it embeds —
 not a base class services inherit, so the monorepo spec's "no shared settings base" rule
@@ -120,23 +140,60 @@ This is the first shared client in `core`; `core` gains no new third-party depen
 `fetch_bytes(url, timeout=30) -> bytes` — `urllib` GET with a
 `User-Agent: ktb-news-preprocessor/0.1` header.
 
-`ArticleBodyParser(body_class)` — collects text inside the first element whose `class`
-contains `body_class`, whitespace-collapsed. Ported **with a fix**: the upstream parser
-increments its nesting depth on every start tag, but void elements (`img`, `br`, `input`,
-…) never close, so the depth never returns to zero and it captures the rest of the page —
-footer and sitemap included (measured: Maeil bodies of 4,300–20,900 characters). The fix
-ignores void elements in both `handle_starttag` and `handle_endtag`; the end-tag side is
-required because `html.parser` routes a self-closing `<br/>` through both handlers.
+`ArticleBodyParser(body_class)` — collects the text inside the first element whose
+`class` attribute contains `body_class` as a whole token, then collapses all whitespace
+runs to single spaces. The complete algorithm:
 
-`RssSource` replaces the reference repo's two near-identical adapter classes. It holds
+```python
+VOID_ELEMENTS = frozenset({"area", "base", "br", "col", "embed", "hr", "img",
+                           "input", "link", "meta", "source", "track", "wbr"})
+
+class ArticleBodyParser(HTMLParser):
+    # _depth == 0: outside the body; > 0: nesting level inside it
+    def handle_starttag(self, tag, attrs):
+        if tag in VOID_ELEMENTS:
+            return
+        if self._depth:
+            self._depth += 1
+        elif self._body_class in (dict(attrs).get("class") or "").split():
+            self._depth = 1
+
+    def handle_endtag(self, tag):
+        if tag in VOID_ELEMENTS:
+            return
+        if self._depth:
+            self._depth -= 1
+
+    def handle_data(self, data):
+        if self._depth:
+            self._parts.append(data)
+
+    # text = " ".join("".join(self._parts).split())
+```
+
+Pages are decoded as UTF-8 with `errors="replace"`.
+
+**Void elements must be skipped in both handlers.** The prototype's version skipped
+neither: `<img>`/`<br>`/`<input>` raised the depth and never lowered it, so capture ran to
+the end of the page, footer and sitemap included (measured on live Maeil pages: 4,300–20,900
+characters, versus 965–2,205 with the fix). Skipping only in `handle_starttag` is also
+wrong: `html.parser` routes a self-closing `<br/>` through both handlers, so the end tag
+would close the body early (measured: Hankyung bodies cut to 63–525 characters).
+
+`RssSource` is one class for both sites (§2.1). It holds
 `source`, `feed_url`, `body_class`, and a `fetch` callable (default `fetch_bytes`), and
 exposes:
 
-- `entries() -> list[FeedEntry]` — fetch and parse the feed only. `FeedEntry` holds
-  `external_id` (`guid`, falling back to `link`), `url`, `title`, `published_at`
-  (`email.utils.parsedate_to_datetime` of `pubDate`), and `raw_payload` (the `<item>`
-  element serialised). Entries missing `link`, `title` or `pubDate` are skipped and
-  logged.
+- `entries() -> list[FeedEntry]` — fetch and parse the feed only (`./channel/item`).
+  `FeedEntry` holds `external_id` (`guid`, falling back to `link`), `url` (`link`),
+  `title`, `published_at`, and `raw_payload` (the `<item>` element serialised with
+  `ElementTree.tostring(..., encoding="unicode")`). All text fields are stripped. Entries
+  missing `link`, `title` or `pubDate` are skipped and logged.
+- `published_at` parsing: `email.utils.parsedate_to_datetime(pubDate)`, **after**
+  rewriting a trailing `±HH:MM` offset to `±HHMM`. Maeil emits `+09:00`, which is not RFC
+  822; `parsedate_to_datetime` accepts it but silently returns a **naive** datetime, and
+  Postgres would read that as UTC — nine hours off. A result that is still naive raises
+  `ValueError` and the entry is skipped and logged.
 - `article(entry) -> NewsItem` — fetch the entry's page and extract the body. Raises
   `EmptyBodyError` if the extracted body is empty.
 
@@ -149,6 +206,18 @@ before any page request is made.
 |---|---|---|---|
 | `HANKYUNG` | `hankyung_economy` | `https://www.hankyung.com/feed/economy` | `article-body` |
 | `MAEIL` | `maeil_business_economy` | `https://www.mk.co.kr/rss/30100041/` | `news_cnt_detail_wrap` |
+
+Live feed facts (2026-09-22). Both are RSS 2.0 with 50 items and **neither has a `guid`**,
+so `external_id` is the article URL for both today; the `guid` preference only matters if
+one is added.
+
+| | Hankyung | Maeil |
+|---|---|---|
+| `<item>` children | `title`, `link`, `author`, `pubDate` | `no`, `title`, `link`, `category`, `author`, `pubDate`, `description`, `media:content` |
+| `link` shape | `https://www.hankyung.com/article/202609220705g` | `https://www.mk.co.kr/news/economy/12159314` |
+| `pubDate` shape | `Tue, 22 Sep 2026 15:01:06 +0900` | `Tue, 22 Sep 2026 14:37:38 +09:00` |
+| Body container | `<div class="article-body">` | `<div class="news_cnt_detail_wrap">` inside `sec_body` |
+| Body length (fixed parser, 8 articles) | 193–2,055 chars | 965–2,205 chars |
 
 ### 3.3 Storage
 
@@ -255,12 +324,18 @@ backlog drains over later runs.
 | File | Checks | Needs |
 |---|---|---|
 | `packages/core/tests/test_embedding.py` | Request body contains `model` and `truncate_prompt_tokens=16384`, and no `dimensions`; vectors reordered by `index`; output is 2000 long with L2 norm 1.0 and equals the renormalised prefix; `ValueError` on short vector and on count mismatch | `urlopen` stub |
-| `services/news-preprocessor/tests/test_sources.py` | Fixture feed + article HTML per site → expected entries and `NewsItem`s; `guid` → `link` fallback; `pubDate` → aware datetime; entries missing fields skipped; `EmptyBodyError` on empty body; body stops at the container's end despite `<img>`, `<br>` and `<br/>` inside it (regression test for the parser fix) | fake `fetch` |
+| `services/news-preprocessor/tests/test_sources.py` | Fixture feed + article HTML per site → expected entries and `NewsItem`s; `guid` → `link` fallback; `+0900` **and** `+09:00` both parse to `+09:00`-aware datetimes; entries missing fields skipped; `EmptyBodyError` on empty body; body stops at the container's end despite `<img>`, `<br>` and `<br/>` inside it and following page content (regression test for the parser fix) | fake `fetch`, fixtures |
 | `services/news-preprocessor/tests/test_storage.py` | Duplicate insert yields one row; `known_external_ids`; `pending_embedding` returns only NULL rows, ordered, limited; `set_embedding` writes the vector | Postgres |
 | `services/news-preprocessor/tests/test_main.py` | Full run with fake fetch + fake embed → embedded rows, exit 0; one feed fails → other source still processed, exit 1; embed fails → articles stored with NULL embedding, exit 1 | Postgres |
 | `infrastructure/postgres/tests/test_migrations.py` | Existing tests, plus: after `upgrade head`, `compare_metadata` against the service's `articles` Table reports no differences | Postgres |
 
 The existing `test_main.py` (which asserts the skeleton exits 0) is replaced.
+
+Fixtures live in `services/news-preprocessor/tests/fixtures/` and are **synthetic**: they
+reproduce each site's structure from §3.2 (item children, `link` and `pubDate` shapes,
+body container class, nesting, void elements, trailing page chrome) with invented Korean
+text. Real article text is not committed — it is the publishers' copyrighted content, and
+the repository may be public.
 
 Tests that need Postgres read `KTB_TEST_POSTGRES_DSN` and are skipped when it is unset, so
 a local `pytest` works without Docker. CI always sets it. `test_storage.py` runs each test in a transaction that is rolled
@@ -293,7 +368,7 @@ confirming rows with non-NULL 2000-dimension embeddings.
 
 ## 9. Deployment requirements (recorded, not implemented)
 
-- Production runs on AWS; the embedding host is `100.77.120.106`, a dedicated machine on the
+- Production runs on AWS; the embedding host is a dedicated machine on the
   Tailscale tailnet (not the Fedora server). The task must join the tailnet — for
   example, a Tailscale sidecar in the task or a subnet router in the VPC.
 - vLLM is started without `--api-key`, so it has no authentication. A Tailscale ACL must
