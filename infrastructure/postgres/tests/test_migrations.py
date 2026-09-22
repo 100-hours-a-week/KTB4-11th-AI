@@ -3,7 +3,9 @@ import pathlib
 
 import sqlalchemy as sa
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.migration import MigrationContext
 
 REPO_ROOT = next(
     parent
@@ -76,3 +78,19 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert _embedding_column_type(conn) == "vector(2000)"
+
+
+def test_service_table_matches_the_migrated_schema(pg_dsn, pg_engine, monkeypatch):
+    from news_preprocessor.storage import metadata
+
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+
+    def only_mirrored_tables(name, type_, parent_names):
+        return name in metadata.tables if type_ == "table" else True
+
+    with pg_engine.connect() as conn:
+        context = MigrationContext.configure(
+            conn, opts={"compare_type": True, "include_name": only_mirrored_tables}
+        )
+        assert compare_metadata(context, metadata) == []
