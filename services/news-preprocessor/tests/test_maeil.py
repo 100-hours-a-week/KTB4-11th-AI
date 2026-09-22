@@ -10,7 +10,10 @@ KST = timezone(timedelta(hours=9))
 
 
 def _fake_fetch(pages: dict[str, bytes]):
-    def fetch(url: str) -> bytes:
+    def fetch(url: str, content_type: str) -> bytes:
+        assert content_type == (
+            "application/xml" if url == MaeilBusinessEconomyRSS.feed_url else "text/html"
+        )
         return pages[url]
 
     return fetch

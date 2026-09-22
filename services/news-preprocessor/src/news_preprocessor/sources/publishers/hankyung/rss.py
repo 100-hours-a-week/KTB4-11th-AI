@@ -4,7 +4,7 @@ from dataclasses import asdict
 from email.utils import parsedate_to_datetime
 
 from bs4 import BeautifulSoup, Tag
-from ktb_core.utils import fetch_bytes
+from ktb_core.utils import fetch
 
 from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.hankyung.parser import parse_article_body
@@ -16,11 +16,11 @@ class HankyungEconomyRSS:
     source = "hankyung_economy"
     feed_url = "https://www.hankyung.com/feed/economy"
 
-    def __init__(self, fetch: Callable[[str], bytes] = fetch_bytes) -> None:
+    def __init__(self, fetch: Callable[[str, str], bytes] = fetch) -> None:
         self._fetch = fetch
 
     def entries(self) -> list[FeedEntry]:
-        feed = BeautifulSoup(self._fetch(self.feed_url), "xml")
+        feed = BeautifulSoup(self._fetch(self.feed_url, "application/xml"), "xml")
         entries = []
         for item in feed.select("channel > item"):
             try:
@@ -30,7 +30,7 @@ class HankyungEconomyRSS:
         return entries
 
     def article(self, entry: FeedEntry) -> NewsItem:
-        body = parse_article_body(self._fetch(entry.url))
+        body = parse_article_body(self._fetch(entry.url, "text/html"))
         if not body:
             raise EmptyBodyError(entry.url)
         return NewsItem(**asdict(entry), body=body)

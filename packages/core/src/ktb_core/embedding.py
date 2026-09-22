@@ -1,7 +1,8 @@
 import json
 import math
 import os
-from urllib.request import Request, urlopen
+
+from ktb_core.utils import fetch
 
 EMBEDDING_MODEL = os.environ.get("KTB_EMBEDDING_MODEL", "mlx-community/Qwen3-Embedding-4B-4bit-DWQ")
 EMBEDDING_DIMENSIONS = int(os.environ.get("KTB_EMBEDDING_DIMENSIONS", "2000"))
@@ -16,13 +17,13 @@ def embed(texts: list[str], timeout: float = 120) -> list[list[float]]:
         "input": texts,
         "truncate_prompt_tokens": EMBEDDING_MAX_TOKENS,
     }
-    request = Request(
+    response = fetch(
         f"{os.environ['KTB_EMBEDDING_BASE_URI'].rstrip('/')}/embeddings",
+        "application/json",
         data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"},
+        timeout=timeout,
     )
-    with urlopen(request, timeout=timeout) as response:
-        data = json.load(response)["data"]
+    data = json.loads(response)["data"]
     if len(data) != len(texts):
         raise ValueError(f"expected {len(texts)} embeddings, got {len(data)}")
 

@@ -14,7 +14,7 @@ class FakeWeb:
         self._failing_feeds = failing_feeds
 
     def fetcher(self, feed_url: str, feed: str, article: str):
-        def fetch(url: str) -> bytes:
+        def fetch(url: str, content_type: str) -> bytes:
             self.requested.append(url)
             if url == feed_url:
                 if url in self._failing_feeds:

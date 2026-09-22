@@ -1,3 +1,3 @@
-from ktb_core.utils.http import fetch_bytes
+from ktb_core.utils.http import fetch
 
-__all__ = ["fetch_bytes"]
+__all__ = ["fetch"]

@@ -5,6 +5,7 @@ import math
 
 import pytest
 from ktb_core import embedding
+from ktb_core.utils import http
 
 NATIVE_DIMENSIONS = 2560
 BASE_URI = "http://embedder:8000/v1"
@@ -24,7 +25,7 @@ def server(monkeypatch):
         requests.append((request, timeout))
         return io.BytesIO(json.dumps(responses.pop(0)).encode())
 
-    monkeypatch.setattr(embedding, "urlopen", fake_urlopen)
+    monkeypatch.setattr(http, "urlopen", fake_urlopen)
     return requests, responses
 
 
@@ -74,6 +75,8 @@ def test_posts_the_contract_to_the_openai_embeddings_route(server, monkeypatch):
     request, timeout = requests[0]
     assert request.full_url == "http://embedder:8000/v1/embeddings"
     assert request.get_method() == "POST"
+    assert request.get_header("Content-type") == "application/json"
+    assert request.get_header("Accept") == "application/json"
     assert json.loads(request.data) == {
         "model": embedding.EMBEDDING_MODEL,
         "input": ["기준금리 동결"],

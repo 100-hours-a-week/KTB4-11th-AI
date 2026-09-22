@@ -109,7 +109,9 @@ Measured against that server:
 >   function over BeautifulSoup; feeds are parsed with `BeautifulSoup(..., "xml")`. Both were
 >   checked against a billion-laughs payload and an external-entity (XXE) payload: neither
 >   expands nor leaks.
-> - `fetch_bytes` moved to `ktb_core.utils`.
+> - `fetch_bytes` became `ktb_core.utils.fetch(url, content_type, data=None)`: it sends
+>   `Accept: content_type`, and with `data` it POSTs with `Content-Type: content_type`. Feeds
+>   ask for `application/xml`, pages for `text/html`, and `embed()` uses it for its JSON POST.
 > - `run()` is gone; `main()` calls `scrape()` (`scrape.py`) for each source and then
 >   `embed_pending()` (`embed_pending.py`). Tests follow the modules: `test_scrape.py`,
 >   `test_embed_pending.py`, `test_main.py` (exit codes).
@@ -121,7 +123,7 @@ packages/core/src/ktb_core/
     EMBEDDING_DIMENSIONS   KTB_EMBEDDING_DIMENSIONS, default 2000
     EMBEDDING_MAX_TOKENS   KTB_EMBEDDING_MAX_TOKENS, default 16384
     embed(texts, timeout=120) -> list[list[float]]   reads KTB_EMBEDDING_BASE_URI (required)
-  utils/http.py            fetch_bytes() — GET with a 5 MiB response cap
+  utils/http.py            fetch(url, content_type, data=None) — 5 MiB response cap
 
 services/news-preprocessor/src/news_preprocessor/
   __main__.py        main(): scrape each source → embed_pending → exit code
