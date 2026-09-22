@@ -7,11 +7,11 @@
 
 Turn the `news-preprocessor` skeleton into a working cron job: collect articles from two
 Korean economy RSS feeds, fetch each article's body, store it in PostgreSQL, and attach a
-`qwen3-embedding:8b` vector so `news-clusterer` can compare articles.
+Qwen3-Embedding-8B vector (served by vLLM) so `news-clusterer` can compare articles.
 
 The feed adapters and body parser are ported from `seheon99/economy_news`. Its LangGraph
 orchestration, LLM event extraction, retry state machine, adaptive polling, and SQLite
-storage are **not** ported.
+storage are **not** ported. The body parser is ported **with a bug fix** (§3.2).
 
 ### Non-goals
 
@@ -28,25 +28,43 @@ storage are **not** ported.
 |---|---|---|
 | Sources | Hankyung economy, Maeil Business economy | The two sites this product targets; parsers already exist upstream |
 | Body extraction | Per-site CSS class, stdlib `html.parser` | No new dependency; two sites don't justify a generic extractor |
-| Embedding model | `qwen3-embedding:8b` via Ollama | Strong multilingual (Korean) quality |
-| Embedding size | 2000, requested with Ollama's `dimensions` parameter | Qwen3 supports Matryoshka truncation; 2000 is pgvector's HNSW limit for `vector` |
-| Embedded text | `f"{title}\n\n{body}"`, one vector per article | Whole articles fit the model's 32k context; one vector per article is what clustering needs |
+| Embedding backend | vLLM, OpenAI-compatible `POST /v1/embeddings` | Already serving the model on the embedding host |
+| Embedding model | `mlx-community/Qwen3-Embedding-8B-4bit-DWQ` | Strong multilingual (Korean) quality |
+| Embedding size | 2000: first 2000 of 4096 components, L2-renormalised, in the client | Qwen3 is Matryoshka-trained; 2000 is pgvector's HNSW limit for `vector`; the server is not configured for `dimensions` |
+| Context | `EMBEDDING_MAX_TOKENS = 16384`, sent as `truncate_prompt_tokens` | Covers every measured article with room to spare; oversize outliers are truncated instead of failing a batch |
+| Embedded text | `f"{title}\n\n{body}"`, one vector per article | Whole articles fit in 16k tokens; one vector per article is what clustering needs |
 | DB access | SQLAlchemy Core (`Table` + expressions, no ORM) | Chosen during design |
-| Failure model | Store first, embed separately; NULL embedding = pending | An Ollama outage never loses articles that would otherwise age out of the feed |
+| Failure model | Store first, embed separately; NULL embedding = pending | An embedding-server outage never loses articles that would otherwise age out of the feed |
 | Shared embedding contract | Constants + client in `ktb_core.embedding` | Every service that embeds must produce comparable vectors |
 
-Verified against the Ollama host on 2026-09-22: Ollama 0.30.10, `qwen3-embedding:8b`
-pulled, and `POST /api/embed` with `"dimensions": 2000` returns a 2000-length vector with
-L2 norm 1.0 (Ollama re-normalises after truncation).
+Verified against the embedding host `100.77.120.106` on 2026-09-22:
+
+- vLLM 0.29.0 on `:8000` serves `mlx-community/Qwen3-Embedding-8B-4bit-DWQ`, returning
+  4096-dimension vectors with L2 norm 1.0.
+- `"dimensions": 2000` is **rejected** (400, "does not support Matryoshka embeddings")
+  because the server was not started with `--hf-overrides '{"is_matryoshka": true}'`.
+  Client-side truncate-and-renormalise is how Matryoshka truncation is defined (keep the
+  leading components, re-normalise), and doing it in the one shared client makes the
+  result independent of server flags. Not yet confirmed empirically against a
+  server-side `dimensions` output — the host went down mid-check; the implementation
+  plan includes that comparison as its first step.
+- The server currently runs with `max_model_len` 1024. **The operator will restart it
+  with `--max-model-len 16384`**; this spec assumes 16384.
+- The same text embedded by vLLM and by Ollama (`qwen3-embedding:8b`) has cosine
+  similarity 0.978, so the two backends' vectors must never share a table. The served
+  model identifier — backend and quantisation included — is part of the schema contract.
+- With the parser fix, 16 live articles (8 per site) have bodies of 193–2,205 characters,
+  well under 16384 tokens.
 
 ## 3. Components
 
 ```
 packages/core/src/ktb_core/
   embedding.py
-    EMBEDDING_MODEL = "qwen3-embedding:8b"
+    EMBEDDING_MODEL = "mlx-community/Qwen3-Embedding-8B-4bit-DWQ"
     EMBEDDING_DIMENSIONS = 2000
-    EmbeddingSettings(BaseSettings)       env_prefix="KTB_", field: ollama_base_url
+    EMBEDDING_MAX_TOKENS = 16384
+    EmbeddingSettings(BaseSettings)       env_prefix="KTB_", field: embedding_base_url
     embed(texts, *, base_url, timeout=120) -> list[list[float]]
 
 services/news-preprocessor/src/news_preprocessor/
@@ -63,22 +81,33 @@ services/news-preprocessor/src/news_preprocessor/
 
 ### 3.1 `ktb_core.embedding`
 
-The model name and dimension count are **constants, not settings**. They are part of the
-database schema: changing either makes every stored vector incomparable, and the
-dimension count is fixed in the column type. A change must be a code change plus a
+The model name, dimension count and token limit are **constants, not settings**. The
+first two are part of the database schema: changing either makes every stored vector
+incomparable, and the dimension count is fixed in the column type. The token limit
+decides which text a vector represents, so it must also match across services. A change must be a code change plus a
 migration in one reviewed PR, never a per-service env var that can silently diverge.
 
-`ollama_base_url` is deployment configuration and is read from `KTB_OLLAMA_BASE_URL`. It
+`embedding_base_url` is deployment configuration and is read from
+`KTB_EMBEDDING_BASE_URL` (e.g. `http://100.77.120.106:8000`). It
 uses the shared `KTB_` prefix, not a per-service one, because it names one shared host.
 `EmbeddingSettings` is a standalone object a service instantiates only if it embeds —
 not a base class services inherit, so the monorepo spec's "no shared settings base" rule
 still holds.
 
-`embed()` POSTs `{"model": EMBEDDING_MODEL, "input": texts, "dimensions":
-EMBEDDING_DIMENSIONS}` to `{base_url}/api/embed` using `urllib.request`, and returns
-`response["embeddings"]`. It raises `ValueError` if the number of vectors differs from
-the number of inputs, or if any vector's length differs from `EMBEDDING_DIMENSIONS`. HTTP
-and network errors propagate unchanged (`urllib.error.URLError` and subclasses).
+`embed()` POSTs `{"model": EMBEDDING_MODEL, "input": texts, "truncate_prompt_tokens":
+EMBEDDING_MAX_TOKENS}` to `{base_url}/v1/embeddings` using `urllib.request`. It orders
+`response["data"]` by `index`, keeps each vector's first `EMBEDDING_DIMENSIONS`
+components, and divides by their L2 norm. It raises `ValueError` if the number of vectors
+differs from the number of inputs, or if any returned vector is shorter than
+`EMBEDDING_DIMENSIONS`. HTTP and network errors propagate unchanged
+(`urllib.error.URLError` and subclasses).
+
+`truncate_prompt_tokens` is sent as the explicit value 16384, not `-1` ("model
+maximum"). With `-1`, a server still running at 1024 would silently embed only each
+article's opening; with 16384 it should reject the request instead, turning a
+misconfigured server into a failed run. **Verify during implementation** that vLLM 0.29
+rejects `truncate_prompt_tokens > max_model_len`; if it clamps silently instead, `embed()`
+must check `GET /v1/models` → `max_model_len >= EMBEDDING_MAX_TOKENS` once per call.
 
 This is the first shared client in `core`; `core` gains no new third-party dependency.
 
@@ -91,8 +120,13 @@ This is the first shared client in `core`; `core` gains no new third-party depen
 `fetch_bytes(url, timeout=30) -> bytes` — `urllib` GET with a
 `User-Agent: ktb-news-preprocessor/0.1` header.
 
-`ArticleBodyParser(body_class)` — ported unchanged: collects text inside the first
-element whose `class` contains `body_class`, whitespace-collapsed.
+`ArticleBodyParser(body_class)` — collects text inside the first element whose `class`
+contains `body_class`, whitespace-collapsed. Ported **with a fix**: the upstream parser
+increments its nesting depth on every start tag, but void elements (`img`, `br`, `input`,
+…) never close, so the depth never returns to zero and it captures the rest of the page —
+footer and sitemap included (measured: Maeil bodies of 4,300–20,900 characters). The fix
+ignores void elements in both `handle_starttag` and `handle_endtag`; the end-tag side is
+required because `html.parser` routes a self-closing `<br/>` through both handlers.
 
 `RssSource` replaces the reference repo's two near-identical adapter classes. It holds
 `source`, `feed_url`, `body_class`, and a `fetch` callable (default `fetch_bytes`), and
@@ -199,8 +233,9 @@ platform's job.
 | Feed unreachable / malformed XML | Log with source name; skip that source | Next run |
 | Article page unreachable | Log with URL; skip the article | Next run, if still in the feed |
 | Empty body | Log with source and URL; skip; run exits 1 | Almost always a markup change — fix `body_class` |
-| Ollama unreachable / HTTP error | Log; stop embedding for this run | Rows stay NULL; next run embeds them |
-| Wrong vector length | `ValueError` from `embed()`; stop embedding | Configuration bug — fix the model or constant |
+| Embedding server unreachable / HTTP error | Log; stop embedding for this run | Rows stay NULL; next run embeds them |
+| Vector too short / count mismatch | `ValueError` from `embed()`; stop embedding | Configuration bug — fix the model or constant |
+| Server context below 16384 | Request rejected (see §3.1); stop embedding | Restart vLLM with `--max-model-len 16384` |
 | Duplicate insert from overlapping runs | `ON CONFLICT DO NOTHING` | None needed |
 | Database unreachable | Unhandled; process exits non-zero with a traceback | Next run |
 
@@ -208,8 +243,8 @@ Embedding stops at the first failure because an unreachable host makes every lat
 fail too; continuing would only add timeouts. Embeddings committed earlier in the run are
 kept.
 
-Timeouts: 30 s for feed and page fetches, 120 s for embedding (the first call loads the
-8B model into memory). No retries within a run — the next cron run is the retry.
+Timeouts: 30 s for feed and page fetches, 120 s for embedding (a batch of 16 full
+articles through an 8B model on the host). No retries within a run — the next cron run is the retry.
 
 The limit of `embed_batch_limit` (default 100) rows per run keeps a backlog, after an
 outage or on the first run, from stretching one run past the next cron trigger. The
@@ -219,8 +254,8 @@ backlog drains over later runs.
 
 | File | Checks | Needs |
 |---|---|---|
-| `packages/core/tests/test_embedding.py` | Request body contains `model` and `dimensions=2000`; vectors returned in input order; `ValueError` on wrong length and on count mismatch | `urlopen` stub |
-| `services/news-preprocessor/tests/test_sources.py` | Fixture feed + article HTML per site → expected entries and `NewsItem`s; `guid` → `link` fallback; `pubDate` → aware datetime; entries missing fields skipped; `EmptyBodyError` on empty body | fake `fetch` |
+| `packages/core/tests/test_embedding.py` | Request body contains `model` and `truncate_prompt_tokens=16384`, and no `dimensions`; vectors reordered by `index`; output is 2000 long with L2 norm 1.0 and equals the renormalised prefix; `ValueError` on short vector and on count mismatch | `urlopen` stub |
+| `services/news-preprocessor/tests/test_sources.py` | Fixture feed + article HTML per site → expected entries and `NewsItem`s; `guid` → `link` fallback; `pubDate` → aware datetime; entries missing fields skipped; `EmptyBodyError` on empty body; body stops at the container's end despite `<img>`, `<br>` and `<br/>` inside it (regression test for the parser fix) | fake `fetch` |
 | `services/news-preprocessor/tests/test_storage.py` | Duplicate insert yields one row; `known_external_ids`; `pending_embedding` returns only NULL rows, ordered, limited; `set_embedding` writes the vector | Postgres |
 | `services/news-preprocessor/tests/test_main.py` | Full run with fake fetch + fake embed → embedded rows, exit 0; one feed fails → other source still processed, exit 1; embed fails → articles stored with NULL embedding, exit 1 | Postgres |
 | `infrastructure/postgres/tests/test_migrations.py` | Existing tests, plus: after `upgrade head`, `compare_metadata` against the service's `articles` Table reports no differences | Postgres |
@@ -231,8 +266,9 @@ Tests that need Postgres read `KTB_TEST_POSTGRES_DSN` and are skipped when it is
 a local `pytest` works without Docker. CI always sets it. `test_storage.py` runs each test in a transaction that is rolled
 back; `test_main.py` calls `main()`, which commits, so it truncates `articles` before each test.
 
-No automated test calls the real news sites or the real Ollama host. Before completion,
-one manual end-to-end run is made against the compose Postgres and the Ollama host,
+No automated test calls the real news sites or the real embedding host. Before
+completion, one manual end-to-end run is made against the compose Postgres and the vLLM
+server,
 confirming rows with non-NULL 2000-dimension embeddings.
 
 ## 8. Infrastructure and CI changes
@@ -257,12 +293,15 @@ confirming rows with non-NULL 2000-dimension embeddings.
 
 ## 9. Deployment requirements (recorded, not implemented)
 
-- Production runs on AWS; the Ollama host is `100.77.120.106`, a dedicated machine on the
+- Production runs on AWS; the embedding host is `100.77.120.106`, a dedicated machine on the
   Tailscale tailnet (not the Fedora server). The task must join the tailnet — for
   example, a Tailscale sidecar in the task or a subnet router in the VPC.
-- Ollama has no authentication. A Tailscale ACL must restrict `:11434` on the Ollama host
-  to the preprocessor's node (and later other embedding consumers) only.
-- Environment: `NEWS_PREPROCESSOR_POSTGRES_DSN`, `KTB_OLLAMA_BASE_URL`, optionally
+- vLLM is started without `--api-key`, so it has no authentication. A Tailscale ACL must
+  restrict `:8000` on the embedding host to the preprocessor's node (and later other
+  embedding consumers) only. Ollama's `:11434` on the same host is no longer used by this
+  repo and should not be opened to these nodes.
+- vLLM runs with `--max-model-len 16384`.
+- Environment: `NEWS_PREPROCESSOR_POSTGRES_DSN`, `KTB_EMBEDDING_BASE_URL`, optionally
   `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` and `NEWS_PREPROCESSOR_LOG_LEVEL`.
 - `alembic upgrade head` must run as a separate job before the new image is scheduled.
 
@@ -274,9 +313,9 @@ confirming rows with non-NULL 2000-dimension embeddings.
    database-backed tests when it is unset.
 3. `ruff check`, `ruff format --check`, and `ty check` pass.
 4. Every CI job passes on the PR (`py314` still allowed to fail).
-5. Manual run: `uv run news-preprocessor` against the compose Postgres and the Ollama
-   host exits 0 and leaves rows from both sources whose `vector_dims(embedding)` is 2000.
+5. Manual run: `uv run news-preprocessor` against the compose Postgres and the vLLM
+   server (restarted at 16384) exits 0 and leaves rows from both sources whose `vector_dims(embedding)` is 2000.
 6. Running it a second time right away inserts no duplicate rows.
-7. With `KTB_OLLAMA_BASE_URL` pointing at an unreachable address, a run stores new
+7. With `KTB_EMBEDDING_BASE_URL` pointing at an unreachable address, a run stores new
    articles with a NULL embedding and exits 1. A following run with the correct URL fills
    them in.
