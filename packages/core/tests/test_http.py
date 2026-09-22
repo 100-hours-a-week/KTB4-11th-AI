@@ -1,19 +1,18 @@
-import io
-
 import pytest
 from ktb_core.utils import http
 from ktb_core.utils.http import MAX_RESPONSE_BYTES, USER_AGENT, fetch
 
 
 @pytest.fixture
-def served(monkeypatch):
+def served(monkeypatch, fake_response):
     class Server:
         body = b""
+        content_type = "text/html; charset=utf-8"
         requests: list = []
 
     def fake_urlopen(request, timeout):
         Server.requests.append((request, timeout))
-        return io.BytesIO(Server.body)
+        return fake_response(Server.body, Server.content_type)
 
     Server.requests = []
     monkeypatch.setattr(http, "urlopen", fake_urlopen)
@@ -21,9 +20,10 @@ def served(monkeypatch):
 
 
 def test_get_asks_for_the_content_type(served):
-    served.body = b"<rss/>"
+    served.body = "<rss>기준금리</rss>".encode()
+    served.content_type = "application/xml; charset=utf-8"
 
-    assert fetch("https://example.test/feed", "application/xml") == b"<rss/>"
+    assert fetch("https://example.test/feed", "application/xml") == "<rss>기준금리</rss>"
 
     request, timeout = served.requests[0]
     assert request.full_url == "https://example.test/feed"
@@ -36,6 +36,7 @@ def test_get_asks_for_the_content_type(served):
 
 def test_post_sends_and_asks_for_the_content_type(served):
     served.body = b"{}"
+    served.content_type = "application/json"
 
     fetch(
         "https://example.test/v1/embeddings", "application/json", data=b'{"input": []}', timeout=5
@@ -47,6 +48,28 @@ def test_post_sends_and_asks_for_the_content_type(served):
     assert request.get_header("Content-type") == "application/json"
     assert request.get_header("Accept") == "application/json"
     assert timeout == 5
+
+
+def test_decodes_with_the_charset_from_the_response_header(served):
+    served.body = "기준금리 동결".encode("euc-kr")
+    served.content_type = "text/html; charset=euc-kr"
+
+    assert fetch("https://example.test/page", "text/html") == "기준금리 동결"
+
+
+def test_json_without_a_charset_is_utf8(served):
+    served.body = '{"text": "기준금리"}'.encode()
+    served.content_type = "application/json"
+
+    assert fetch("https://example.test/v1/embeddings", "application/json") == '{"text": "기준금리"}'
+
+
+def test_rejects_any_other_response_without_a_charset(served):
+    served.body = b"<html/>"
+    served.content_type = "text/html"
+
+    with pytest.raises(ValueError, match="no charset"):
+        fetch("https://example.test/page", "text/html")
 
 
 def test_accepts_a_body_exactly_at_the_cap(served):

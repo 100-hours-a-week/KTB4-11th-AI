@@ -9,8 +9,8 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 KST = timezone(timedelta(hours=9))
 
 
-def _fake_fetch(pages: dict[str, bytes]):
-    def fetch(url: str, content_type: str) -> bytes:
+def _fake_fetch(pages: dict[str, str]):
+    def fetch(url: str, content_type: str) -> str:
         assert content_type == (
             "application/xml" if url == MaeilBusinessEconomyRSS.feed_url else "text/html"
         )
@@ -19,8 +19,10 @@ def _fake_fetch(pages: dict[str, bytes]):
     return fetch
 
 
-def _source(article: bytes | None = None) -> MaeilBusinessEconomyRSS:
-    pages = {MaeilBusinessEconomyRSS.feed_url: (FIXTURES / "maeil_feed.xml").read_bytes()}
+def _source(article: str | None = None) -> MaeilBusinessEconomyRSS:
+    pages = {
+        MaeilBusinessEconomyRSS.feed_url: (FIXTURES / "maeil_feed.xml").read_text(encoding="utf-8")
+    }
     if article is not None:
         pages["https://www.mk.co.kr/news/economy/10000001"] = article
     return MaeilBusinessEconomyRSS(fetch=_fake_fetch(pages))
@@ -54,7 +56,7 @@ def test_extra_item_children_are_kept_only_in_the_raw_payload():
 
 
 def test_article_extracts_the_body_only():
-    source = _source((FIXTURES / "maeil_article.html").read_bytes())
+    source = _source((FIXTURES / "maeil_article.html").read_text(encoding="utf-8"))
 
     item = source.article(source.entries()[0])
 
@@ -66,7 +68,7 @@ def test_article_extracts_the_body_only():
 
 
 def test_article_without_the_body_container_raises():
-    source = _source(b"<html><body><p>no body</p></body></html>")
+    source = _source("<html><body><p>no body</p></body></html>")
 
     with pytest.raises(EmptyBodyError):
         source.article(source.entries()[0])

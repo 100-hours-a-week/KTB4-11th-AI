@@ -9,8 +9,8 @@ FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 KST = timezone(timedelta(hours=9))
 
 
-def _fake_fetch(pages: dict[str, bytes]):
-    def fetch(url: str, content_type: str) -> bytes:
+def _fake_fetch(pages: dict[str, str]):
+    def fetch(url: str, content_type: str) -> str:
         assert content_type == (
             "application/xml" if url == HankyungEconomyRSS.feed_url else "text/html"
         )
@@ -19,8 +19,10 @@ def _fake_fetch(pages: dict[str, bytes]):
     return fetch
 
 
-def _source(article: bytes | None = None) -> HankyungEconomyRSS:
-    pages = {HankyungEconomyRSS.feed_url: (FIXTURES / "hankyung_feed.xml").read_bytes()}
+def _source(article: str | None = None) -> HankyungEconomyRSS:
+    pages = {
+        HankyungEconomyRSS.feed_url: (FIXTURES / "hankyung_feed.xml").read_text(encoding="utf-8")
+    }
     if article is not None:
         pages["https://www.hankyung.com/article/202609220001i"] = article
     return HankyungEconomyRSS(fetch=_fake_fetch(pages))
@@ -48,7 +50,7 @@ def test_entry_fields():
 
 
 def test_article_extracts_the_body_only():
-    source = _source((FIXTURES / "hankyung_article.html").read_bytes())
+    source = _source((FIXTURES / "hankyung_article.html").read_text(encoding="utf-8"))
     entry = source.entries()[0]
 
     item = source.article(entry)
@@ -63,7 +65,7 @@ def test_article_extracts_the_body_only():
 
 
 def test_article_without_the_body_container_raises():
-    source = _source(b"<html><body><div class='other'>no body</div></body></html>")
+    source = _source("<html><body><div class='other'>no body</div></body></html>")
     entry = source.entries()[0]
 
     with pytest.raises(EmptyBodyError):

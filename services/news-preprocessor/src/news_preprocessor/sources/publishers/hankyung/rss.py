@@ -16,7 +16,7 @@ class HankyungEconomyRSS:
     source = "hankyung_economy"
     feed_url = "https://www.hankyung.com/feed/economy"
 
-    def __init__(self, fetch: Callable[[str, str], bytes] = fetch) -> None:
+    def __init__(self, fetch: Callable[[str, str], str] = fetch) -> None:
         self._fetch = fetch
 
     def entries(self) -> list[FeedEntry]:

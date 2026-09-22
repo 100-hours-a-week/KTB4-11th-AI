@@ -14,13 +14,13 @@ class FakeWeb:
         self._failing_feeds = failing_feeds
 
     def fetcher(self, feed_url: str, feed: str, article: str):
-        def fetch(url: str, content_type: str) -> bytes:
+        def fetch(url: str, content_type: str) -> str:
             self.requested.append(url)
             if url == feed_url:
                 if url in self._failing_feeds:
                     raise URLError("feed unreachable")
-                return (FIXTURES / feed).read_bytes()
-            return (FIXTURES / article).read_bytes()
+                return (FIXTURES / feed).read_text(encoding="utf-8")
+            return (FIXTURES / article).read_text(encoding="utf-8")
 
         return fetch
 

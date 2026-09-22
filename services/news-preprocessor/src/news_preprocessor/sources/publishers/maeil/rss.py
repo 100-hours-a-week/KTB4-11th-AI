@@ -19,7 +19,7 @@ class MaeilBusinessEconomyRSS:
     source = "maeil_business_economy"
     feed_url = "https://www.mk.co.kr/rss/30100041/"
 
-    def __init__(self, fetch: Callable[[str, str], bytes] = fetch) -> None:
+    def __init__(self, fetch: Callable[[str, str], str] = fetch) -> None:
         self._fetch = fetch
 
     def entries(self) -> list[FeedEntry]:

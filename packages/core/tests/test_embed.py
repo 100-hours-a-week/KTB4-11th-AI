@@ -1,4 +1,3 @@
-import io
 import json
 import math
 
@@ -16,14 +15,14 @@ def _vector(first: float, second: float) -> list[float]:
 
 
 @pytest.fixture
-def server(monkeypatch):
+def server(monkeypatch, fake_response):
     monkeypatch.setenv("KTB_EMBEDDING_BASE_URI", BASE_URI)
     requests = []
     responses = []
 
     def fake_urlopen(request, timeout):
         requests.append((request, timeout))
-        return io.BytesIO(json.dumps(responses.pop(0)).encode())
+        return fake_response(json.dumps(responses.pop(0)).encode(), "application/json")
 
     monkeypatch.setattr(http, "urlopen", fake_urlopen)
     return requests, responses
