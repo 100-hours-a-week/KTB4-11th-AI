@@ -20,4 +20,4 @@ jobs:
         uses: hoho4190/issue-pr-labeler@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          config-file-path: .github/labeler.yml
+          config-file-path: labeler.yml
