@@ -69,11 +69,15 @@ class ThemeClient:
         transport: Transport,
         interval: float = 1.3,
         sleep: Callable[[float], None] = time.sleep,
+        max_retries: int = 5,
+        backoff_base: float = 2.0,
     ) -> None:
         self._tokens = tokens
         self._transport = transport
         self._interval = interval
         self._sleep = sleep
+        self._max_retries = max_retries
+        self._backoff_base = backoff_base
         self._paced = False
 
     def groups(self, date_tp: int) -> list[ThemeGroup]:
@@ -130,6 +134,22 @@ class ThemeClient:
             next_key = page.next_key
 
     def _page(
+        self,
+        api_id: str,
+        body: dict[str, object],
+        array_field: str,
+        next_key: str | None,
+    ) -> Page:
+        for attempt in range(self._max_retries + 1):
+            try:
+                return self._attempt(api_id, body, array_field, next_key)
+            except KiwoomRateLimited:
+                if attempt == self._max_retries:
+                    raise
+                self._sleep(self._backoff_base ** (attempt + 1))
+        raise AssertionError("unreachable")
+
+    def _attempt(
         self,
         api_id: str,
         body: dict[str, object],

@@ -32,7 +32,7 @@ class FakeTransport:
         return self.responses.pop(0)
 
 
-def _client(*chart_responses, interval=1.3):
+def _client(*chart_responses, interval=1.3, max_retries=5):
     transport = FakeTransport(({}, TOKEN_OK), *chart_responses)
     slept = []
     client = ChartClient(
@@ -40,6 +40,7 @@ def _client(*chart_responses, interval=1.3):
         transport,
         interval=interval,
         sleep=slept.append,
+        max_retries=max_retries,
     )
     return client, transport, slept
 
@@ -110,8 +111,10 @@ def test_daily_page_uses_the_other_api_id_and_array():
 
 
 def test_rate_limiting_raises_its_own_error():
+    # Retry/backoff behaviour is covered by test_backoff.py; with max_retries=0 this
+    # exercises only the return_code=5 -> KiwoomRateLimited mapping on the first attempt.
     body = {"return_code": 5, "return_msg": "허용된 요청 개수를 초과하였습니다"}
-    client, _, _ = _client(({}, body))
+    client, _, _ = _client(({}, body), max_retries=0)
 
     with pytest.raises(KiwoomRateLimited):
         client.minute_page("005930", 1)
