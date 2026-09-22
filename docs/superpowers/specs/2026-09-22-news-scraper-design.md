@@ -57,13 +57,9 @@ import, vendor, or link to the prototype.
 
 ### 2.2 Embedding host — verified 2026-09-22
 
-The host is `100.77.120.106`, a dedicated machine on the Tailscale tailnet (not the Fedora
-server). It runs two embedding servers; **only vLLM is used by this repo.**
-
-| Server | Port | Model | State at last check |
-|---|---|---|---|
-| vLLM 0.29.0 | `8000` | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` — Q4 MLX build of Qwen3-Embedding-4B | serving, `max_model_len` 16384 |
-| Ollama | `11434` | `qwen3-embedding:8b` (GGUF; `qwen3-embedding:4b` also pulled) | backend down (proxy up, `127.0.0.1:11435` refused) |
+The host is `100.77.120.106`, a dedicated machine on the Tailscale tailnet. It runs vLLM
+0.29.0 on port `8000`, serving `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` (Q4 MLX build
+of Qwen3-Embedding-4B) with `max_model_len` 16384.
 
 vLLM must be launched in pooling mode. The MLX builds are detected as generative models,
 and a launch without these flags exposes no `/v1/embeddings` route (observed twice):
@@ -91,9 +87,10 @@ Measured against that server:
 - Latency: 0.1 s for 1k tokens, 0.3 s for 4k, 0.5 s for 16k (truncated), 1.3 s for a
   batch of 16 × 2k. The first 16k-token request after a restart once took over 10 min;
   it did not recur.
-- Vectors from different backends are not interchangeable: the same text through vLLM
-  (8B Q4 MLX) and Ollama (`qwen3-embedding:8b`) gave cosine 0.978. The served model
-  identifier — size, backend and quantisation — is part of the schema contract.
+- Vectors from different builds of the same model are not interchangeable: the same text
+  through two differently quantised builds of Qwen3-Embedding-8B gave cosine 0.978. The
+  served model identifier — size, runtime and quantisation — is part of the schema
+  contract.
 - With the parser fix, 16 live articles (8 per site) have bodies of 193–2,205 characters,
   well under 16384 tokens.
 
@@ -112,18 +109,20 @@ services/news-preprocessor/src/news_preprocessor/
   __main__.py        main(): scrape → embed → exit code
   settings.py        existing + embed_batch_limit (default 100)
   sources/
-    __init__.py              re-exports NewsSource, NewsItem, FeedEntry, EmptyBodyError, SOURCES
+    __init__.py              re-exports NewsSource, NewsItem, FeedEntry, EmptyBodyError
     news_source.py           NewsSource protocol
     news_item.py             FeedEntry, NewsItem dataclasses
     empty_body_error.py      EmptyBodyError
     http.py                  fetch_bytes()
     article_body_parser.py   ArticleBodyParser base
-    hankyung/
-      rss.py                 HankyungEconomyRSS
-      parser.py              HankyungEconomyParser
-    maeil/
-      rss.py                 MaeilBusinessEconomyRSS
-      parser.py              MaeilBusinessEconomyParser
+    publishers/              one subpackage per news outlet
+      __init__.py            SOURCES
+      hankyung/
+        rss.py               HankyungEconomyRSS
+        parser.py            HankyungEconomyParser
+      maeil/
+        rss.py               MaeilBusinessEconomyRSS
+        parser.py            MaeilBusinessEconomyParser
   storage.py         `articles` Table, insert_new(), known_external_ids(),
                      pending_embedding(), set_embedding()
 ```
@@ -137,14 +136,17 @@ decides which text a vector represents, so it must also match across services. A
 migration in one reviewed PR, never a per-service env var that can silently diverge.
 
 `embedding_base_uri` is deployment configuration and is read from
-`KTB_EMBEDDING_BASE_URI`, set to `http://<host>:8000` (the vLLM server). It
+`KTB_EMBEDDING_BASE_URI`, set to `http://<host>:8000/v1`. The value is an
+OpenAI-compatible base **including `/v1`**, following the OpenAI SDK's `base_url`
+convention, so the name says what the endpoint is *for* while the value says which
+protocol it speaks; a later chat endpoint gets its own `KTB_CHAT_BASE_URI`. It
 uses the shared `KTB_` prefix, not a per-service one, because it names one shared host.
 `EmbeddingSettings` is a standalone object a service instantiates only if it embeds —
 not a base class services inherit, so the monorepo spec's "no shared settings base" rule
 still holds.
 
 `embed()` POSTs `{"model": EMBEDDING_MODEL, "input": texts, "truncate_prompt_tokens":
-EMBEDDING_MAX_TOKENS}` to `{base_uri}/v1/embeddings` using `urllib.request`. It orders
+EMBEDDING_MAX_TOKENS}` to `{base_uri}/embeddings` using `urllib.request`. It orders
 `response["data"]` by `index`, keeps each vector's first `EMBEDDING_DIMENSIONS`
 components, and divides by their L2 norm. It raises `ValueError` if the number of vectors
 differs from the number of inputs, or if any returned vector is shorter than
@@ -176,8 +178,11 @@ the parser base are shared; everything that reads a feed or a page is site-speci
 - `fetch_bytes(url, timeout=30) -> bytes` — `urllib` GET with a
   `User-Agent: ktb-news-preprocessor/0.1` header. Each adapter takes a `fetch` callable
   defaulting to it, so tests inject fixtures.
-- `SOURCES` — the tuple of adapter instances `main()` iterates:
-  `(HankyungEconomyRSS(), MaeilBusinessEconomyRSS())`.
+- `publishers.SOURCES` — the tuple of adapter instances `main()` iterates:
+  `(HankyungEconomyRSS(), MaeilBusinessEconomyRSS())`. It lives in
+  `publishers/__init__.py`, not `sources/__init__.py`: the publisher modules import the
+  shared types from `sources`, so re-exporting them from there would be a circular import.
+  Adding an outlet means a new `publishers/<name>/` subpackage plus one entry here.
 
 `ArticleBodyParser(body_class)` — the shared base each site's parser subclasses with its
 own class name. It collects the text inside the first element whose `class` attribute
@@ -405,12 +410,11 @@ confirming rows with non-NULL 2000-dimension embeddings.
 ## 9. Deployment requirements (recorded, not implemented)
 
 - Production runs on AWS; the embedding host is a dedicated machine on the
-  Tailscale tailnet (not the Fedora server). The task must join the tailnet — for
+  Tailscale tailnet. The task must join the tailnet — for
   example, a Tailscale sidecar in the task or a subnet router in the VPC.
 - vLLM is started without `--api-key`, so it has no authentication. A Tailscale ACL must
   restrict `:8000` on the embedding host to the preprocessor's node (and later other
-  embedding consumers) only. Ollama's `:11434` on the same host is no longer used by this
-  repo and should not be opened to these nodes.
+  embedding consumers) only.
 - vLLM runs with `--max-model-len 16384`.
 - Environment: `NEWS_PREPROCESSOR_POSTGRES_DSN`, `KTB_EMBEDDING_BASE_URI`, optionally
   `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` and `NEWS_PREPROCESSOR_LOG_LEVEL`.
