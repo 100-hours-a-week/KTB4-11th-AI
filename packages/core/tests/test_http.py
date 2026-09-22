@@ -57,6 +57,23 @@ def test_decodes_with_the_charset_from_the_response_header(served):
     assert fetch("https://example.test/page", "text/html") == "기준금리 동결"
 
 
+def test_without_a_content_type_it_sends_no_accept_header(served):
+    served.body = "<html>기준금리</html>".encode()
+
+    assert fetch("https://example.test/page") == "<html>기준금리</html>"
+
+    request, _ = served.requests[0]
+    assert request.get_header("Accept") is None
+    assert request.get_header("User-agent") == USER_AGENT
+
+
+def test_a_body_without_a_content_type_is_rejected(served):
+    with pytest.raises(ValueError, match="needs a content type"):
+        fetch("https://example.test/v1/embeddings", data=b"{}")
+
+    assert served.requests == []
+
+
 def test_json_without_a_charset_is_utf8(served):
     served.body = '{"text": "기준금리"}'.encode()
     served.content_type = "application/json"

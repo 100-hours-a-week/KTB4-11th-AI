@@ -124,7 +124,7 @@ packages/core/src/ktb_core/
     config.py              KTB_EMBEDDING_MODEL / _DIMENSIONS / _MAX_TOKENS, with defaults (os only)
     embed.py               embed(texts, timeout=120); reads KTB_EMBEDDING_BASE_URI (required)
     __init__.py            empty: importing the config must not pull in the client
-  utils/http.py            fetch(url, content_type, data=None) -> str — 5 MiB cap; decodes
+  utils/http.py            fetch(url, content_type=None, data=None) -> str — 5 MiB cap; decodes
                            with the response's Content-Type charset (JSON: UTF-8 per RFC 8259)
 
 services/news-preprocessor/src/news_preprocessor/
