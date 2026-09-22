@@ -44,7 +44,7 @@ def test_colon_offset_pubdate_is_timezone_aware():
 def test_extra_item_children_are_kept_only_in_the_raw_payload():
     first = _source().entries()[0]
 
-    assert first.title == '"집값 잡으려 어쩔수 없지만"…가계이자 부담 늘어'
+    assert first.title == "“집값 잡으려 어쩔수 없지만”…가계이자 부담 늘어"
     assert first.url == first.external_id
     assert "<no>10000001</no>" in first.raw_payload
     assert "요약문은 저장하지 않는다" in first.raw_payload
