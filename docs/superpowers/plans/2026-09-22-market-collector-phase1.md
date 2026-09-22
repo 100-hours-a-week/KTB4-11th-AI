@@ -4084,12 +4084,21 @@ Note that the retry re-enters `_attempt`, which applies the pacing sleep again. 
 
 - [ ] **Step 4: Add the same to `ThemeClient`**
 
-In `themes.py`, give `__init__` the same two parameters and store them, then wrap `_call` the same way — rename the existing `_call` body to `_attempt` and add:
+`themes.py` ended up structurally identical to `rest.py`: its private method is also named
+`_page`, and it also returns the shared `Page` NamedTuple rather than a bare tuple. So this
+step is the same rename plus the same wrapper.
+
+Give `__init__` the same two parameters and store them, rename the existing `_page` body to
+`_attempt`, and add:
 
 ```python
-    def _call(
-        self, api_id: str, body: dict[str, object], array_field: str, next_key: str | None
-    ) -> tuple[list[dict[str, str]], str | None, bool]:
+    def _page(
+        self,
+        api_id: str,
+        body: dict[str, object],
+        array_field: str,
+        next_key: str | None,
+    ) -> Page:
         for attempt in range(self._max_retries + 1):
             try:
                 return self._attempt(api_id, body, array_field, next_key)
@@ -4099,6 +4108,11 @@ In `themes.py`, give `__init__` the same two parameters and store them, then wra
                 self._sleep(self._backoff_base ** (attempt + 1))
         raise AssertionError("unreachable")
 ```
+
+Note the parameter order differs from `rest.py`'s `_page` — `themes.py` takes
+`(api_id, body, array_field, next_key)` while `rest.py` takes
+`(api_id, array_field, body, next_key)`. Keep each file's existing order; do not
+"harmonise" them, because the callers in each file pass positionally.
 
 - [ ] **Step 5: Run every client test**
 
