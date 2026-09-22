@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title>매일경제 : 경제</title>
+    <link>https://www.mk.co.kr/news/economy/</link>
+    <item>
+      <no>10000001</no>
+      <title><![CDATA["집값 잡으려 어쩔수 없지만"…가계이자 부담 늘어]]></title>
+      <link>https://www.mk.co.kr/news/economy/10000001</link>
+      <category>경제</category>
+      <author>매일경제</author>
+      <pubDate>Tue, 22 Sep 2026 14:37:38 +09:00</pubDate>
+      <description><![CDATA[요약문은 저장하지 않는다]]></description>
+      <media:content url="https://wimg.mk.co.kr/test.jpg" medium="image"></media:content>
+    </item>
+    <item>
+      <no>10000002</no>
+      <title>수출 11개월 연속 증가</title>
+      <link>https://www.mk.co.kr/news/economy/10000002</link>
+      <category>경제</category>
+      <author>매일경제</author>
+      <pubDate>Tue, 22 Sep 2026 09:05:00 +09:00</pubDate>
+      <description>요약</description>
+    </item>
+    <item>
+      <no>10000003</no>
+      <title>발행 시각이 깨진 기사</title>
+      <link>https://www.mk.co.kr/news/economy/10000003</link>
+      <pubDate>어제 오후</pubDate>
+    </item>
+  </channel>
+</rss>
