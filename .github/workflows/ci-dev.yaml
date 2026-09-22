@@ -1,0 +1,98 @@
+name: CI Dev
+
+# dev에 코드가 push되거나,
+# dev 브랜치를 대상으로 Pull Request가 생성될 때 실행합니다.
+on:
+  push:
+    branches: [dev]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+  pull_request:
+    branches: [dev]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+# 같은 브랜치/PR에서 새로운 CI가 시작되면
+# 이전 실행을 취소해 불필요한 실행 시간을 줄입니다.
+concurrency:
+  group: ci-dev-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 정적 검사와 테스트를 수행합니다.
+  lint-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # uv를 설치하고 의존성 캐시를 활성화합니다.
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+
+      # uv.lock 기준으로 전체 패키지와
+      # migrations 그룹 의존성을 설치합니다.
+      - name: Install dependencies
+        run: uv sync --all-packages --locked --group migrations
+
+      # Ruff를 이용해 정적 검사를 수행합니다.
+      #
+      # 실제 검사 규칙(F, B, S, ASYNC, I)은 pyproject.toml의 Ruff 설정을 사용합니다.
+      - name: Ruff check
+        run: uv run ruff check --output-format=github .
+
+      # 코드가 Ruff Formatter 기준에 맞는지 확인
+      # 파일을 자동 수정하지 않고 포맷 오류가 있으면 실패합니다.
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      # 전체 테스트 코드를 실행
+      - name: Run tests
+        run: uv run pytest
+
+  # Docker 이미지가 실제로 빌드 가능한지 검증합니다.
+  # 빠른 CI 결과 확인을 위해 lint-and-test Job과 병렬로 실행합니다.
+  build-images:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # 세 AI 서비스의 이미지를 각각 병렬로 빌드합니다.
+      matrix:
+        service:
+          - news-preprocessor
+          - news-clusterer
+          - portfolio-builder
+
+    steps:
+      # Docker Build에 필요한 Repository 코드를 가져옵니다.
+      - uses: actions/checkout@v7
+
+      # BuildKit 기반 Docker Buildx 환경을 준비합니다.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # 서비스별 Dockerfile을 이용해 이미지를 빌드합니다.
+      #
+      # dev에서는 배포용 이미지 생성이 목적이 아니므로
+      # Registry에는 Push하지 않습니다.
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/${{ matrix.service }}.Dockerfile
+
+          # 빌드 성공 여부만 확인합니다.
+          push: false
+
+          # 이전 CI에서 생성된 Docker Layer를 재사용합니다.
+          cache-from: type=gha,scope=${{ matrix.service }}
+
+          # 이번 빌드 결과를 다음 CI에서 재사용할 수 있도록 저장합니다.
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
