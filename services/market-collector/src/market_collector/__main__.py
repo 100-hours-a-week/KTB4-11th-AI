@@ -20,3 +20,7 @@ def main() -> None:
 
     log.error("unknown subcommand: %s", command)
     raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    main()
