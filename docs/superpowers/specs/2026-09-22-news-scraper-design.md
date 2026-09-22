@@ -102,12 +102,13 @@ packages/core/src/ktb_core/
     EMBEDDING_MODEL = "mlx-community/Qwen3-Embedding-4B-4bit-DWQ"
     EMBEDDING_DIMENSIONS = 2000
     EMBEDDING_MAX_TOKENS = 16384
-    EmbeddingSettings(BaseSettings)       env_prefix="KTB_", field: embedding_base_uri
+    EMBEDDING_BASE_URI_ENV = "KTB_EMBEDDING_BASE_URI"
     embed(texts, *, base_uri, timeout=120) -> list[list[float]]
 
 services/news-preprocessor/src/news_preprocessor/
   __main__.py        main(): scrape → embed → exit code
-  settings.py        existing + embed_batch_limit (default 100)
+  settings.py        existing + embedding_base_uri (from KTB_EMBEDDING_BASE_URI),
+                     embed_batch_limit (default 100)
   sources/
     __init__.py              re-exports NewsSource, NewsItem, FeedEntry, EmptyBodyError
     news_source.py           NewsSource protocol
@@ -135,15 +136,24 @@ incomparable, and the dimension count is fixed in the column type. The token lim
 decides which text a vector represents, so it must also match across services. A change must be a code change plus a
 migration in one reviewed PR, never a per-service env var that can silently diverge.
 
-`embedding_base_uri` is deployment configuration and is read from
-`KTB_EMBEDDING_BASE_URI`, set to `http://<host>:8000/v1`. The value is an
+The embedding base URI is deployment configuration, read from
+`KTB_EMBEDDING_BASE_URI` and set to `http://<host>:8000/v1`. The value is an
 OpenAI-compatible base **including `/v1`**, following the OpenAI SDK's `base_url`
 convention, so the name says what the endpoint is *for* while the value says which
 protocol it speaks; a later chat endpoint gets its own `KTB_CHAT_BASE_URI`. It
 uses the shared `KTB_` prefix, not a per-service one, because it names one shared host.
-`EmbeddingSettings` is a standalone object a service instantiates only if it embeds —
-not a base class services inherit, so the monorepo spec's "no shared settings base" rule
-still holds.
+
+`core` exports only the variable's **name**, `EMBEDDING_BASE_URI_ENV`. Each service that
+embeds declares the field in its own `Settings`:
+
+```python
+embedding_base_uri: str = Field(validation_alias=EMBEDDING_BASE_URI_ENV)
+```
+
+A `validation_alias` bypasses the service's `env_prefix`, so every service reads the same
+variable. This keeps both monorepo rules intact: `core` stays standard-library only (a
+`BaseSettings` class there would pull in `pydantic-settings`), and settings live in each
+service.
 
 `embed()` POSTs `{"model": EMBEDDING_MODEL, "input": texts, "truncate_prompt_tokens":
 EMBEDDING_MAX_TOKENS}` to `{base_uri}/embeddings` using `urllib.request`. It orders
