@@ -1,11 +1,8 @@
 name: CI Main
 
-# main 브랜치에 코드가 push되었을 때 실행합니다.
-# 일반적으로 dev → main PR이 merge된 시점에 실행됩니다.
 on:
   push:
     branches: [main]
-    # 문서만 수정된 경우에는 이미지 생성/Push를 수행하지 않습니다.
     paths-ignore:
       - "**/*.md"
       - "docs/**"
@@ -14,7 +11,6 @@ permissions:
   contents: read
   id-token: write
 
-# main에 새로운 Commit이 push되면 이전 Commit의 CI 실행을 취소합니다.
 concurrency:
   group: ci-main
   cancel-in-progress: true
@@ -22,104 +18,57 @@ concurrency:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
-
     steps:
-      # 현재 main 브랜치 코드를 Runner로 가져옵니다.
       - uses: actions/checkout@v7
 
-      # Python 패키지 관리 도구 uv를 설치하고
-      # 의존성 캐시를 활성화합니다.
       - uses: astral-sh/setup-uv@v10.2.0
         with:
           enable-cache: true
 
-      # uv.lock 기준으로 의존성을 설치합니다.
       - name: Install dependencies
         run: uv sync --all-packages --locked --group migrations
 
-      # Ruff를 통해 코드 오류 및 import 등을 검사합니다.
       - name: Ruff check
         run: uv run ruff check .
 
-      # 코드 포맷이 Ruff 기준에 맞는지 검사합니다.
       - name: Ruff format check
         run: uv run ruff format --check .
 
-      # 전체 테스트를 수행합니다.
       - name: Run tests
         run: uv run pytest
 
-  # lint/test를 통과한 코드만 Docker 이미지로 생성해
-  # Amazon ECR Public에 Push합니다.
   build-and-push-images:
-
-    # lint-and-test Job이 성공해야만 실행됩니다.
     needs: lint-and-test
-
     runs-on: ubuntu-latest
-
     strategy:
-      # 세 AI 서비스를 각각 별도 이미지로 병렬 빌드합니다.
       matrix:
         service:
           - news-preprocessor
           - news-clusterer
           - portfolio-builder
-
     steps:
-      # Docker 이미지 생성에 필요한 소스 코드를 가져옵니다.
       - uses: actions/checkout@v7
 
-      # GitHub Actions의 OIDC Token을 이용해
-      # Terraform에서 생성한 AWS IAM Role을 Assume합니다.
-      #
-      # AWS Access Key / Secret Key를 GitHub에 저장하지 않고
-      # 임시 AWS Credential을 발급받는 방식입니다.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          # GitHub Repository Variables에 저장한
-          # ECR Push 전용 IAM Role ARN입니다.
           role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
-
-          # Amazon ECR Public 인증 API는 us-east-1을 사용합니다.
           aws-region: us-east-1
 
-      # 위에서 발급받은 AWS Credential을 이용해
-      # Amazon ECR Public Registry에 로그인합니다.
       - name: Login to Amazon ECR Public
         uses: aws-actions/amazon-ecr-login@v2
         with:
-          # Private ECR이 아니라 Public ECR을 사용하므로
-          # registry-type을 public으로 지정합니다.
           registry-type: public
 
-      # Docker BuildKit 기반 Buildx 환경을 준비합니다.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # 서비스별 Docker 이미지를 빌드하고
-      # Amazon ECR Public Repository에 Push합니다.
       - name: Build and push ${{ matrix.service }}
         uses: docker/build-push-action@v7
         with:
-          # Repository 루트를 Docker build context로 사용합니다.
           context: .
-
-          # matrix의 서비스 이름에 맞는 Dockerfile을 사용합니다.
           file: docker/${{ matrix.service }}.Dockerfile
-
-          # main에서는 실제 배포에 사용할 이미지이므로
-          # 빌드 후 ECR Public에 Push합니다.
           push: true
-
-          # 서비스 이름과 Git Commit SHA로 이미지를 구분합니다.
           tags: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ matrix.service }}-${{ github.sha }}
-
-          # 서비스별 기존 Docker Layer 캐시를 가져옵니다.
-          # 변경되지 않은 Layer는 다시 빌드하지 않아 빌드 시간이 줄어듭니다.
           cache-from: type=gha,scope=${{ matrix.service }}
-
-          # 이번 빌드에서 생성된 Layer를
-          # 다음 GitHub Actions 실행에서 재사용할 수 있도록 저장합니다.
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
