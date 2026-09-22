@@ -3610,9 +3610,10 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
     base_dt = today.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
+    cursors = CursorStore(settings.cursor_path)
+
     def worker(index: int, bucket: list[str]) -> int:
         client = _client(settings, index)
-        cursors = CursorStore(settings.cursor_path)
         written = 0
         with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
             store = Store(sink)
@@ -3697,6 +3698,8 @@ if __name__ == "__main__":
 ```
 
 Each worker builds its own `ChartClient`, and therefore its own `TokenStore` and pacing state, because the rate limit is per account and sharing a client would serialise all five.
+
+The `CursorStore`, by contrast, is constructed **once, outside the workers, and shared**. One store per worker would give each thread its own in-memory copy of the whole cursor dict, and every write serialises that copy — so the last worker to finish a symbol would silently erase the entries the others had written, which is the precise progress loss this file exists to prevent. `CursorStore` is thread-safe for this reason; see Task 10.
 
 - [ ] **Step 7: Update the Task 1 entry-point test for argparse**
 
