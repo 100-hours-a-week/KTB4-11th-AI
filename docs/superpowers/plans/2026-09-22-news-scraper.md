@@ -42,7 +42,9 @@ docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test   # s
 export KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test
 ```
 
-Switching the compose image from `postgres:18.6-trixie` to `pgvector/pgvector:0.8.6-pg18-trixie` recreates the container on the same `postgres-data` volume; both are PostgreSQL 18.6, so the data directory is compatible.
+Switching the compose image from `postgres:18.6-trixie` to `pgvector/pgvector:0.8.6-pg18-trixie` recreates the container on the same `postgres-data` volume. Verified 2026-09-22 on a copy of an existing `ktb4-ai_postgres-data` volume: the pgvector image starts on it (PostgreSQL 18.6), keeps the data, and `CREATE EXTENSION vector` gives 0.8.6. No `down -v` is needed.
+
+Task 1's lock change touches only `uv.lock`: `migrations` is not a runtime group, so the three exported requirement files stay unchanged (verified). They change first in Task 6.
 
 ---
 
@@ -2063,7 +2065,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 ### Task 8: End-to-end verification against the live sites and vLLM
 
-No code changes. This is the spec's §10 acceptance run. Everything here was performed once while writing this plan (2026-09-22) and passed; the numbers below are what to expect.
+No code changes. This is the spec's §10 acceptance run. While writing this plan (2026-09-22) the same behaviour was exercised — the same `news-preprocessor` runs, live feeds and vLLM server — against a separate pgvector container rather than the compose database, and every expectation below held. The commands here target the compose database, so they have not been run in exactly this form.
 
 - [ ] **Step 1: Make sure vLLM is serving embeddings**
 
