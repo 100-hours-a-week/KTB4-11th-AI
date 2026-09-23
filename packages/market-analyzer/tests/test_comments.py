@@ -67,12 +67,13 @@ def test_no_two_families_define_the_same_label():
 
 
 def _every_emittable_label() -> set[str]:
-    """Asked of the families rather than written out, so a rule added without its
-    glossary entry fails here."""
-    labels: set[str] = set()
-    for family in _FAMILIES:
-        for field in family.FIELDS:
-            labels |= set(family.labels_for(field))
+    labels = set(banded.MEANINGS) | {"FLAT"}
+    for rule in signed.SIGNED.values():
+        for side, suffix in itertools.product(
+            ("BULLISH", "BEARISH"),
+            (rule.cross, rule.growing, rule.shrinking, rule.steady),
+        ):
+            labels.add(f"{side}_{suffix}")
     return labels
 
 

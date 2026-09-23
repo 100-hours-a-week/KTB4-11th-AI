@@ -4,7 +4,7 @@
 
 **Goal:** Give every indicator value a deterministic verdict — 72.4 on the RSI reads as `OVERBOUGHT` — so that a consumer is handed a judgement rather than a number and a threshold to apply itself, and reach it through a single call that returns the number, the verdict, what the verdict means, and what the indicator measures.
 
-**Architecture:** A third text layer beside the existing two, and one call that assembles all of them. `indicators.py` produces numbers, `descriptions.py` says what each field measures, and the new `comments/` package says what a particular value means. One module per rule family, each exporting the same four names — `FIELDS`, `MEANINGS`, `comments`, `labels_for` — so adding an indicator means opening the one file whose rule shape it fits, and adding a new shape means a new file plus one line in the dispatcher. The rules are data rather than branches, which is what lets a test ask the families to enumerate every label they can emit and check it against the glossary. Nothing here is configurable, because a verdict that moved with configuration would not be deterministic.
+**Architecture:** A third text layer beside the existing two, and one call that assembles all of them. `indicators.py` produces numbers, `descriptions.py` says what each field measures, and the new `comments/` package says what a particular value means. One module per rule family, each exporting the same three names — `FIELDS`, `MEANINGS`, `comments` — so adding an indicator means opening the one file whose rule shape it fits, and adding a new shape means a new file plus one line in the dispatcher. The rules are data rather than branches, which is what lets a test enumerate every label they can emit and check it against the glossary. Nothing here is configurable, because a verdict that moved with configuration would not be deterministic.
 
 `readings.py` sits on top and is the package's whole public surface: `interpret` for a moment and `get_basic_market_data` for the indicator itself. It computes nothing the layers below have not already computed — it is assembly, which is why a consumer needing whole series rather than one moment still reaches into the submodules.
 
@@ -299,12 +299,12 @@ git commit -m "feat: turn indicator values into deterministic verdicts"
 - Create: `packages/market-analyzer/src/ktb_market_analyzer/readings.py`
 - Create: `packages/market-analyzer/tests/test_readings.py`
 - Modify: `packages/market-analyzer/src/ktb_market_analyzer/__init__.py`
-- Modify: `packages/market-analyzer/src/ktb_market_analyzer/comments/{__init__,banded,signed}.py` (add `labels_for`)
+- Modify: `packages/market-analyzer/src/ktb_market_analyzer/comments/*` — unchanged in the end; see the note below
 - Modify: `services/portfolio-builder/tests/test_main.py`
 
 **Interfaces:**
 - Consumes: `indicators`, `comments`, `descriptions`.
-- Produces: `Candles(high, low, close)`, `Reading(value, comment, comment_meaning, description)`, `interpret(field, candles) -> Reading`, `get_basic_market_data(field: str | None = None) -> str`.
+- Produces: `Candles(high, low, close)`, `Reading(value, comment, comment_meaning, description)`, `interpret(field, candles) -> Reading`, `get_basic_market_data() -> str`.
 
 Task 7 leaves four pieces in four places. A caller wanting to read one indicator has
 to know which function computes the field, that `macd` yields three fields from one
@@ -327,33 +327,32 @@ Reading(
 caller looks a token up. `description` is always present because it describes the
 measurement, not the moment.
 
-`get_basic_market_data` answers without any data. **With no argument it is the
-catalogue**, and that is the briefing a caller starts from:
+`get_basic_market_data` takes **no argument** and answers without any data. It is the
+catalogue, and that is the briefing a caller starts from:
 
 ```
-Indicators available. Call interpret(field, candles) for a reading, or
-get_basic_market_data(field) for one field's possible verdicts.
+Indicators available. Call interpret(field, candles) to read one.
 - macd: MACD line: the 12-period exponential moving average of price minus the 26-period one.
 - macd_histogram: MACD histogram: the MACD line minus its signal line, ...
 - ...
 ```
 
-This is also the **discovery path**, which is why nothing else needs to publish a list
-of field names. Both calls take a field name, and without the catalogue a caller's only
-way to learn those names would be to trigger the `KeyError` and read its message.
+It takes no argument on purpose: its whole job is to show the set to choose from, and a
+parameter would mean the caller had to already know what is in there.
 
-Named with a field it is the deep dive: what it measures plus every verdict it can
-return and what each means. It lists **only the labels that field can emit** — `macd`
-and `macd_histogram` are in the same family but use different words, one crossing zero
-and the other its signal line, so this cannot be a single shared list, which is why
-each family gains `labels_for(field)`. That is the only addition to Task 7's structure;
-everything else here is assembly.
+That makes it the **discovery path** too, which is why nothing else publishes a list of
+field names. `interpret` takes a field name, and this is where those names come from —
+without it a caller's only way to learn them would be to trigger the `KeyError` and
+read its message.
 
-The catalogue deliberately omits the verdict vocabulary. Four of the eight fields share
-the same three labels, so listing them per field would pad the briefing with
-repetition, and `interpret` returns each verdict's meaning alongside it anyway — a
-caller never has to have read the vocabulary in advance. The catalogue runs about 1,100
-characters and a single field about 500.
+The catalogue carries no verdict vocabulary. `interpret` returns each verdict's meaning
+alongside it, so a caller never has to have read the vocabulary in advance. This is also
+why no per-field variant exists: there is nothing a caller would learn from one that
+`interpret` does not already tell it. About 1,000 characters in total.
+
+**Nothing is added to Task 7's structure.** An earlier draft gave each family a
+`labels_for(field)` so a per-field call could list that field's verdicts; with the
+per-field call gone its only caller was a test, so it came out again.
 
 **Nothing new is computed.** `readings.py` calls what already exists. A consumer that
 needs whole series rather than one moment — a collector writing every candle to
@@ -385,30 +384,22 @@ field's labels, and that a field with no verdict says where to look instead.
 Run: `uv run pytest packages/market-analyzer/tests/test_readings.py -q`
 Expected: collection error, no module named `ktb_market_analyzer.readings`.
 
-- [ ] **Step 3: Add `labels_for` to each family**
-
-Banded returns the same three labels for every field. Signed derives them from the
-rule's word set, so `macd` and `macd_histogram` differ. The dispatcher gains a
-matching `labels_for`, and the glossary test in `test_comments.py` switches to asking
-the families instead of walking the rule tables by hand — which also makes it fail if
-a family's `labels_for` and its `comments` ever disagree.
-
-- [ ] **Step 4: Write `readings.py`**
+- [ ] **Step 3: Write `readings.py`**
 
 A `_COMPUTE` dict maps each field name to a callable taking `Candles`, so `macd`,
 `macd_signal` and `macd_histogram` are three rows over one function and a new
 indicator is one row. `interpret` computes, takes the newest value, and asks the
 comments layer for the verdict; `get_basic_market_data` needs neither.
 
-- [ ] **Step 5: Narrow `__init__.py` and retarget the portfolio-builder test**
+- [ ] **Step 4: Narrow `__init__.py` and retarget the portfolio-builder test**
 
-- [ ] **Step 6: Run everything**
+- [ ] **Step 5: Run everything**
 
-Run: `uv run pytest packages/market-analyzer -q` → 87 tests.
-Run: `uv run pytest -q` → 111 across the workspace.
+Run: `uv run pytest packages/market-analyzer -q` → 78 tests.
+Run: `uv run pytest -q` → 102 across the workspace.
 Run: `uv run ruff check . && uv run ruff format --check . && uv run ty check` → clean.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add packages/market-analyzer services/portfolio-builder
@@ -420,9 +411,9 @@ git commit -m "feat: one call returning value, verdict, meaning and description"
 ## Final verification
 
 - [ ] `uv sync --all-packages --locked` succeeds and `git status` is clean afterwards
-- [ ] `uv run pytest packages/market-analyzer -v` passes with 87 tests
-- [ ] `uv run pytest` passes with 111 across the workspace
-- [ ] `get_basic_market_data()` with no argument names every field, so no separate list of field names is published
+- [ ] `uv run pytest packages/market-analyzer -v` passes with 78 tests
+- [ ] `uv run pytest` passes with 102 across the workspace
+- [ ] `get_basic_market_data()` takes no argument and names every field, so no separate list of field names is published
 - [ ] `uv run ruff check .`, `uv run ruff format --check .`, `uv run ty check` all pass across the workspace
 - [ ] `ktb_market_analyzer.__all__` exposes exactly: `Candles`, `Reading`, `get_basic_market_data`, `interpret`
 - [ ] The indicator functions, verdict rules and text registries are reachable only through `ktb_market_analyzer.indicators`, `.comments` and `.descriptions`

@@ -86,40 +86,8 @@ def test_an_unknown_indicator_names_the_ones_that_exist():
     with pytest.raises(KeyError, match="cci"):
         interpret("cci", _candles())
 
-    with pytest.raises(KeyError, match="rsi"):
         # The message lists the known fields, so a caller can recover without
         # reading the source.
-        get_basic_market_data("cci")
-
-
-def test_basic_market_data_needs_no_price_data():
-    text = get_basic_market_data("rsi")
-
-    assert DESCRIPTIONS["rsi"] in text
-    assert "OVERBOUGHT" in text
-    assert "OVERSOLD" in text
-    assert "NEUTRAL" in text
-
-
-def test_basic_market_data_lists_only_the_labels_that_field_can_emit():
-    macd_text = get_basic_market_data("macd")
-    histogram_text = get_basic_market_data("macd_histogram")
-
-    assert "ZERO_CROSS" in macd_text and "CROSSOVER" not in macd_text
-    assert "CROSSOVER" in histogram_text and "ZERO_CROSS" not in histogram_text
-
-
-def test_basic_market_data_says_where_to_look_for_a_field_with_no_verdict():
-    text = get_basic_market_data("macd_signal")
-
-    assert DESCRIPTIONS["macd_signal"] in text
-    assert "macd_histogram" in text
-    assert "OVERBOUGHT" not in text
-
-
-def test_basic_market_data_covers_every_described_field():
-    for field in DESCRIPTIONS:
-        assert get_basic_market_data(field).startswith(f"{field}:"), field
 
 
 def test_the_catalogue_needs_no_argument_and_names_every_field():
@@ -133,10 +101,7 @@ def test_the_catalogue_needs_no_argument_and_names_every_field():
 
 
 def test_the_catalogue_tells_the_caller_what_to_call_next():
-    catalogue = get_basic_market_data()
-
-    assert "interpret(" in catalogue
-    assert "get_basic_market_data(field)" in catalogue
+    assert "interpret(" in get_basic_market_data()
 
 
 def test_the_catalogue_omits_the_verdict_vocabulary():
@@ -146,7 +111,3 @@ def test_the_catalogue_omits_the_verdict_vocabulary():
 
     assert "OVERBOUGHT" not in catalogue
     assert "ZERO_CROSS" not in catalogue
-
-
-def test_naming_a_field_still_gives_its_verdicts():
-    assert "OVERBOUGHT" in get_basic_market_data("rsi")

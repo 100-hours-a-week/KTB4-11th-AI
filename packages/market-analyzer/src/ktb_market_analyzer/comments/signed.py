@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["FIELDS", "MEANINGS", "SIGNED", "Signed", "comments", "labels_for"]
+__all__ = ["FIELDS", "MEANINGS", "SIGNED", "Signed", "comments"]
 
 
 @dataclass(frozen=True)
@@ -119,16 +119,3 @@ def comments(field: str, values: npt.NDArray[np.float64]) -> list[str | None]:
         previous = value
 
     return out
-
-
-def labels_for(field: str) -> list[str]:
-    """Every label this field can emit, in the order a reader meets them.
-
-    The word set differs by field — the MACD line crosses zero while the histogram
-    crosses its signal line — so this cannot be a single shared list.
-    """
-    rule = SIGNED[field]
-    labels = ["FLAT"]
-    for suffix in (rule.cross, rule.growing, rule.shrinking, rule.steady):
-        labels += [f"BULLISH_{suffix}", f"BEARISH_{suffix}"]
-    return labels

@@ -7,8 +7,8 @@ every caller — which field maps to which function, which registry holds which
 text — so this module does it in one call.
 
 :func:`interpret` needs price data and answers about a specific moment.
-:func:`get_basic_market_data` needs no data and answers about the indicator
-itself, for a caller deciding what is worth asking about before it spends a call.
+:func:`get_basic_market_data` needs nothing at all and lists what can be asked
+about, which is where a caller gets the field names it passes to the other.
 
 Both are pure: no I/O and no configuration. The caller fetches the candles.
 
@@ -29,7 +29,6 @@ from ktb_market_analyzer.comments import (
     COMMENT_MEANINGS,
     COMMENTED_FIELDS,
     comment_series,
-    labels_for,
 )
 from ktb_market_analyzer.descriptions import DESCRIPTIONS
 from ktb_market_analyzer.indicators import macd, roc, rsi, stochastic, williams_r
@@ -110,38 +109,23 @@ def interpret(field: str, candles: Candles) -> Reading:
     return Reading(value, label, COMMENT_MEANINGS[label], description)
 
 
-def get_basic_market_data(field: str | None = None) -> str:
-    """Describe the indicators, without any price data.
+def get_basic_market_data() -> str:
+    """The catalogue: every indicator and what it measures, with no price data.
 
-    Called with no argument this is the catalogue: every indicator and what it
-    measures. That is the briefing a caller starts from — it names the fields, so
-    nothing else has to publish a list of them, and from it a caller picks what to
-    spend an :func:`interpret` call on.
+    This is the briefing a caller starts from. It takes no argument on purpose —
+    its whole job is to show the set to choose from, and a parameter would mean
+    the caller had to already know what is in there.
 
-    Called with a field it is the deep dive on that one: what it measures plus
-    every verdict it can return and what each means.
+    It is therefore also the discovery path: :func:`interpret` takes a field name,
+    and this is where those names come from, so nothing else has to publish a list
+    of them.
 
-    The catalogue deliberately omits the verdict vocabulary. Four of the eight
-    fields share the same three labels, so listing them eight times would pad the
-    briefing with repetition, and :func:`interpret` returns each verdict's meaning
-    alongside it anyway — a caller never has to have read the vocabulary in advance.
+    The catalogue carries no verdict vocabulary. :func:`interpret` returns each
+    verdict's meaning alongside it, so a caller never has to have read the
+    vocabulary in advance.
     """
-    if field is None:
-        lines = [
-            "Indicators available. Call interpret(field, candles) for a reading, or "
-            "get_basic_market_data(field) for one field's possible verdicts."
-        ]
-        lines += [f"- {name}: {DESCRIPTIONS[name]}" for name in sorted(_COMPUTE)]
-        return "\n".join(lines)
-
-    _known(field)
-    text = f"{field}: {DESCRIPTIONS[field]}"
-
-    if field not in COMMENTED_FIELDS:
-        return (
-            f"{text} This field carries no verdict of its own; read it through macd "
-            "and macd_histogram, which report every event involving it."
-        )
-
-    readings = "; ".join(f"{label} — {COMMENT_MEANINGS[label]}" for label in labels_for(field))
-    return f"{text} Possible readings: {readings}"
+    lines = [
+        "Indicators available. Call interpret(field, candles) to read one.",
+        *(f"- {name}: {DESCRIPTIONS[name]}" for name in sorted(_COMPUTE)),
+    ]
+    return "\n".join(lines)

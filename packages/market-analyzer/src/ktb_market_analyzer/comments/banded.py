@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["BANDS", "FIELDS", "MEANINGS", "comments", "labels_for"]
+__all__ = ["BANDS", "FIELDS", "MEANINGS", "comments"]
 
 
 @dataclass(frozen=True)
@@ -63,10 +63,3 @@ def _verdict(value: float, band: Band) -> str | None:
 def comments(field: str, values: npt.NDArray[np.float64]) -> list[str | None]:
     band = BANDS[field]
     return [_verdict(float(value), band) for value in values]
-
-
-def labels_for(field: str) -> list[str]:
-    """Every label this field can emit. Banded fields all share the same three."""
-    if field not in FIELDS:
-        raise KeyError(field)
-    return ["OVERBOUGHT", "NEUTRAL", "OVERSOLD"]

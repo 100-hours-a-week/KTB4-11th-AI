@@ -54,13 +54,3 @@ def test_every_field_in_this_family_has_both_bounds():
 
 def test_fields_matches_the_rule_table():
     assert banded.FIELDS == frozenset(banded.BANDS)
-
-
-def test_labels_for_is_the_same_three_for_every_banded_field():
-    for field in banded.FIELDS:
-        assert banded.labels_for(field) == ["OVERBOUGHT", "NEUTRAL", "OVERSOLD"]
-
-
-def test_labels_for_rejects_a_field_from_another_family():
-    with pytest.raises(KeyError):
-        banded.labels_for("macd")
