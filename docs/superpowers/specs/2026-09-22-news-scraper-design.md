@@ -111,7 +111,9 @@ Measured against that server:
 >   function over BeautifulSoup; feeds are parsed with `BeautifulSoup(..., "xml")`. Both were
 >   checked against a billion-laughs payload and an external-entity (XXE) payload: neither
 >   expands nor leaks.
-> - Both adapters parse `pubDate` with `datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")`.
+> - Each adapter carries its feed's date shape as a class attribute,
+>   `pub_date_format = "%a, %d %b %Y %H:%M:%S %z"`, beside `source` and `feed_url`, and parses
+>   `pubDate` with `datetime.strptime`.
 >   `%z` accepts Hankyung's `+0900` and Maeil's `+09:00` alike, so the offset rewrite and the
 >   naive-datetime guard are gone; a `pubDate` that does not match raises `ValueError` and the
 >   entry is skipped and logged. (`datetime.fromisoformat` cannot be used: RSS dates are

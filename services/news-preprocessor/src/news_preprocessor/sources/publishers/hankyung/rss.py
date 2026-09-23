@@ -9,7 +9,6 @@ from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.hankyung.parser import parse_article_body
 
 USER_AGENT = "ktb-ai/0.1"
-PUB_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z"
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +16,7 @@ logger = logging.getLogger(__name__)
 class HankyungEconomyRSS:
     source = "hankyung_economy"
     feed_url = "https://www.hankyung.com/feed/economy"
+    pub_date_format = "%a, %d %b %Y %H:%M:%S %z"
 
     def __init__(self, client: httpx.Client | None = None) -> None:
         self._client = client or httpx.Client(follow_redirects=True)
@@ -49,7 +49,7 @@ class HankyungEconomyRSS:
         pub_date = _text(item, "pubDate")
         if not (link and title and pub_date):
             raise ValueError(f"missing link, title or pubDate: {link or title!r}")
-        published_at = datetime.strptime(pub_date, PUB_DATE_FORMAT)
+        published_at = datetime.strptime(pub_date, self.pub_date_format)
         return FeedEntry(
             source=self.source,
             external_id=link,
