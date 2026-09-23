@@ -29,6 +29,11 @@ INDICATORS = [
     "williams_r",
 ]
 
+# Every indicator except macd_signal carries a verdict beside its value. The
+# exception is deliberate: macd_signal is a smoothed copy of the MACD line, so
+# every event involving it is already reported on macd_histogram.
+COMMENTED = [name for name in INDICATORS if name != "macd_signal"]
+
 
 def _all_sql() -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in apply_mod.schema_files())
@@ -81,6 +86,21 @@ def test_candle_tables_carry_every_indicator_column():
         statement = _statement_for(table)
         for column in INDICATORS:
             assert re.search(rf"\b{column}\s+DOUBLE", statement), f"{table}.{column}"
+
+
+def test_candle_tables_carry_a_verdict_column_beside_each_indicator():
+    for table in BAR_TABLES:
+        statement = _statement_for(table)
+        for column in COMMENTED:
+            assert re.search(rf"\b{column}_comment\s+SYMBOL", statement), f"{table}.{column}"
+
+
+def test_macd_signal_has_no_verdict_column():
+    # A verdict here would duplicate what macd_histogram already reports, and a
+    # column nothing ever writes reads as a gap in the collector rather than a
+    # decision.
+    for table in BAR_TABLES:
+        assert "macd_signal_comment" not in _statement_for(table), table
 
 
 def test_partition_granularity_matches_candle_density():
