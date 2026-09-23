@@ -43,6 +43,21 @@ services:
       timeout: 3s
       retries: 12
 
+  news-preprocessor:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/news-preprocessor.Dockerfile
+    environment:
+      - NEWS_PREPROCESSOR_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
+      - NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT=${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
+      - NEWS_PREPROCESSOR_LOG_LEVEL=${NEWS_PREPROCESSOR_LOG_LEVEL:-INFO}
+      - KTB_EMBEDDING_BASE_URI
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   postgres-data:
   questdb-data:
