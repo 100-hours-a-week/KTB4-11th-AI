@@ -69,22 +69,13 @@ jobs:
 
     strategy:
       matrix:
-        include:
-          - service: news-preprocessor
-            target: lambda
-            platform: linux/arm64
-          - service: news-clusterer
-            target: runtime
-            platform: linux/amd64
-          - service: portfolio-builder
-            target: runtime
-            platform: linux/amd64
+        service:
+          - news-preprocessor
+          - news-clusterer
+          - portfolio-builder
 
     steps:
       - uses: actions/checkout@v7
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -94,8 +85,6 @@ jobs:
         with:
           context: .
           file: docker/${{ matrix.service }}.Dockerfile
-          target: ${{ matrix.target }}
-          platforms: ${{ matrix.platform }}
           push: false
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}

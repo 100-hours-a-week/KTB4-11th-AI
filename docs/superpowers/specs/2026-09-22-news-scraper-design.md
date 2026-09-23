@@ -459,15 +459,25 @@ confirming rows with non-NULL 2000-dimension embeddings.
 
 ## 9. Deployment requirements (recorded, not implemented)
 
-- Production runs on AWS; the embedding host is a dedicated machine on the
-  Tailscale tailnet. The task must join the tailnet — for
-  example, a Tailscale sidecar in the task or a subnet router in the VPC.
+- Production runs on one EC2 instance with `docker compose`, alongside PostgreSQL in the
+  same stack; the service reaches it by its compose service name. An hourly cron entry
+  runs `docker compose up -d news-preprocessor`: the container is one-shot, so `up -d`
+  starts the exited container again, and does nothing while a previous run is still
+  going. The compose service therefore needs `restart: "no"` — any restart policy would
+  loop a job that is supposed to exit. The compose file itself lives with the EC2
+  provisioning, not in this repository.
+- The embedding host is a separate machine on the Tailscale tailnet, so the EC2 instance
+  must be on the tailnet too.
 - vLLM is started without `--api-key`, so it has no authentication. A Tailscale ACL must
   restrict `:8000` on the embedding host to the preprocessor's node (and later other
   embedding consumers) only.
 - vLLM runs with `--max-model-len 16384`.
 - Environment: `NEWS_PREPROCESSOR_POSTGRES_DSN`, `KTB_EMBEDDING_BASE_URI`, optionally
-  `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` and `NEWS_PREPROCESSOR_LOG_LEVEL`.
+  `NEWS_PREPROCESSOR_USER_AGENT`, `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT`,
+  `NEWS_PREPROCESSOR_LOG_LEVEL` and the `KTB_EMBEDDING_*` contract overrides.
+- CI builds and pushes the Dockerfile's default `runtime` target. The `lambda` target and
+  `news_preprocessor.handler` stay in the repository for a later move to Lambda, but
+  nothing builds them, so they are not covered by CI.
 - `alembic upgrade head` must run as a separate job before the new image is scheduled.
 
 ## 10. Acceptance criteria
