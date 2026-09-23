@@ -19,11 +19,12 @@ def main() -> None:
     logger.info("news-preprocessor started")
     engine = sa.create_engine(settings.postgres_dsn)
     try:
-        results = [scrape(engine, source) for source in SOURCES]
-        results.append(embed_pending(engine, embed, settings.embed_batch_limit))
+        scraped = [scrape(engine, source) for source in SOURCES]
+        embedded = embed_pending(engine, embed, settings.embed_batch_limit)
     finally:
         engine.dispose()
-    sys.exit(0 if all(results) else 1)
+    failed = [result for result in scraped if result.failed] or embedded.failed
+    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

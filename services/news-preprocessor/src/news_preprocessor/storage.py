@@ -62,7 +62,7 @@ def insert_new(conn: sa.Connection, item: NewsItem) -> bool:
 
 def pending_embedding(conn: sa.Connection, limit: int) -> Sequence[sa.Row]:
     query = (
-        sa.select(articles.c.id, articles.c.title, articles.c.body)
+        sa.select(articles.c.id, articles.c.external_id, articles.c.title, articles.c.body)
         .where(articles.c.embedding.is_(None))
         .order_by(articles.c.id)
         .limit(limit)

@@ -5,6 +5,7 @@ from news_preprocessor.sources.news_item import FeedEntry, NewsItem
 
 class NewsSource(Protocol):
     source: str
+    feed_url: str
 
     def entries(self) -> list[FeedEntry]: ...
 

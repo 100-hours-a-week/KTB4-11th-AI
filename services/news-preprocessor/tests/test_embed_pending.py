@@ -9,6 +9,10 @@ from news_preprocessor.storage import articles, insert_new
 VECTOR = [1.0] + [0.0] * 1999
 
 
+def _url(number: int) -> str:
+    return f"https://example.test/{number}"
+
+
 def fake_embedder(texts: list[str]) -> list[list[float]]:
     return [VECTOR for _ in texts]
 
@@ -24,8 +28,8 @@ def _insert(engine, count: int) -> None:
                 conn,
                 NewsItem(
                     source="hankyung_economy",
-                    external_id=f"https://example.test/{number}",
-                    url=f"https://example.test/{number}",
+                    external_id=_url(number),
+                    url=_url(number),
                     title=f"제목 {number}",
                     published_at=datetime(2026, 9, 22, tzinfo=UTC),
                     raw_payload="<item/>",
@@ -40,11 +44,13 @@ def _embeddings(engine):
         return list(conn.execute(query).scalars())
 
 
-def test_embeds_every_pending_article(engine):
+def test_embeds_every_pending_article_and_reports_their_ids(engine):
     _insert(engine, 20)
 
-    assert embed_pending(engine, fake_embedder, limit=100) is True
+    result = embed_pending(engine, fake_embedder, limit=100)
 
+    assert result.succeed == [_url(number) for number in range(20)]
+    assert result.failed == []
     assert all(len(vector) == 2000 for vector in _embeddings(engine))
 
 
@@ -57,19 +63,23 @@ def test_sends_title_and_body_together(engine):
     assert sent == ["제목 0\n\n본문 0"]
 
 
-def test_failure_keeps_articles_pending_until_a_later_run(engine):
+def test_failure_reports_the_pending_ids_until_a_later_run(engine):
     _insert(engine, 3)
 
-    assert embed_pending(engine, failing_embedder, limit=100) is False
+    result = embed_pending(engine, failing_embedder, limit=100)
+
+    assert result.succeed == []
+    assert result.failed == [_url(number) for number in range(3)]
     assert _embeddings(engine) == [None, None, None]
 
-    assert embed_pending(engine, fake_embedder, limit=100) is True
+    assert embed_pending(engine, fake_embedder, limit=100).failed == []
     assert all(vector is not None for vector in _embeddings(engine))
 
 
 def test_limit_caps_one_run(engine):
     _insert(engine, 5)
 
-    embed_pending(engine, fake_embedder, limit=3)
+    result = embed_pending(engine, fake_embedder, limit=3)
 
+    assert len(result.succeed) == 3
     assert sum(vector is not None for vector in _embeddings(engine)) == 3

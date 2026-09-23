@@ -119,6 +119,14 @@ Measured against that server:
 >   entry is skipped and logged. (`datetime.fromisoformat` cannot be used: RSS dates are
 >   RFC 822, e.g. `Wed, 23 Sep 2026 10:31:17 +0900`.) Python keeps `LC_TIME` at `C` unless a
 >   program calls `setlocale`, so `%a`/`%b` stay English.
+> - `scrape()` returns `ScrapeResult(succeed, failed)` and `embed_pending()` returns
+>   `EmbedResult(succeed, failed)`, both lists of `external_id`s; `main()` exits 1 when either
+>   `failed` is non-empty.
+> - The service also ships as an AWS Lambda container image: the `lambda` target in
+>   `docker/news-preprocessor.Dockerfile` (`public.ecr.aws/lambda/python:3.13`, arm64) with
+>   `news_preprocessor.handler.handler`, which returns per-step `succeed`/`failed` lists and
+>   counts and raises `RuntimeError` when anything failed. The `runtime` target stays the
+>   default for local use.
 > - There is no HTTP helper. `embed()` and both adapters call **httpx** directly; adapters take
 >   an `httpx.Client` (tests inject `httpx.MockTransport`), send `Accept: application/xml` for
 >   feeds and `text/html` for pages, and call `raise_for_status()`. **`ktb_core` keeps no
