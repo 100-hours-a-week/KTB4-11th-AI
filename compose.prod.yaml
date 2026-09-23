@@ -1,0 +1,276 @@
+name: ktb4-ai
+
+# 2 vCPU / 4 GiB 서버 기준 운영 구성입니다.
+#
+# [상시 실행]
+# - postgres
+# - questdb
+# - portfolio-builder
+#
+# [주기 실행]
+# - news-preprocessor: 2시간마다, 약 15분
+# - news-clusterer: 매주 일요일 03:30, 약 15분 이상
+# - market-collector: 월~금 08:00~16:00
+#
+# news-clusterer는 market-collector와 겹치지 않게 실행하고,
+# news-preprocessor와도 가능한 겹치지 않도록 스케줄링합니다.
+# 주기 작업을 모두 동시에 실행하지 않습니다.
+#
+# 실제 메모리 사용량을 확인한 뒤
+# .env의 *_MEMORY_LIMIT 및 *_MEMORY_RESERVATION 값을 조정합니다.
+
+services:
+
+  # ==================================================
+  # 상시 실행 서비스
+  # ==================================================
+
+  # 뉴스 데이터 및 뉴스 클러스터링 결과 저장소
+  postgres:
+    image: postgres:18.6-trixie
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in .env}
+
+    volumes:
+      - postgres-data:/var/lib/postgresql
+
+    # 호스트 내부에서만 직접 접근합니다.
+    # Compose 내부 컨테이너는 postgres:5432로 접근합니다.
+    ports:
+      - "127.0.0.1:5432:5432"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-768m}
+    mem_reservation: ${POSTGRES_MEMORY_RESERVATION:-256m}
+    cpus: 0.3
+
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # 시장 시계열 데이터 저장소
+  questdb:
+    image: questdb/questdb:10.0.1
+    restart: unless-stopped
+
+    environment:
+      QDB_PG_USER: ${QUESTDB_USER:?set QUESTDB_USER in .env}
+      QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?set QUESTDB_PASSWORD in .env}
+
+    volumes:
+      - questdb-data:/var/lib/questdb
+
+    # PostgreSQL 호환 포트와 관리 콘솔은
+    # 호스트 내부에서만 직접 접근합니다.
+    ports:
+      - "127.0.0.1:8812:8812"
+      - "127.0.0.1:9000:9000"
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fsS http://localhost:9003/status >/dev/null || exit 1"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+    mem_limit: ${QUESTDB_MEMORY_LIMIT:-200m}
+    mem_reservation: ${QUESTDB_MEMORY_RESERVATION:-128m}
+    cpus: 0.25
+
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # Backend 서버의 요청을 받아 포트폴리오를 생성하는 상시 API
+  #
+  # news-clusterer를 직접 호출하지 않습니다.
+  # news-clusterer가 PostgreSQL에 저장해 둔 결과를 조회합니다.
+  portfolio-builder:
+    image: ${PUBLIC_ECR_AI_REPOSITORY_URI:?set PUBLIC_ECR_AI_REPOSITORY_URI in .env}:portfolio-builder-${IMAGE_SHA:?set IMAGE_SHA in .env}
+    restart: unless-stopped
+
+    environment:
+      PORTFOLIO_BUILDER_POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
+      PORTFOLIO_BUILDER_QUESTDB_DSN: ${QUESTDB_DSN:?set QUESTDB_DSN in .env}
+
+    # Backend EC2
+    #   → AI EC2 Private IP:8001
+    #   → portfolio-builder container:8000
+    #
+    # AI EC2 Security Group에서는
+    # Backend EC2의 Security Group만 8001 접근 허용
+    ports:
+      - "8001:8000"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+
+    mem_limit: ${PORTFOLIO_BUILDER_MEMORY_LIMIT:-512m}
+    cpus: 0.4
+
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # ==================================================
+  # 주기 실행 서비스
+  # ==================================================
+
+  # 1~2시간마다 실행되는 뉴스 수집/전처리 작업
+  #
+  # 예:
+  # docker compose run --rm news-preprocessor
+  #
+  # 실행 완료 후 컨테이너는 제거됩니다.
+  news-preprocessor:
+    profiles: [news-preprocessor]
+
+    image: ${PUBLIC_ECR_AI_REPOSITORY_URI:?set PUBLIC_ECR_AI_REPOSITORY_URI in .env}:news-preprocessor-${IMAGE_SHA:?set IMAGE_SHA in .env}
+    restart: "no"
+
+    environment:
+      NEWS_PREPROCESSOR_POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    mem_limit: ${NEWS_PREPROCESSOR_MEMORY_LIMIT:-384m}
+    cpus: 0.25
+
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # news-clusterer 실행 전에 checkpoint Volume의
+  # 소유권을 news-clusterer 실행 사용자(UID 10001)로 설정합니다.
+  checkpoint-init:
+    profiles: [news-clusterer]
+
+    image: busybox:1.37
+
+    command:
+      [
+        "chown",
+        "10001:10001",
+        "/checkpoint"
+      ]
+
+    volumes:
+      - clusterer-checkpoint:/checkpoint
+
+    restart: "no"
+
+
+  # 주 1회 실행되는 뉴스 클러스터링 / 요약 작업
+  #
+  # 처리 흐름:
+  #
+  # PostgreSQL에서 뉴스 조회
+  #        ↓
+  # 클러스터링 / 요약
+  #        ↓
+  # PostgreSQL에 결과 저장
+  #
+  # DBSCAN checkpoint는 Docker Volume에 별도 저장합니다.
+  #
+  # 예:
+  # docker compose run --rm news-clusterer
+  news-clusterer:
+    profiles: [news-clusterer]
+
+    image: ${PUBLIC_ECR_AI_REPOSITORY_URI:?set PUBLIC_ECR_AI_REPOSITORY_URI in .env}:news-clusterer-${IMAGE_SHA:?set IMAGE_SHA in .env}
+    restart: "no"
+
+    environment:
+      NEWS_CLUSTERER_POSTGRES_DSN: ${POSTGRES_DSN:?set POSTGRES_DSN in .env}
+
+    volumes:
+      # 실제 파일:
+      # /app/news-clusterer/checkpoint/dbscan_checkpoint.pkl
+      - clusterer-checkpoint:/app/news-clusterer/checkpoint
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+      # checkpoint Volume 권한 설정이 정상 종료된 후 실행합니다.
+      checkpoint-init:
+        condition: service_completed_successfully
+
+    mem_limit: ${NEWS_CLUSTERER_MEMORY_LIMIT:-1g}
+    cpus: 0.6
+
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+  # 월~금 08:00~16:00 동안 실행되는 시장 데이터 수집 서비스
+  #
+  # 시작/종료 시점은 서버 스케줄러에서 제어합니다.
+  market-collector:
+    profiles: [market-collector]
+
+    image: ${PUBLIC_ECR_AI_REPOSITORY_URI:?set PUBLIC_ECR_AI_REPOSITORY_URI in .env}:market-collector-${IMAGE_SHA:?set IMAGE_SHA in .env}
+    restart: "no"
+
+    depends_on:
+      questdb:
+        condition: service_healthy
+
+    mem_limit: ${MARKET_COLLECTOR_MEMORY_LIMIT:-384m}
+    cpus: 0.25
+
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+
+# ==================================================
+# 영속 데이터
+# ==================================================
+
+volumes:
+
+  # PostgreSQL 데이터
+  postgres-data:
+
+  # QuestDB 시계열 데이터
+  questdb-data:
+
+  # news-clusterer의 DBSCAN checkpoint 보관
+  #
+  # /app/news-clusterer/checkpoint/dbscan_checkpoint.pkl
+  clusterer-checkpoint:
