@@ -304,7 +304,7 @@ git commit -m "feat: turn indicator values into deterministic verdicts"
 
 **Interfaces:**
 - Consumes: `indicators`, `comments`, `descriptions`.
-- Produces: `Candles(high, low, close)`, `Reading(value, comment, comment_meaning, description)`, `interpret(field, candles) -> Reading`, `get_basic_market_data() -> str`.
+- Produces: `Candles(high, low, close)`, `Reading(value, comment, comment_reasoning, description)`, `interpret(field, candles) -> Reading`, `get_basic_market_data() -> str`.
 
 Task 7 leaves four pieces in four places. A caller wanting to read one indicator has
 to know which function computes the field, that `macd` yields three fields from one
@@ -318,12 +318,12 @@ interpret("rsi", candles)
 Reading(
     value=57.96,
     comment="NEUTRAL",
-    comment_meaning="The indicator is between its extreme zones, in the range it spends most of its time.",
+    comment_reasoning="The indicator is between its extreme zones, in the range it spends most of its time.",
     description="Relative Strength Index, 0-100: compares the average size of recent gains with ...",
 )
 ```
 
-`comment` is the token and `comment_meaning` is the sentence explaining it, so no
+`comment` is the token and `comment_reasoning` is the sentence explaining it, so no
 caller looks a token up. `description` is always present because it describes the
 measurement, not the moment.
 
@@ -370,7 +370,7 @@ imports talib just as transitively.
 - [ ] **Step 1: Write the failing tests**
 
 `test_readings.py` covers: the public surface being exactly the two calls and their
-types; `interpret` returning all four parts; `comment_meaning` matching
+types; `interpret` returning all four parts; `comment_reasoning` matching
 `COMMENT_MEANINGS[comment]`; reading the newest candle rather than any other;
 every described field being interpretable; `macd_signal` returning value and
 description with no verdict; too little data yielding `value=None` rather than

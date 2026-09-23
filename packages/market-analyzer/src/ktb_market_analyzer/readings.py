@@ -49,14 +49,14 @@ class Candles(NamedTuple):
 class Reading(NamedTuple):
     """One indicator at one moment, with the words to read it by.
 
-    ``comment`` is the verdict token and ``comment_meaning`` is the sentence that
+    ``comment`` is the verdict token and ``comment_reasoning`` is the sentence that
     explains it, so a caller never has to look the token up. ``description`` says
     what the indicator measures and is the same whatever the value is.
     """
 
     value: float | None
     comment: str | None
-    comment_meaning: str | None
+    comment_reasoning: str | None
     description: str
 
 
@@ -84,7 +84,7 @@ def interpret(field: str, candles: Candles) -> Reading:
     """Compute ``field`` over ``candles`` and read its newest value.
 
     ``value`` is ``None`` when TA-Lib could not compute it. ``comment`` and
-    ``comment_meaning`` are ``None`` both then and when the field carries no
+    ``comment_reasoning`` are ``None`` both then and when the field carries no
     verdict rule at all — ``macd_signal`` is the one such field, because
     everything it could say is already said by ``macd`` and ``macd_histogram``.
     ``description`` is always present: it describes the measurement, not the

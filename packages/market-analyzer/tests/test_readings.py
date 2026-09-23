@@ -26,7 +26,7 @@ def test_interpret_returns_all_four_parts_in_one_call():
     assert isinstance(reading, Reading)
     assert reading.value is not None
     assert reading.comment is not None
-    assert reading.comment_meaning is not None
+    assert reading.comment_reasoning is not None
     assert reading.description == DESCRIPTIONS["rsi"]
 
 
@@ -36,7 +36,7 @@ def test_the_meaning_explains_the_label_so_no_lookup_is_needed():
     reading = interpret("rsi", _candles())
     assert reading.comment is not None
 
-    assert reading.comment_meaning == COMMENT_MEANINGS[reading.comment]
+    assert reading.comment_reasoning == COMMENT_MEANINGS[reading.comment]
 
 
 def test_it_reads_the_newest_candle():
@@ -61,7 +61,7 @@ def test_a_field_with_no_verdict_rule_still_returns_its_value_and_description():
     assert "macd_signal" not in COMMENTED_FIELDS
     assert reading.value is not None
     assert reading.comment is None
-    assert reading.comment_meaning is None
+    assert reading.comment_reasoning is None
     assert reading.description == DESCRIPTIONS["macd_signal"]
 
 
