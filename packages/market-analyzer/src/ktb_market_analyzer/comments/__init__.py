@@ -19,7 +19,7 @@ whose rule shape it fits:
   and Rate of Change against zero; the MACD histogram against its signal line.
 
 An indicator that fits neither gets a new module beside these two, exporting the
-same three names — ``FIELDS``, ``MEANINGS`` and ``comments`` — and added to
+same four names — ``FIELDS``, ``MEANINGS``, ``comments`` and ``labels_for`` — and added to
 ``_FAMILIES`` below. That tuple is the only line here that changes.
 
 ``macd_signal`` belongs to no family and has no verdict. Everything it could say is
@@ -34,7 +34,7 @@ import numpy.typing as npt
 
 from ktb_market_analyzer.comments import banded, signed
 
-__all__ = ["COMMENTED_FIELDS", "COMMENT_MEANINGS", "comment_series"]
+__all__ = ["COMMENTED_FIELDS", "COMMENT_MEANINGS", "comment_series", "labels_for"]
 
 _FAMILIES = (banded, signed)
 
@@ -55,6 +55,13 @@ COMMENTED_FIELDS: frozenset[str] = frozenset().union(*(f.FIELDS for f in _FAMILI
 COMMENT_MEANINGS: dict[str, str] = _merged_meanings()
 
 
+def _family_for(field: str):
+    for family in _FAMILIES:
+        if field in family.FIELDS:
+            return family
+    raise KeyError(f"no comment rule for field: {field!r}")
+
+
 def comment_series(field: str, values: npt.NDArray[np.float64]) -> list[str | None]:
     """One verdict per value, aligned with ``values``.
 
@@ -65,7 +72,9 @@ def comment_series(field: str, values: npt.NDArray[np.float64]) -> list[str | No
     nothing resets at a session boundary. A consumer stores a null rather than
     inventing a verdict.
     """
-    for family in _FAMILIES:
-        if field in family.FIELDS:
-            return family.comments(field, values)
-    raise KeyError(f"no comment rule for field: {field!r}")
+    return _family_for(field).comments(field, values)
+
+
+def labels_for(field: str) -> list[str]:
+    """Every label this field can emit, for describing it without any data."""
+    return _family_for(field).labels_for(field)

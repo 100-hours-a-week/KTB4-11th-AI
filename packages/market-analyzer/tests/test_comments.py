@@ -8,8 +8,14 @@ import itertools
 
 import numpy as np
 import pytest
-from ktb_market_analyzer import COMMENT_MEANINGS, COMMENTED_FIELDS, comment_series
-from ktb_market_analyzer.comments import _FAMILIES, banded, signed
+from ktb_market_analyzer.comments import (
+    _FAMILIES,
+    COMMENT_MEANINGS,
+    COMMENTED_FIELDS,
+    banded,
+    comment_series,
+    signed,
+)
 
 
 def test_macd_signal_has_no_rule_because_the_other_two_fields_say_it_all():
@@ -61,13 +67,12 @@ def test_no_two_families_define_the_same_label():
 
 
 def _every_emittable_label() -> set[str]:
-    labels = set(banded.MEANINGS) | {"FLAT"}
-    for rule in signed.SIGNED.values():
-        for side, suffix in itertools.product(
-            ("BULLISH", "BEARISH"),
-            (rule.cross, rule.growing, rule.shrinking, rule.steady),
-        ):
-            labels.add(f"{side}_{suffix}")
+    """Asked of the families rather than written out, so a rule added without its
+    glossary entry fails here."""
+    labels: set[str] = set()
+    for family in _FAMILIES:
+        for field in family.FIELDS:
+            labels |= set(family.labels_for(field))
     return labels
 
 

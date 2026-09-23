@@ -2,9 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give every indicator value a deterministic verdict — 72.4 on the RSI reads as `OVERBOUGHT` — so that a consumer is handed a judgement rather than a number and a threshold to apply itself.
+**Goal:** Give every indicator value a deterministic verdict — 72.4 on the RSI reads as `OVERBOUGHT` — so that a consumer is handed a judgement rather than a number and a threshold to apply itself, and reach it through a single call that returns the number, the verdict, what the verdict means, and what the indicator measures.
 
-**Architecture:** A third text layer beside the existing two. `indicators.py` produces numbers, `descriptions.py` says what each field measures, and the new `comments/` package says what a particular value means. One module per rule family, each exporting the same three names — `FIELDS`, `MEANINGS`, `comments` — so adding an indicator means opening the one file whose rule shape it fits, and adding a new shape means a new file plus one line in the dispatcher. The rules are data rather than branches, which is what lets a test enumerate every label the rules can emit and check it against the glossary. Nothing here is configurable, because a verdict that moved with configuration would not be deterministic.
+**Architecture:** A third text layer beside the existing two, and one call that assembles all of them. `indicators.py` produces numbers, `descriptions.py` says what each field measures, and the new `comments/` package says what a particular value means. One module per rule family, each exporting the same four names — `FIELDS`, `MEANINGS`, `comments`, `labels_for` — so adding an indicator means opening the one file whose rule shape it fits, and adding a new shape means a new file plus one line in the dispatcher. The rules are data rather than branches, which is what lets a test ask the families to enumerate every label they can emit and check it against the glossary. Nothing here is configurable, because a verdict that moved with configuration would not be deterministic.
+
+`readings.py` sits on top and is the package's whole public surface: `interpret` for a moment and `get_basic_market_data` for the indicator itself. It computes nothing the layers below have not already computed — it is assembly, which is why a consumer needing whole series rather than one moment still reaches into the submodules.
 
 **Tech Stack:** Python 3.13, numpy, pytest, ruff, ty — all already present in `packages/market-analyzer`. No new dependencies; `uv.lock` does not change.
 
@@ -91,10 +93,13 @@ Task 7 below modifies `descriptions.py` and `__init__.py`; everything else it ad
 | `packages/market-analyzer/src/ktb_market_analyzer/comments/__init__.py` | Dispatch across rule families, plus the merged `COMMENT_MEANINGS` and `COMMENTED_FIELDS`. New. |
 | `packages/market-analyzer/src/ktb_market_analyzer/comments/banded.py` | The banded family: its fields, bounds, label meanings and rule. New. |
 | `packages/market-analyzer/src/ktb_market_analyzer/comments/signed.py` | The signed family: its fields, word sets, label meanings and rule. New. |
-| `packages/market-analyzer/src/ktb_market_analyzer/__init__.py` | Re-exports the public surface of all three modules. |
+| `packages/market-analyzer/src/ktb_market_analyzer/readings.py` | `Candles`, `Reading`, `interpret`, `get_basic_market_data` — the field-to-function registry and the assembly. New. |
+| `packages/market-analyzer/src/ktb_market_analyzer/__init__.py` | The public surface: the two calls and their types, and nothing else. |
 | `packages/market-analyzer/tests/test_comment_bands.py` | The banded family's own rules. New. |
 | `packages/market-analyzer/tests/test_comment_signed.py` | The signed family's own rules. New. |
 | `packages/market-analyzer/tests/test_comments.py` | Dispatch and the invariants that span families. New. |
+| `packages/market-analyzer/tests/test_readings.py` | The two calls, and that the public surface is exactly them. New. |
+| `services/portfolio-builder/tests/test_main.py` | One assertion retargeted; see Task 8. |
 | `packages/market-analyzer/tests/test_descriptions.py` | Registry completeness and the description/verdict boundary. |
 
 ---
@@ -288,12 +293,123 @@ git commit -m "feat: turn indicator values into deterministic verdicts"
 
 ---
 
+### Task 8: One call for all four parts
+
+**Files:**
+- Create: `packages/market-analyzer/src/ktb_market_analyzer/readings.py`
+- Create: `packages/market-analyzer/tests/test_readings.py`
+- Modify: `packages/market-analyzer/src/ktb_market_analyzer/__init__.py`
+- Modify: `packages/market-analyzer/src/ktb_market_analyzer/comments/{__init__,banded,signed}.py` (add `labels_for`)
+- Modify: `services/portfolio-builder/tests/test_main.py`
+
+**Interfaces:**
+- Consumes: `indicators`, `comments`, `descriptions`.
+- Produces: `Candles(high, low, close)`, `Reading(value, comment, comment_meaning, description)`, `interpret(field, candles) -> Reading`, `get_basic_market_data(field) -> str`.
+
+Task 7 leaves four pieces in four places. A caller wanting to read one indicator has
+to know which function computes the field, that `macd` yields three fields from one
+call, which registry holds the field's description, and which holds the label's
+meaning. That is four imports and a mapping, repeated in every consumer.
+
+`interpret` collapses it to one call:
+
+```python
+interpret("rsi", candles)
+Reading(
+    value=57.96,
+    comment="NEUTRAL",
+    comment_meaning="The indicator is between its extreme zones, in the range it spends most of its time.",
+    description="Relative Strength Index, 0-100: compares the average size of recent gains with ...",
+)
+```
+
+`comment` is the token and `comment_meaning` is the sentence explaining it, so no
+caller looks a token up. `description` is always present because it describes the
+measurement, not the moment.
+
+`get_basic_market_data` answers without any data, for a caller deciding what is worth
+asking about before it spends a call:
+
+```
+macd: MACD line: the 12-period exponential moving average of price minus the
+26-period one. Possible readings: FLAT — ...; BULLISH_ZERO_CROSS — ...; ...
+```
+
+It lists **only the labels that field can emit**. `macd` and `macd_histogram` are in
+the same family but use different words — one crosses zero, the other crosses its
+signal line — so this cannot be a single shared list, which is why each family gains
+`labels_for(field)`. That is the only addition to Task 7's structure; everything else
+here is assembly.
+
+**Nothing new is computed.** `readings.py` calls what already exists. A consumer that
+needs whole series rather than one moment — a collector writing every candle to
+storage — still reaches into `ktb_market_analyzer.indicators` and
+`.comments` directly, because `interpret` answers about the newest candle only.
+
+**The public surface narrows to these two calls.** `rsi`, `macd`, `comment_series`,
+`DESCRIPTIONS` and `COMMENT_MEANINGS` come off the package's top level. They stay
+importable from their submodules; what changes is that the top level now names the
+curated surface rather than every part. One existing test asserted
+`hasattr(ktb_market_analyzer, "rsi")` from `portfolio-builder`, where it proves the
+workspace edge is real and TA-Lib resolved; it is retargeted to `interpret`, which
+imports talib just as transitively.
+
+- [ ] **Step 1: Write the failing tests**
+
+`test_readings.py` covers: the public surface being exactly the two calls and their
+types; `interpret` returning all four parts; `comment_meaning` matching
+`COMMENT_MEANINGS[comment]`; reading the newest candle rather than any other;
+every described field being interpretable; `macd_signal` returning value and
+description with no verdict; too little data yielding `value=None` rather than
+raising; an empty series; an unknown field naming the ones that exist; and for
+`get_basic_market_data`, that it needs no data, lists only that field's labels, and
+says where to look for a field with no verdict.
+
+- [ ] **Step 2: Run them and confirm they fail**
+
+Run: `uv run pytest packages/market-analyzer/tests/test_readings.py -q`
+Expected: collection error, no module named `ktb_market_analyzer.readings`.
+
+- [ ] **Step 3: Add `labels_for` to each family**
+
+Banded returns the same three labels for every field. Signed derives them from the
+rule's word set, so `macd` and `macd_histogram` differ. The dispatcher gains a
+matching `labels_for`, and the glossary test in `test_comments.py` switches to asking
+the families instead of walking the rule tables by hand — which also makes it fail if
+a family's `labels_for` and its `comments` ever disagree.
+
+- [ ] **Step 4: Write `readings.py`**
+
+A `_COMPUTE` dict maps each field name to a callable taking `Candles`, so `macd`,
+`macd_signal` and `macd_histogram` are three rows over one function and a new
+indicator is one row. `interpret` computes, takes the newest value, and asks the
+comments layer for the verdict; `get_basic_market_data` needs neither.
+
+- [ ] **Step 5: Narrow `__init__.py` and retarget the portfolio-builder test**
+
+- [ ] **Step 6: Run everything**
+
+Run: `uv run pytest packages/market-analyzer -q` → 83 tests.
+Run: `uv run pytest -q` → 107 across the workspace.
+Run: `uv run ruff check . && uv run ruff format --check . && uv run ty check` → clean.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add packages/market-analyzer services/portfolio-builder
+git commit -m "feat: one call returning value, verdict, meaning and description"
+```
+
+---
+
 ## Final verification
 
 - [ ] `uv sync --all-packages --locked` succeeds and `git status` is clean afterwards
-- [ ] `uv run pytest packages/market-analyzer -v` passes with 66 tests
+- [ ] `uv run pytest packages/market-analyzer -v` passes with 83 tests
+- [ ] `uv run pytest` passes with 107 across the workspace
 - [ ] `uv run ruff check .`, `uv run ruff format --check .`, `uv run ty check` all pass across the workspace
-- [ ] `ktb_market_analyzer.__all__` exposes exactly: `COMMENTED_FIELDS`, `COMMENT_MEANINGS`, `DESCRIPTIONS`, `MacdResult`, `StochasticResult`, `comment_series`, `macd`, `roc`, `rsi`, `stochastic`, `williams_r`
+- [ ] `ktb_market_analyzer.__all__` exposes exactly: `Candles`, `Reading`, `get_basic_market_data`, `interpret`
+- [ ] The indicator functions, verdict rules and text registries are reachable only through `ktb_market_analyzer.indicators`, `.comments` and `.descriptions`
 - [ ] `packages/market-analyzer/pyproject.toml` is unchanged: zero first-party dependencies, nothing third-party beyond `ta-lib` and `numpy`
 - [ ] `DESCRIPTIONS` contains no verdict word and no threshold comparison
 - [ ] Every verdict is a pure function of the values, with no configuration and no I/O

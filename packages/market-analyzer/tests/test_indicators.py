@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 import talib
-from ktb_market_analyzer import (
+from ktb_market_analyzer.indicators import (
     MacdResult,
     StochasticResult,
     macd,

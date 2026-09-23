@@ -83,3 +83,21 @@ def test_a_nan_does_not_become_the_previous_value_for_trend_purposes():
 
 def test_fields_matches_the_rule_table():
     assert signed.FIELDS == frozenset(signed.SIGNED)
+
+
+def test_labels_for_lists_the_words_this_field_actually_uses():
+    # The MACD line crosses zero while the histogram crosses its signal line, so
+    # the two cannot share one label list.
+    assert "BULLISH_ZERO_CROSS" in signed.labels_for("macd")
+    assert "BULLISH_CROSSOVER" not in signed.labels_for("macd")
+    assert "BULLISH_CROSSOVER" in signed.labels_for("macd_histogram")
+    assert "BULLISH_ZERO_CROSS" not in signed.labels_for("macd_histogram")
+
+
+def test_labels_for_covers_every_label_the_rule_can_emit():
+    for field in signed.FIELDS:
+        rule = signed.SIGNED[field]
+        labels = set(signed.labels_for(field))
+        for suffix in (rule.cross, rule.growing, rule.shrinking, rule.steady):
+            assert f"BULLISH_{suffix}" in labels, field
+            assert f"BEARISH_{suffix}" in labels, field

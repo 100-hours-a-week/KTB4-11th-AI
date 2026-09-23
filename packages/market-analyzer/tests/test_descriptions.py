@@ -1,4 +1,5 @@
-from ktb_market_analyzer import COMMENT_MEANINGS, DESCRIPTIONS
+from ktb_market_analyzer.comments import COMMENT_MEANINGS
+from ktb_market_analyzer.descriptions import DESCRIPTIONS
 
 EXPECTED_FIELDS = {
     "rsi",
