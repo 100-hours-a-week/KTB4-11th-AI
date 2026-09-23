@@ -1,7 +1,6 @@
 import logging
-import re
 from dataclasses import asdict
-from email.utils import parsedate_to_datetime
+from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -10,10 +9,10 @@ from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.maeil.parser import parse_article_body
 
 USER_AGENT = "ktb-ai/0.1"
+# RFC 822, as RSS requires; %z takes both "+0900" and Maeil's "+09:00".
+PUB_DATE_FORMAT = "%a, %d %b %Y %H:%M:%S %z"
 
 logger = logging.getLogger(__name__)
-
-_COLON_OFFSET = re.compile(r"([+-]\d{2}):(\d{2})$")
 
 
 class MaeilBusinessEconomyRSS:
@@ -51,10 +50,7 @@ class MaeilBusinessEconomyRSS:
         pub_date = _text(item, "pubDate")
         if not (link and title and pub_date):
             raise ValueError(f"missing link, title or pubDate: {link or title!r}")
-        # Maeil writes the offset as "+09:00"; parsedate_to_datetime then drops the timezone.
-        published_at = parsedate_to_datetime(_COLON_OFFSET.sub(r"\1\2", pub_date))
-        if published_at.tzinfo is None:
-            raise ValueError(f"pubDate has no timezone: {pub_date!r}")
+        published_at = datetime.strptime(pub_date, PUB_DATE_FORMAT)
         return FeedEntry(
             source=self.source,
             external_id=link,

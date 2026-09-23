@@ -111,6 +111,12 @@ Measured against that server:
 >   function over BeautifulSoup; feeds are parsed with `BeautifulSoup(..., "xml")`. Both were
 >   checked against a billion-laughs payload and an external-entity (XXE) payload: neither
 >   expands nor leaks.
+> - Both adapters parse `pubDate` with `datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %z")`.
+>   `%z` accepts Hankyung's `+0900` and Maeil's `+09:00` alike, so the offset rewrite and the
+>   naive-datetime guard are gone; a `pubDate` that does not match raises `ValueError` and the
+>   entry is skipped and logged. (`datetime.fromisoformat` cannot be used: RSS dates are
+>   RFC 822, e.g. `Wed, 23 Sep 2026 10:31:17 +0900`.) Python keeps `LC_TIME` at `C` unless a
+>   program calls `setlocale`, so `%a`/`%b` stay English.
 > - There is no HTTP helper. `embed()` and both adapters call **httpx** directly; adapters take
 >   an `httpx.Client` (tests inject `httpx.MockTransport`), send `Accept: application/xml` for
 >   feeds and `text/html` for pages, and call `raise_for_status()`. **`ktb_core` keeps no
