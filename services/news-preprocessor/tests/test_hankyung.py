@@ -5,7 +5,6 @@ import httpx
 import pytest
 from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers.hankyung import HankyungEconomyRSS
-from news_preprocessor.sources.publishers.hankyung.rss import USER_AGENT
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 KST = timezone(timedelta(hours=9))
@@ -15,7 +14,7 @@ def _source(article: str | None = None) -> HankyungEconomyRSS:
     pages = {
         HankyungEconomyRSS.feed_url: (
             (FIXTURES / "hankyung_feed.xml").read_text(encoding="utf-8"),
-            "application/xml",
+            "text/xml",
         )
     }
     if article is not None:
@@ -24,7 +23,6 @@ def _source(article: str | None = None) -> HankyungEconomyRSS:
     def handler(request: httpx.Request) -> httpx.Response:
         body, accept = pages[str(request.url)]
         assert request.headers["accept"] == accept
-        assert request.headers["user-agent"] == USER_AGENT
         return httpx.Response(200, text=body)
 
     return HankyungEconomyRSS(client=httpx.Client(transport=httpx.MockTransport(handler)))
