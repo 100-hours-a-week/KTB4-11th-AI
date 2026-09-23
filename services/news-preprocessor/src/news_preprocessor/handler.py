@@ -27,18 +27,19 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, dict[str, Any]]:
     scraped_succeed = [article for result in scraped for article in result.succeed]
     scraped_failed = [article for result in scraped for article in result.failed]
     report = {
-        "scraped": _report(scraped_succeed, scraped_failed),
-        "embedded": _report(embedded.succeed, embedded.failed),
+        "scraped": {
+            "succeed": scraped_succeed,
+            "succeed_count": len(scraped_succeed),
+            "failed": scraped_failed,
+            "failed_count": len(scraped_failed),
+        },
+        "embedded": {
+            "succeed": embedded.succeed,
+            "succeed_count": len(embedded.succeed),
+            "failed": embedded.failed,
+            "failed_count": len(embedded.failed),
+        },
     }
     if scraped_failed or embedded.failed:
         raise RuntimeError(f"failed: {', '.join(scraped_failed + embedded.failed)}")
     return report
-
-
-def _report(succeed: list[str], failed: list[str]) -> dict[str, Any]:
-    return {
-        "succeed": succeed,
-        "succeed_count": len(succeed),
-        "failed": failed,
-        "failed_count": len(failed),
-    }
