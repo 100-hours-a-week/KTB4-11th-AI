@@ -10,7 +10,7 @@ FEED = "https://www.mk.co.kr/rss/30100041/"
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("NEWS_PREPROCESSOR_POSTGRES_DSN", "postgresql+psycopg://u@unused.invalid/db")
-    monkeypatch.setattr(entry, "SOURCES", ("first", "second"))
+    monkeypatch.setattr(entry, "publishers", lambda client: ("first", "second"))
 
 
 def _arrange(monkeypatch, scrape_results, embed_result):

@@ -119,6 +119,10 @@ Measured against that server:
 >   entry is skipped and logged. (`datetime.fromisoformat` cannot be used: RSS dates are
 >   RFC 822, e.g. `Wed, 23 Sep 2026 10:31:17 +0900`.) Python keeps `LC_TIME` at `C` unless a
 >   program calls `setlocale`, so `%a`/`%b` stay English.
+> - `main()` and `handler()` build one `httpx.Client` from `settings.user_agent`
+>   (`NEWS_PREPROCESSOR_USER_AGENT`, default `ktb-ai/0.1`; both publishers answer 403 to
+>   httpx's default agent) and pass it to `publishers(client)`, which replaces the `SOURCES`
+>   tuple. Adapters take the client and never build one.
 > - `scrape()` returns `ScrapeResult(succeed, failed)` and `embed_pending()` returns
 >   `EmbedResult(succeed, failed)`, both lists of `external_id`s; `main()` exits 1 when either
 >   `failed` is non-empty.
@@ -146,14 +150,14 @@ services/news-preprocessor/src/news_preprocessor/
   embed.py           embed(texts, timeout=120, client=None); reads KTB_EMBEDDING_BASE_URI
   scrape.py          scrape(engine, source) -> bool
   embed_pending.py   embed_pending(engine, embedder, limit) -> bool
-  settings.py        existing + embed_batch_limit (default 100)
+  settings.py        existing + user_agent, embed_batch_limit (default 100)
   sources/
     __init__.py              re-exports NewsSource, NewsItem, FeedEntry, EmptyBodyError
     news_source.py           NewsSource protocol
     news_item.py             FeedEntry, NewsItem dataclasses
     empty_body_error.py      EmptyBodyError
     publishers/              one subpackage per news outlet
-      __init__.py            SOURCES
+      __init__.py            publishers(client)
       hankyung/
         rss.py               HankyungEconomyRSS
         parser.py            parse_article_body()
@@ -366,7 +370,7 @@ platform's job.
 
 ```
 1. settings, embedding settings, engine
-2. SCRAPE — for each source in SOURCES:
+2. SCRAPE — for each source in publishers(client):
      entries = source.entries()                 failure → log, failed = True, next source
      known   = known_external_ids(...)          one query per source
      for entry not in known:

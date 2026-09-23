@@ -25,7 +25,7 @@ def _source(article: str | None = None) -> HankyungEconomyRSS:
         assert request.headers["accept"] == accept
         return httpx.Response(200, text=body)
 
-    return HankyungEconomyRSS(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return HankyungEconomyRSS(httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_entries_parse_valid_items_and_skip_one_without_pubdate(caplog):

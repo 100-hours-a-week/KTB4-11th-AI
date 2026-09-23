@@ -25,7 +25,7 @@ def _source(article: str | None = None) -> MaeilBusinessEconomyRSS:
         assert request.headers["accept"] == accept
         return httpx.Response(200, text=body)
 
-    return MaeilBusinessEconomyRSS(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    return MaeilBusinessEconomyRSS(httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_entries_parse_valid_items_and_skip_one_with_a_broken_pubdate(caplog):

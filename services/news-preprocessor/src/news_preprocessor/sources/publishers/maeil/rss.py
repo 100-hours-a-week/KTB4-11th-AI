@@ -5,7 +5,7 @@ from datetime import datetime
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-from news_preprocessor.sources import USER_AGENT, EmptyBodyError, FeedEntry, NewsItem
+from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.maeil.parser import parse_article_body
 
 logger = logging.getLogger(__name__)
@@ -16,10 +16,8 @@ class MaeilBusinessEconomyRSS:
     feed_url = "https://www.mk.co.kr/rss/30100041/"
     pub_date_format = "%a, %d %b %Y %H:%M:%S %z"
 
-    def __init__(self, client: httpx.Client | None = None) -> None:
-        self._client = client or httpx.Client(
-            headers={"User-Agent": USER_AGENT}, follow_redirects=True
-        )
+    def __init__(self, client: httpx.Client) -> None:
+        self._client = client
 
     def entries(self) -> list[FeedEntry]:
         response = self._client.get(self.feed_url, headers={"Accept": "text/xml"}, timeout=30)

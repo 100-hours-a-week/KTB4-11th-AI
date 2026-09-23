@@ -28,12 +28,12 @@ class FakeWeb:
     def sources(self):
         return (
             HankyungEconomyRSS(
-                client=self.client(
+                self.client(
                     HankyungEconomyRSS.feed_url, "hankyung_feed.xml", "hankyung_article.html"
                 )
             ),
             MaeilBusinessEconomyRSS(
-                client=self.client(
+                self.client(
                     MaeilBusinessEconomyRSS.feed_url, "maeil_feed.xml", "maeil_article.html"
                 )
             ),
