@@ -5,11 +5,8 @@ from datetime import datetime
 import httpx
 from bs4 import BeautifulSoup, Tag
 
-from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
+from news_preprocessor.sources import USER_AGENT, EmptyBodyError, FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.maeil.parser import parse_article_body
-
-# Both publishers answer 403 to httpx's default agent.
-USER_AGENT = "ktb-ai/0.1"
 
 logger = logging.getLogger(__name__)
 
