@@ -1,31 +1,33 @@
 import pathlib
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers.maeil import MaeilBusinessEconomyRSS
+from news_preprocessor.sources.publishers.maeil.rss import USER_AGENT
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 KST = timezone(timedelta(hours=9))
 
 
-def _fake_fetch(pages: dict[str, str]):
-    def fetch(url: str, content_type: str) -> str:
-        assert content_type == (
-            "application/xml" if url == MaeilBusinessEconomyRSS.feed_url else "text/html"
-        )
-        return pages[url]
-
-    return fetch
-
-
 def _source(article: str | None = None) -> MaeilBusinessEconomyRSS:
     pages = {
-        MaeilBusinessEconomyRSS.feed_url: (FIXTURES / "maeil_feed.xml").read_text(encoding="utf-8")
+        MaeilBusinessEconomyRSS.feed_url: (
+            (FIXTURES / "maeil_feed.xml").read_text(encoding="utf-8"),
+            "application/xml",
+        )
     }
     if article is not None:
-        pages["https://www.mk.co.kr/news/economy/10000001"] = article
-    return MaeilBusinessEconomyRSS(fetch=_fake_fetch(pages))
+        pages["https://www.mk.co.kr/news/economy/10000001"] = (article, "text/html")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body, accept = pages[str(request.url)]
+        assert request.headers["accept"] == accept
+        assert request.headers["user-agent"] == USER_AGENT
+        return httpx.Response(200, text=body)
+
+    return MaeilBusinessEconomyRSS(client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_entries_parse_valid_items_and_skip_one_with_a_broken_pubdate(caplog):

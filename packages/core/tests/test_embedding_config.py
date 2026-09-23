@@ -43,11 +43,10 @@ def test_the_environment_overrides_the_defaults(reloaded):
     assert module.EMBEDDING_MAX_TOKENS == 8192
 
 
-def test_importing_the_config_does_not_import_the_client_or_urllib():
+def test_importing_the_config_pulls_in_no_third_party_package():
     source = (
         "import sys; import ktb_core.embedding.config; "
-        "print(sorted(name for name in sys.modules "
-        "if name.startswith('ktb_core.embedding.embed') or name == 'urllib.request'))"
+        "print(sorted(name for name in sys.modules if name in ('httpx', 'urllib.request')))"
     )
 
     result = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True)

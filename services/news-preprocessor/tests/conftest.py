@@ -1,6 +1,6 @@
 import pathlib
-from urllib.error import URLError
 
+import httpx
 import pytest
 import sqlalchemy as sa
 from news_preprocessor.sources.publishers import HankyungEconomyRSS, MaeilBusinessEconomyRSS
@@ -13,26 +13,27 @@ class FakeWeb:
         self.requested: list[str] = []
         self._failing_feeds = failing_feeds
 
-    def fetcher(self, feed_url: str, feed: str, article: str):
-        def fetch(url: str, content_type: str) -> str:
+    def client(self, feed_url: str, feed: str, article: str) -> httpx.Client:
+        def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
             self.requested.append(url)
             if url == feed_url:
                 if url in self._failing_feeds:
-                    raise URLError("feed unreachable")
-                return (FIXTURES / feed).read_text(encoding="utf-8")
-            return (FIXTURES / article).read_text(encoding="utf-8")
+                    raise httpx.ConnectError("feed unreachable")
+                return httpx.Response(200, text=(FIXTURES / feed).read_text(encoding="utf-8"))
+            return httpx.Response(200, text=(FIXTURES / article).read_text(encoding="utf-8"))
 
-        return fetch
+        return httpx.Client(transport=httpx.MockTransport(handler))
 
     def sources(self):
         return (
             HankyungEconomyRSS(
-                fetch=self.fetcher(
+                client=self.client(
                     HankyungEconomyRSS.feed_url, "hankyung_feed.xml", "hankyung_article.html"
                 )
             ),
             MaeilBusinessEconomyRSS(
-                fetch=self.fetcher(
+                client=self.client(
                     MaeilBusinessEconomyRSS.feed_url, "maeil_feed.xml", "maeil_article.html"
                 )
             ),

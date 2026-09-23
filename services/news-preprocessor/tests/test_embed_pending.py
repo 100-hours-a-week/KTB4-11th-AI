@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
-from urllib.error import URLError
 
+import httpx
 import sqlalchemy as sa
 from news_preprocessor.embed_pending import embed_pending
 from news_preprocessor.sources import NewsItem
@@ -14,7 +14,7 @@ def fake_embedder(texts: list[str]) -> list[list[float]]:
 
 
 def failing_embedder(texts: list[str]) -> list[list[float]]:
-    raise URLError("embedding host unreachable")
+    raise httpx.ConnectError("embedding host unreachable")
 
 
 def _insert(engine, count: int) -> None:

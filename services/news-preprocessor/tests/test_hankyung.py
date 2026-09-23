@@ -1,31 +1,33 @@
 import pathlib
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers.hankyung import HankyungEconomyRSS
+from news_preprocessor.sources.publishers.hankyung.rss import USER_AGENT
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 KST = timezone(timedelta(hours=9))
 
 
-def _fake_fetch(pages: dict[str, str]):
-    def fetch(url: str, content_type: str) -> str:
-        assert content_type == (
-            "application/xml" if url == HankyungEconomyRSS.feed_url else "text/html"
-        )
-        return pages[url]
-
-    return fetch
-
-
 def _source(article: str | None = None) -> HankyungEconomyRSS:
     pages = {
-        HankyungEconomyRSS.feed_url: (FIXTURES / "hankyung_feed.xml").read_text(encoding="utf-8")
+        HankyungEconomyRSS.feed_url: (
+            (FIXTURES / "hankyung_feed.xml").read_text(encoding="utf-8"),
+            "application/xml",
+        )
     }
     if article is not None:
-        pages["https://www.hankyung.com/article/202609220001i"] = article
-    return HankyungEconomyRSS(fetch=_fake_fetch(pages))
+        pages["https://www.hankyung.com/article/202609220001i"] = (article, "text/html")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body, accept = pages[str(request.url)]
+        assert request.headers["accept"] == accept
+        assert request.headers["user-agent"] == USER_AGENT
+        return httpx.Response(200, text=body)
+
+    return HankyungEconomyRSS(client=httpx.Client(transport=httpx.MockTransport(handler)))
 
 
 def test_entries_parse_valid_items_and_skip_one_without_pubdate(caplog):

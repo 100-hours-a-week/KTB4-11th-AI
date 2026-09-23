@@ -1,13 +1,14 @@
 import logging
-from collections.abc import Callable
 from dataclasses import asdict
 from email.utils import parsedate_to_datetime
 
+import httpx
 from bs4 import BeautifulSoup, Tag
-from ktb_core.utils import fetch
 
 from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.hankyung.parser import parse_article_body
+
+USER_AGENT = "ktb-ai/0.1"
 
 logger = logging.getLogger(__name__)
 
@@ -16,11 +17,11 @@ class HankyungEconomyRSS:
     source = "hankyung_economy"
     feed_url = "https://www.hankyung.com/feed/economy"
 
-    def __init__(self, fetch: Callable[[str, str], str] = fetch) -> None:
-        self._fetch = fetch
+    def __init__(self, client: httpx.Client | None = None) -> None:
+        self._client = client or httpx.Client(follow_redirects=True)
 
     def entries(self) -> list[FeedEntry]:
-        feed = BeautifulSoup(self._fetch(self.feed_url, "application/xml"), "xml")
+        feed = BeautifulSoup(self._get(self.feed_url, "application/xml"), "xml")
         entries = []
         for item in feed.select("channel > item"):
             try:
@@ -30,10 +31,16 @@ class HankyungEconomyRSS:
         return entries
 
     def article(self, entry: FeedEntry) -> NewsItem:
-        body = parse_article_body(self._fetch(entry.url, "text/html"))
+        body = parse_article_body(self._get(entry.url, "text/html"))
         if not body:
             raise EmptyBodyError(entry.url)
         return NewsItem(**asdict(entry), body=body)
+
+    def _get(self, url: str, accept: str) -> str:
+        response = self._client.get(
+            url, headers={"User-Agent": USER_AGENT, "Accept": accept}, timeout=30
+        )
+        return response.raise_for_status().text
 
     def _entry(self, item: Tag) -> FeedEntry:
         link = _text(item, "link")

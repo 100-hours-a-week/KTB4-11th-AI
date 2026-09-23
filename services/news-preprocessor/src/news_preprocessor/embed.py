@@ -1,26 +1,25 @@
-import json
 import math
 import os
 
+import httpx
 from ktb_core.embedding.config import EMBEDDING_DIMENSIONS, EMBEDDING_MAX_TOKENS, EMBEDDING_MODEL
-from ktb_core.utils import fetch
 
 
-def embed(texts: list[str], timeout: float = 120) -> list[list[float]]:
+def embed(
+    texts: list[str], timeout: float = 120, client: httpx.Client | None = None
+) -> list[list[float]]:
     if not texts:
         return []
-    payload = {
-        "model": EMBEDDING_MODEL,
-        "input": texts,
-        "truncate_prompt_tokens": EMBEDDING_MAX_TOKENS,
-    }
-    response = fetch(
+    response = (client or httpx).post(
         f"{os.environ['KTB_EMBEDDING_BASE_URI'].rstrip('/')}/embeddings",
-        "application/json",
-        data=json.dumps(payload).encode(),
+        json={
+            "model": EMBEDDING_MODEL,
+            "input": texts,
+            "truncate_prompt_tokens": EMBEDDING_MAX_TOKENS,
+        },
         timeout=timeout,
     )
-    data = json.loads(response)["data"]
+    data = response.raise_for_status().json()["data"]
     if len(data) != len(texts):
         raise ValueError(f"expected {len(texts)} embeddings, got {len(data)}")
 

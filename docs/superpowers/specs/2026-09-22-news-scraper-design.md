@@ -111,23 +111,23 @@ Measured against that server:
 >   function over BeautifulSoup; feeds are parsed with `BeautifulSoup(..., "xml")`. Both were
 >   checked against a billion-laughs payload and an external-entity (XXE) payload: neither
 >   expands nor leaks.
-> - `fetch_bytes` became `ktb_core.utils.fetch(url, content_type, data=None)`: it sends
->   `Accept: content_type`, and with `data` it POSTs with `Content-Type: content_type`. Feeds
->   ask for `application/xml`, pages for `text/html`, and `embed()` uses it for its JSON POST.
+> - There is no HTTP helper. `embed()` and both adapters call **httpx** directly; adapters take
+>   an `httpx.Client` (tests inject `httpx.MockTransport`), send `Accept: application/xml` for
+>   feeds and `text/html` for pages, and call `raise_for_status()`. **`ktb_core` keeps no
+>   third-party runtime dependency**: only the contract (`ktb_core.embedding.config`) lives
+>   there, while the client lives in the service as `news_preprocessor.embed`. A service that
+>   only compares vectors (news-clusterer) reads the contract without pulling in httpx.
 > - `run()` is gone; `main()` calls `scrape()` (`scrape.py`) for each source and then
 >   `embed_pending()` (`embed_pending.py`). Tests follow the modules: `test_scrape.py`,
 >   `test_embed_pending.py`, `test_main.py` (exit codes).
 
 ```
 packages/core/src/ktb_core/
-  embedding/
-    config.py              KTB_EMBEDDING_MODEL / _DIMENSIONS / _MAX_TOKENS, with defaults (os only)
-    embed.py               embed(texts, timeout=120); reads KTB_EMBEDDING_BASE_URI (required)
-    __init__.py            empty: importing the config must not pull in the client
-  utils/http.py            fetch(url, content_type=None, data=None) -> str — UTF-8, 5 MiB cap
+  embedding/config.py      KTB_EMBEDDING_MODEL / _DIMENSIONS / _MAX_TOKENS, with defaults (os only)
 
 services/news-preprocessor/src/news_preprocessor/
   __main__.py        main(): scrape each source → embed_pending → exit code
+  embed.py           embed(texts, timeout=120, client=None); reads KTB_EMBEDDING_BASE_URI
   scrape.py          scrape(engine, source) -> bool
   embed_pending.py   embed_pending(engine, embedder, limit) -> bool
   settings.py        existing + embed_batch_limit (default 100)
