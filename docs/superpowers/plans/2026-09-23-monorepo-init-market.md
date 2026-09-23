@@ -4,7 +4,7 @@
 
 **Goal:** Give every indicator value a deterministic verdict — 72.4 on the RSI reads as `OVERBOUGHT` — so that a consumer is handed a judgement rather than a number and a threshold to apply itself.
 
-**Architecture:** A third text layer beside the existing two. `indicators.py` produces numbers, `descriptions.py` says what each field measures, and the new `comments.py` says what a particular value means. The rules are data, not branches: two frozen dataclasses and two field-to-rule dicts, which is what lets a test enumerate every label the rules can emit and check it against the glossary. Nothing here is configurable, because a verdict that moved with configuration would not be deterministic.
+**Architecture:** A third text layer beside the existing two. `indicators.py` produces numbers, `descriptions.py` says what each field measures, and the new `comments/` package says what a particular value means. One module per rule family, each exporting the same three names — `FIELDS`, `MEANINGS`, `comments` — so adding an indicator means opening the one file whose rule shape it fits, and adding a new shape means a new file plus one line in the dispatcher. The rules are data rather than branches, which is what lets a test enumerate every label the rules can emit and check it against the glossary. Nothing here is configurable, because a verdict that moved with configuration would not be deterministic.
 
 **Tech Stack:** Python 3.13, numpy, pytest, ruff, ty — all already present in `packages/market-analyzer`. No new dependencies; `uv.lock` does not change.
 
@@ -88,9 +88,13 @@ Task 7 below modifies `descriptions.py` and `__init__.py`; everything else it ad
 |---|---|
 | `packages/market-analyzer/src/ktb_market_analyzer/indicators.py` | The five pure indicator functions plus `MacdResult` and `StochasticResult`. Unchanged. |
 | `packages/market-analyzer/src/ktb_market_analyzer/descriptions.py` | `DESCRIPTIONS: dict[str, str]` — what each output field measures. Rewritten. |
-| `packages/market-analyzer/src/ktb_market_analyzer/comments.py` | The verdict rules, `COMMENT_MEANINGS`, `COMMENTED_FIELDS`, `comment_series`. New. |
+| `packages/market-analyzer/src/ktb_market_analyzer/comments/__init__.py` | Dispatch across rule families, plus the merged `COMMENT_MEANINGS` and `COMMENTED_FIELDS`. New. |
+| `packages/market-analyzer/src/ktb_market_analyzer/comments/banded.py` | The banded family: its fields, bounds, label meanings and rule. New. |
+| `packages/market-analyzer/src/ktb_market_analyzer/comments/signed.py` | The signed family: its fields, word sets, label meanings and rule. New. |
 | `packages/market-analyzer/src/ktb_market_analyzer/__init__.py` | Re-exports the public surface of all three modules. |
-| `packages/market-analyzer/tests/test_comments.py` | Thresholds, crossings, uncomputable values, glossary coverage. New. |
+| `packages/market-analyzer/tests/test_comment_bands.py` | The banded family's own rules. New. |
+| `packages/market-analyzer/tests/test_comment_signed.py` | The signed family's own rules. New. |
+| `packages/market-analyzer/tests/test_comments.py` | Dispatch and the invariants that span families. New. |
 | `packages/market-analyzer/tests/test_descriptions.py` | Registry completeness and the description/verdict boundary. |
 
 ---
@@ -98,7 +102,11 @@ Task 7 below modifies `descriptions.py` and `__init__.py`; everything else it ad
 ### Task 7: Value comments
 
 **Files:**
-- Create: `packages/market-analyzer/src/ktb_market_analyzer/comments.py`
+- Create: `packages/market-analyzer/src/ktb_market_analyzer/comments/__init__.py`
+- Create: `packages/market-analyzer/src/ktb_market_analyzer/comments/banded.py`
+- Create: `packages/market-analyzer/src/ktb_market_analyzer/comments/signed.py`
+- Create: `packages/market-analyzer/tests/test_comment_bands.py`
+- Create: `packages/market-analyzer/tests/test_comment_signed.py`
 - Create: `packages/market-analyzer/tests/test_comments.py`
 - Modify: `packages/market-analyzer/src/ktb_market_analyzer/descriptions.py`
 - Modify: `packages/market-analyzer/src/ktb_market_analyzer/__init__.py`
@@ -188,7 +196,12 @@ value compares against the last real one.
 
 - [ ] **Step 1: Write the failing tests**
 
-`test_comments.py` covers, in order: `macd_signal` and unknown fields raising `KeyError`;
+The family tests sit beside the families they cover. `test_comment_bands.py` and
+`test_comment_signed.py` each exercise one rule file, and `test_comments.py` keeps what no
+single family can check: dispatch, the field-overlap and label-collision invariants, and
+glossary coverage.
+
+Between them they cover, in order: `macd_signal` and unknown fields raising `KeyError`;
 every band boundary at ±0.1 either side; the Williams %R sign trap; the first computable
 value getting no verdict; crossings outranking trend; growth and decay on both sides of
 zero; `roc` sharing the MACD line vocabulary; the histogram naming its crossing
@@ -222,13 +235,28 @@ without its glossary entry fails, and so does a glossary entry no rule can produ
 Run: `uv run pytest packages/market-analyzer/tests/test_comments.py -q`
 Expected: collection error, `ModuleNotFoundError: No module named 'ktb_market_analyzer.comments'`.
 
-- [ ] **Step 3: Write `comments.py`**
+- [ ] **Step 3: Write the `comments/` package**
 
-Two frozen dataclasses hold the rules — `_Band(upper, lower)` and
-`_Signed(cross, growing, shrinking)` — and two module-level dicts map field names onto
-them. `comment_series` dispatches on which dict holds the field and raises `KeyError` when
-neither does. Keeping the rules as data rather than as branches is what lets the glossary
-test enumerate every emittable label; a chain of `if field == ...` could not be walked.
+One module per rule family. `banded.py` holds `Band(upper, lower)`, the four fields that
+use it, the three labels it can emit and their meanings. `signed.py` holds
+`Signed(cross, growing, shrinking, steady)`, its three fields, and its fifteen labels.
+Each exports `FIELDS`, `MEANINGS` and `comments(field, values)` — the same three names —
+and `__init__.py` walks a `_FAMILIES` tuple to dispatch, merge the glossaries and build
+`COMMENTED_FIELDS`.
+
+The split is for cohesion: a field's rule, its label vocabulary and the words explaining
+that vocabulary sit in one file, so adding an indicator is a single-file edit and the
+reader never has to hold two files in their head to see what a verdict means. An
+indicator fitting neither shape gets a third module rather than an `if` in an existing
+one; `_FAMILIES` is the only line in the dispatcher that changes.
+
+The merge refuses a label defined by two families rather than letting one silently win,
+and a test pins that no two families claim the same field — overlapping `FIELDS` would
+make the dispatcher's answer depend on tuple order, which is not a contract anyone should
+rely on.
+
+Keeping the rules as data rather than as branches is what lets the glossary test
+enumerate every emittable label; a chain of `if field == ...` could not be walked.
 
 - [ ] **Step 4: Rewrite `descriptions.py`**
 
@@ -246,7 +274,7 @@ registries share no keys, since one is keyed by field and the other by label.
 - [ ] **Step 6: Re-export and run everything**
 
 Run: `uv run pytest packages/market-analyzer -q`
-Expected: 59 tests pass.
+Expected: 66 tests pass.
 
 Run: `uv run ruff check . && uv run ruff format --check . && uv run ty check`
 Expected: all clean across the workspace, not just this package.
@@ -263,7 +291,7 @@ git commit -m "feat: turn indicator values into deterministic verdicts"
 ## Final verification
 
 - [ ] `uv sync --all-packages --locked` succeeds and `git status` is clean afterwards
-- [ ] `uv run pytest packages/market-analyzer -v` passes with 59 tests
+- [ ] `uv run pytest packages/market-analyzer -v` passes with 66 tests
 - [ ] `uv run ruff check .`, `uv run ruff format --check .`, `uv run ty check` all pass across the workspace
 - [ ] `ktb_market_analyzer.__all__` exposes exactly: `COMMENTED_FIELDS`, `COMMENT_MEANINGS`, `DESCRIPTIONS`, `MacdResult`, `StochasticResult`, `comment_series`, `macd`, `roc`, `rsi`, `stochastic`, `williams_r`
 - [ ] `packages/market-analyzer/pyproject.toml` is unchanged: zero first-party dependencies, nothing third-party beyond `ta-lib` and `numpy`
