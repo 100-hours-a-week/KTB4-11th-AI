@@ -110,13 +110,30 @@ def interpret(field: str, candles: Candles) -> Reading:
     return Reading(value, label, COMMENT_MEANINGS[label], description)
 
 
-def get_basic_market_data(field: str) -> str:
-    """Describe ``field`` and how its readings are meant to be taken, without data.
+def get_basic_market_data(field: str | None = None) -> str:
+    """Describe the indicators, without any price data.
 
-    This is the orientation a caller wants before spending a call on
-    :func:`interpret`: what the indicator measures, and which verdicts it can
-    return with what each one means.
+    Called with no argument this is the catalogue: every indicator and what it
+    measures. That is the briefing a caller starts from — it names the fields, so
+    nothing else has to publish a list of them, and from it a caller picks what to
+    spend an :func:`interpret` call on.
+
+    Called with a field it is the deep dive on that one: what it measures plus
+    every verdict it can return and what each means.
+
+    The catalogue deliberately omits the verdict vocabulary. Four of the eight
+    fields share the same three labels, so listing them eight times would pad the
+    briefing with repetition, and :func:`interpret` returns each verdict's meaning
+    alongside it anyway — a caller never has to have read the vocabulary in advance.
     """
+    if field is None:
+        lines = [
+            "Indicators available. Call interpret(field, candles) for a reading, or "
+            "get_basic_market_data(field) for one field's possible verdicts."
+        ]
+        lines += [f"- {name}: {DESCRIPTIONS[name]}" for name in sorted(_COMPUTE)]
+        return "\n".join(lines)
+
     _known(field)
     text = f"{field}: {DESCRIPTIONS[field]}"
 

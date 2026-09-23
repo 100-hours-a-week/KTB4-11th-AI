@@ -304,7 +304,7 @@ git commit -m "feat: turn indicator values into deterministic verdicts"
 
 **Interfaces:**
 - Consumes: `indicators`, `comments`, `descriptions`.
-- Produces: `Candles(high, low, close)`, `Reading(value, comment, comment_meaning, description)`, `interpret(field, candles) -> Reading`, `get_basic_market_data(field) -> str`.
+- Produces: `Candles(high, low, close)`, `Reading(value, comment, comment_meaning, description)`, `interpret(field, candles) -> Reading`, `get_basic_market_data(field: str | None = None) -> str`.
 
 Task 7 leaves four pieces in four places. A caller wanting to read one indicator has
 to know which function computes the field, that `macd` yields three fields from one
@@ -327,19 +327,33 @@ Reading(
 caller looks a token up. `description` is always present because it describes the
 measurement, not the moment.
 
-`get_basic_market_data` answers without any data, for a caller deciding what is worth
-asking about before it spends a call:
+`get_basic_market_data` answers without any data. **With no argument it is the
+catalogue**, and that is the briefing a caller starts from:
 
 ```
-macd: MACD line: the 12-period exponential moving average of price minus the
-26-period one. Possible readings: FLAT — ...; BULLISH_ZERO_CROSS — ...; ...
+Indicators available. Call interpret(field, candles) for a reading, or
+get_basic_market_data(field) for one field's possible verdicts.
+- macd: MACD line: the 12-period exponential moving average of price minus the 26-period one.
+- macd_histogram: MACD histogram: the MACD line minus its signal line, ...
+- ...
 ```
 
-It lists **only the labels that field can emit**. `macd` and `macd_histogram` are in
-the same family but use different words — one crosses zero, the other crosses its
-signal line — so this cannot be a single shared list, which is why each family gains
-`labels_for(field)`. That is the only addition to Task 7's structure; everything else
-here is assembly.
+This is also the **discovery path**, which is why nothing else needs to publish a list
+of field names. Both calls take a field name, and without the catalogue a caller's only
+way to learn those names would be to trigger the `KeyError` and read its message.
+
+Named with a field it is the deep dive: what it measures plus every verdict it can
+return and what each means. It lists **only the labels that field can emit** — `macd`
+and `macd_histogram` are in the same family but use different words, one crossing zero
+and the other its signal line, so this cannot be a single shared list, which is why
+each family gains `labels_for(field)`. That is the only addition to Task 7's structure;
+everything else here is assembly.
+
+The catalogue deliberately omits the verdict vocabulary. Four of the eight fields share
+the same three labels, so listing them per field would pad the briefing with
+repetition, and `interpret` returns each verdict's meaning alongside it anyway — a
+caller never has to have read the vocabulary in advance. The catalogue runs about 1,100
+characters and a single field about 500.
 
 **Nothing new is computed.** `readings.py` calls what already exists. A consumer that
 needs whole series rather than one moment — a collector writing every candle to
@@ -362,8 +376,9 @@ types; `interpret` returning all four parts; `comment_meaning` matching
 every described field being interpretable; `macd_signal` returning value and
 description with no verdict; too little data yielding `value=None` rather than
 raising; an empty series; an unknown field naming the ones that exist; and for
-`get_basic_market_data`, that it needs no data, lists only that field's labels, and
-says where to look for a field with no verdict.
+`get_basic_market_data`, that the no-argument catalogue names every field and says
+what to call next while omitting the vocabulary, that naming a field lists only that
+field's labels, and that a field with no verdict says where to look instead.
 
 - [ ] **Step 2: Run them and confirm they fail**
 
@@ -389,8 +404,8 @@ comments layer for the verdict; `get_basic_market_data` needs neither.
 
 - [ ] **Step 6: Run everything**
 
-Run: `uv run pytest packages/market-analyzer -q` → 83 tests.
-Run: `uv run pytest -q` → 107 across the workspace.
+Run: `uv run pytest packages/market-analyzer -q` → 87 tests.
+Run: `uv run pytest -q` → 111 across the workspace.
 Run: `uv run ruff check . && uv run ruff format --check . && uv run ty check` → clean.
 
 - [ ] **Step 7: Commit**
@@ -405,8 +420,9 @@ git commit -m "feat: one call returning value, verdict, meaning and description"
 ## Final verification
 
 - [ ] `uv sync --all-packages --locked` succeeds and `git status` is clean afterwards
-- [ ] `uv run pytest packages/market-analyzer -v` passes with 83 tests
-- [ ] `uv run pytest` passes with 107 across the workspace
+- [ ] `uv run pytest packages/market-analyzer -v` passes with 87 tests
+- [ ] `uv run pytest` passes with 111 across the workspace
+- [ ] `get_basic_market_data()` with no argument names every field, so no separate list of field names is published
 - [ ] `uv run ruff check .`, `uv run ruff format --check .`, `uv run ty check` all pass across the workspace
 - [ ] `ktb_market_analyzer.__all__` exposes exactly: `Candles`, `Reading`, `get_basic_market_data`, `interpret`
 - [ ] The indicator functions, verdict rules and text registries are reachable only through `ktb_market_analyzer.indicators`, `.comments` and `.descriptions`

@@ -120,3 +120,33 @@ def test_basic_market_data_says_where_to_look_for_a_field_with_no_verdict():
 def test_basic_market_data_covers_every_described_field():
     for field in DESCRIPTIONS:
         assert get_basic_market_data(field).startswith(f"{field}:"), field
+
+
+def test_the_catalogue_needs_no_argument_and_names_every_field():
+    # This is the discovery path: nothing else publishes a list of field names, so
+    # a caller starts here and picks what to interpret.
+    catalogue = get_basic_market_data()
+
+    for field in DESCRIPTIONS:
+        assert f"- {field}:" in catalogue, field
+        assert DESCRIPTIONS[field] in catalogue, field
+
+
+def test_the_catalogue_tells_the_caller_what_to_call_next():
+    catalogue = get_basic_market_data()
+
+    assert "interpret(" in catalogue
+    assert "get_basic_market_data(field)" in catalogue
+
+
+def test_the_catalogue_omits_the_verdict_vocabulary():
+    # Four fields share the same three labels, so listing them per field would pad
+    # the briefing; interpret() returns each verdict's meaning alongside it anyway.
+    catalogue = get_basic_market_data()
+
+    assert "OVERBOUGHT" not in catalogue
+    assert "ZERO_CROSS" not in catalogue
+
+
+def test_naming_a_field_still_gives_its_verdicts():
+    assert "OVERBOUGHT" in get_basic_market_data("rsi")
