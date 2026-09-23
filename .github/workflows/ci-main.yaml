@@ -34,8 +34,36 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      - name: Check module boundaries
+        run: uv run tach check
+
+      - name: Check core has no external dependencies
+        run: |
+          uv run python -c 'import pathlib, tomllib; assert not tomllib.loads(pathlib.Path("packages/core/pyproject.toml").read_text())["project"]["dependencies"]'
+          uv run tach check-external -e packages/market-analyzer,services
+
       - name: Run tests
         run: uv run pytest
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+      - run: uv sync --all-packages --locked --group migrations
+      - name: Inspect declared dependencies per workspace member
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          audit_status=0
+          for member in packages/* services/*; do
+            echo "::group::$member"
+            uv run deptry "$member/src" --config "$member/pyproject.toml" || audit_status=1
+            echo "::endgroup::"
+          done
+          exit "$audit_status"
 
   build-and-push-images:
     needs: lint-and-test
