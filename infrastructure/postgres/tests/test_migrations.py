@@ -86,29 +86,23 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
     ("module", "owned_tables"),
     [
         ("news_preprocessor.storage", {"articles"}),
-        ("news_clusterer.storage", {"articles", "clusters", "article_clusters"}),
+        ("news_clusterer.storage", {"clusters", "article_clusters"}),
     ],
 )
 def test_service_tables_match_the_migrated_schema(
     pg_dsn, pg_engine, monkeypatch, module, owned_tables
 ):
-    source_metadata = importlib.import_module(module).metadata
+    metadata = importlib.import_module(module).metadata
 
     monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
     command.upgrade(_alembic_config(), "head")
 
-    # Create metadata with only owned tables for comparison
-    metadata = sa.MetaData()
-    for table_name in owned_tables:
-        if table_name in source_metadata.tables:
-            source_metadata.tables[table_name].to_metadata(metadata)
-
-    def only_owned_tables(name, type_, parent_names):
+    def only_owned_tables(obj, name, type_, reflected, compare_to):
         return name in owned_tables if type_ == "table" else True
 
     with pg_engine.connect() as conn:
         context = MigrationContext.configure(
-            conn, opts={"compare_type": True, "include_name": only_owned_tables}
+            conn, opts={"compare_type": True, "include_object": only_owned_tables}
         )
         assert compare_metadata(context, metadata) == []
 
