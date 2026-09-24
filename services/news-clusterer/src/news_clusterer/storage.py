@@ -6,10 +6,8 @@ from ktb_core.embedding.config import EMBEDDING_DIMENSIONS
 from pgvector.sqlalchemy import VECTOR
 from sqlalchemy.dialects.postgresql import insert
 
-# Mirrors infrastructure/postgres/migrations for queries only; the migrations own the schema.
 metadata = sa.MetaData()
 
-# Only the article columns this service reads; news-preprocessor owns the full table.
 articles = sa.Table(
     "articles",
     metadata,
