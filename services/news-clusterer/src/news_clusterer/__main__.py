@@ -2,6 +2,7 @@ import logging
 import resource
 import sys
 import time
+from contextlib import ExitStack
 
 import httpx
 import sqlalchemy as sa
@@ -27,10 +28,10 @@ def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level)
     logger.info("news-clusterer started")
-    engine = sa.create_engine(settings.postgres_dsn)
-    client = httpx.Client()
     failed = 0
-    try:
+    with httpx.Client() as client, ExitStack() as cleanup:
+        engine = sa.create_engine(settings.postgres_dsn)
+        cleanup.callback(engine.dispose)
         started = time.perf_counter()
         with engine.connect() as conn:
             article_ids, vectors = load_embeddings(conn)
@@ -82,9 +83,6 @@ def main() -> None:
             with engine.begin() as conn:
                 set_summary(conn, cluster_id, title, summary)
         logger.info("summarized %d clusters, %d failed", len(pending) - failed, failed)
-    finally:
-        client.close()
-        engine.dispose()
     sys.exit(1 if failed else 0)
 
 
