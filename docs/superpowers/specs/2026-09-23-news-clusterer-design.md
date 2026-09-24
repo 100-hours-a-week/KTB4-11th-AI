@@ -204,9 +204,9 @@ For each cluster that needs a summary:
 
 - `dbscan` against `sklearn.cluster.DBSCAN(metric="cosine")` on generated unit vectors
   (several tight blobs plus scattered noise, seeded):
-  - the core point set equals sklearn's `core_sample_indices_`;
   - the noise set equals sklearn's `-1` points;
-  - labels are equal up to renaming (identical partitions);
+  - labels are equal up to renaming (identical partitions), including chains whose end
+    points are border points;
   - run for several `(eps, min_samples)` pairs, including `min_samples = 1` (no noise)
     and an `eps` so small that everything is noise.
   Generated data keeps pairwise distances away from `eps`, so float rounding cannot flip
