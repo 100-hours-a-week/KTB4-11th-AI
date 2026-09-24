@@ -15,6 +15,8 @@ class YonhapEconomyRSS:
     source = "yonhap_economy"
     feed_url = "https://www.yna.co.kr/rss/economy.xml"
     pub_date_format = "%a, %d %b %Y %H:%M:%S %z"
+    # Cross-section digests of stories that are already published as their own items.
+    digest_title_prefix = "[연합뉴스 이 시각 헤드라인]"
 
     def __init__(self, client: httpx.Client) -> None:
         self._client = client
@@ -31,6 +33,8 @@ class YonhapEconomyRSS:
                 pub_date = get_text(item, "pubDate")
                 if not (link and title and pub_date):
                     raise ValueError(f"missing link, title or pubDate: {link or title!r}")
+                if title.startswith(self.digest_title_prefix):
+                    continue
                 published_at = datetime.strptime(pub_date, self.pub_date_format)
                 entries.append(
                     FeedEntry(

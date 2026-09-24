@@ -28,7 +28,7 @@ def _source(article: str | None = None) -> YonhapEconomyRSS:
     return YonhapEconomyRSS(httpx.Client(transport=httpx.MockTransport(handler)))
 
 
-def test_entries_parse_valid_items_and_skip_one_with_a_broken_pubdate(caplog):
+def test_entries_skip_headline_digests_and_a_broken_pubdate(caplog):
     entries = _source().entries()
 
     assert [entry.external_id for entry in entries] == [
