@@ -38,7 +38,7 @@ PostgreSQL.
 
 1. **Load** every embedded article: `SELECT id, embedding FROM articles WHERE embedding
    IS NOT NULL ORDER BY id`.
-2. **Cluster** them with `dbscan()` (§4).
+2. **Cluster** them with `dbscan()` (§4), then log the cost of steps 1–2 (§3.1).
 3. **Load the previous assignment** from `article_clusters`.
 4. **Match** new clusters to old ones and **write** the result in one transaction (§5).
 5. **Summarize** every cluster that needs it (§6), one transaction per cluster.
@@ -49,6 +49,21 @@ its old self unchanged, and the run writes nothing and calls no LLM.
 
 A summary failure leaves the cluster flagged (§5), so the next run retries it even if the
 cluster did not change again.
+
+### 3.1 Clustering cost log
+
+After step 2, `main()` logs one INFO line so the §8 decision rests on measured numbers:
+
+```
+clustering cost: articles=12345 clusters=210 noise=4021 load_seconds=3.21 dbscan_seconds=58.40 peak_rss_mib=1532
+```
+
+- `load_seconds` / `dbscan_seconds`: `time.perf_counter()` around step 1 and step 2.
+- `peak_rss_mib`: `resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024` (Linux
+  reports KiB). It is the process peak so far, which after step 2 is the loaded vectors
+  plus DBSCAN's working memory; steps 3–5 are much smaller.
+- The values go in the message text because `ktb_core.logging.JsonFormatter` does not
+  emit `extra` fields. Keep the `key=value` format stable so log queries can parse it.
 
 ## 4. DBSCAN
 
@@ -180,7 +195,7 @@ For each cluster that needs a summary:
   dimensions. Memory is `n × 2000 × 4` bytes for the vectors (about 800 MB at 100,000
   articles) plus one row block of distances.
 - **Replace with incremental DBSCAN or online learning** when a run no longer finishes
-  well inside the cron interval or no longer fits the task's memory. Until then, full
+  well inside the cron interval or no longer fits the task's memory, judged from the §3.1 log line. Until then, full
   recompute stays.
 - **Default `eps` / `min_samples` are guesses.** They need tuning against real
   embeddings; a change simply takes effect on the next full run.
@@ -204,4 +219,5 @@ For each cluster that needs a summary:
 - `summarize`: `httpx.MockTransport` for a valid reply, malformed JSON and an HTTP error;
   the character budget keeps the newest article.
 - `main`: end to end against PostgreSQL with a mocked LLM; a second run with no new
-  articles writes nothing and makes no LLM call.
+  articles writes nothing and makes no LLM call; the `clustering cost:` line is logged
+  with the right `articles` / `clusters` / `noise` counts.
