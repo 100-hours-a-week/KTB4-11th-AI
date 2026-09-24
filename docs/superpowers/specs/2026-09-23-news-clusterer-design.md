@@ -1,6 +1,6 @@
-# news-clusterer — Incremental DBSCAN + LLM Summaries
+# news-clusterer — DBSCAN + LLM Summaries
 
-**Date:** 2026-09-23
+**Date:** 2026-09-23 (revised 2026-09-24)
 **Status:** Approved for planning
 
 ## 1. Purpose and scope
@@ -13,9 +13,11 @@ PostgreSQL.
 ### Non-goals
 
 - Any HTTP surface. The FastAPI app and `GET /health` are removed.
-- Expiring old articles from clustering (see §8).
+- Incremental DBSCAN or online learning. Every run clusters all articles from scratch;
+  an incremental algorithm replaces it only once a full run no longer fits (§8).
+- A checkpoint or any state outside PostgreSQL.
 - Per-cluster sentiment, tickers or scores.
-- Deployment mechanics (ECS task, schedule, volume provisioning).
+- Deployment mechanics (ECS task, schedule).
 
 ## 2. Decisions
 
@@ -23,79 +25,53 @@ PostgreSQL.
 |---|---|---|
 | Trigger | Cron: `main()` runs once and exits | Clustering is batch work; nothing needs to call it synchronously |
 | Consumer contract | `portfolio-builder` reads `clusters` / `article_clusters` from PostgreSQL | Removes the only service-to-service HTTP edge; every service now talks through datastores |
-| Algorithm | Incremental DBSCAN (insert-only, Ester et al. 1998), own code on numpy | Each run costs O(new × total) instead of reclustering everything; cluster ids stay stable across runs |
-| State between runs | Pickle checkpoint at `/app/news-clusterer/checkpoint/dbscan_checkpoint.pkl` on a Docker volume | DBSCAN needs every point's neighbour count and label; recomputing them from PostgreSQL each run would be a full recluster |
-| Cluster ids | Assigned by the checkpoint, not by PostgreSQL | Merges and new clusters are decided in memory before any write |
-| Lost or mismatched checkpoint | Full rebuild: clear the cluster tables, treat every embedded article as new | Ids come from the checkpoint, so without it the stored ids have no owner |
-| New-article detection | Embedded article ids minus checkpoint ids | news-preprocessor embeds after inserting, so an older id can be embedded late; a max-id cursor would skip it |
+| Algorithm | Batch DBSCAN over all embedded articles every run | Simplest correct model; revisit when a run gets too slow or too large (§8) |
+| Implementation | Our own DBSCAN on numpy; scikit-learn only in tests as the reference | Keeps sklearn and scipy out of the image; sklearn proves correctness (§9) |
 | Distance | Cosine distance `1 - x·y` on the stored unit vectors | Embeddings are already L2-normalised (news-scraper spec) |
+| Previous state | Read from `article_clusters` | PostgreSQL already holds last run's assignment; no checkpoint file or volume |
+| Cluster identity | Match each new cluster to the old cluster it shares the most articles with (§5) | Stable ids for `portfolio-builder`; unchanged clusters keep their summary |
 | Summaries | vLLM OpenAI-compatible `POST /chat/completions`, full article bodies up to a character budget, JSON `{title, summary}` in Korean | Articles are Korean; full bodies give better summaries |
 | Summary trigger | Only clusters whose membership changed | LLM cost scales with change, not with total clusters |
 | LLM endpoint | Required setting, no default | Keeps team infrastructure addresses out of the repo |
 
 ## 3. Run flow
 
-1. **Load checkpoint.** If the file is missing, or its `eps` / `min_samples` differ from
-   the current settings, start from an empty checkpoint and mark the run as a rebuild.
-2. **Find new articles.** `SELECT id FROM articles WHERE embedding IS NOT NULL`, subtract
-   the checkpoint's ids, then fetch vectors for the remainder ordered by `id`.
-3. **Insert** each new article into the in-memory state in `id` order (§4). Collect the
-   set of cluster ids that gained members, the set absorbed by merges, and every article
-   whose label changed.
-4. **Write clusters** in one transaction (§5). On a rebuild, the transaction first
-   truncates both cluster tables.
+1. **Load** every embedded article: `SELECT id, embedding FROM articles WHERE embedding
+   IS NOT NULL ORDER BY id`.
+2. **Cluster** them with `dbscan()` (§4).
+3. **Load the previous assignment** from `article_clusters`.
+4. **Match** new clusters to old ones and **write** the result in one transaction (§5).
 5. **Summarize** every cluster that needs it (§6), one transaction per cluster.
-6. **Save checkpoint** to a temp file in the same directory, then `os.replace` it over
-   the old one.
-7. Exit 1 if any summary failed, else 0.
+6. Exit 1 if any summary failed, else 0.
 
-A crash between steps 4 and 6 leaves PostgreSQL ahead of the checkpoint. The next run
-replays the same insertions from the old checkpoint; insertion order is deterministic and
-step 4 only upserts, so it reproduces the same rows.
+With no new articles, the same input produces the same clusters, every cluster matches
+its old self unchanged, and the run writes nothing and calls no LLM.
 
 A summary failure leaves the cluster flagged (§5), so the next run retries it even if the
 cluster did not change again.
 
-## 4. Incremental DBSCAN
+## 4. DBSCAN
 
-State (all arrays row-aligned, stored in the checkpoint):
+`dbscan(vectors: float32[n, d], eps: float, min_samples: int) -> int64[n]` returns a
+label per row, `-1` for noise, clusters numbered `0..k-1`. Semantics match
+`sklearn.cluster.DBSCAN(eps=eps, min_samples=min_samples, metric="cosine")`:
 
-| Field | Type | Meaning |
-|---|---|---|
-| `article_ids` | `int64[n]` | `articles.id` of each point |
-| `vectors` | `float32[n, 2000]` | Unit-length embeddings |
-| `counts` | `int32[n]` | Size of the eps-neighbourhood, including the point itself |
-| `labels` | `int64[n]` | Cluster id, or `-1` for noise |
-| `next_cluster_id` | `int` | Next id to hand out, starting at 1 |
-| `eps`, `min_samples` | `float`, `int` | Parameters the state was built with |
+- Neighbours of point `i` are the points `j` (including `i` itself) with
+  `1 - vectors[i] @ vectors[j] <= eps`.
+- `i` is **core** when it has at least `min_samples` neighbours.
+- Visit points in index order. Each unlabelled core point starts a new cluster, which is
+  expanded through core neighbours; non-core neighbours reached by the expansion join the
+  cluster as border points if they are still unlabelled.
+- Points never reached stay `-1`.
 
-A point is **core** when `counts >= min_samples`. Neighbours of `v` are points with
-`1 - vectors @ v <= eps`.
+Neighbour lists are computed in row blocks (`vectors[block] @ vectors.T`, block size
+fixed in code) so peak memory is `block × n` floats rather than `n × n`.
 
-Inserting point `p`:
-
-1. `N` = existing neighbours of `p`. Append `p` with `counts = |N| + 1`, `label = -1`.
-   Increment `counts` for every point in `N`.
-2. `new_cores` = points in `N ∪ {p}` that are core now but were not before this insert.
-3. If `new_cores` is empty: if `N` holds a core point, `p` takes the label of its most
-   similar core neighbour (border point); otherwise `p` stays noise. Done.
-4. Otherwise let `R` = the union of the neighbourhoods of all `new_cores`. `L` = labels of
-   the points in `R` that were core **before** this insert (a new core's old label is
-   only a border label and does not force a merge).
-   - `L` empty → `target = next_cluster_id`, then increment it.
-   - otherwise `target = min(L)`; every point labelled with another id in `L` is
-     relabelled to `target`, and those ids are recorded as merged.
-5. Label every point in `new_cores` with `target`, and every noise point in `R` with `target`.
-
-Only a new core can create or connect clusters in an insert-only stream, so this keeps
-the same core points and core-to-core connectivity as batch DBSCAN over the same points.
-Border points adjacent to two clusters may land in either, as in batch DBSCAN.
-
-## 5. Schema (migration `0002`)
+## 5. Schema (migration `0002`) and matching
 
 ```
 clusters
-  id             bigint PRIMARY KEY            -- from the checkpoint
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY
   title          text NULL
   summary        text NULL
   updated_at     timestamptz NOT NULL DEFAULT now()
@@ -110,12 +86,24 @@ article_clusters
 A cluster **needs a summary** when `summarized_at IS NULL OR summarized_at < updated_at`.
 Noise articles have no `article_clusters` row.
 
-Write order inside the step-4 transaction:
+**Matching** (`match()`, pure Python, no I/O). Input: new clusters and old clusters, each
+as a set of article ids. Output: for each new cluster an old id or none, plus the old ids
+left unmatched.
 
-1. Upsert every cluster that gained members with `updated_at = now()`.
-2. Upsert `article_clusters` for every article whose label changed to a cluster id.
-3. Delete the merged cluster ids. Their members were re-pointed in step 2, so the cascade
-   removes nothing that is still needed.
+1. For every (new, old) pair with at least one shared article, compute the overlap size.
+2. Take pairs in descending overlap order, ties broken by lower old id then lower new
+   label; accept a pair when neither side is matched yet.
+3. Unmatched new clusters get no old id; unmatched old ids are returned for deletion.
+
+**Write** in one transaction:
+
+1. Insert a `clusters` row for every unmatched new cluster (`summarized_at` NULL).
+2. For every matched new cluster whose article set differs from its old one, set
+   `updated_at = now()`.
+3. Replace `article_clusters` rows for articles whose cluster changed: delete rows for
+   articles that became noise, upsert the rest.
+4. Delete the unmatched old clusters. Their remaining members were re-pointed in step 3
+   or became noise, so the cascade removes nothing that is still needed.
 
 ## 6. Summaries
 
@@ -138,9 +126,9 @@ For each cluster that needs a summary:
 | Module | Top-level function |
 |---|---|
 | `settings.py` | `Settings` |
-| `checkpoint.py` | `Checkpoint` state, `load_checkpoint()`, `save_checkpoint()` |
-| `dbscan.py` | `insert()` — §4 on one point |
-| `storage.py` | SQL for §3 step 2, §5 writes and §6 reads/updates |
+| `dbscan.py` | `dbscan()` — §4 |
+| `match.py` | `match()` — §5 matching |
+| `storage.py` | SQL for §3 steps 1 and 3, §5 writes and §6 reads/updates |
 | `summarize.py` | `summarize()` — one cluster to `{title, summary}` via httpx |
 | `__main__.py` | `main()` — the §3 flow |
 
@@ -155,7 +143,6 @@ For each cluster that needs a summary:
 | `llm_model` | required |
 | `eps` | `0.2` (cosine distance; tune on real data) |
 | `min_samples` | `3` (tune on real data) |
-| `checkpoint_path` | `/app/news-clusterer/checkpoint/dbscan_checkpoint.pkl` |
 | `summary_max_chars` | `24000` |
 | `llm_timeout` | `120` seconds |
 | `log_level` | `INFO` |
@@ -164,19 +151,19 @@ For each cluster that needs a summary:
 
 ### Dependencies
 
-Remove `fastapi` and `uvicorn`. Add `numpy`, `httpx`, `sqlalchemy`, `psycopg[binary]` and
-`pgvector`, matching news-preprocessor's versions. Then `uv lock` and regenerate
-`docker/requirements/news-clusterer.txt` as described in `AGENTS.md`.
+- `news-clusterer`: remove `fastapi` and `uvicorn`; add `numpy`, `httpx`, `sqlalchemy`,
+  `psycopg[binary]` and `pgvector`, matching news-preprocessor's versions.
+- Root `dev` group: add `scikit-learn`. It is a test-only reference and must not reach
+  the image.
+- Then `uv lock` and regenerate `docker/requirements/news-clusterer.txt` as described in
+  `AGENTS.md`.
 
 ### Docker and compose
 
-- `docker/news-clusterer.Dockerfile`: drop `EXPOSE 8000`; create
-  `/app/news-clusterer/checkpoint` owned by `app` (uid 10001) before `USER app`, so a
-  fresh named volume mounted there inherits writable ownership.
+- `docker/news-clusterer.Dockerfile`: drop `EXPOSE 8000`.
 - `compose.dev.yaml`: add a `news-clusterer` service under the `jobs` profile, depending
-  on a healthy `postgres`, with a named volume `news-clusterer-checkpoint` mounted at
-  `/app/news-clusterer/checkpoint`, `restart: "no"`, and the `NEWS_CLUSTERER_*`
-  variables passed through from the environment.
+  on a healthy `postgres`, `restart: "no"`, with the `NEWS_CLUSTERER_*` variables passed
+  through from the environment.
 - CI builds the image only; no workflow change is needed.
 
 ### Documentation
@@ -187,29 +174,34 @@ Remove `fastapi` and `uvicorn`. Add `numpy`, `httpx`, `sqlalchemy`, `psycopg[bin
 - The monorepo design spec keeps its history; this spec supersedes its §2 "one
   synchronous edge".
 
-## 8. Limits and risks
+## 8. Limits and when to replace the algorithm
 
-- **Memory and time grow with total articles.** Vectors take about 8 KB per article
-  (about 800 MB at 100,000 articles), and each insert is a dot product against every
-  point. Upgrade path: expire articles older than a window out of the checkpoint.
-- **Pickle executes code on load.** Anyone who can write the checkpoint volume can run
-  code as the job. The volume must be private to this job.
-- **Default `eps` / `min_samples` are guesses.** They need tuning against real embeddings;
-  changing either triggers a full rebuild (§3 step 1).
+- **Every run is O(n²) in time.** At `n` articles it computes `n²` dot products of 2000
+  dimensions. Memory is `n × 2000 × 4` bytes for the vectors (about 800 MB at 100,000
+  articles) plus one row block of distances.
+- **Replace with incremental DBSCAN or online learning** when a run no longer finishes
+  well inside the cron interval or no longer fits the task's memory. Until then, full
+  recompute stays.
+- **Default `eps` / `min_samples` are guesses.** They need tuning against real
+  embeddings; a change simply takes effect on the next full run.
 
 ## 9. Testing
 
-- `dbscan`: insert a synthetic set of unit vectors one by one and compare with a
-  brute-force batch DBSCAN written in the test: same core points, same partition of core
-  points, same noise set, and every border point labelled with a cluster of one of its
-  core neighbours. Include a case where a bridging point merges two clusters and the
-  lower id survives.
-- `checkpoint`: save/load round trip; missing file and changed `eps` both produce an
-  empty state marked as a rebuild.
-- `storage` (PostgreSQL fixtures, skipped without `KTB_TEST_POSTGRES_DSN`): new-article
-  detection including a late-embedded older id; the §5 write order with a merge; rebuild
-  truncation; the needs-summary query.
+- `dbscan` against `sklearn.cluster.DBSCAN(metric="cosine")` on generated unit vectors
+  (several tight blobs plus scattered noise, seeded):
+  - the core point set equals sklearn's `core_sample_indices_`;
+  - the noise set equals sklearn's `-1` points;
+  - labels are equal up to renaming (identical partitions);
+  - run for several `(eps, min_samples)` pairs, including `min_samples = 1` (no noise)
+    and an `eps` so small that everything is noise.
+  Generated data keeps pairwise distances away from `eps`, so float rounding cannot flip
+  a neighbour decision.
+- `match`: unchanged clusters keep their ids; a grown cluster keeps its id; a split keeps
+  the id on the larger part; a merge keeps the id with the larger overlap and deletes the
+  other; ties follow the stated order.
+- `storage` (PostgreSQL fixtures, skipped without `KTB_TEST_POSTGRES_DSN`): the §5 write
+  steps including an article that becomes noise; the needs-summary query.
 - `summarize`: `httpx.MockTransport` for a valid reply, malformed JSON and an HTTP error;
   the character budget keeps the newest article.
 - `main`: end to end against PostgreSQL with a mocked LLM; a second run with no new
-  articles changes nothing and makes no LLM call.
+  articles writes nothing and makes no LLM call.
