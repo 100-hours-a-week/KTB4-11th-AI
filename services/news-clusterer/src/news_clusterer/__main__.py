@@ -7,7 +7,7 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import setup_logging
 
-from news_clusterer.dbscan import dbscan
+from news_clusterer.dbscan import NOISE, dbscan
 from news_clusterer.match import match
 from news_clusterer.settings import Settings
 from news_clusterer.storage import (
@@ -40,7 +40,7 @@ def main() -> None:
 
         new: dict[int, set[int]] = {}
         for article_id, label in zip(article_ids, labels.tolist(), strict=True):
-            if label != -1:
+            if label != NOISE:
                 new.setdefault(label, set()).add(article_id)
         clustered_count = sum(len(members) for members in new.values())
         # Keep this key=value format stable: it decides when to leave full-recompute DBSCAN.

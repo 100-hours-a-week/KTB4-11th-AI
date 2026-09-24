@@ -86,3 +86,16 @@ def test_empty_input():
     labels = dbscan(np.empty((0, 64), dtype=np.float32), 0.1, 3)
 
     assert labels.shape == (0,)
+
+
+@pytest.mark.parametrize(
+    ("vectors", "eps", "min_samples"),
+    [
+        (np.ones(4, dtype=np.float32), 0.1, 3),
+        (blobs(), 0.0, 3),
+        (blobs(), 0.1, 0),
+    ],
+)
+def test_invalid_arguments_raise(vectors, eps, min_samples):
+    with pytest.raises(ValueError):
+        dbscan(vectors, eps, min_samples)

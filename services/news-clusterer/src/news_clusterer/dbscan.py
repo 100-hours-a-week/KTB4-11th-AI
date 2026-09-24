@@ -1,32 +1,48 @@
 import numpy as np
+from numpy.typing import NDArray
 
+NOISE = -1
 BLOCK_ROWS = 1024
 
 
-def dbscan(vectors: np.ndarray, eps: float, min_samples: int) -> np.ndarray:
-    n = len(vectors)
-    neighbors: list[np.ndarray] = []
-    # ponytail: O(n²) distances per run, computed in row blocks so memory stays BLOCK_ROWS × n;
-    # switch to incremental DBSCAN when the "clustering cost" log shows a run no longer fits.
-    for start in range(0, n, BLOCK_ROWS):
-        distances = 1 - vectors[start : start + BLOCK_ROWS] @ vectors.T
-        # Rounding can put a point's distance to itself above a tiny eps; it is always 0.
-        np.fill_diagonal(distances[:, start:], 0)
-        neighbors.extend(np.flatnonzero(row <= eps) for row in distances)
+def dbscan(vectors: NDArray[np.floating], eps: float, min_samples: int) -> NDArray[np.int64]:
+    if vectors.ndim != 2:
+        raise ValueError(f"vectors must be a 2-D array, got shape {vectors.shape}")
+    if eps <= 0:
+        raise ValueError(f"eps must be positive, got {eps}")
+    if min_samples < 1:
+        raise ValueError(f"min_samples must be at least 1, got {min_samples}")
 
-    is_core = [len(points) >= min_samples for points in neighbors]
-    labels = np.full(n, -1, dtype=np.int64)
+    neighborhoods = _cosine_neighborhoods(vectors, eps)
+    is_core = [len(neighborhood) >= min_samples for neighborhood in neighborhoods]
+    return _label_clusters(neighborhoods, is_core)
+
+
+def _cosine_neighborhoods(vectors: NDArray[np.floating], eps: float) -> list[NDArray[np.intp]]:
+    neighborhoods: list[NDArray[np.intp]] = []
+    for start in range(0, len(vectors), BLOCK_ROWS):
+        distances = 1.0 - vectors[start : start + BLOCK_ROWS] @ vectors.T
+        distances_to_self = distances[:, start:]
+        np.fill_diagonal(distances_to_self, 0.0)
+        neighborhoods.extend(np.flatnonzero(row <= eps) for row in distances)
+    return neighborhoods
+
+
+def _label_clusters(
+    neighborhoods: list[NDArray[np.intp]], is_core: list[bool]
+) -> NDArray[np.int64]:
+    labels = np.full(len(neighborhoods), NOISE, dtype=np.int64)
     cluster = 0
-    for seed in range(n):
-        if labels[seed] != -1 or not is_core[seed]:
+    for seed in range(len(neighborhoods)):
+        if not is_core[seed] or labels[seed] != NOISE:
             continue
         labels[seed] = cluster
-        stack = [seed]
-        while stack:
-            for neighbor in neighbors[stack.pop()]:
-                if labels[neighbor] == -1:
+        frontier = [seed]
+        while frontier:
+            for neighbor in neighborhoods[frontier.pop()]:
+                if labels[neighbor] == NOISE:
                     labels[neighbor] = cluster
                     if is_core[neighbor]:
-                        stack.append(neighbor)
+                        frontier.append(neighbor)
         cluster += 1
     return labels
