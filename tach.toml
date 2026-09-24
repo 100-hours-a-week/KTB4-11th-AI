@@ -1,0 +1,26 @@
+source_roots = [
+    "packages/core/src",
+    "packages/market-analyzer/src",
+    "services/news-preprocessor/src",
+    "services/news-clusterer/src",
+    "services/portfolio-builder/src",
+]
+root_module = "forbid"
+
+[[modules]]
+path = "ktb_core"
+
+[[modules]]
+path = "ktb_market_analyzer"
+
+[[modules]]
+path = "news_preprocessor"
+depends_on = ["ktb_core"]
+
+[[modules]]
+path = "news_clusterer"
+depends_on = ["ktb_core"]
+
+[[modules]]
+path = "portfolio_builder"
+depends_on = ["ktb_core", "ktb_market_analyzer"]
