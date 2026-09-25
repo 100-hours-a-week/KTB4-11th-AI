@@ -20,7 +20,7 @@
   KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run alembic upgrade head
   ```
   Every `pytest` command below is run as `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest ...` (written `PYTEST ...` below). After Task 1 adds migration `0003`, re-run the `alembic upgrade head` line above.
-- **Secrets:** never `cat`, print, log or commit the Kiwoom key files (`~/.config/ktb4-ai/kiwoom/`) or the DART key (`OPENDART_API_KEY` in the main checkout's `.env`). Tests use fake values only. No step in this plan needs a real key.
+- **Secrets:** never `cat`, print, log or commit API keys (the Kiwoom app/secret keys and the DART key). Tests use fake values only. No step in this plan needs a real key.
 - Code style (`AGENTS.md`): no comments or docstrings that restate names, comments only for a non-obvious *why*; one top-level function per module; no thin wrappers or single-caller helpers; configuration via environment variables with defaults except truly required values.
 - After changing any member's dependencies: `uv lock`, then exactly
   `uv export --package <svc> --no-dev --no-emit-workspace --format requirements-txt -o docker/requirements/<svc>.txt`.

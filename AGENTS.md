@@ -19,13 +19,18 @@ KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news uv run alembic
 docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f flag is required)
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
-NEWS_GRAPH_BUILDER_LLM_BASE_URI=http://100.bbb.ccc.ddd:8001/v1 NEWS_GRAPH_BUILDER_LLM_MODEL=<model> NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY=<key> NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY=<key> docker compose -f compose.dev.yaml up news-graph-builder
+docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
 
 # tests TRUNCATE tables: point them at a separate database, never at `news`
 docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run alembic upgrade head
 KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest
 ```
+
+`news-graph-builder` reads `NEWS_GRAPH_BUILDER_LLM_BASE_URI`, `NEWS_GRAPH_BUILDER_LLM_MODEL`,
+`NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY` and `NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY` from the shell
+environment, and the DART key from `OPENDART_API_KEY` in the `.env` file next to
+`compose.dev.yaml`. Export the keys from a file rather than typing them on the command line.
 
 pytest runs with `--import-mode=importlib`, so test files with the same name (e.g. `test_settings.py`) can exist in several members without `__init__.py`.
 
