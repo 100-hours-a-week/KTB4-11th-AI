@@ -102,8 +102,10 @@ def extract(
         },
         timeout=timeout,
     )
-    content = response.raise_for_status().json()["choices"][0]["message"]["content"]
+    response.raise_for_status()
+    content = None
     try:
+        content = response.json()["choices"][0]["message"]["content"]
         reply = json.loads(content)
         extraction = Extraction(
             reply["title"],
@@ -114,8 +116,9 @@ def extract(
                 for item in reply["relations"]
             ][:max_relations],
         )
-    except (ValueError, KeyError, TypeError) as error:
-        raise ValueError(f"LLM reply does not match the schema: {content!r}") from error
+    except (ValueError, KeyError, TypeError, IndexError) as error:
+        msg = content if content is not None else response.text
+        raise ValueError(f"LLM reply does not match the schema: {msg!r}") from error
     fields = [
         extraction.title,
         extraction.summary,

@@ -117,3 +117,20 @@ def test_malformed_replies_raise_value_error(content):
 def test_http_errors_raise():
     with pytest.raises(httpx.HTTPStatusError):
         call(client_replying("", status=500), [("a", "b")])
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"choices": []},
+        {"choices": [{}]},
+    ],
+)
+def test_malformed_envelope_raises_value_error(body):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(ValueError):
+        call(client, [("a", "b")])
