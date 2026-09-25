@@ -101,6 +101,13 @@ def collect(
     returns immediately without any request. ``max_pages`` bounds a smoke
     run and does not mark the cursor done, so a later unbounded run still
     resumes and finishes the walk.
+
+    A ``next_key`` that comes back unchanged from the one just sent — a
+    server bug, not a rate limit or transport error, so ``ChartClient``'s own
+    retry/backoff cannot see it — means the walk cannot make progress. This
+    is detected and the loop stops, leaving the cursor un-done so a later,
+    corrected run resumes from the same point rather than looping against
+    Kiwoom forever with every iteration counting against the rate limit.
     """
     cursor = cursors.get(symbol, timeframe)
     if cursor.done:
@@ -115,10 +122,11 @@ def collect(
     pages_fetched = 0
 
     while True:
+        sent_key = next_key
         page = (
-            client.daily_page(symbol, base_dt, next_key)
+            client.daily_page(symbol, base_dt, sent_key)
             if is_daily
-            else client.minute_page(symbol, TIC_SCOPES[timeframe], next_key)
+            else client.minute_page(symbol, TIC_SCOPES[timeframe], sent_key)
         )
         pages_fetched += 1
 
@@ -132,9 +140,20 @@ def collect(
 
         depth_reached = len(collected) >= depth
         history_ended = not page.has_more
+        stalled = page.has_more and next_key == sent_key
 
         if depth_reached or history_ended:
             cursors.finish(symbol, timeframe)
+            break
+        if stalled:
+            log.warning(
+                "next_key did not advance for %s/%s (stuck at %r after %d pages); "
+                "stopping without marking done",
+                symbol,
+                timeframe,
+                next_key,
+                pages_fetched,
+            )
             break
         if max_pages is not None and pages_fetched >= max_pages:
             break
