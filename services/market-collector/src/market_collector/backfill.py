@@ -162,12 +162,18 @@ def collect(
     losing that data. See the module docstring for why ``backfill_one``
     needs both.
 
-    A page that comes back empty on the very first request — a halted
-    symbol, a newly-listed one, or a transient upstream empty — is not
-    treated as history ending: an empty later page after real data already
-    arrived is a legitimate end of history, but an empty first page carries
-    no evidence of that, and treating it as one would mark the pair done
-    having collected nothing, never to be retried.
+    A page that comes back empty on the very first request ever made for
+    this pair — a halted symbol, a newly-listed one, or a transient
+    upstream empty — is not treated as history ending: an empty later page
+    after real data already arrived (in this run *or an earlier one*) is a
+    legitimate end of history, but an empty first-ever page carries no
+    evidence of that, and treating it as one would mark the pair done
+    having collected nothing, never to be retried. "First ever" is read
+    from ``cursor.pages``, not just this call's own page count — a resumed
+    walk's first *fetched-this-call* page is not the walk's first page,
+    and treating it as such would make a genuinely empty terminal page
+    after a resume permanently unfinishable: every later run would
+    re-fetch only that one page and hit the same false ambiguity again.
 
     A ``next_key`` that comes back unchanged from the one just sent — a
     server bug, not a rate limit or transport error, so ``ChartClient``'s own
@@ -207,7 +213,15 @@ def collect(
         next_key = page.next_key
         cursors.advance(symbol, timeframe, next_key, oldest_raw)
 
-        first_page_empty = pages_fetched == 1 and not page.rows
+        # cursor.pages is the count persisted from earlier runs; a
+        # resumed walk starts this call's pages_fetched back at 0, so
+        # checking only pages_fetched == 1 would treat the first page
+        # fetched *after resume* as evidence-free even when it is the
+        # walk's genuine terminal empty page -- the pair would then
+        # never finish, re-fetching that one page forever. Gating on
+        # cursor.pages == 0 too means "no page has ever been fetched
+        # for this pair, in this run or any earlier one".
+        first_page_empty = cursor.pages == 0 and pages_fetched == 1 and not page.rows
         depth_reached = len(collected) >= depth
         history_ended = (not page.has_more) and not first_page_empty
         stalled = page.has_more and next_key == sent_key
