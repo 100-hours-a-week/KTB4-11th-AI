@@ -3,6 +3,7 @@ from datetime import datetime
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
+from news_graph_builder.extract import Extraction
 from news_graph_builder.normalize import normalize
 
 # Mirrors infrastructure/postgres/migrations for queries only; the migrations own the schema.
@@ -175,3 +176,62 @@ def company_entity_id(conn: sa.Connection, corp_code: str) -> int:
             set_={"corp_code": statement.excluded.corp_code},
         ).returning(entities.c.id)
     ).scalar_one()
+
+
+def lock_cluster(conn: sa.Connection, cluster_id: int, seen: datetime) -> bool:
+    query = (
+        sa.select(clusters.c.id)
+        .where(clusters.c.id == cluster_id, clusters.c.updated_at == seen)
+        .with_for_update(read=True)
+    )
+    return conn.execute(query).first() is not None
+
+
+def write_graph(
+    conn: sa.Connection,
+    cluster_id: int,
+    seen: datetime,
+    extraction: Extraction,
+    entity_ids: dict[str, int],
+) -> int:
+    conn.execute(sa.delete(cluster_entities).where(cluster_entities.c.cluster_id == cluster_id))
+    conn.execute(sa.delete(relations).where(relations.c.cluster_id == cluster_id))
+    if entity_ids:
+        conn.execute(
+            insert(cluster_entities),
+            [
+                {"cluster_id": cluster_id, "entity_id": entity_id}
+                for entity_id in sorted(set(entity_ids.values()))
+            ],
+        )
+    rows = [
+        {
+            "cluster_id": cluster_id,
+            "source_entity_id": entity_ids[normalize(relation.source)],
+            "target_entity_id": entity_ids[normalize(relation.target)],
+            "type": relation.type,
+            "description": relation.description,
+        }
+        for relation in extraction.relations
+        if normalize(relation.source) in entity_ids and normalize(relation.target) in entity_ids
+    ]
+    if rows:
+        conn.execute(insert(relations), rows)
+    statement = insert(cluster_summaries).values(
+        cluster_id=cluster_id,
+        title=extraction.title,
+        summary=extraction.summary,
+        cluster_updated_at=seen,
+    )
+    conn.execute(
+        statement.on_conflict_do_update(
+            index_elements=[cluster_summaries.c.cluster_id],
+            set_={
+                "title": statement.excluded.title,
+                "summary": statement.excluded.summary,
+                "cluster_updated_at": statement.excluded.cluster_updated_at,
+                "summarized_at": sa.func.now(),
+            },
+        )
+    )
+    return len(extraction.relations) - len(rows)
