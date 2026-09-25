@@ -28,9 +28,48 @@ def test_defaults_match_the_measured_safe_values(monkeypatch):
     settings = Settings()
 
     assert settings.log_level == "INFO"
-    assert settings.questdb_ilp_port == 9009
+    # 9000 is the HTTP ILP port, which store.py connects to with
+    # Protocol.Http; 9009 is the TCP ILP port and is not open on the
+    # running QuestDB server.
+    assert settings.questdb_ilp_port == 9000
     assert settings.request_interval == 1.3
     assert settings.theme_date_tps == [5, 20, 60]
+
+
+def test_backfill_depths_default_to_the_backfill_modules_depths(monkeypatch):
+    from market_collector.backfill import DEFAULT_DEPTHS
+
+    _populate(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.backfill_depths == DEFAULT_DEPTHS
+
+
+def test_backfill_depths_can_be_overridden(monkeypatch):
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_BACKFILL_DEPTHS", '{"1m": 100}')
+
+    settings = Settings()
+
+    assert settings.backfill_depths == {"1m": 100}
+
+
+def test_indicators_on_backfill_defaults_to_false(monkeypatch):
+    _populate(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.indicators_on_backfill is False
+
+
+def test_indicators_on_backfill_can_be_enabled(monkeypatch):
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_INDICATORS_ON_BACKFILL", "true")
+
+    settings = Settings()
+
+    assert settings.indicators_on_backfill is True
 
 
 @pytest.mark.parametrize(

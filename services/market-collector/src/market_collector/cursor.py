@@ -29,7 +29,7 @@ class Cursor:
 
 
 class CursorStore:
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path | str) -> None:
         self._path = Path(path)
         self._state: dict[str, dict[str, object]] = self._load()
         self._lock = threading.Lock()
