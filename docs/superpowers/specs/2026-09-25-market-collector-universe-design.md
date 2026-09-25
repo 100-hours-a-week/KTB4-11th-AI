@@ -127,10 +127,17 @@ can write a row, the row should say which one did.
 | Module | Contents |
 |---|---|
 | `universe/dto.py` | `IndexMember` |
-| `universe/kiwoom.py` | `fetch_members()` — §4.1 step 1, and `IndexSource` Protocol |
-| `universe/repository.py` | `upsert_members()`, `latest_members()` — §4.2 |
+| `universe/kiwoom.py` | `IndexClient.members()` pages `ka20002`; `fetch_members()` validates and logs; `IndexSource` Protocol |
+| `universe/repository.py` | `upsert_members()`, `latest_members()` — §4.2 — and `EmptyUniverseError` |
 | `universe/service.py` | `sync_universe()` — §4.1, on plain rows |
-| `universe/__init__.py` | `EmptyUniverseError`, and the public names above |
+| `universe/__init__.py` | Re-exports the public names above |
+
+Two placements differ from an earlier draft of this table, both for reasons the code makes
+plain. `EmptyUniverseError` is defined in `repository.py`, the module that raises it, and
+re-exported from `__init__.py`; defining it in `__init__.py` would have `repository` import
+its own package and cycle. And `kiwoom.py` splits paging from validation — `IndexClient.members`
+walks the pages, `fetch_members` rejects a malformed symbol and logs the count — because the
+paging half is what a test replaces and the validating half is what a test exercises.
 
 Deleted: `universe/kospi200.csv` and the `load_from` / `load_kospi200` loader that read it,
 with its skipped 200-count test.
