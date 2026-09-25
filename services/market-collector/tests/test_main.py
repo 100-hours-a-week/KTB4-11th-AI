@@ -23,7 +23,7 @@ def test_bare_invocation_validates_and_exits(monkeypatch, capsys):
     assert payload["message"] == "market-collector started"
 
 
-def test_unknown_subcommand_exits_nonzero(monkeypatch):
+def test_unknown_subcommand_exits_nonzero(monkeypatch, capsys):
     _populate(monkeypatch)
     monkeypatch.setattr("sys.argv", ["market-collector", "nope"])
 
@@ -31,3 +31,4 @@ def test_unknown_subcommand_exits_nonzero(monkeypatch):
         main()
 
     assert exc.value.code == 2
+    assert "invalid choice" in capsys.readouterr().err

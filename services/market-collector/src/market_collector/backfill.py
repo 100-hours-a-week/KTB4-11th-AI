@@ -54,7 +54,14 @@ from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, 
 from market_collector.kiwoom.rest import Page
 from market_collector.store import CandleRow, Store
 
-__all__ = ["DEFAULT_DEPTHS", "TIC_SCOPES", "backfill_one", "collect", "to_candle_rows"]
+__all__ = [
+    "DEFAULT_DEPTHS",
+    "TIC_SCOPES",
+    "backfill_one",
+    "collect",
+    "refresh_recent",
+    "to_candle_rows",
+]
 
 log = logging.getLogger(__name__)
 
@@ -265,3 +272,37 @@ def backfill_one(
     written = store.write_candles(timeframe, rows)
     log.info("backfilled %d %s candles for %s", written, timeframe, symbol)
     return written
+
+
+def refresh_recent(
+    client: ChartSource,
+    store: Store,
+    symbol: str,
+    timeframe: str,
+    base_dt: str,
+    since: datetime,
+) -> int:
+    """Fetch the newest page and write only the candles at or after ``since``.
+
+    Indicators are computed over the whole page but only the tail is written.
+    One page is 900 candles for the minute endpoints and 600 for the daily
+    one, while the tail of a single session is at most about 450 candles, so
+    every written candle has well over the 300-candle warm-up behind it. Writing
+    the whole page instead would overwrite good indicator values from the
+    backfill with nulls, because the head of the page has no warm-up.
+    """
+    is_daily = timeframe == "1d"
+    page = (
+        client.daily_page(symbol, base_dt)
+        if is_daily
+        else client.minute_page(symbol, TIC_SCOPES[timeframe])
+    )
+    parse = parse_daily_bar if is_daily else parse_minute_bar
+    bars = sorted({parse(row).ts: parse(row) for row in page.rows}.values(), key=lambda b: b.ts)
+    if not bars:
+        return 0
+
+    rows = [row for row in to_candle_rows(bars, symbol) if row.ts >= since]
+    if not rows:
+        return 0
+    return store.write_candles(timeframe, rows)
