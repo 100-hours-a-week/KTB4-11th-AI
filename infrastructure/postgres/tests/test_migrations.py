@@ -87,6 +87,17 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
     [
         ("news_preprocessor.storage", {"articles"}),
         ("news_clusterer.storage", {"clusters", "article_clusters"}),
+        (
+            "news_graph_builder.storage",
+            {
+                "companies",
+                "company_aliases",
+                "entities",
+                "cluster_summaries",
+                "cluster_entities",
+                "relations",
+            },
+        ),
     ],
 )
 def test_service_tables_match_the_migrated_schema(
