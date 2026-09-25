@@ -173,6 +173,41 @@ def test_max_pages_bounds_a_smoke_run_without_marking_done(tmp_path):
     assert cursors.get("005930", "1m").done is False
 
 
+class StallingClient:
+    """Always claims more history with a ``next_key`` that never advances —
+    the pathological server behaviour ``collect`` must detect rather than
+    page against forever. A real server could hand back an infinite supply
+    of such pages; this fake actually does, so the test only passes if
+    ``collect`` itself bounds the number of calls.
+    """
+
+    def __init__(self, next_key):
+        self._next_key = next_key
+        self.minute_calls = []
+
+    def minute_page(self, symbol, tic_scope, next_key=None):
+        self.minute_calls.append((symbol, tic_scope, next_key))
+        return Page([_minute_row(0, 277000)], self._next_key, True)
+
+    def daily_page(self, symbol, base_dt, next_key=None):
+        raise NotImplementedError
+
+
+def test_collect_stops_when_next_key_stops_advancing(tmp_path):
+    client = StallingClient("STUCK")
+    cursors = CursorStore(tmp_path / "c.json")
+
+    bars = collect(client, "005930", "1m", cursors, BASE_DT, depth=8000)
+
+    # One call to discover the stuck key, one more to confirm it repeats —
+    # not the unbounded loop a naive implementation would run forever.
+    assert len(client.minute_calls) == 2
+    assert client.minute_calls[0][2] is None
+    assert client.minute_calls[1][2] == "STUCK"
+    assert len(bars) == 1
+    assert cursors.get("005930", "1m").done is False
+
+
 def test_collect_pages_the_daily_endpoint_for_the_1d_timeframe(tmp_path):
     row = {
         "dt": "20260921",
