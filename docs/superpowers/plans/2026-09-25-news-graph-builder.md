@@ -1631,6 +1631,8 @@ def test_keeps_listed_companies(monkeypatch):
             ["00126380", "삼성전자", "SAMSUNG ELECTRONICS CO,.LTD", "005930", "20251201"],
             ["00999999", "비상장", "Unlisted", " ", "20250101"],
             ["00164779", "SK하이닉스", " ", "000660", "20240328"],
+            ["00266961", "NAVER", None, "035420", "20240311"],
+            ["00888888", "상장폐지", "Delisted", None, "20240101"],
         ],
         columns=["corp_code", "corp_name", "corp_eng_name", "stock_code", "modify_date"],
     )
@@ -1639,6 +1641,7 @@ def test_keeps_listed_companies(monkeypatch):
     assert fetch_corp_codes("key") == [
         DartCompany("00126380", "삼성전자", "SAMSUNG ELECTRONICS CO,.LTD", "005930"),
         DartCompany("00164779", "SK하이닉스", None, "000660"),
+        DartCompany("00266961", "NAVER", None, "035420"),
     ]
 
 
@@ -1747,11 +1750,12 @@ def fetch_corp_codes(api_key: str) -> list[DartCompany]:
         DartCompany(
             row.corp_code,
             row.corp_name,
-            (row.corp_eng_name or "").strip() or None,
+            row.corp_eng_name.strip() or None,
             row.stock_code.strip(),
         )
-        for row in frame.itertuples()
-        if (row.stock_code or "").strip()
+        # pandas 3 stores a missing string as NaN, which is truthy and has no strip().
+        for row in frame.fillna("").itertuples()
+        if row.stock_code.strip()
     ]
 ```
 
