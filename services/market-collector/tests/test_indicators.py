@@ -21,8 +21,19 @@ def _prices(n: int):
     return high, low, close
 
 
-def test_the_field_set_is_exactly_the_published_descriptions():
-    assert set(INDICATOR_FIELDS) == set(DESCRIPTIONS)
+def test_every_stored_field_has_a_published_description():
+    # A subset, deliberately, not an equality. INDICATOR_FIELDS is what the
+    # collector persists to QuestDB; DESCRIPTIONS is everything the analyzer
+    # can describe, and that catalogue is meant to grow past this set —
+    # indicators added later are computed on demand when the LLM calls them as
+    # a tool, and never get a column. An equality here would fail the day the
+    # first tool-only indicator lands and would read as "add a column", which
+    # is the opposite of the intent.
+    #
+    # The direction that does matter: nothing may be stored that the analyzer
+    # cannot describe, or a stored column would reach an LLM with no statement
+    # of what it measures.
+    assert set(INDICATOR_FIELDS) <= set(DESCRIPTIONS)
 
 
 def test_series_returns_one_array_per_field_aligned_with_the_input():

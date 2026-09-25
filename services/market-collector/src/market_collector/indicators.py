@@ -1,4 +1,13 @@
-"""The eight indicator fields and their verdicts, computed over a candle window.
+"""The eight persisted indicator fields and their verdicts, over a candle window.
+
+``INDICATOR_FIELDS`` is the set the collector computes during collection and
+stores in QuestDB beside the OHLCV. It is declared here by hand, and not
+derived from the analyzer's catalogue, because the two are meant to diverge:
+indicators added to ``ktb_market_analyzer`` later are computed on demand when
+the LLM calls them as a tool, over candles read back through
+``store.read_regular_candles``, and never get a column. Adding an indicator to
+the analyzer is therefore not a schema change. A field joins this tuple only
+when someone decides it is worth persisting on every candle.
 
 Indicators are recomputed over the whole series rather than updated from their
 own previous values. Three of the five underlying functions need a rolling
