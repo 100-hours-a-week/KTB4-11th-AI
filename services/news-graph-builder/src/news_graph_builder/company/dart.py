@@ -1,13 +1,6 @@
-from typing import NamedTuple
-
 from opendartreader.dart_list import corp_codes
 
-
-class DartCompany(NamedTuple):
-    corp_code: str
-    corp_name: str
-    corp_eng_name: str | None
-    stock_code: str
+from news_graph_builder.company.dto import DartCompany
 
 
 def fetch_corp_codes(api_key: str) -> list[DartCompany]:

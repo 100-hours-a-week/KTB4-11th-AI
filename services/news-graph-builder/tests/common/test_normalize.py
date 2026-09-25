@@ -1,5 +1,5 @@
 import pytest
-from news_graph_builder.normalize import normalize
+from news_graph_builder.common import normalize
 
 
 @pytest.mark.parametrize(

@@ -1,8 +1,6 @@
 import sqlalchemy as sa
-from news_graph_builder.dart import DartCompany
-from news_graph_builder.extract import Entity
-from news_graph_builder.resolve import resolve
-from news_graph_builder.sync_companies import sync_companies
+from news_graph_builder.company import DartCompany, sync_companies
+from news_graph_builder.graph import Entity, resolve
 
 SAMSUNG = DartCompany("00126380", "삼성전자", None, "005930")
 

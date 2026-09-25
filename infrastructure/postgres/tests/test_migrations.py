@@ -88,7 +88,7 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
         ("news_preprocessor.storage", {"articles"}),
         ("news_clusterer.storage", {"clusters", "article_clusters"}),
         (
-            "news_graph_builder.storage",
+            "news_graph_builder.database",
             {
                 "companies",
                 "company_aliases",

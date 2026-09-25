@@ -1,7 +1,6 @@
 import pytest
 import sqlalchemy as sa
-from news_graph_builder.dart import DartCompany
-from news_graph_builder.sync_companies import sync_companies
+from news_graph_builder.company import DartCompany, sync_companies
 
 SAMSUNG = DartCompany("00126380", "삼성전자", "SAMSUNG ELECTRONICS CO,.LTD", "005930")
 HYNIX = DartCompany("00164779", "SK하이닉스", "SK hynix Inc.", "000660")

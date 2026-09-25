@@ -2,7 +2,7 @@ import json
 
 import httpx
 import pytest
-from news_graph_builder.extract import Entity, Extraction, Relation, extract
+from news_graph_builder.graph import Entity, Extraction, Relation, extract
 
 BASE_URI = "http://llm.test/v1"
 

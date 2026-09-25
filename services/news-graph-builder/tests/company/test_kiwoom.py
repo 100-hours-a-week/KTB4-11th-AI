@@ -2,7 +2,7 @@ import json
 
 import httpx
 import pytest
-from news_graph_builder.kiwoom import fetch_kospi
+from news_graph_builder.company import fetch_kospi
 
 BASE_URI = "https://kiwoom.test"
 

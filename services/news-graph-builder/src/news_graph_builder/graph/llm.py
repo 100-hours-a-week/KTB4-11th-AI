@@ -1,8 +1,9 @@
 import json
 from collections.abc import Sequence
-from typing import NamedTuple
 
 import httpx
+
+from news_graph_builder.graph.dto import Entity, Extraction, Relation
 
 SYSTEM_PROMPT = (
     "당신은 경제 뉴스 편집자입니다. 같은 사건을 다룬 기사들이 주어집니다. "
@@ -44,25 +45,6 @@ RESPONSE_FORMAT = {
         },
     },
 }
-
-
-class Entity(NamedTuple):
-    name: str
-    type: str
-
-
-class Relation(NamedTuple):
-    source: str
-    target: str
-    type: str
-    description: str
-
-
-class Extraction(NamedTuple):
-    title: str
-    summary: str
-    entities: list[Entity]
-    relations: list[Relation]
 
 
 def extract(

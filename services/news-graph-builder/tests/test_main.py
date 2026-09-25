@@ -3,9 +3,9 @@ import logging
 import pytest
 import sqlalchemy as sa
 from news_graph_builder import __main__ as entry
-from news_graph_builder.dart import DartCompany
-from news_graph_builder.extract import Entity, Extraction, Relation
-from news_graph_builder.storage import due_clusters
+from news_graph_builder.cluster import due_clusters
+from news_graph_builder.company import DartCompany
+from news_graph_builder.graph import Entity, Extraction, Relation
 
 SAMSUNG = DartCompany("00126380", "삼성전자", "SAMSUNG ELECTRONICS CO,.LTD", "005930")
 EXTRACTION = Extraction(

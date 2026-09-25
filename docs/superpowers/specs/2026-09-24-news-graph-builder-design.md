@@ -257,17 +257,29 @@ and `response_format` of type `json_schema`:
 
 ### Modules (`services/news-graph-builder/src/news_graph_builder/`)
 
-| Module | Top-level function |
+Organized by domain, NestJS-style: each domain package exposes a public API in its
+`__init__.py`; `service.py` holds decisions, `repository.py` holds SQL, `dto.py` holds data
+shapes. `tach.toml` enforces the dependencies and interfaces between the packages.
+
+| Module | Contents |
 |---|---|
-| `settings.py` | `Settings` |
-| `normalize.py` | `normalize()` |
-| `kiwoom.py` | `fetch_kospi()` — §6 step 1 |
-| `dart.py` | `fetch_corp_codes()` — §6 step 2 |
-| `sync_companies.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
-| `extract.py` | `extract()` — §7 |
-| `resolve.py` | `resolve()` — §5 |
-| `storage.py` | due clusters, member articles, the §4.1 write |
 | `__main__.py` | `main()` — §4 |
+| `settings.py` | `Settings` |
+| `database.py` | `metadata` and the table mirrors (the migrations own the schema) |
+| `common/normalize.py` | `normalize()` — §5 |
+| `company/kiwoom.py` | `fetch_kospi()` — §6 step 1 |
+| `company/dart.py` | `fetch_corp_codes()` — §6 step 2 |
+| `company/dto.py` | `DartCompany` |
+| `company/service.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
+| `company/repository.py` | company upserts, aliases, entity merge, `company_entity_id()` |
+| `cluster/repository.py` | due clusters, member articles, `lock_cluster()` — §4.1 step 1 |
+| `graph/dto.py` | `Entity`, `Relation`, `Extraction` |
+| `graph/llm.py` | `extract()` — §7 |
+| `graph/service.py` | `resolve()` — §5 |
+| `graph/repository.py` | plain-entity upsert, `write_graph()` — §4.1 steps 3–4 |
+
+Dependencies: `graph` → `company`; `company`, `cluster`, `graph` → `database`, `common`.
+`company` never imports `graph`.
 
 ### Settings (`NEWS_GRAPH_BUILDER_` prefix)
 

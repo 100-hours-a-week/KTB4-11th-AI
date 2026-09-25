@@ -2,8 +2,7 @@ import traceback
 
 import pandas as pd
 import pytest
-from news_graph_builder import dart
-from news_graph_builder.dart import DartCompany, fetch_corp_codes
+from news_graph_builder.company import DartCompany, dart, fetch_corp_codes
 
 
 def test_keeps_listed_companies(monkeypatch):

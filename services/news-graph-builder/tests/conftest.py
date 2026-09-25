@@ -69,3 +69,14 @@ def article():
 @pytest.fixture
 def cluster():
     return add_cluster
+
+
+def read_updated_at(conn: sa.Connection, cluster_id: int) -> datetime:
+    return conn.execute(
+        sa.text("SELECT updated_at FROM clusters WHERE id = :id"), {"id": cluster_id}
+    ).scalar_one()
+
+
+@pytest.fixture
+def updated_at():
+    return read_updated_at
