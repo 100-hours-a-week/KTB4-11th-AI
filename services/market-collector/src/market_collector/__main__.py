@@ -38,11 +38,32 @@ def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
     return [group for group in groups if group]
 
 
+# Calendar days the preopen window trails behind ``now``, not exactly one.
+# "Midnight KST of the day before" misses Friday entirely on a Monday run:
+# Monday minus one calendar day is Sunday, and refresh_recent then filters
+# every Friday row out as older than ``since``. Phase 1 has no live path, so
+# preopen is the only ongoing candle writer and backfill will not fill the
+# gap behind it (those pairs are marked done) — a Monday-Friday schedule
+# would lose one trading day every week, permanently, for 1-minute data.
+#
+# 4 is the smallest window that reaches Friday not only from a plain Monday
+# run (Monday - 3 calendar days already gets there) but also from a Tuesday
+# run following a Monday holiday (Tuesday - 4 calendar days = Friday), with
+# no trading calendar available to compute that precisely. Dedup on
+# (ts, symbol) makes the resulting overlap on every ordinary day free to
+# write twice.
+PREOPEN_WINDOW_DAYS = 4
+
+
 def previous_session_start(now: datetime) -> datetime:
-    """Midnight KST of the day before ``now``, expressed in UTC."""
+    """Start of the trailing preopen window (``PREOPEN_WINDOW_DAYS`` calendar
+    days before ``now``), at KST midnight, expressed in UTC.
+    """
     local = now.astimezone(KST)
-    previous = (local - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-    return previous.astimezone(UTC)
+    start = (local - timedelta(days=PREOPEN_WINDOW_DAYS)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return start.astimezone(UTC)
 
 
 def _client(settings: Settings, index: int) -> tuple[ChartClient, HttpxTransport]:

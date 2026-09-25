@@ -97,6 +97,85 @@ def test_written_rows_have_a_warm_indicator_because_the_page_carries_history():
     assert any(field in last for field in INDICATOR_FIELDS)
 
 
+def _row_on(date, minute_index, close):
+    hour, minute = divmod(minute_index, 60)
+    stamp = f"{date}{9 + hour:02d}{minute:02d}00"
+    return {
+        "cntr_tm": stamp,
+        "cur_prc": f"+{close}",
+        "open_pric": f"+{close}",
+        "high_pric": f"+{close + 100}",
+        "low_pric": f"+{close - 100}",
+        "trde_qty": "1000",
+    }
+
+
+class TwoPageFakeClient:
+    """Replays scripted pages in order — the shape a preopen window that
+    outgrows one page needs, unlike ``FakeClient`` above which always
+    returns the same page regardless of the requested continuation."""
+
+    def __init__(self, pages):
+        self._pages = list(pages)
+        self.calls = []
+
+    def minute_page(self, symbol, tic_scope, next_key=None):
+        self.calls.append((symbol, tic_scope, next_key))
+        return self._pages.pop(0)
+
+    def daily_page(self, symbol, base_dt, next_key=None):
+        raise NotImplementedError("this test only exercises the minute endpoint")
+
+
+def test_1m_pages_further_back_when_since_is_not_covered_by_one_page():
+    # since reaches back to a day the newest page alone cannot cover (a
+    # Monday preopen run reaching Friday, per H3): the newest page is dated
+    # 2026-09-22 and since is 2026-09-19 09:00 KST, three trading days back.
+    newest = Page([_row_on("20260922", i, 277000 + i) for i in range(390)], "NK1", True)
+    older = Page([_row_on("20260919", i, 276000 + i) for i in range(390)], None, False)
+    client = TwoPageFakeClient([newest, older])
+    sink = FakeSink()
+
+    written = refresh_recent(
+        client,
+        Store(sink),
+        "005930",
+        "1m",
+        "20260922",
+        since=datetime(2026, 9, 19, 0, 0, tzinfo=UTC),  # 2026-09-19 09:00 KST
+    )
+
+    assert len(client.calls) == 2
+    assert client.calls[0] == ("005930", 1, None)
+    assert client.calls[1] == ("005930", 1, "NK1")
+    assert written == len(sink.rows) == 780
+    assert all(row[3] >= datetime(2026, 9, 19, 0, 0, tzinfo=UTC) for row in sink.rows)
+
+
+def test_1m_paging_stops_once_max_refresh_pages_is_hit():
+    # since is never reached (it is far older than either page), and history
+    # never ends (has_more stays True) — a pathological or very deep window
+    # must not turn into an unbounded page loop.
+    pages = [
+        Page([_row_on("20260922", i, 277000 + i) for i in range(390)], "NK1", True),
+        Page([_row_on("20260921", i, 276000 + i) for i in range(390)], "NK2", True),
+        Page([_row_on("20260920", i, 275000 + i) for i in range(390)], "NK3", True),
+    ]
+    client = TwoPageFakeClient(pages)
+    sink = FakeSink()
+
+    refresh_recent(
+        client,
+        Store(sink),
+        "005930",
+        "1m",
+        "20260922",
+        since=datetime(2020, 1, 1, tzinfo=UTC),
+    )
+
+    assert len(client.calls) == 3
+
+
 def test_nothing_new_writes_nothing():
     page = Page([_row(0, 277000)], None, False)
     sink = FakeSink()

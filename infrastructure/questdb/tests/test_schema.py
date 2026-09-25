@@ -3,6 +3,7 @@ import pathlib
 import re
 
 import pytest
+from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS
 
 REPO_ROOT = next(
     parent
@@ -18,21 +19,19 @@ _spec.loader.exec_module(apply_mod)
 
 BAR_TABLES = ["bars_1m", "bars_15m", "bars_1h", "bars_1d"]
 THEME_TABLES = ["theme_snapshot", "theme_members"]
-INDICATORS = [
-    "rsi",
-    "macd",
-    "macd_signal",
-    "macd_histogram",
-    "stochastic_k",
-    "stochastic_d",
-    "roc",
-    "williams_r",
-]
+
+# Derived from market_collector.indicators rather than hand-listed: Task 3's
+# convention is that new indicators are added to ktb_market_analyzer one at a
+# time, and a hand-maintained copy here would silently drift the day the
+# first one lands — the DDL would never declare the new column, ILP would
+# auto-create it untyped and unindexed (or the server would reject the row),
+# and this file would still pass because it was only checking itself.
+INDICATORS = list(INDICATOR_FIELDS)
 
 # Every indicator except macd_signal carries a verdict beside its value. The
 # exception is deliberate: macd_signal is a smoothed copy of the MACD line, so
 # every event involving it is already reported on macd_histogram.
-COMMENTED = [name for name in INDICATORS if name != "macd_signal"]
+COMMENTED = list(COMMENT_FIELDS)
 
 
 def _all_sql() -> str:
@@ -50,6 +49,18 @@ def _dedup_keys(statement: str) -> str:
     match = re.search(r"DEDUP UPSERT KEYS\s*\(([^)]*)\)", statement)
     assert match is not None
     return match.group(1)
+
+
+def _column_names(statement: str) -> set[str]:
+    """The declared column names of a ``CREATE TABLE`` statement.
+
+    Parses the ``(col type, col type, ...)`` block between the table name
+    and ``TIMESTAMP(ts)``, taking each entry's first token as the column
+    name — robust to the type and any trailing modifier (``SYMBOL INDEX``).
+    """
+    match = re.search(r"\((.*)\)\s*TIMESTAMP\(ts\)", statement, re.DOTALL)
+    assert match is not None
+    return {part.strip().split()[0] for part in match.group(1).split(",") if part.strip()}
 
 
 def test_every_expected_table_is_declared():
@@ -101,6 +112,21 @@ def test_macd_signal_has_no_verdict_column():
     # decision.
     for table in BAR_TABLES:
         assert "macd_signal_comment" not in _statement_for(table), table
+
+
+def test_candle_columns_exactly_match_the_analyzers_indicator_and_comment_fields():
+    # Pins the DDL's column set to the code's own field lists rather than to
+    # anything hand-maintained in this file, so the first indicator Task 3's
+    # convention adds shows up here as a failing test instead of a silently
+    # untyped, unindexed column (or a rejected row) in production.
+    expected = (
+        {"ts", "symbol", "session", "src"}  # metadata
+        | {"open", "high", "low", "close", "volume", "trade_value"}  # OHLCV
+        | set(INDICATOR_FIELDS)
+        | {f"{field}_comment" for field in COMMENT_FIELDS}
+    )
+    for table in BAR_TABLES:
+        assert _column_names(_statement_for(table)) == expected, table
 
 
 def test_partition_granularity_matches_candle_density():
