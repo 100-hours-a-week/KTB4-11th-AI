@@ -3290,6 +3290,57 @@ def test_backfill_accepts_a_page_bound(monkeypatch):
     assert seen["max_pages"] == 2
 ```
 
+### Defects and additions carried into this task
+
+Four things reached this task from elsewhere. None were in the original plan.
+
+**1. `Settings.questdb_ilp_port` defaults to the wrong port.** It is `9009`, but `store.py`
+connects with `Protocol.Http` and QuestDB serves HTTP ILP on **9000** — 9009 is the TCP ILP
+port, which `compose.dev.yaml` does not even expose. Verified against the running server:
+9009 is closed, and a real `Sender(Protocol.Http, host, 9009)` fails with "Could not detect
+server's line protocol version". Every real run would fail to connect.
+
+Change the default to `9000` and add a test pinning it, with a comment saying which
+protocol the port belongs to — the two numbers are easy to swap back because both are
+"the QuestDB port" to a reader who has not hit this.
+
+**2. Two settings v1 needs, which no earlier task added** because nothing read them yet:
+
+```
+MARKET_COLLECTOR_BACKFILL_DEPTHS          per-timeframe bar counts
+                                          default {"1m": 8000, "15m": 300, "1h": 300, "1d": 300}
+MARKET_COLLECTOR_INDICATORS_ON_BACKFILL   compute indicators and verdicts over backfilled
+                                          history; default False
+```
+
+`backfill.DEFAULT_DEPTHS` already holds those four numbers. Import it as the setting's
+default rather than retyping them, so the two cannot drift.
+
+The toggle governs **history only**. `run_backfill` passes it through as
+`with_indicators`; `run_preopen` always computes regardless, because new candles are the
+whole reason the indicators exist.
+
+**3. `HttpxTransport` opens an `httpx.Client` and nothing closes it.** It exposes `close()`
+but has no context-manager support, and this task builds one transport per account inside
+long-running workers — so the connection pool leaks for the process lifetime. Close each
+transport when its worker finishes. Do not add `__enter__`/`__exit__` to `HttpxTransport`
+itself; that is Task 5's file and a separate change.
+
+**4. `tach.toml` does not know about this service.** A separate branch
+(`feat/6/news-scraper`, PR #19) introduces `tach` with `root_module = "forbid"` and an
+explicit module list. It has not merged yet, so the file may be absent when you run — check
+first. **If `tach.toml` exists**, add `market_collector` to `source_roots` and a module
+entry:
+
+```toml
+[[modules]]
+path = "market_collector"
+depends_on = ["ktb_core", "ktb_market_analyzer"]
+```
+
+and confirm `uv run tach check` passes. If the file does not exist, skip this and say so in
+your report — do not create it.
+
 - [ ] **Step 6: Replace `__main__.py`**
 
 ```python
