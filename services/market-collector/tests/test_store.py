@@ -247,6 +247,102 @@ def test_read_regular_candles_rejects_unknown_timeframe():
         read_regular_candles("postgresql://localhost:8812/qdb", "4h", "005930")
 
 
+def _fake_psycopg(rows: list[tuple[datetime, float, float, float]]):
+    """A ``psycopg`` stand-in whose fake cursor behaves like a real
+    ``ORDER BY`` / ``LIMIT`` query over ``rows`` -- filtering by ``ts >=``,
+    sorting ascending or descending, and truncating to a limit, each only if
+    the executed query text asks for it. Tests built on this exercise the
+    function's actual SQL choices (ASC vs DESC, whether LIMIT/ts>= appear at
+    all) rather than merely pinning query text.
+    """
+
+    class FakeCursor:
+        def execute(self, query, params) -> None:
+            query_l = str(query).lower()
+            params_iter = iter(params)
+            next(params_iter)  # symbol; every row here already matches it
+            result = list(rows)
+            if "ts >=" in query_l:
+                since = next(params_iter)
+                result = [row for row in result if row[0] >= since]
+            result.sort(key=lambda row: row[0], reverse="desc" in query_l)
+            if "limit" in query_l:
+                limit = next(params_iter)
+                result = result[:limit]
+            self._result = result
+
+        def fetchall(self):
+            return self._result
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    return types.SimpleNamespace(connect=lambda dsn: FakeConnection())
+
+
+_FIVE_ROWS = [
+    (datetime(2026, 9, 22, hour, tzinfo=UTC), float(i), float(i) - 1, float(i))
+    for i, hour in enumerate(range(9, 14))
+]
+
+
+def test_read_regular_candles_limit_selects_the_newest_not_the_oldest(monkeypatch):
+    # Five distinct timestamps: the two oldest and two newest are disjoint
+    # sets, so a naive `ORDER BY ts ASC LIMIT 2` (which returns the two
+    # oldest) fails this assertion; only selecting the newest two and
+    # returning them oldest-first satisfies it.
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
+
+    result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=2)
+
+    assert result == [_FIVE_ROWS[3], _FIVE_ROWS[4]]
+
+
+def test_read_regular_candles_since_is_inclusive(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
+
+    result = read_regular_candles(
+        "postgresql://localhost:8812/qdb", "1m", "005930", since=_FIVE_ROWS[2][0]
+    )
+
+    assert result == [_FIVE_ROWS[2], _FIVE_ROWS[3], _FIVE_ROWS[4]]
+
+
+def test_read_regular_candles_since_and_limit_combine_to_newest_after_since(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
+
+    result = read_regular_candles(
+        "postgresql://localhost:8812/qdb",
+        "1m",
+        "005930",
+        since=_FIVE_ROWS[1][0],
+        limit=2,
+    )
+
+    # since keeps rows 1..4; the newest 2 of those are rows 3 and 4.
+    assert result == [_FIVE_ROWS[3], _FIVE_ROWS[4]]
+
+
+def test_read_regular_candles_rejects_non_positive_limit():
+    with pytest.raises(ValueError, match="0"):
+        read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=0)
+    with pytest.raises(ValueError, match="-1"):
+        read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=-1)
+
+
 def test_without_nones_keeps_falsy_but_non_none_values():
     # This is the filter that protects in_universe=False and genuine 0.0
     # MACD/ROC values from ever being silently dropped. `is not None` is

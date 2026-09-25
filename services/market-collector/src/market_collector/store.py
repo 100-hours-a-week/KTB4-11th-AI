@@ -221,28 +221,68 @@ def questdb_sink(host: str, port: int) -> Iterator[RowSink]:
 
 
 def read_regular_candles(
-    dsn: str, timeframe: str, symbol: str
+    dsn: str,
+    timeframe: str,
+    symbol: str,
+    *,
+    since: datetime | None = None,
+    limit: int | None = None,
 ) -> list[tuple[datetime, float, float, float]]:
     """Regular-session candles for one symbol, oldest first, as (ts, high, low, close).
 
     The column order is deliberate: it is exactly the three series
     ``ktb_market_analyzer``'s ``Candles`` needs, so a caller builds one with a
     single ``zip`` over the result.
+
+    ``since``, if given, bounds the window from that timestamp onward and is
+    *inclusive*: a candle timestamped exactly ``since`` is returned.
+
+    ``limit``, if given, returns the newest ``limit`` candles -- not the
+    oldest -- though the result is still returned oldest-first. Combined
+    with ``since``, the two together mean "the newest ``limit`` candles at
+    or after ``since``". ``limit`` must be a positive integer; zero or a
+    negative value raises ``ValueError`` rather than returning an empty
+    list, since an empty list would misleadingly read as "no data for this
+    symbol" rather than "you asked for zero rows".
+
+    Bound your request generously: ``ktb_market_analyzer``'s indicators need
+    warm-up history before they produce a value -- RSI needs 14 prior
+    candles, MACD needs 33 -- so asking for only the newest candle, or a
+    narrow window, returns candles whose indicators are all NaN.
     """
     if timeframe not in TIMEFRAME_TABLES:
         raise KeyError(f"unknown timeframe: {timeframe}")
+    if limit is not None and limit <= 0:
+        raise ValueError(f"limit must be positive, got {limit}")
 
     import psycopg
 
     table = TIMEFRAME_TABLES[timeframe]
-    # The table name comes from TIMEFRAME_TABLES, not caller input, so the
-    # f-string is safe; it is only not a LiteralString because of that
+    since_clause = " AND ts >= %s" if since is not None else ""
+    order_clause = "ORDER BY ts DESC LIMIT %s" if limit is not None else "ORDER BY ts ASC"
+    # The table name comes from TIMEFRAME_TABLES, not caller input;
+    # since_clause and order_clause are each picked from a fixed pair of
+    # literal strings, never built from since/limit/symbol themselves. So
+    # the f-string is safe; it is only not a LiteralString because of that
     # interpolation, which is what the cast below tells the type checker.
     query = cast(
         LiteralString,
         f"SELECT ts, high, low, close FROM {table} "
-        "WHERE symbol = %s AND session = 'regular' ORDER BY ts ASC",
+        f"WHERE symbol = %s AND session = 'regular'{since_clause} {order_clause}",
     )
+    params: tuple[object, ...] = (symbol,)
+    if since is not None:
+        params += (since,)
+    if limit is not None:
+        params += (limit,)
+
     with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
-        cursor.execute(query, (symbol,))
-        return [(ts, high, low, close) for ts, high, low, close in cursor.fetchall()]
+        cursor.execute(query, params)
+        rows = [(ts, high, low, close) for ts, high, low, close in cursor.fetchall()]
+
+    if limit is not None:
+        # We asked the DB for the newest `limit` rows in descending order;
+        # reverse them so the function's contract (oldest first) still
+        # holds regardless of which bounds a caller combined.
+        rows.reverse()
+    return rows
