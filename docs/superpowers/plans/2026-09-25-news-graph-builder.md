@@ -178,7 +178,6 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("now()"),
         ),
-        sa.UniqueConstraint("stock_code", name="companies_stock_code_key"),
     )
     op.create_table(
         "company_aliases",
@@ -1100,7 +1099,6 @@ companies = sa.Table(
         nullable=False,
         server_default=sa.text("now()"),
     ),
-    sa.UniqueConstraint("stock_code", name="companies_stock_code_key"),
 )
 
 company_aliases = sa.Table(

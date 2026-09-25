@@ -106,7 +106,7 @@ short transaction; its cascade delete then removes the rows just written.
 ```
 companies
   corp_code      text PRIMARY KEY
-  stock_code     text NOT NULL UNIQUE
+  stock_code     text NOT NULL
   corp_name      text NOT NULL
   corp_eng_name  text NULL
   synced_at      timestamptz NOT NULL DEFAULT now()
@@ -156,6 +156,9 @@ For a company entity, `raw_name` is `corp_name`, `name` is `normalize(corp_name)
 
 - Every foreign key to `clusters` cascades, so the clusterer's delete of an unmatched
   cluster never fails on graph rows.
+- `stock_code` is deliberately not unique: companies are never deleted, so a code that
+  later moves to another `corp_code` would otherwise fail every sync. The join happens
+  in Python and nothing reads by `stock_code`.
 - The sync upserts companies and never deletes them. A company that leaves KOSPI keeps
   its row and its entity; `synced_at` shows when it was last on the list.
 - Entities are shared across clusters. The only deletion is a plain entity merged into
