@@ -49,8 +49,8 @@ clusters.
 
 - Delete `summarize.py` and `tests/test_summarize.py`.
 - `storage.py`: move `clusters_needing_summary`, `cluster_articles` and `set_summary` out
-  (they become graph-builder's `storage.py`, with `set_summary` replaced by the guarded
-  write in §4.1). Remove their cases from `tests/test_storage.py`; keep the write tests,
+  (they become graph-builder's `cluster/repository.py`, with `set_summary` replaced by the
+  guarded write in §4.1). Remove their cases from `tests/test_storage.py`; keep the write tests,
   asserting `updated_at` instead of the needs-summary query. The `clusters` table
   definition drops `title`, `summary` and `summarized_at`.
 - `__main__.py`: remove the `httpx.Client`, the summary loop and the "exit 1 if a summary
@@ -164,7 +164,7 @@ For a company entity, `raw_name` is `corp_name`, `name` is `normalize(corp_name)
 - Entities are shared across clusters. The only deletion is a plain entity merged into
   a company (§6 step 5).
 
-### Resolution (`resolve.py`)
+### Resolution (`graph/service.py`)
 
 `normalize(text)`: remove `(주)`, `㈜` and `주식회사`, remove all whitespace, casefold. The
 same function builds aliases and looks them up.
@@ -184,7 +184,7 @@ Then:
   `normalize()`d name. Drop relations with an unknown endpoint and log how many.
 - A cluster with zero entities still gets its title and summary.
 
-## 6. Company sync (`sync_companies.py`)
+## 6. Company sync (`company/service.py`)
 
 The fetches stay at the edge; the join and upsert take plain rows so tests need no
 patched clients.
@@ -229,7 +229,7 @@ patched clients.
   outbound IP has to be registered.
 - All keys come from the environment and are never committed.
 
-## 7. LLM extraction (`extract.py`)
+## 7. LLM extraction (`graph/llm.py`)
 
 `POST {llm_base_uri}/chat/completions`, the same shape as the clusterer's former
 `summarize()`: `model`, a Korean system prompt, the article text as the user message,
@@ -278,7 +278,8 @@ shapes. `tach.toml` enforces the dependencies and interfaces between the package
 | `graph/service.py` | `resolve()` — §5 |
 | `graph/repository.py` | plain-entity upsert, `write_graph()` — §4.1 steps 3–4 |
 
-Dependencies: `graph` → `company`; `company`, `cluster`, `graph` → `database`, `common`.
+Dependencies: `graph` → `company`; `company`, `graph` → `database`, `common`;
+`cluster` → `database`.
 `company` never imports `graph`.
 
 ### Settings (`NEWS_GRAPH_BUILDER_` prefix)
@@ -369,7 +370,8 @@ without `KTB_TEST_POSTGRES_DSN`. The fixtures truncate tables, so locally
 - `resolve`: alias hit regardless of type; miss creates one entity per
   `(name, type)`, keeping the first `raw_name`; two names resolving to one company are
   deduplicated; a relation with an unknown endpoint is dropped.
-- `storage`: re-extraction replaces relations; the guarded write skips when `updated_at`
+- `cluster` / `graph` repositories: re-extraction replaces relations; the guarded write skips
+  when `updated_at`
   moved and when the cluster was deleted; `cluster_updated_at` is set to the seen
   `updated_at`; a cluster with no summary row and one with an older
   `cluster_updated_at` are both due; deleting a cluster cascades to its graph rows.

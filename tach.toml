@@ -65,7 +65,6 @@ from = ["news_graph_builder.common"]
 
 [[interfaces]]
 expose = [
-    "COMPANY_TYPE",
     "DartCompany",
     "company_entity_id",
     "fetch_corp_codes",
