@@ -21,6 +21,7 @@ from news_graph_builder.storage import (
 from news_graph_builder.sync_companies import sync_companies
 
 logger = logging.getLogger(__name__)
+RUN_LOCK = 0x6E677262
 
 
 def main() -> None:
@@ -33,6 +34,13 @@ def main() -> None:
     with httpx.Client() as client, ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
+        run_lock = cleanup.enter_context(engine.connect())
+        if not run_lock.execute(
+            sa.text("SELECT pg_try_advisory_lock(:id)"), {"id": RUN_LOCK}
+        ).scalar_one():
+            logger.info("another news-graph-builder run is in progress, exiting")
+            sys.exit(0)
+        run_lock.commit()
         try:
             kospi = fetch_kospi(
                 client,

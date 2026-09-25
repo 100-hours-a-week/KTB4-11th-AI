@@ -153,3 +153,15 @@ def test_urllib3_debug_logging_is_silenced(env, engine, companies_api, llm):
     assert run() == 0
 
     assert logging.getLogger("urllib3").level == logging.INFO
+
+
+def test_a_second_concurrent_run_exits_without_work(env, engine, two_clusters, companies_api, llm):
+    with engine.connect() as holder:
+        holder.execute(sa.text("SELECT pg_advisory_lock(:id)"), {"id": entry.RUN_LOCK})
+        holder.commit()
+        try:
+            assert run() == 0
+            assert llm == []
+        finally:
+            holder.execute(sa.text("SELECT pg_advisory_unlock(:id)"), {"id": entry.RUN_LOCK})
+            holder.commit()
