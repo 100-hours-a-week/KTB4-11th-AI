@@ -24,6 +24,24 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg18-trixie
+        env:
+          POSTGRES_USER: ktb
+          POSTGRES_PASSWORD: ktb
+          POSTGRES_DB: news
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ktb -d news"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+
     steps:
       - uses: actions/checkout@v7
 
@@ -47,6 +65,9 @@ jobs:
         run: |
           uv run python -c 'import pathlib, tomllib; assert not tomllib.loads(pathlib.Path("packages/core/pyproject.toml").read_text())["project"]["dependencies"]'
           uv run tach check-external -e packages/market-analyzer,services
+
+      - name: Apply database migrations
+        run: uv run alembic upgrade head
 
       - name: Run tests
         run: uv run pytest
@@ -115,10 +136,30 @@ jobs:
   python-314-compatibility:
     runs-on: ubuntu-latest
     continue-on-error: true
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg18-trixie
+        env:
+          POSTGRES_USER: ktb
+          POSTGRES_PASSWORD: ktb
+          POSTGRES_DB: news
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ktb -d news"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
       - run: uv sync --all-packages --locked --group migrations --python 3.14
+      - run: uv run --python 3.14 alembic upgrade head
       - run: uv run --python 3.14 pytest

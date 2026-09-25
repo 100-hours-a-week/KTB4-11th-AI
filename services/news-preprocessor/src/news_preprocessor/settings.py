@@ -1,5 +1,4 @@
-"""Configuration for the news-preprocessor."""
-
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,4 +9,6 @@ class Settings(BaseSettings):
     )
 
     log_level: str = "INFO"
+    user_agent: str = "ktb-ai/0.1"
     postgres_dsn: str
+    embed_batch_limit: int = Field(default=100, gt=0)

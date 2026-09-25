@@ -1,5 +1,5 @@
 import logging
-import sys
+from typing import Any
 
 import httpx
 import sqlalchemy as sa
@@ -14,7 +14,7 @@ from news_preprocessor.sources.publishers import publishers
 logger = logging.getLogger(__name__)
 
 
-def main() -> None:
+def handler(event: dict[str, Any], context: Any) -> dict[str, dict[str, Any]]:
     settings = Settings()
     setup_logging(settings.log_level)
     logger.info("news-preprocessor started")
@@ -26,9 +26,23 @@ def main() -> None:
     finally:
         client.close()
         engine.dispose()
-    failed = [result for result in scraped if result.failed] or embedded.failed
-    sys.exit(1 if failed else 0)
 
-
-if __name__ == "__main__":
-    main()
+    scraped_succeed = [article for result in scraped for article in result.succeed]
+    scraped_failed = [article for result in scraped for article in result.failed]
+    report = {
+        "scraped": {
+            "succeed": scraped_succeed,
+            "succeed_count": len(scraped_succeed),
+            "failed": scraped_failed,
+            "failed_count": len(scraped_failed),
+        },
+        "embedded": {
+            "succeed": embedded.succeed,
+            "succeed_count": len(embedded.succeed),
+            "failed": embedded.failed,
+            "failed_count": len(embedded.failed),
+        },
+    }
+    if scraped_failed or embedded.failed:
+        raise RuntimeError(f"failed: {', '.join(scraped_failed + embedded.failed)}")
+    return report
