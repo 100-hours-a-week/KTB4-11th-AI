@@ -70,7 +70,9 @@ def test_candle_writes_split_symbols_from_columns():
     assert written == 1
     table, symbols, columns, at = sink.rows[0]
     assert table == "bars_1m"
-    assert symbols == {"symbol": "005930", "session": "regular", "src": "rest"}
+    assert symbols["symbol"] == "005930"
+    assert symbols["session"] == "regular"
+    assert symbols["src"] == "rest"
     assert columns["open"] == 277750.0
     assert columns["close"] == 277500.0
     assert columns["volume"] == 38961
@@ -104,7 +106,7 @@ def test_extended_rows_carry_ohlcv_and_no_indicators():
     assert symbols["session"] == "extended"
     assert columns["close"] == 277500.0
     assert not any(field in columns for field in INDICATOR_FIELDS)
-    assert not any(f"{field}_comment" for field in COMMENT_FIELDS if field in columns)
+    assert not any(f"{field}_comment" in symbols for field in COMMENT_FIELDS)
 
 
 def test_an_unknown_timeframe_is_rejected_before_any_write():
@@ -165,33 +167,33 @@ def test_theme_members_are_tagged_against_the_universe():
     assert sink.rows[0][0] == "theme_members"
 
 
-def test_verdict_columns_are_named_field_comment_and_macd_signal_has_none():
+def test_verdict_symbols_are_named_field_comment_and_macd_signal_has_none():
     sink = FakeSink()
     comments: dict[str, str | None] = dict.fromkeys(COMMENT_FIELDS, "overbought")
 
     Store(sink).write_candles("1m", [_candle(comments=comments)])
 
-    _, _, columns, _ = sink.rows[0]
+    _, symbols, _, _ = sink.rows[0]
     for field in COMMENT_FIELDS:
-        assert columns[f"{field}_comment"] == "overbought"
-    assert "macd_signal_comment" not in columns
+        assert symbols[f"{field}_comment"] == "overbought"
+    assert "macd_signal_comment" not in symbols
     # Only the seven commented fields plus macd_signal make up the eight
-    # indicator fields, so no stray "_comment" columns beyond COMMENT_FIELDS.
-    comment_columns = {name for name in columns if name.endswith("_comment")}
-    assert comment_columns == {f"{field}_comment" for field in COMMENT_FIELDS}
+    # indicator fields, so no stray "_comment" symbols beyond COMMENT_FIELDS.
+    comment_symbols = {name for name in symbols if name.endswith("_comment")}
+    assert comment_symbols == {f"{field}_comment" for field in COMMENT_FIELDS}
 
 
 def test_none_valued_comments_are_omitted():
     sink = FakeSink()
-    comments = dict.fromkeys(COMMENT_FIELDS, None)
+    comments: dict[str, str | None] = dict.fromkeys(COMMENT_FIELDS, None)
     comments["rsi"] = "oversold"
 
     Store(sink).write_candles("1m", [_candle(comments=comments)])
 
-    _, _, columns, _ = sink.rows[0]
-    assert columns["rsi_comment"] == "oversold"
+    _, symbols, _, _ = sink.rows[0]
+    assert symbols["rsi_comment"] == "oversold"
     other_fields = [field for field in COMMENT_FIELDS if field != "rsi"]
-    assert not any(f"{field}_comment" in columns for field in other_fields)
+    assert not any(f"{field}_comment" in symbols for field in other_fields)
 
 
 def test_read_regular_candles_pins_ts_high_low_close_column_order(monkeypatch):
