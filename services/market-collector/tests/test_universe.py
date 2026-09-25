@@ -1,5 +1,5 @@
 import pytest
-from market_collector.universe import load_from, load_kospi200
+from market_collector.universe import EmptyUniverseError, load_from, load_kospi200
 
 
 @pytest.mark.skip(reason="awaiting the KRX KOSPI 200 export")
@@ -31,3 +31,13 @@ def test_a_duplicate_code_is_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="duplicate"):
         load_from(path)
+
+
+def test_an_empty_universe_raises_a_named_error_naming_the_file(tmp_path):
+    path = tmp_path / "u.csv"
+    path.write_text("code,name\n", encoding="utf-8")
+
+    with pytest.raises(EmptyUniverseError) as excinfo:
+        load_from(path)
+
+    assert str(path) in str(excinfo.value)

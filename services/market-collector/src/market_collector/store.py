@@ -10,6 +10,16 @@ null in storage — which is exactly what an extended-session candle's indicator
 and verdict columns need, and what every column stays for v1's backfilled
 history, which carries OHLCV with no indicators or verdicts attached at all.
 
+That omission is not harmless on a row that already exists. Every candle
+table is ``DEDUP UPSERT KEYS(ts, symbol)`` (§5 of the design), and confirmed
+against the live server: writing ``rsi=55.0`` for a ``(ts, symbol)`` and then
+rewriting the same key while omitting ``rsi`` does not leave the stored value
+alone — it sets it to null. An omitted column is not "not sent this time", it
+is "cleared". So a second write over a row a first write already enriched
+with indicators must be a strict superset of that first write's columns,
+never a narrower one — see ``backfill.py``'s module docstring for where this
+constrains the order backfill and preopen are allowed to run in.
+
 Each indicator field gets a value column and, beside it, a verdict column
 named ``<field>_comment`` — except ``macd_signal``, which ``COMMENT_FIELDS``
 excludes because ``ktb_market_analyzer`` has no verdict rule for it. Verdicts

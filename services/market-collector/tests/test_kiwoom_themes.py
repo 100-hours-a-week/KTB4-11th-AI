@@ -1,5 +1,7 @@
+import pytest
 from market_collector.kiwoom.auth import TokenStore
-from market_collector.kiwoom.themes import ThemeClient
+from market_collector.kiwoom.rest import KiwoomRequestError
+from market_collector.kiwoom.themes import RATE_LIMITED, ThemeClient
 from market_collector.settings import KiwoomAccount
 
 ACCOUNT = KiwoomAccount(app_key="k", secret_key="s")
@@ -110,3 +112,39 @@ def test_an_unparseable_rate_becomes_none_rather_than_raising():
     client, _ = _client(({"cont-yn": "N"}, body))
 
     assert client.groups(date_tp=10)[0].dt_prft_rt is None
+
+
+def test_rate_limited_is_shared_with_rest_rather_than_redefined():
+    from market_collector.kiwoom.rest import RATE_LIMITED as REST_RATE_LIMITED
+
+    assert RATE_LIMITED is REST_RATE_LIMITED
+
+
+def test_groups_stops_and_raises_when_next_key_stops_advancing():
+    # A cont-yn: Y response whose next-key never changes must not be paged
+    # forever — that is the exact continuous-hammering risk the project's
+    # five-account/IP-registration setup exists to work around. Unlike
+    # backfill.collect there is no cursor to resume from here, so it raises
+    # rather than silently returning a partial theme list as if complete.
+    stuck_page = ({"cont-yn": "Y", "next-key": "STUCK"}, {"return_code": 0, "thema_grp": [GROUP]})
+    client, transport = _client(stuck_page, stuck_page)
+
+    with pytest.raises(KiwoomRequestError, match="STUCK"):
+        client.groups(date_tp=10)
+
+    # One call to discover the stuck key, one more to confirm it repeats —
+    # not an unbounded loop.
+    assert len(transport.calls) == 3  # token exchange + two page requests
+
+
+def test_members_stops_and_raises_when_next_key_stops_advancing():
+    stuck_page = (
+        {"cont-yn": "Y", "next-key": "STUCK"},
+        {"return_code": 0, "thema_comp_stk": [MEMBER]},
+    )
+    client, transport = _client(stuck_page, stuck_page)
+
+    with pytest.raises(KiwoomRequestError, match="STUCK"):
+        client.members("557", date_tp=10)
+
+    assert len(transport.calls) == 3

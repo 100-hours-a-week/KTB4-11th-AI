@@ -7,21 +7,35 @@ date_tp — the caller must page to the end to see every theme.
 dt_prft_rt is kept under its upstream name because its semantics are
 unconfirmed: it reads +299.34 at date_tp=3 and +68.45 at date_tp=120 for the
 same theme, which no plain N-day return explains.
+
+``groups`` and ``members`` guard against the same pathological server
+behaviour ``backfill.collect`` does: a ``cont-yn: Y`` response whose
+``next-key`` fails to advance would otherwise page forever, re-hitting
+Kiwoom every iteration — the risk this project can least afford, since
+continuous hammering invites the rate limiting and IP-level blocking that
+five accounts and their IP registration already exist to work around.
+Unlike ``collect``, there is no cursor to leave the walk resumable from, so
+a stall cannot be handled by quietly returning what was collected so far —
+that would write a truncated snapshot into QuestDB indistinguishable from a
+complete one. It raises instead, failing that theme/period loudly rather
+than presenting a partial result as complete.
 """
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 from market_collector.kiwoom.auth import TokenStore, Transport
-from market_collector.kiwoom.rest import KiwoomRateLimited, KiwoomRequestError, Page
+from market_collector.kiwoom.rest import RATE_LIMITED, KiwoomRateLimited, KiwoomRequestError, Page
 
 __all__ = ["ThemeClient", "ThemeGroup", "ThemeMember"]
+
+log = logging.getLogger(__name__)
 
 THEME_PATH = "/api/dostk/thme"
 GROUPS_API_ID = "ka90001"
 MEMBERS_API_ID = "ka90002"
-RATE_LIMITED = 5
 
 
 def _rate(raw: object) -> float | None:
@@ -92,7 +106,8 @@ class ThemeClient:
         collected: list[ThemeGroup] = []
         next_key: str | None = None
         while True:
-            page = self._page(GROUPS_API_ID, body, "thema_grp", next_key)
+            sent_key = next_key
+            page = self._page(GROUPS_API_ID, body, "thema_grp", sent_key)
             collected.extend(
                 ThemeGroup(
                     code=row["thema_grp_cd"],
@@ -110,6 +125,17 @@ class ThemeClient:
             if not page.has_more:
                 return collected
             next_key = page.next_key
+            if next_key == sent_key:
+                log.warning(
+                    "next_key did not advance for theme groups date_tp=%s "
+                    "(stuck at %r after %d themes collected)",
+                    date_tp,
+                    next_key,
+                    len(collected),
+                )
+                raise KiwoomRequestError(
+                    f"stalled paging theme groups: date_tp={date_tp} next_key={next_key!r}"
+                )
 
     def members(self, theme_code: str, date_tp: int) -> list[ThemeMember]:
         body: dict[str, object] = {
@@ -120,7 +146,8 @@ class ThemeClient:
         collected: list[ThemeMember] = []
         next_key: str | None = None
         while True:
-            page = self._page(MEMBERS_API_ID, body, "thema_comp_stk", next_key)
+            sent_key = next_key
+            page = self._page(MEMBERS_API_ID, body, "thema_comp_stk", sent_key)
             collected.extend(
                 ThemeMember(
                     theme_code=theme_code,
@@ -132,6 +159,17 @@ class ThemeClient:
             if not page.has_more:
                 return collected
             next_key = page.next_key
+            if next_key == sent_key:
+                log.warning(
+                    "next_key did not advance for theme members theme_code=%s "
+                    "(stuck at %r after %d members collected)",
+                    theme_code,
+                    next_key,
+                    len(collected),
+                )
+                raise KiwoomRequestError(
+                    f"stalled paging theme members: theme_code={theme_code} next_key={next_key!r}"
+                )
 
     def _page(
         self,

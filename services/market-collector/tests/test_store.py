@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 import pytest
 from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
-from market_collector.store import TIMEFRAME_TABLES, CandleRow, Store, read_regular_candles
+from market_collector.store import (
+    TIMEFRAME_TABLES,
+    CandleRow,
+    Store,
+    _without_nones,
+    read_regular_candles,
+)
 
 TS = datetime(2026, 9, 22, 6, 19, tzinfo=UTC)
 
@@ -239,3 +245,27 @@ def test_read_regular_candles_pins_ts_high_low_close_column_order(monkeypatch):
 def test_read_regular_candles_rejects_unknown_timeframe():
     with pytest.raises(KeyError, match="4h"):
         read_regular_candles("postgresql://localhost:8812/qdb", "4h", "005930")
+
+
+def test_without_nones_keeps_falsy_but_non_none_values():
+    # This is the filter that protects in_universe=False and genuine 0.0
+    # MACD/ROC values from ever being silently dropped. `is not None` is
+    # correct; `if value` (a plausible future "simplification") is not —
+    # this test fails against that simplification because 0.0 and False are
+    # falsy but must still survive.
+    result = _without_nones({"a": 0.0, "b": False, "c": None, "d": 1, "e": ""})
+
+    assert result == {"a": 0.0, "b": False, "d": 1, "e": ""}
+
+
+def test_zero_valued_indicators_survive_the_write_not_just_none_ones():
+    sink = FakeSink()
+    indicators = dict.fromkeys(INDICATOR_FIELDS, None)
+    indicators["macd"] = 0.0
+    indicators["roc"] = 0.0
+
+    Store(sink).write_candles("1m", [_candle(indicators=indicators)])
+
+    _, _, columns, _ = sink.rows[0]
+    assert columns["macd"] == 0.0
+    assert columns["roc"] == 0.0

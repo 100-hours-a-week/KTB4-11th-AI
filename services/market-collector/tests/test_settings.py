@@ -47,12 +47,27 @@ def test_backfill_depths_default_to_the_backfill_modules_depths(monkeypatch):
 
 
 def test_backfill_depths_can_be_overridden(monkeypatch):
+    from market_collector.backfill import DEFAULT_DEPTHS
+
     _populate(monkeypatch)
     monkeypatch.setenv("MARKET_COLLECTOR_BACKFILL_DEPTHS", '{"1m": 100}')
 
     settings = Settings()
 
-    assert settings.backfill_depths == {"1m": 100}
+    # A partial override fills in the other three timeframes from
+    # DEFAULT_DEPTHS rather than leaving them missing: __main__.run_backfill
+    # indexes backfill_depths[timeframe] for all four unconditionally, so an
+    # override that dropped the rest used to crash with KeyError after the
+    # first symbol's 1m walk had already written and marked itself done.
+    assert settings.backfill_depths == {**DEFAULT_DEPTHS, "1m": 100}
+
+
+def test_backfill_depths_rejects_an_unknown_timeframe(monkeypatch):
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_BACKFILL_DEPTHS", '{"5m": 100}')
+
+    with pytest.raises(ValidationError, match="5m"):
+        Settings()
 
 
 def test_indicators_on_backfill_defaults_to_false(monkeypatch):
