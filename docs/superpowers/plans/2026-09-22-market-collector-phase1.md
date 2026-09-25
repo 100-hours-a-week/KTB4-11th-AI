@@ -2713,355 +2713,103 @@ git commit -m "feat: persist backfill cursors so an interrupted run resumes"
 - Test: `services/market-collector/tests/test_backfill.py`
 
 **Interfaces:**
-- Consumes: `ChartClient`, `Page`, `parse_minute_bar`, `parse_daily_bar`, `Store`, `CandleRow`, `CursorStore`, `indicator_series`, `INDICATOR_FIELDS`.
-- Produces: `TIC_SCOPES: dict[str, int]`, `to_candle_rows(bars, symbol, src='rest') -> list[CandleRow]`, `collect(client, symbol, timeframe, cursors, base_dt, cutoff, max_pages=None) -> list[MinuteBar | DailyBar]`, `backfill_one(client, store, cursors, symbol, timeframe, base_dt, cutoff, max_pages=None) -> int`.
+- Consumes: `ChartClient`, `Page`, `parse_minute_bar`, `parse_daily_bar`, `Store`, `CandleRow`, `CursorStore`, `indicator_series`, `comment_series_for`, `INDICATOR_FIELDS`, `COMMENT_FIELDS`.
+- Produces: `TIC_SCOPES: dict[str, int]`, `DEFAULT_DEPTHS: dict[str, int]`, `to_candle_rows(bars, symbol, src="rest", with_indicators=True) -> list[CandleRow]`, `collect(client, symbol, timeframe, cursors, base_dt, depth, max_pages=None) -> list[MinuteBar | DailyBar]`, `backfill_one(client, store, cursors, symbol, timeframe, base_dt, depth, with_indicators=False, max_pages=None) -> int`.
 
-**Resume granularity is one symbol and timeframe, not one page.** Pages are accumulated in memory so that indicators can be computed over the whole ascending series in a single pass, which means a crash loses the symbol in flight — at worst the 112 pages of a 1-minute walk, about three minutes. The cursor still records `next_key`, `oldest` and `pages` for every page, because when a walk misbehaves those values are the only way to see where it was.
+### v1 scope, which differs from what this plan originally described
 
-- [ ] **Step 1: Write the failing test**
+Three decisions were taken after the plan was written and before this task ran.
+
+**Collection depth is a bar count, per timeframe, and nothing uses a date cutoff.**
 
 ```python
-# services/market-collector/tests/test_backfill.py
-from datetime import UTC, datetime
+DEFAULT_DEPTHS: dict[str, int] = {"1m": 8000, "15m": 300, "1h": 300, "1d": 300}
+```
 
-from market_collector.backfill import TIC_SCOPES, backfill_one, collect, to_candle_rows
-from market_collector.cursor import CursorStore
-from market_collector.indicators import INDICATOR_FIELDS
-from market_collector.kiwoom.parse import parse_minute_bar
-from market_collector.kiwoom.rest import Page
-from market_collector.store import Store
+8,000 one-minute candles is about a month — roughly 20 trading days at ~408 candles each, counting the extended-session candles Kiwoom includes. The other three stay at 300. Terminating on a count rather than a date is what lets all four timeframes share one code path: an earlier draft bounded 1m by calendar age and the rest by bar count, which meant two termination rules and a date-to-trading-day conversion nobody can do exactly.
 
-CUTOFF = datetime(2025, 9, 1, tzinfo=UTC)
-BASE_DT = "20260922"
+Per symbol this is about 13 pages — roughly 9 for 1m at 900 records a page, and 1 each for the others. The plan's earlier arithmetic of 124 pages and 3.3 minutes per symbol is stale, so a smoke run's `max_pages` bound should be chosen against 13, not 124.
 
+**Backfilled history stores OHLCV only. Indicators and verdicts are attached only to candles that arrive after the service is running.** Hence `with_indicators=False` as `backfill_one`'s default — Task 13 flips it from a setting. `to_candle_rows` keeps `with_indicators=True` as its own default because the pre-open and live paths always want them; only the backfill opts out.
 
-def _minute_row(stamp, close):
-    return {
-        "cntr_tm": stamp,
-        "cur_prc": f"+{close}",
-        "open_pric": f"+{close}",
-        "high_pric": f"+{close + 100}",
-        "low_pric": f"+{close - 100}",
-        "trde_qty": "1000",
-    }
+This is why 300 is enough. The depths are sized to be **input** to the newest calculation, not a series to store: the longest lookback among the eight fields is MACD at 33, and even `SMA(200)` — if an LLM tool asks for one later — needs 199 of the 300. Nothing here needs a long stored history of indicator values.
 
+**Verdicts are stored beside values.** `CandleRow` carries both, and `COMMENT_FIELDS` has 7 entries against `INDICATOR_FIELDS`' 8 because `macd_signal` has no verdict.
 
-def _daily_row(day, close):
-    return {
-        "dt": day,
-        "cur_prc": str(close),
-        "open_pric": str(close),
-        "high_pric": str(close + 100),
-        "low_pric": str(close - 100),
-        "trde_qty": "1000",
-        "trde_prica": "500",
-    }
+- [ ] **Step 1: Write the failing tests**
 
+`test_backfill.py` covers, in order: `TIC_SCOPES` mapping the three minute timeframes to their `tic_scope` values; `DEFAULT_DEPTHS` holding the four depths above; `collect` following continuation until the depth is reached; bars returned oldest first; duplicate timestamps dropped across overlapping pages; **`collect` stopping once `depth` bars are collected even when the API offers more**; `collect` marking the cursor done when the history ends on its own; `collect` skipping a pair already marked done; `max_pages` bounding a smoke run; indicators computed only on regular-session rows; **`with_indicators=False` producing rows whose indicator and verdict dicts are entirely `None`**; and `backfill_one` writing to the timeframe's table with `src="rest"`.
 
-class FakeClient:
-    def __init__(self, pages):
-        self.pages = list(pages)
-        self.minute_calls = []
-        self.daily_calls = []
+Two tests carry the weight, because they pin decisions rather than mechanics:
 
-    def minute_page(self, symbol, tic_scope, next_key=None):
-        self.minute_calls.append((symbol, tic_scope, next_key))
-        return self.pages.pop(0)
-
-    def daily_page(self, symbol, base_dt, next_key=None):
-        self.daily_calls.append((symbol, base_dt, next_key))
-        return self.pages.pop(0)
-
-
-class FakeSink:
-    def __init__(self):
-        self.rows = []
-        self.flushes = 0
-
-    def row(self, table, *, symbols, columns, at):
-        self.rows.append((table, dict(symbols), dict(columns), at))
-
-    def flush(self):
-        self.flushes += 1
-
-
-def test_every_minute_timeframe_maps_to_its_tic_scope():
-    assert TIC_SCOPES == {"1m": 1, "15m": 15, "1h": 60}
-
-
-def test_collect_follows_continuation_until_the_history_ends(tmp_path):
+```python
+def test_collect_stops_once_the_depth_is_reached(tmp_path):
     pages = [
-        Page([_minute_row("20260922151900", 277500)], "NK1", True),
-        Page([_minute_row("20260921104300", 277000)], "NK2", True),
-        Page([_minute_row("20260917170500", 276500)], None, False),
+        Page([_minute_row(i, 277000 + i) for i in range(900)], "NK1", True),
+        Page([_minute_row(i, 276000 + i) for i in range(900)], "NK2", True),
     ]
     client = FakeClient(pages)
     cursors = CursorStore(tmp_path / "c.json")
 
-    bars = collect(client, "005930", "1m", cursors, BASE_DT, CUTOFF)
+    bars = collect(client, "005930", "1m", cursors, BASE_DT, depth=1000)
 
-    assert len(bars) == 3
-    assert [call[2] for call in client.minute_calls] == [None, "NK1", "NK2"]
-    assert cursors.get("005930", "1m").pages == 3
-
-
-def test_collect_returns_bars_oldest_first(tmp_path):
-    pages = [
-        Page([_minute_row("20260922151900", 277500), _minute_row("20260922151800", 277400)],
-             None, False),
-    ]
-    cursors = CursorStore(tmp_path / "c.json")
-
-    bars = collect(FakeClient(pages), "005930", "1m", cursors, BASE_DT, CUTOFF)
-
-    assert [b.ts for b in bars] == sorted(b.ts for b in bars)
-
-
-def test_collect_drops_duplicate_timestamps_across_overlapping_pages(tmp_path):
-    row = _minute_row("20260922151900", 277500)
-    pages = [Page([row], "NK1", True), Page([row], None, False)]
-    cursors = CursorStore(tmp_path / "c.json")
-
-    bars = collect(FakeClient(pages), "005930", "1m", cursors, BASE_DT, CUTOFF)
-
-    assert len(bars) == 1
-
-
-def test_collect_stops_at_the_cutoff_even_when_more_is_offered(tmp_path):
-    pages = [
-        Page([_daily_row("20260922", 277500)], "NK1", True),
-        Page([_daily_row("20240101", 100000)], "NK2", True),
-    ]
-    client = FakeClient(pages)
-    cursors = CursorStore(tmp_path / "c.json")
-
-    bars = collect(client, "005930", "1d", cursors, BASE_DT, CUTOFF)
-
-    assert [b.ts.year for b in bars] == [2026]
-    assert len(client.daily_calls) == 2
-    assert cursors.get("005930", "1d").done is True
-
-
-def test_collect_marks_done_when_the_history_ends(tmp_path):
-    cursors = CursorStore(tmp_path / "c.json")
-    pages = [Page([_minute_row("20260922151900", 277500)], None, False)]
-
-    collect(FakeClient(pages), "005930", "1m", cursors, BASE_DT, CUTOFF)
-
+    # The second page completes rather than being truncated mid-page: already
+    # fetched data is not thrown away, and dedup makes a re-run safe.
+    assert len(bars) >= 1000
+    assert len(client.minute_calls) == 2
     assert cursors.get("005930", "1m").done is True
 
 
-def test_collect_skips_a_pair_already_marked_done(tmp_path):
-    cursors = CursorStore(tmp_path / "c.json")
-    cursors.finish("005930", "1m")
-    client = FakeClient([])
-
-    bars = collect(client, "005930", "1m", cursors, BASE_DT, CUTOFF)
-
-    assert bars == []
-    assert client.minute_calls == []
-
-
-def test_max_pages_bounds_a_smoke_run(tmp_path):
-    pages = [
-        Page([_minute_row("20260922151900", 277500)], "NK1", True),
-        Page([_minute_row("20260921104300", 277000)], "NK2", True),
-    ]
-    client = FakeClient(pages)
-    cursors = CursorStore(tmp_path / "c.json")
-
-    bars = collect(client, "005930", "1m", cursors, BASE_DT, CUTOFF, max_pages=2)
-
-    assert len(bars) == 2
-    assert cursors.get("005930", "1m").done is False
-
-
-def test_indicators_are_computed_only_on_regular_rows():
-    stamps = [f"202609{22:02d}{9 + i // 60:02d}{i % 60:02d}00" for i in range(400)]
-    rows = [_minute_row(s, 277000 + i) for i, s in enumerate(stamps)]
-    rows.append(_minute_row("20260922170500", 276000))
-    bars = [parse_minute_bar(r) for r in rows]
-    bars.sort(key=lambda b: b.ts)
-
-    candles = to_candle_rows(bars, "005930")
-
-    regular = [c for c in candles if c.session == "regular"]
-    extended = [c for c in candles if c.session == "extended"]
-    assert extended and all(
-        all(v is None for v in c.indicators.values()) for c in extended
-    )
-    assert any(regular[-1].indicators[f] is not None for f in INDICATOR_FIELDS)
-
-
-def test_backfill_one_writes_to_the_timeframe_table(tmp_path):
-    pages = [Page([_minute_row("20260922151900", 277500)], None, False)]
+def test_backfill_without_indicators_stores_ohlcv_alone(tmp_path):
     sink = FakeSink()
-    cursors = CursorStore(tmp_path / "c.json")
+    pages = [Page([_minute_row(0, 277000)], None, False)]
 
-    written = backfill_one(
-        FakeClient(pages), Store(sink), cursors, "005930", "15m", BASE_DT, CUTOFF
+    backfill_one(
+        FakeClient(pages), Store(sink), CursorStore(tmp_path / "c.json"),
+        "005930", "1m", BASE_DT, depth=300, with_indicators=False,
     )
 
-    assert written == 1
-    assert sink.rows[0][0] == "bars_15m"
-    assert sink.rows[0][1]["src"] == "rest"
+    _, symbols, columns, _ = sink.rows[0]
+    assert columns["close"] == 277000.0
+    assert not any(field in columns for field in INDICATOR_FIELDS)
+    assert not any(f"{field}_comment" in symbols for field in COMMENT_FIELDS)
 ```
 
-- [ ] **Step 2: Run it and confirm it fails**
+- [ ] **Step 2: Run them and confirm they fail**
 
-Run: `uv run pytest services/market-collector/tests/test_backfill.py -v`
+Run: `uv run pytest services/market-collector/tests/test_backfill.py -q`
 Expected: collection error, no module named `market_collector.backfill`.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 3: Write `collect`**
 
-```python
-# services/market-collector/src/market_collector/backfill.py
-"""Walk one symbol and timeframe back to the cutoff and store it.
+One loop for all four timeframes, differing only in which endpoint it pages. It accumulates into a dict keyed by timestamp — which drops the duplicates overlapping pages produce — and stops when that dict reaches `depth`, when the page reports no continuation, or when `max_pages` is hit.
 
-Minute history ends on its own at 2025-09-01 with cont-yn flipping to N.
-Daily history reaches 1985, so the cutoff is what stops it. Both paths use the
-same loop and differ only in which endpoint they page.
-"""
+**Do not truncate the final page to land exactly on `depth`.** Already-fetched candles are not worth discarding, and dedup makes writing a few extra harmless. `depth` is a floor on what is collected, not a ceiling.
 
-import logging
-from collections.abc import Sequence
-from datetime import datetime
+Advance the cursor on every page, and mark it done when the depth or the history end is reached. `max_pages` is a smoke-run bound and deliberately does **not** mark done.
 
-import numpy as np
+- [ ] **Step 4: Write `to_candle_rows`**
 
-from market_collector.cursor import CursorStore
-from market_collector.indicators import INDICATOR_FIELDS, indicator_series
-from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
-from market_collector.kiwoom.rest import ChartClient
-from market_collector.store import CandleRow, Store
+Compute the indicator series over the regular-session candles as one contiguous array, then map the results back onto their original positions. Extended-session candles are excluded from the array entirely rather than masked afterwards, because leaving them in would change the period count every indicator is defined over.
 
-__all__ = ["TIC_SCOPES", "backfill_one", "collect", "to_candle_rows"]
+With `with_indicators=False`, skip the computation and give every row empty indicator and verdict dicts.
 
-TIC_SCOPES: dict[str, int] = {"1m": 1, "15m": 15, "1h": 60}
+**Treat a non-finite value as unjudged for both the value and its verdict.** `NaN` becomes `None` on the value, and the analyzer's verdict rules already return `None` for `NaN` — but they check `isnan` only, not `isinf`. So if an infinity ever appeared, the value would be cleaned to `None` while the verdict stayed a real label, and a consumer would read a verdict for a row with no number. Clean both on `math.isfinite`, not just `isnan`. It takes a close of exactly zero to reach this with real prices, which is why it is a guard rather than a fix.
 
-log = logging.getLogger(__name__)
+- [ ] **Step 5: Write `backfill_one`**
 
-Bar = MinuteBar | DailyBar
+Collect, convert, write, log the count. Returns the number of rows written.
 
+- [ ] **Step 6: Run the tests**
 
-def collect(
-    client: ChartClient,
-    symbol: str,
-    timeframe: str,
-    cursors: CursorStore,
-    base_dt: str,
-    cutoff: datetime,
-    max_pages: int | None = None,
-) -> list[Bar]:
-    if cursors.get(symbol, timeframe).done:
-        return []
+Run: `uv run pytest services/market-collector/tests/test_backfill.py -q`
+Expected: PASS.
 
-    is_daily = timeframe == "1d"
-    by_ts: dict[datetime, Bar] = {}
-    next_key: str | None = None
-    pages = 0
-
-    while True:
-        page = (
-            client.daily_page(symbol, base_dt, next_key)
-            if is_daily
-            else client.minute_page(symbol, TIC_SCOPES[timeframe], next_key)
-        )
-        pages += 1
-        parse = parse_daily_bar if is_daily else parse_minute_bar
-        bars = [parse(row) for row in page.rows]
-
-        reached_cutoff = False
-        for bar in bars:
-            if bar.ts < cutoff:
-                reached_cutoff = True
-                continue
-            by_ts.setdefault(bar.ts, bar)
-
-        oldest = min((b.ts for b in bars), default=None)
-        cursors.advance(
-            symbol,
-            timeframe,
-            page.next_key,
-            oldest.strftime("%Y%m%d%H%M%S") if oldest else None,
-        )
-        next_key = page.next_key
-
-        if reached_cutoff or not page.has_more:
-            cursors.finish(symbol, timeframe)
-            break
-        if max_pages is not None and pages >= max_pages:
-            log.info("stopping %s %s at the page bound of %d", symbol, timeframe, max_pages)
-            break
-
-    return [by_ts[ts] for ts in sorted(by_ts)]
-
-
-def to_candle_rows(bars: Sequence[Bar], symbol: str, src: str = "rest") -> list[CandleRow]:
-    """Attach indicators to regular-session candles and leave extended ones null."""
-    regular_positions = [i for i, bar in enumerate(bars) if bar.session == "regular"]
-    empty: dict[str, float | None] = dict.fromkeys(INDICATOR_FIELDS)
-    per_position: dict[int, dict[str, float | None]] = {}
-
-    if regular_positions:
-        highs = np.array([bars[i].high for i in regular_positions], dtype=np.float64)
-        lows = np.array([bars[i].low for i in regular_positions], dtype=np.float64)
-        closes = np.array([bars[i].close for i in regular_positions], dtype=np.float64)
-        series = indicator_series(highs, lows, closes)
-        for offset, position in enumerate(regular_positions):
-            values: dict[str, float | None] = {}
-            for field in INDICATOR_FIELDS:
-                value = float(series[field][offset])
-                values[field] = None if np.isnan(value) or np.isinf(value) else value
-            per_position[position] = values
-
-    return [
-        CandleRow(
-            ts=bar.ts,
-            symbol=symbol,
-            session=bar.session,
-            open=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-            volume=bar.volume,
-            trade_value=bar.trade_value,
-            indicators=per_position.get(position, empty),
-            src=src,
-        )
-        for position, bar in enumerate(bars)
-    ]
-
-
-def backfill_one(
-    client: ChartClient,
-    store: Store,
-    cursors: CursorStore,
-    symbol: str,
-    timeframe: str,
-    base_dt: str,
-    cutoff: datetime,
-    max_pages: int | None = None,
-) -> int:
-    bars = collect(client, symbol, timeframe, cursors, base_dt, cutoff, max_pages)
-    if not bars:
-        return 0
-    rows = to_candle_rows(bars, symbol)
-    written = store.write_candles(timeframe, rows)
-    log.info("%s %s: wrote %d candles", symbol, timeframe, written)
-    return written
-```
-
-`to_candle_rows` computes the indicator series over the regular-session candles as one contiguous array and then maps the results back onto their original positions. Extended-session candles are excluded from the array entirely rather than masked afterwards, because leaving them in would change the period count that every indicator is defined over.
-
-- [ ] **Step 4: Run the tests**
-
-Run: `uv run pytest services/market-collector/tests/test_backfill.py -v`
-Expected: PASS, ten tests.
-
-- [ ] **Step 5: Verify a real round trip against QuestDB**
+- [ ] **Step 7: Verify a real round trip against QuestDB**
 
 The unit tests never touch a database. This proves the written rows come back.
+
+**Docker registry pulls were blocked in this environment when Task 7 ran** — the daemon answered but `docker compose up -d questdb` never got past "Pulling", behind a pull-through proxy. Try it; if it still fails, **do not skip silently and do not report DONE**. Complete every other step, report **DONE_WITH_CONCERNS** naming this one, and say exactly which commands you could not run. A report claiming the round trip passed when it did not is the one outcome that must not happen.
 
 ```bash
 docker compose -f compose.dev.yaml up -d questdb
@@ -3069,11 +2817,9 @@ KTB_QUESTDB_DSN=postgresql://admin:quest@localhost:8812/qdb \
   uv run --group migrations python infrastructure/questdb/apply.py
 ```
 
-Then, with the credentials from `.env` exported, run a bounded real walk from a Python shell:
+Then, with credentials from `.env` exported, a bounded real walk from a Python shell:
 
 ```python
-# uv run python
-from datetime import UTC, datetime
 from market_collector.backfill import backfill_one
 from market_collector.cursor import CursorStore
 from market_collector.kiwoom.auth import TokenStore
@@ -3089,30 +2835,28 @@ cursors = CursorStore("var/smoke/cursors.json")
 with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
     written = backfill_one(
         client, Store(sink), cursors, "005930", "1h",
-        base_dt="20260922", cutoff=datetime(2025, 9, 1, tzinfo=UTC), max_pages=1,
+        base_dt="20260925", depth=300, with_indicators=True, max_pages=1,
     )
 print("written", written)
-
-rows = read_regular_candles(settings.questdb_dsn, "1h", "005930")
-print("read back", len(rows), rows[-1] if rows else None)
+print("read back", len(read_regular_candles(settings.questdb_dsn, "1h", "005930")))
 ```
 
-Expected: `written` is around 900 and `read back` is a non-zero count slightly smaller than it, because extended-session candles are excluded from the read. If `read back` is 0, the session classification or the ILP timestamp is wrong — check that `at` carries a timezone-aware UTC datetime.
+Expected: `written` around 900 and `read back` a non-zero count slightly smaller, because extended-session candles are excluded from the read. If `read back` is 0, the session classification or the ILP timestamp is wrong — check that `at` carries a timezone-aware UTC datetime.
 
 Confirm indicators landed and dedup works:
 
 ```bash
 curl -s -G 'http://localhost:9000/exec' --data-urlencode \
-  "query=SELECT count(), count(rsi), count_distinct(session) FROM bars_1h WHERE symbol='005930'"
+  "query=SELECT count(), count(rsi), count(rsi_comment) FROM bars_1h WHERE symbol='005930'"
 ```
 
-Expected: the indicator count is lower than the row count, because warm-up and extended rows are null there. Re-running the same walk must leave `count()` unchanged — that is the dedup key doing its job.
+Expected: the indicator and verdict counts are lower than the row count, because the oldest bars and the extended-session rows are null there. Re-running the same walk must leave `count()` unchanged — that is the dedup key doing its job.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add services/market-collector
-git commit -m "feat: backfill one symbol and timeframe with indicators attached"
+git commit -m "feat: backfill one symbol and timeframe to a bar-count depth"
 ```
 
 ---
