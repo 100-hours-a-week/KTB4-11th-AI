@@ -2,40 +2,59 @@ import pytest
 from news_clusterer.settings import Settings
 from pydantic import ValidationError
 
-DSN = "postgresql://ktb:ktb@localhost:5432/news"
+REQUIRED = {
+    "NEWS_CLUSTERER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/news",
+    "NEWS_CLUSTERER_LLM_BASE_URI": "http://llm.test/v1",
+    "NEWS_CLUSTERER_LLM_MODEL": "test-model",
+}
 
 
-def test_loads_from_the_environment(monkeypatch):
-    monkeypatch.setenv("NEWS_CLUSTERER_POSTGRES_DSN", DSN)
-    monkeypatch.setenv("NEWS_CLUSTERER_PORT", "9100")
+@pytest.fixture
+def required_env(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+
+
+def test_defaults(required_env):
+    settings = Settings()
+
+    assert settings.llm_base_uri == "http://llm.test/v1"
+    assert settings.llm_model == "test-model"
+    assert settings.eps == 0.2
+    assert settings.min_samples == 3
+    assert settings.summary_max_chars == 24000
+    assert settings.llm_timeout == 120
+
+
+def test_clustering_parameters_come_from_the_environment(required_env, monkeypatch):
+    monkeypatch.setenv("NEWS_CLUSTERER_EPS", "0.15")
+    monkeypatch.setenv("NEWS_CLUSTERER_MIN_SAMPLES", "5")
 
     settings = Settings()
 
-    assert settings.postgres_dsn == DSN
-    assert settings.port == 9100
+    assert settings.eps == 0.15
+    assert settings.min_samples == 5
 
 
-def test_serving_defaults(monkeypatch):
-    monkeypatch.setenv("NEWS_CLUSTERER_POSTGRES_DSN", DSN)
-    monkeypatch.delenv("NEWS_CLUSTERER_PORT", raising=False)
-    monkeypatch.delenv("NEWS_CLUSTERER_HOST", raising=False)
-
-    settings = Settings()
-
-    assert settings.host == "0.0.0.0"
-    assert settings.port == 8000
-
-
-def test_missing_dsn_raises_at_construction(monkeypatch):
-    monkeypatch.delenv("NEWS_CLUSTERER_POSTGRES_DSN", raising=False)
+@pytest.mark.parametrize("missing", sorted(REQUIRED))
+def test_missing_required_value_raises(required_env, monkeypatch, missing):
+    monkeypatch.delenv(missing)
 
     with pytest.raises(ValidationError):
         Settings()
 
 
-def test_non_numeric_port_raises(monkeypatch):
-    monkeypatch.setenv("NEWS_CLUSTERER_POSTGRES_DSN", DSN)
-    monkeypatch.setenv("NEWS_CLUSTERER_PORT", "eight-thousand")
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("NEWS_CLUSTERER_EPS", "0"),
+        ("NEWS_CLUSTERER_EPS", "2.5"),
+        ("NEWS_CLUSTERER_MIN_SAMPLES", "0"),
+        ("NEWS_CLUSTERER_SUMMARY_MAX_CHARS", "0"),
+    ],
+)
+def test_out_of_range_values_raise(required_env, monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
 
     with pytest.raises(ValidationError):
         Settings()

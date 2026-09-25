@@ -18,6 +18,7 @@ KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news uv run alembic
 
 docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f flag is required)
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
+NEWS_CLUSTERER_LLM_BASE_URI=http://100.bbb.ccc.ddd:8001/v1 NEWS_CLUSTERER_LLM_MODEL=<model> docker compose -f compose.dev.yaml up news-clusterer
 ```
 
 pytest runs with `--import-mode=importlib`, so test files with the same name (e.g. `test_settings.py`) can exist in several members without `__init__.py`.
@@ -37,12 +38,13 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | Member | Kind | Trigger | Depends on |
 |---|---|---|---|
 | `services/news-preprocessor` | service | cron: `main()` runs once and exits | `ktb-core` |
-| `services/news-clusterer` | service | FastAPI via uvicorn (`app.py`) | `ktb-core` |
-| `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer`, news-clusterer over HTTP |
+| `services/news-clusterer` | service | cron: `main()` runs once and exits | `ktb-core` |
+| `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate through datastores.** news-preprocessor writes news to PostgreSQL, and the other two services read it. The only direct service-to-service call is portfolio-builder → news-clusterer, a synchronous HTTP call.
+- **Services communicate only through datastores.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters` back, and portfolio-builder reads both. There are no direct service-to-service calls.
+- **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB (market time-series) is read-only here.** Another team owns its schema and ingestion. Read it over the Postgres wire protocol (port 8812, plain psycopg). Never create or alter QuestDB tables, and don't build an ORM on top of it.
 - **Work queue:** SQS in production, Redis in development. portfolio-builder is its only consumer.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.

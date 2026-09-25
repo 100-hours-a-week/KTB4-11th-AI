@@ -47,7 +47,7 @@ def fake_web():
 
 def _truncate(engine):
     with engine.begin() as conn:
-        conn.execute(sa.text("TRUNCATE articles RESTART IDENTITY"))
+        conn.execute(sa.text("TRUNCATE articles RESTART IDENTITY CASCADE"))
 
 
 @pytest.fixture

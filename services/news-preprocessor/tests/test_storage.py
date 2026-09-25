@@ -14,7 +14,7 @@ from news_preprocessor.storage import (
 
 @pytest.fixture
 def conn(pg_conn):
-    pg_conn.execute(sa.text("TRUNCATE articles"))
+    pg_conn.execute(sa.text("TRUNCATE articles CASCADE"))
     return pg_conn
 
 
