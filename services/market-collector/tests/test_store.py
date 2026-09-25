@@ -1,6 +1,6 @@
 import sys
 import types
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS
@@ -334,6 +334,35 @@ def test_read_regular_candles_since_and_limit_combine_to_newest_after_since(monk
 
     # since keeps rows 1..4; the newest 2 of those are rows 3 and 4.
     assert result == [_FIVE_ROWS[3], _FIVE_ROWS[4]]
+
+
+def test_read_regular_candles_since_past_the_newest_row_returns_empty(monkeypatch):
+    # An empty list here means "no candles in that window", which is a real
+    # answer the caller must handle -- not an error. It also pins that the
+    # since clause is spliced into the query at all: a dropped `ts >=` would
+    # return all five rows.
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
+
+    result = read_regular_candles(
+        "postgresql://localhost:8812/qdb",
+        "1m",
+        "005930",
+        since=_FIVE_ROWS[-1][0] + timedelta(hours=1),
+    )
+
+    assert result == []
+
+
+def test_read_regular_candles_limit_beyond_the_row_count_returns_every_row(monkeypatch):
+    # Asking for more than exists is not an error, and the rows must still
+    # arrive oldest-first -- the DESC-then-reverse path runs here exactly as
+    # it does for a limit that truncates, so a missing reverse() would show
+    # up as the whole series backwards.
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
+
+    result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=500)
+
+    assert result == _FIVE_ROWS
 
 
 def test_read_regular_candles_rejects_non_positive_limit():
