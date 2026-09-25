@@ -118,6 +118,7 @@ jobs:
           - news-clusterer
           - news-graph-builder
           - portfolio-builder
+          - market-collector
 
     steps:
       - uses: actions/checkout@v7
