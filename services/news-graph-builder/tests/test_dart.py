@@ -32,10 +32,12 @@ def test_errors_never_carry_the_key(monkeypatch):
 
     monkeypatch.setattr(dart, "corp_codes", failing)
 
+    key = "SECRET"
     with pytest.raises(RuntimeError) as info:
-        fetch_corp_codes("SECRET")
+        fetch_corp_codes(key)
 
     assert "SECRET" not in "".join(traceback.format_exception(info.value))
+    assert info.value.__suppress_context__ is True
 
 
 def test_dart_status_errors_keep_their_message(monkeypatch):

@@ -10,17 +10,6 @@ class DartCompany(NamedTuple):
     stock_code: str
 
 
-class _SafeRuntimeError(RuntimeError):
-    # ponytail: suppress traceback to prevent api_key leakage in exception formatting
-    @property
-    def __traceback__(self):
-        return None
-
-    @__traceback__.setter
-    def __traceback__(self, value):
-        pass
-
-
 def fetch_corp_codes(api_key: str) -> list[DartCompany]:
     try:
         frame = corp_codes(api_key)
@@ -32,7 +21,7 @@ def fetch_corp_codes(api_key: str) -> list[DartCompany]:
             if isinstance(error, ValueError) and error.args and isinstance(error.args[0], dict)
             else type(error).__name__
         )
-        raise _SafeRuntimeError(f"DART corp_codes failed: {detail}") from None
+        raise RuntimeError(f"DART corp_codes failed: {detail}") from None
     return [
         DartCompany(
             row.corp_code,
