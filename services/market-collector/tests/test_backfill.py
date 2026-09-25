@@ -258,6 +258,34 @@ def test_an_empty_later_page_still_finishes_the_pair(tmp_path):
     assert cursors.get("005930", "1m").done is True
 
 
+def test_an_empty_page_after_a_resume_still_finishes_the_pair(tmp_path):
+    # The scoping bug: pages_fetched resets to 0 on every collect() call, so
+    # checking only "pages_fetched == 1" treats the first page fetched
+    # *after a resume* as evidence-free too -- even when it is the walk's
+    # genuine terminal empty page. That would make the pair permanently
+    # unfinishable: every later run re-fetches just that one page and hits
+    # the same false ambiguity again. cursor.pages (persisted across runs)
+    # must be consulted too.
+    cursors = CursorStore(tmp_path / "c.json")
+    interrupted = [
+        Page([_minute_row(i, 277000 + i) for i in range(5)], "NK1", True),
+        Page([_minute_row(i, 276000 + i) for i in range(5)], "NK2", True),
+    ]
+    collect(FakeClient(interrupted), "005930", "1m", cursors, BASE_DT, depth=1000, max_pages=1)
+    assert cursors.get("005930", "1m").pages == 1
+    assert cursors.get("005930", "1m").done is False
+
+    # Resume with a brand new client whose only page is the genuine,
+    # terminal empty one -- this is the first page *fetched this call*, but
+    # not the pair's first page ever.
+    resumed_client = FakeClient([Page([], None, False)])
+
+    bars = collect(resumed_client, "005930", "1m", cursors, BASE_DT, depth=1000)
+
+    assert bars == []
+    assert cursors.get("005930", "1m").done is True
+
+
 def test_on_page_is_called_with_each_pages_bars_before_the_cursor_advances(tmp_path):
     pages = [
         Page([_minute_row(i, 277000 + i) for i in range(3)], "NK1", True),
