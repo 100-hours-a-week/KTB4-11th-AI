@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 from ktb_market_analyzer.comments import COMMENTED_FIELDS, comment_series
 from ktb_market_analyzer.descriptions import DESCRIPTIONS
+from ktb_market_analyzer.indicators import macd as ta_macd
+from ktb_market_analyzer.indicators import stochastic as ta_stochastic
 from market_collector.indicators import (
     COMMENT_FIELDS,
     INDICATOR_FIELDS,
@@ -31,6 +33,27 @@ def test_series_returns_one_array_per_field_aligned_with_the_input():
     assert set(series) == set(INDICATOR_FIELDS)
     for field, values in series.items():
         assert values.shape == close.shape, field
+
+
+def test_series_maps_each_macd_and_stochastic_field_to_the_matching_talib_output():
+    # Regression guard for the exact failure mode the task dispatch warned
+    # about: MacdResult and StochasticResult are positional NamedTuples, and
+    # mapping .histogram into "macd_signal" or .d into "stochastic_k" would
+    # produce plausible-looking numbers rather than an error. The random-walk
+    # prices from _prices(400) keep macd/signal/histogram and k/d numerically
+    # distinct from each other (verified separately), so a transposition
+    # cannot pass this test by coincidence the way it could on flat input.
+    high, low, close = _prices(400)
+
+    series = indicator_series(high, low, close)
+    macd_result = ta_macd(close)
+    stochastic_result = ta_stochastic(high, low, close)
+
+    np.testing.assert_array_equal(series["macd"], macd_result.macd)
+    np.testing.assert_array_equal(series["macd_signal"], macd_result.signal)
+    np.testing.assert_array_equal(series["macd_histogram"], macd_result.histogram)
+    np.testing.assert_array_equal(series["stochastic_k"], stochastic_result.k)
+    np.testing.assert_array_equal(series["stochastic_d"], stochastic_result.d)
 
 
 def test_latest_matches_the_last_element_of_the_series():
