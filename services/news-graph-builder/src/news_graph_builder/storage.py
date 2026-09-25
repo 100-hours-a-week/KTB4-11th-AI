@@ -1,6 +1,9 @@
 from datetime import datetime
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert
+
+from news_graph_builder.normalize import normalize
 
 # Mirrors infrastructure/postgres/migrations for queries only; the migrations own the schema.
 metadata = sa.MetaData()
@@ -125,6 +128,8 @@ relations = sa.Table(
     sa.Index("relations_target_entity_id_idx", "target_entity_id"),
 )
 
+COMPANY_TYPE = "기업"
+
 
 def due_clusters(conn: sa.Connection) -> list[tuple[int, datetime]]:
     query = (
@@ -153,3 +158,20 @@ def cluster_articles(conn: sa.Connection, cluster_id: int) -> list[tuple[str, st
 
 def has_companies(conn: sa.Connection) -> bool:
     return conn.execute(sa.select(companies.c.corp_code).limit(1)).first() is not None
+
+
+def company_entity_id(conn: sa.Connection, corp_code: str) -> int:
+    corp_name = conn.execute(
+        sa.select(companies.c.corp_name).where(companies.c.corp_code == corp_code)
+    ).scalar_one()
+    statement = insert(entities).values(
+        raw_name=corp_name, name=normalize(corp_name), type=COMPANY_TYPE, corp_code=corp_code
+    )
+    return conn.execute(
+        statement.on_conflict_do_update(
+            index_elements=[entities.c.corp_code],
+            index_where=entities.c.corp_code.is_not(None),
+            # A no-op update, so that RETURNING also yields the id of an existing row.
+            set_={"corp_code": statement.excluded.corp_code},
+        ).returning(entities.c.id)
+    ).scalar_one()
