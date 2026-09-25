@@ -58,3 +58,15 @@ def test_non_positive_values_raise(required_env, monkeypatch, name):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_secrets_not_in_validation_error(required_env, monkeypatch):
+    monkeypatch.delenv("NEWS_GRAPH_BUILDER_DART_API_KEY")
+    monkeypatch.setenv("NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY", "FAKE-APP-KEY-123")
+
+    with pytest.raises(ValidationError) as info:
+        Settings()
+
+    error_str = str(info.value)
+    assert "FAKE-APP-KEY-123" not in error_str
+    assert "input_value" not in error_str
