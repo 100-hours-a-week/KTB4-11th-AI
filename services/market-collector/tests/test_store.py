@@ -159,18 +159,21 @@ def test_theme_groups_are_written_with_date_tp_in_the_columns():
     assert at == TS
 
 
-def test_theme_members_are_tagged_against_the_universe():
+def test_theme_members_outside_the_universe_are_not_written():
     sink = FakeSink()
     members = [
         ThemeMember(theme_code="557", symbol="005930", stock_name="삼성전자"),
         ThemeMember(theme_code="557", symbol="033170", stock_name="시그네틱스"),
     ]
 
-    Store(sink).write_theme_members(TS, members, frozenset({"005930"}))
+    written = Store(sink).write_theme_members(TS, members, frozenset({"005930"}))
 
-    flags = {row[1]["symbol"]: row[2]["in_universe"] for row in sink.rows}
-    assert flags == {"005930": True, "033170": False}
+    assert written == 1
+    assert [row[1]["symbol"] for row in sink.rows] == ["005930"]
     assert sink.rows[0][0] == "theme_members"
+    # Symbols, no fields. The membership is the whole fact, and QuestDB stores
+    # a symbols-only row because the symbols are the series key.
+    assert sink.rows[0][2] == {}
 
 
 def test_verdict_symbols_are_named_field_comment_and_macd_signal_has_none():
@@ -373,8 +376,9 @@ def test_read_regular_candles_rejects_non_positive_limit():
 
 
 def test_without_nones_keeps_falsy_but_non_none_values():
-    # This is the filter that protects in_universe=False and genuine 0.0
-    # MACD/ROC values from ever being silently dropped. `is not None` is
+    # This is the filter that protects a genuine 0.0 MACD/ROC value — and any
+    # falsy value a later column introduces — from being silently dropped
+    # instead of stored. `is not None` is
     # correct; `if value` (a plausible future "simplification") is not —
     # this test fails against that simplification because 0.0 and False are
     # falsy but must still survive.

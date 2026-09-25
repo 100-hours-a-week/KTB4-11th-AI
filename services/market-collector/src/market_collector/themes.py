@@ -9,10 +9,10 @@ larger half of this job.
 Every row in one run shares a single timestamp, so a reader can select one
 snapshot without a range query.
 
-A theme whose members are all outside the configured universe still gets a
-theme_snapshot row: Kiwoom computes stock_count and dt_prft_rt over all
-members, not just the ones that fall inside the universe, so dropping the row
-would make those figures unreadable.
+Memberships are stored only for symbols inside the universe. A theme whose
+members all fall outside it still gets a theme_snapshot row and simply no
+member rows: Kiwoom computes stock_count and dt_prft_rt over the theme's whole
+membership, so the snapshot row stays meaningful on its own.
 """
 
 import logging

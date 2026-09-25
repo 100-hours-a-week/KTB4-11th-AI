@@ -6,10 +6,17 @@
 -- The column keeps its upstream name: its semantics are unconfirmed, and a
 -- name like period_return would invite a consumer to reason on a guess.
 --
--- theme_members records every membership, including symbols outside the
--- KOSPI 200, so that stock_count and dt_prft_rt stay interpretable. Kiwoom
--- computes them over all members. in_universe says whether candles exist for
--- the symbol, which lets a consumer tell "no data" from "no signal".
+-- theme_members records only memberships inside the KOSPI 200. The collector
+-- has no scope outside it, so a row for a symbol with no candles is a row
+-- nothing can join against.
+--
+-- One consequence to keep in mind: theme_snapshot's stock_count, rising_count,
+-- falling_count and dt_prft_rt come from Kiwoom, which computes them over a
+-- theme's whole membership across the market. They therefore do not match the
+-- number of rows stored here, and a consumer must not derive a ratio by
+-- combining the two.
+--
+-- Rows here carry symbols and no fields; the membership is the whole fact.
 
 CREATE TABLE IF NOT EXISTS theme_snapshot (
     ts TIMESTAMP,
@@ -28,6 +35,5 @@ CREATE TABLE IF NOT EXISTS theme_members (
     ts TIMESTAMP,
     theme_code SYMBOL INDEX,
     symbol SYMBOL INDEX,
-    stock_name SYMBOL,
-    in_universe BOOLEAN
+    stock_name SYMBOL
 ) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(ts, theme_code, symbol);

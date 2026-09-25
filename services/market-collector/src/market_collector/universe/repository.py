@@ -34,8 +34,8 @@ class EmptyUniverseError(RuntimeError):
     An empty universe is a misconfiguration -- the same treatment the
     design gives Kiwoom's ``return_code=3`` (unregistered IP): fail loudly
     at the source rather than flow silently into an empty ``frozenset``
-    that would later tag every theme member ``in_universe=false`` for the
-    wrong reason.
+    that would later drop every theme membership for the wrong reason,
+    leaving a snapshot that looks complete and holds nothing.
     """
 
 

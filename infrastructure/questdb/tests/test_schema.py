@@ -100,6 +100,19 @@ def test_theme_tables_dedup_on_their_own_keys():
     assert [k.strip() for k in members.split(",")] == ["ts", "theme_code", "symbol"]
 
 
+def test_theme_members_records_membership_and_nothing_else():
+    # The collector's scope is the KOSPI 200, so themes.py stores only
+    # memberships inside it. There is deliberately no in_universe flag: it
+    # would be true on every row. This pins the column set so the flag cannot
+    # come back without the decision being revisited.
+    assert _column_names(_statement_for("theme_members")) == {
+        "ts",
+        "theme_code",
+        "symbol",
+        "stock_name",
+    }
+
+
 def test_universe_members_dedups_on_ts_index_code_and_symbol():
     # This is what makes universe/repository.py's day-truncated ts collapse
     # two same-day runs into one snapshot rather than appending a second.
