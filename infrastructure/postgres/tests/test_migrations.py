@@ -118,3 +118,59 @@ def test_downgrade_removes_the_cluster_tables(pg_dsn, pg_engine, monkeypatch):
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT to_regclass('clusters')")).scalar() is not None
+
+
+def _columns(conn, table: str) -> set[str]:
+    return set(
+        conn.execute(
+            sa.text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+            {"t": table},
+        ).scalars()
+    )
+
+
+def test_summaries_live_outside_clusters(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+
+    command.upgrade(_alembic_config(), "head")
+
+    with pg_engine.connect() as conn:
+        assert _columns(conn, "clusters") == {"id", "updated_at"}
+        assert _columns(conn, "cluster_summaries") == {
+            "cluster_id",
+            "title",
+            "summary",
+            "cluster_updated_at",
+            "summarized_at",
+        }
+
+
+def test_downgrade_to_0002_copies_summaries_back(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+    with pg_engine.begin() as conn:
+        cluster_id = conn.execute(
+            sa.text("INSERT INTO clusters DEFAULT VALUES RETURNING id")
+        ).scalar_one()
+        conn.execute(
+            sa.text(
+                "INSERT INTO cluster_summaries (cluster_id, title, summary, cluster_updated_at)"
+                " VALUES (:id, '제목', '요약', now())"
+            ),
+            {"id": cluster_id},
+        )
+
+    try:
+        command.downgrade(config, "0002")
+        with pg_engine.connect() as conn:
+            row = conn.execute(
+                sa.text("SELECT title, summary, summarized_at FROM clusters WHERE id = :id"),
+                {"id": cluster_id},
+            ).one()
+        assert (row.title, row.summary) == ("제목", "요약")
+        assert row.summarized_at is not None
+    finally:
+        command.upgrade(config, "head")
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE clusters CASCADE"))

@@ -12,9 +12,6 @@ articles = sa.Table(
     "articles",
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True),
-    sa.Column("title", sa.Text, nullable=False),
-    sa.Column("body", sa.Text, nullable=False),
-    sa.Column("published_at", sa.DateTime(timezone=True), nullable=False),
     sa.Column("embedding", VECTOR(EMBEDDING_DIMENSIONS), nullable=True),
 )
 
@@ -22,15 +19,12 @@ clusters = sa.Table(
     "clusters",
     metadata,
     sa.Column("id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
-    sa.Column("title", sa.Text, nullable=True),
-    sa.Column("summary", sa.Text, nullable=True),
     sa.Column(
         "updated_at",
         sa.DateTime(timezone=True),
         nullable=False,
         server_default=sa.text("now()"),
     ),
-    sa.Column("summarized_at", sa.DateTime(timezone=True), nullable=True),
 )
 
 article_clusters = sa.Table(
@@ -112,35 +106,3 @@ def write_clusters(
         conn.execute(sa.delete(article_clusters).where(article_clusters.c.article_id.in_(noise)))
     if unmatched:
         conn.execute(sa.delete(clusters).where(clusters.c.id.in_(unmatched)))
-
-
-def clusters_needing_summary(conn: sa.Connection) -> list[int]:
-    query = (
-        sa.select(clusters.c.id)
-        .where(
-            sa.or_(
-                clusters.c.summarized_at.is_(None),
-                clusters.c.summarized_at < clusters.c.updated_at,
-            )
-        )
-        .order_by(clusters.c.id)
-    )
-    return list(conn.execute(query).scalars())
-
-
-def cluster_articles(conn: sa.Connection, cluster_id: int) -> list[tuple[str, str]]:
-    query = (
-        sa.select(articles.c.title, articles.c.body)
-        .join(article_clusters, article_clusters.c.article_id == articles.c.id)
-        .where(article_clusters.c.cluster_id == cluster_id)
-        .order_by(articles.c.published_at.desc(), articles.c.id.desc())
-    )
-    return [(row.title, row.body) for row in conn.execute(query)]
-
-
-def set_summary(conn: sa.Connection, cluster_id: int, title: str, summary: str) -> None:
-    conn.execute(
-        sa.update(clusters)
-        .where(clusters.c.id == cluster_id)
-        .values(title=title, summary=summary, summarized_at=sa.func.now())
-    )

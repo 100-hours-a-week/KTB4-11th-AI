@@ -2,11 +2,7 @@ import pytest
 from news_clusterer.settings import Settings
 from pydantic import ValidationError
 
-REQUIRED = {
-    "NEWS_CLUSTERER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/news",
-    "NEWS_CLUSTERER_LLM_BASE_URI": "http://llm.test/v1",
-    "NEWS_CLUSTERER_LLM_MODEL": "test-model",
-}
+REQUIRED = {"NEWS_CLUSTERER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/news"}
 
 
 @pytest.fixture
@@ -18,12 +14,8 @@ def required_env(monkeypatch):
 def test_defaults(required_env):
     settings = Settings()
 
-    assert settings.llm_base_uri == "http://llm.test/v1"
-    assert settings.llm_model == "test-model"
     assert settings.eps == 0.2
     assert settings.min_samples == 3
-    assert settings.summary_max_chars == 24000
-    assert settings.llm_timeout == 120
 
 
 def test_clustering_parameters_come_from_the_environment(required_env, monkeypatch):
@@ -50,7 +42,6 @@ def test_missing_required_value_raises(required_env, monkeypatch, missing):
         ("NEWS_CLUSTERER_EPS", "0"),
         ("NEWS_CLUSTERER_EPS", "2.5"),
         ("NEWS_CLUSTERER_MIN_SAMPLES", "0"),
-        ("NEWS_CLUSTERER_SUMMARY_MAX_CHARS", "0"),
     ],
 )
 def test_out_of_range_values_raise(required_env, monkeypatch, name, value):

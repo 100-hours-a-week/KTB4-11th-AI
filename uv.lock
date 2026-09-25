@@ -447,7 +447,6 @@ name = "news-clusterer"
 version = "0.1.0"
 source = { editable = "services/news-clusterer" }
 dependencies = [
-    { name = "httpx" },
     { name = "ktb-core" },
     { name = "numpy" },
     { name = "pgvector" },
@@ -458,7 +457,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = ">=0.28" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "numpy", specifier = ">=2.5" },
     { name = "pgvector", specifier = ">=0.5.0" },
