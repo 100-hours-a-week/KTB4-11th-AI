@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level)
+    logging.getLogger("urllib3").setLevel(logging.INFO)
     logger.info("news-graph-builder started")
     sync_failed = False
     failed = 0
