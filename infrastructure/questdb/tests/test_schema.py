@@ -21,12 +21,19 @@ BAR_TABLES = ["bars_1m", "bars_15m", "bars_1h", "bars_1d"]
 THEME_TABLES = ["theme_snapshot", "theme_members"]
 UNIVERSE_TABLES = ["universe_members"]
 
-# Derived from market_collector.indicators rather than hand-listed: Task 3's
-# convention is that new indicators are added to ktb_market_analyzer one at a
-# time, and a hand-maintained copy here would silently drift the day the
-# first one lands — the DDL would never declare the new column, ILP would
-# auto-create it untyped and unindexed (or the server would reject the row),
-# and this file would still pass because it was only checking itself.
+# Derived from market_collector.indicators rather than hand-listed, because a
+# hand-maintained copy here would silently drift from what the collector
+# actually writes: the DDL would not declare the column, ILP would auto-create
+# it untyped and unindexed (or the server would reject the row), and this file
+# would still pass because it was only checking itself.
+#
+# Note what this does NOT track. INDICATOR_FIELDS is the collector's own list
+# of persisted fields, not the analyzer's catalogue of what it can compute.
+# Adding an indicator to ktb_market_analyzer does not add a column here and
+# must not: expansion indicators are computed on demand when the LLM calls
+# them as a tool, over candles read back out of QuestDB. A column appears only
+# when someone decides a given indicator is worth persisting and adds it to
+# INDICATOR_FIELDS.
 INDICATORS = list(INDICATOR_FIELDS)
 
 # Every indicator except macd_signal carries a verdict beside its value. The
@@ -137,10 +144,12 @@ def test_macd_signal_has_no_verdict_column():
 
 
 def test_candle_columns_exactly_match_the_analyzers_indicator_and_comment_fields():
-    # Pins the DDL's column set to the code's own field lists rather than to
-    # anything hand-maintained in this file, so the first indicator Task 3's
-    # convention adds shows up here as a failing test instead of a silently
-    # untyped, unindexed column (or a rejected row) in production.
+    # Pins the DDL's column set to the collector's own field lists rather than
+    # to anything hand-maintained in this file, so a field added to
+    # INDICATOR_FIELDS shows up here as a failing test instead of a silently
+    # untyped, unindexed column (or a rejected row) in production. Growing the
+    # analyzer's catalogue does not move this set — see the note beside
+    # INDICATORS above.
     expected = (
         {"ts", "symbol", "session", "src"}  # metadata
         | {"open", "high", "low", "close", "volume", "trade_value"}  # OHLCV
