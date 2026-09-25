@@ -5,6 +5,7 @@ from market_collector.store import Store
 from market_collector.themes import snapshot
 
 NOW = datetime(2026, 9, 22, 7, 0, tzinfo=UTC)
+UNIVERSE = frozenset({"005930", "033170"})
 
 
 def _group(code, date_tp):
@@ -66,27 +67,29 @@ def test_groups_are_collected_once_per_period():
 def test_members_are_collected_once_per_theme_not_once_per_period():
     client = FakeThemeClient(["103", "557"])
 
-    _, members = snapshot(client, Store(FakeSink()), frozenset(), [5, 20], NOW)
+    _, members = snapshot(client, Store(FakeSink()), UNIVERSE, [5, 20], NOW)
 
     assert sorted(code for code, _ in client.member_calls) == ["103", "557"]
+    # Two themes, both members of each inside the universe -- not four per
+    # period, which is what collecting once per period would give.
     assert members == 4
 
 
-def test_membership_is_tagged_against_the_universe():
+def test_only_universe_members_are_stored():
     sink = FakeSink()
 
     snapshot(FakeThemeClient(["103"]), Store(sink), frozenset({"005930"}), [5], NOW)
 
     member_rows = [r for r in sink.rows if r[0] == "theme_members"]
-    flags = {r[1]["symbol"]: r[2]["in_universe"] for r in member_rows}
-    assert flags == {"005930": True, "033170": False}
+    assert [r[1]["symbol"] for r in member_rows] == ["005930"]
 
 
 def test_every_row_shares_one_snapshot_timestamp():
     sink = FakeSink()
 
-    snapshot(FakeThemeClient(["103", "557"]), Store(sink), frozenset(), [5, 20], NOW)
+    snapshot(FakeThemeClient(["103", "557"]), Store(sink), UNIVERSE, [5, 20], NOW)
 
+    assert {r[0] for r in sink.rows} == {"theme_snapshot", "theme_members"}
     assert {r[3] for r in sink.rows} == {NOW}
 
 

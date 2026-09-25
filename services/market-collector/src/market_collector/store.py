@@ -165,8 +165,20 @@ class Store:
     def write_theme_members(
         self, ts: datetime, members: Iterable[ThemeMember], universe: frozenset[str]
     ) -> int:
+        """Write the memberships inside ``universe``, and only those.
+
+        Symbols outside it are dropped rather than stored under a flag. The
+        collector's scope is the KOSPI 200 and nothing else, so a row for a
+        symbol that has no candles is a row no consumer can join against.
+
+        The rows carry symbols and no fields. QuestDB accepts that — the
+        symbols are the series key — and the membership is the entire fact
+        there is to record.
+        """
         written = 0
         for member in members:
+            if member.symbol not in universe:
+                continue
             self._sink.row(
                 THEME_MEMBERS_TABLE,
                 symbols={
@@ -174,7 +186,7 @@ class Store:
                     "symbol": member.symbol,
                     "stock_name": member.stock_name,
                 },
-                columns={"in_universe": member.symbol in universe},
+                columns={},
                 at=ts,
             )
             written += 1
