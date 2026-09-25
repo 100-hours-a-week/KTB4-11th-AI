@@ -22,7 +22,7 @@ from market_collector.kiwoom.themes import ThemeClient
 from market_collector.settings import Settings
 from market_collector.store import Store, questdb_sink
 from market_collector.themes import snapshot
-from market_collector.universe import load_kospi200
+from market_collector.universe import IndexClient, fetch_members, latest_members, sync_universe
 
 TIMEFRAMES = ("1m", "15m", "1h", "1d")
 
@@ -85,7 +85,7 @@ def _client(settings: Settings, index: int) -> tuple[ChartClient, HttpxTransport
 
 
 def run_backfill(settings: Settings, today: datetime, max_pages: int | None = None) -> int:
-    symbols = sorted(load_kospi200())
+    symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
     base_dt = today.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
@@ -128,7 +128,7 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
 
 
 def run_preopen(settings: Settings, now: datetime) -> int:
-    symbols = sorted(load_kospi200())
+    symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
     since = previous_session_start(now)
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
@@ -162,9 +162,24 @@ def run_themes(settings: Settings, now: datetime) -> tuple[int, int]:
             transport,
             interval=settings.request_interval,
         )
-        universe = load_kospi200()
+        universe = latest_members(settings.questdb_dsn, settings.index_code)
         with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
             return snapshot(client, Store(sink), universe, settings.theme_date_tps, now)
+    finally:
+        transport.close()
+
+
+def run_universe(settings: Settings, now: datetime) -> int:
+    transport = HttpxTransport()
+    try:
+        client = IndexClient(
+            TokenStore(settings.kiwoom_accounts[0], transport),
+            transport,
+            interval=settings.request_interval,
+        )
+        members = fetch_members(client, settings.index_code)
+        with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
+            return sync_universe(sink, now, settings.index_code, members)
     finally:
         transport.close()
 
@@ -176,6 +191,7 @@ def main() -> None:
     backfill_parser.add_argument("--max-pages", type=int, default=None)
     sub.add_parser("preopen", help="write the previous session, extended included")
     sub.add_parser("themes", help="snapshot theme groups and memberships")
+    sub.add_parser("universe", help="sync index constituents from Kiwoom")
 
     args = parser.parse_args()
     settings = Settings()
@@ -188,6 +204,8 @@ def main() -> None:
         run_preopen(settings, now)
     elif args.command == "themes":
         run_themes(settings, now)
+    elif args.command == "universe":
+        run_universe(settings, now)
     else:
         log.info("market-collector started")
 

@@ -19,6 +19,7 @@ _spec.loader.exec_module(apply_mod)
 
 BAR_TABLES = ["bars_1m", "bars_15m", "bars_1h", "bars_1d"]
 THEME_TABLES = ["theme_snapshot", "theme_members"]
+UNIVERSE_TABLES = ["universe_members"]
 
 # Derived from market_collector.indicators rather than hand-listed: Task 3's
 # convention is that new indicators are added to ktb_market_analyzer one at a
@@ -64,12 +65,12 @@ def _column_names(statement: str) -> set[str]:
 
 
 def test_every_expected_table_is_declared():
-    for table in BAR_TABLES + THEME_TABLES:
+    for table in BAR_TABLES + THEME_TABLES + UNIVERSE_TABLES:
         assert _statement_for(table)
 
 
 def test_every_table_is_idempotent_walled_and_deduplicated():
-    for table in BAR_TABLES + THEME_TABLES:
+    for table in BAR_TABLES + THEME_TABLES + UNIVERSE_TABLES:
         statement = _statement_for(table)
         assert "IF NOT EXISTS" in statement
         assert "WAL" in statement
@@ -90,6 +91,27 @@ def test_theme_tables_dedup_on_their_own_keys():
 
     members = _dedup_keys(_statement_for("theme_members"))
     assert [k.strip() for k in members.split(",")] == ["ts", "theme_code", "symbol"]
+
+
+def test_universe_members_dedups_on_ts_index_code_and_symbol():
+    # This is what makes universe/repository.py's day-truncated ts collapse
+    # two same-day runs into one snapshot rather than appending a second.
+    keys = _dedup_keys(_statement_for("universe_members"))
+    assert [k.strip() for k in keys.split(",")] == ["ts", "index_code", "symbol"]
+
+
+def test_universe_members_indexes_both_index_code_and_symbol():
+    # The read path (latest_members) filters on index_code; a consumer
+    # asking "which indices is this stock in" filters on symbol.
+    statement = _statement_for("universe_members")
+    assert re.search(r"\bindex_code\s+SYMBOL\s+INDEX\b", statement)
+    assert re.search(r"\bsymbol\s+SYMBOL\s+INDEX\b", statement)
+
+
+def test_universe_members_partitions_by_month():
+    # A snapshot is roughly 200 rows and constituents change twice a year --
+    # a day partition would be almost all empty partitions.
+    assert "PARTITION BY MONTH" in _statement_for("universe_members")
 
 
 def test_candle_tables_carry_every_indicator_column():

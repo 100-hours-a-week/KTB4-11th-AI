@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     kiwoom_accounts: list[KiwoomAccount] = Field(min_length=1)
     request_interval: float = 1.3
     theme_date_tps: list[int] = [5, 20, 60]
+    # The KOSPI 200's Kiwoom sector code (ka20002's inds_cd). A setting, not
+    # a constant, so a different index needs no code change -- see the
+    # universe design's non-goals for why it is still a single value, not a
+    # loop.
+    index_code: str = "201"
     cursor_path: str = "var/market-collector/cursors.json"
     backfill_depths: dict[str, int] = Field(default_factory=_default_backfill_depths)
     indicators_on_backfill: bool = False
