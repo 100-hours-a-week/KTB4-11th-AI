@@ -29,7 +29,7 @@ from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 
 if TYPE_CHECKING:
-    from questdb.ingress import Sender as QuestDbSender
+    from questdb import Sender as QuestDbSender
 
 __all__ = [
     "TIMEFRAME_TABLES",
@@ -84,6 +84,10 @@ def _without_nones(columns: dict[str, object]) -> dict[str, object]:
     return {name: value for name, value in columns.items() if value is not None}
 
 
+def _without_none_symbols(symbols: dict[str, str | None]) -> dict[str, str]:
+    return {name: value for name, value in symbols.items() if value is not None}
+
+
 class Store:
     def __init__(self, sink: RowSink) -> None:
         self._sink = sink
@@ -105,16 +109,18 @@ class Store:
             }
             for field in INDICATOR_FIELDS:
                 columns[field] = candle.indicators.get(field)
+
+            symbols: dict[str, str | None] = {
+                "symbol": candle.symbol,
+                "session": candle.session,
+                "src": candle.src,
+            }
             for field in COMMENT_FIELDS:
-                columns[f"{field}_comment"] = candle.comments.get(field)
+                symbols[f"{field}_comment"] = candle.comments.get(field)
 
             self._sink.row(
                 table,
-                symbols={
-                    "symbol": candle.symbol,
-                    "session": candle.session,
-                    "src": candle.src,
-                },
+                symbols=_without_none_symbols(symbols),
                 columns=_without_nones(columns),
                 at=candle.ts,
             )
@@ -178,7 +184,7 @@ class _QuestDbSink:
         columns: dict[str, object],
         at: datetime,
     ) -> None:
-        from questdb.ingress import TimestampNanos
+        from questdb import TimestampNanos
 
         # RowSink's dict types are invariant on the value type and narrower
         # than questdb's own (which also allow None values, numpy arrays,
@@ -197,8 +203,8 @@ class _QuestDbSink:
 
 @contextmanager
 def questdb_sink(host: str, port: int) -> Iterator[RowSink]:
-    from questdb.ingress import Protocol as IlpProtocol
-    from questdb.ingress import Sender
+    from questdb import Protocol as IlpProtocol
+    from questdb import Sender
 
     with Sender(IlpProtocol.Http, host, port) as sender:
         yield _QuestDbSink(sender)
