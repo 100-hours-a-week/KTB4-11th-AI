@@ -34,6 +34,16 @@ def test_defaults_match_the_measured_safe_values(monkeypatch):
     assert settings.questdb_ilp_port == 9000
     assert settings.request_interval == 1.3
     assert settings.theme_date_tps == [5, 20, 60]
+    assert settings.index_code == "201"
+
+
+def test_index_code_can_be_overridden(monkeypatch):
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_INDEX_CODE", "150")
+
+    settings = Settings()
+
+    assert settings.index_code == "150"
 
 
 def test_backfill_depths_default_to_the_backfill_modules_depths(monkeypatch):

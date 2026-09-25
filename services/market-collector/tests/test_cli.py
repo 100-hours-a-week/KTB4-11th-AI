@@ -53,7 +53,7 @@ def test_previous_session_start_still_reaches_friday_from_a_monday_run():
     assert start <= datetime(2026, 9, 24, 15, 0, tzinfo=UTC)  # 2026-09-25 00:00 KST (Friday)
 
 
-@pytest.mark.parametrize("command", ["backfill", "preopen", "themes"])
+@pytest.mark.parametrize("command", ["backfill", "preopen", "themes", "universe"])
 def test_each_subcommand_dispatches_to_its_runner(monkeypatch, command, capsys):
     _populate(monkeypatch)
     monkeypatch.setattr("sys.argv", ["market-collector", command])
@@ -61,6 +61,7 @@ def test_each_subcommand_dispatches_to_its_runner(monkeypatch, command, capsys):
     monkeypatch.setattr(cli, "run_backfill", lambda *a, **k: called.append("backfill") or 0)
     monkeypatch.setattr(cli, "run_preopen", lambda *a, **k: called.append("preopen") or 0)
     monkeypatch.setattr(cli, "run_themes", lambda *a, **k: called.append("themes") or (0, 0))
+    monkeypatch.setattr(cli, "run_universe", lambda *a, **k: called.append("universe") or 0)
 
     cli.main()
 
@@ -99,7 +100,9 @@ def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
         "MARKET_COLLECTOR_BACKFILL_DEPTHS",
         '{"1m": 1111, "15m": 2222, "1h": 3333, "1d": 4444}',
     )
-    monkeypatch.setattr(cli, "load_kospi200", lambda: frozenset({"005930", "000660"}))
+    monkeypatch.setattr(
+        cli, "latest_members", lambda dsn, index_code: frozenset({"005930", "000660"})
+    )
 
     class FakeChartSource:
         def minute_page(self, symbol, tic_scope, next_key=None):
@@ -172,3 +175,60 @@ def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
         assert call["with_indicators"] is True
         assert call["max_pages"] == 7
         assert call["base_dt"] == "20260922"
+
+
+def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
+    monkeypatch,
+):
+    # Mirrors the run_backfill wiring test: runs the real run_universe, with
+    # only the network-touching edges (the index client's transport and the
+    # QuestDB sink) and the leaf fetch/sync calls replaced by fakes/spies,
+    # so a swapped or dropped argument on the way to fetch_members or
+    # sync_universe shows up here.
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_INDEX_CODE", "201")
+
+    class FakeTransport:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "HttpxTransport", lambda: FakeTransport())
+    monkeypatch.setattr(cli, "TokenStore", lambda account, transport: object())
+
+    fetch_calls = []
+
+    def fake_fetch_members(client, index_code):
+        fetch_calls.append(index_code)
+        return ["member-1", "member-2"]
+
+    monkeypatch.setattr(cli, "fetch_members", fake_fetch_members)
+
+    class FakeSink:
+        def row(self, table, *, symbols, columns, at):
+            raise AssertionError("run_universe must never reach a real QuestDB sink")
+
+        def flush(self):
+            pass
+
+    @contextmanager
+    def fake_questdb_sink(host, port):
+        yield FakeSink()
+
+    monkeypatch.setattr(cli, "questdb_sink", fake_questdb_sink)
+
+    sync_calls = []
+
+    def fake_sync_universe(sink, ts, index_code, members):
+        sync_calls.append((ts, index_code, members))
+        return len(members)
+
+    monkeypatch.setattr(cli, "sync_universe", fake_sync_universe)
+
+    settings = Settings()
+    now = datetime(2026, 9, 25, 6, 0, tzinfo=UTC)
+
+    total = cli.run_universe(settings, now)
+
+    assert total == 2
+    assert fetch_calls == ["201"]
+    assert sync_calls == [(now, "201", ["member-1", "member-2"])]
