@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
+from news_graph_builder.dart import DartCompany
 from news_graph_builder.extract import Entity, Extraction, Relation
 from news_graph_builder.resolve import resolve
 from news_graph_builder.storage import (
@@ -10,6 +11,7 @@ from news_graph_builder.storage import (
     lock_cluster,
     write_graph,
 )
+from news_graph_builder.sync_companies import sync_companies
 
 
 def summarize(conn, cluster_id: int, cluster_updated_at) -> None:
@@ -171,3 +173,25 @@ def test_deleting_a_cluster_cascades_to_its_graph(engine, article, cluster):
         for table in ("cluster_summaries", "cluster_entities", "relations"):
             assert conn.execute(sa.text(f"SELECT count(*) FROM {table}")).scalar_one() == 0
         assert conn.execute(sa.text("SELECT count(*) FROM entities")).scalar_one() == 2
+
+
+def test_two_names_of_one_company_become_one_cluster_entity(engine, article, cluster):
+    with engine.begin() as conn:
+        sync_companies(
+            conn,
+            [("005930", "삼성전자")],
+            [DartCompany("00126380", "삼성전자", "Samsung Electronics", "005930")],
+        )
+        cluster_id = cluster(conn, [article(conn)])
+    extraction = Extraction(
+        "제목",
+        "요약",
+        [Entity("삼성전자", "기업"), Entity("Samsung Electronics", "company")],
+        [Relation("삼성전자", "Samsung Electronics", "동일", "같은 회사")],
+    )
+
+    assert build(engine, cluster_id, extraction) == 0
+
+    with engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT count(*) FROM cluster_entities")).scalar_one() == 1
+        assert conn.execute(sa.text("SELECT count(*) FROM relations")).scalar_one() == 1
