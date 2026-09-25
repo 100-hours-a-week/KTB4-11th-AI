@@ -13,6 +13,8 @@ from news_graph_builder.normalize import normalize
         (" SK 하이닉스\t", "sk하이닉스"),
         ("SK hynix Inc.", "skhynixinc."),
         ("(주)", ""),
+        ("（주）삼성전자", "삼성전자"),
+        ("ＬＧ화학", "lg화학"),
     ],
 )
 def test_normalize(text, expected):
