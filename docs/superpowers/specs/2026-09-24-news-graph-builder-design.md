@@ -151,7 +151,8 @@ Migration `0003` also drops `title`, `summary` and `summarized_at` from `cluster
 Every existing cluster then has no `cluster_summaries` row and is due, so the first run
 makes one LLM call per existing cluster and rebuilds the summaries #29 wrote.
 
-For a company entity, `name` is `normalize(corp_name)` and `raw_name` is `corp_name`.
+For a company entity, `raw_name` is `corp_name`, `name` is `normalize(corp_name)` and
+`type` is `기업`.
 
 - Every foreign key to `clusters` cascades, so the clusterer's delete of an unmatched
   cluster never fails on graph rows.
@@ -190,9 +191,12 @@ patched clients.
    `POST {kiwoom_base_uri}/api/dostk/stkinfo` with headers `api-id: ka10099` and
    `authorization: Bearer <token>`, body `{"mrkt_tp": "0"}`, following continuation
    headers until the list ends. Keep `code` and `name`.
-2. **DART:** `OpenDartReader(dart_api_key)` then `corp_codes`; keep `corp_code`,
-   `corp_name`, `corp_eng_name`, `stock_code`. The constructor downloads, so it sits
-   inside the sync's error handling.
+2. **DART:** `opendartreader.dart_list.corp_codes(dart_api_key)`, called directly: the
+   `OpenDartReader` constructor also loads `.env` from the working directory and writes a
+   pickle cache to `./docs_cache/`, neither of which a cron task wants. Keep listed rows
+   (non-blank `stock_code`) with `corp_code`, `corp_name`, `corp_eng_name`, `stock_code`.
+   `requests` puts the full URL, which carries the key, into connection error messages,
+   so a failure is re-raised as a new error without the original chained.
 3. **Join** on `stock_code`. Log the Kiwoom, DART and joined counts. A joined count below
    the Kiwoom count is expected (preferred shares have no DART row); **zero joined rows
    is a failure** (it means the code formats do not match).
@@ -254,7 +258,9 @@ and `response_format` of type `json_schema`:
 |---|---|
 | `settings.py` | `Settings` |
 | `normalize.py` | `normalize()` |
-| `sync_companies.py` | `sync_companies()` — §6 |
+| `kiwoom.py` | `fetch_kospi()` — §6 step 1 |
+| `dart.py` | `fetch_corp_codes()` — §6 step 2 |
+| `sync_companies.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
 | `extract.py` | `extract()` — §7 |
 | `resolve.py` | `resolve()` — §5 |
 | `storage.py` | due clusters, member articles, the §4.1 write |
@@ -284,9 +290,8 @@ and `response_format` of type `json_schema`:
   `opendartreader`, at the versions the other services use.
 - `tach.toml`: add the source root and a `news_graph_builder` module depending on
   `ktb_core`.
-- `docker/news-graph-builder.Dockerfile`, modeled on the clusterer's. OpenDartReader
-  writes its cache to `./docs_cache/`, so the `WORKDIR` must be writable by the runtime
-  user.
+- `docker/news-graph-builder.Dockerfile`, modeled on the clusterer's. Calling
+  `dart_list.corp_codes` directly writes no cache, so the read-only `WORKDIR` is fine.
 - `uv lock`, then `uv export` to `docker/requirements/news-graph-builder.txt` as in
   `AGENTS.md`.
 - `compose.dev.yaml`: a `news-graph-builder` service under the `jobs` profile, depending
@@ -302,15 +307,21 @@ and `response_format` of type `json_schema`:
   readers join `clusters` to `cluster_summaries` for titles), the
   settings-prefix list and the compose run command.
 
-## 9. Verify during planning
+## 9. Verification status
 
-- DART `corp_codes` has a `corp_eng_name` column; the docs consulted list only
-  `corp_code`, `corp_name`, `stock_code`, `modify_date`.
-- Kiwoom `code` and DART `stock_code` use the same format (six digits, no suffix).
-- Kiwoom `ka10099` continuation header names, and that the paper-trading domain serves
-  `ka10099` (its keys are separate credentials).
-- `opendartreader` and its dependencies lock and install on Python 3.13 and 3.14.
-- vLLM accepts the nested `json_schema` above.
+Checked during planning (2026-09-25):
+
+- DART `corp_codes` returns `corp_code`, `corp_name`, `corp_eng_name`, `stock_code`,
+  `modify_date`: 119,447 rows, 3,994 with a `stock_code`, always six digits; 3 listed
+  rows have no English name.
+- `opendartreader` 0.3.3 installs and imports on Python 3.13 and 3.14.
+- Kiwoom paging uses `cont-yn` / `next-key` request and response headers (library docs).
+
+Still open, covered by the zero-join guard and the first real run:
+
+- Kiwoom `code` uses the same six-digit format as DART `stock_code`.
+- The paper-trading domain serves `ka10099`.
+- vLLM accepts the nested `json_schema` in §7.
 
 ## 10. Limits
 
@@ -326,7 +337,8 @@ and `response_format` of type `json_schema`:
 ## 11. Testing
 
 Follows the existing patterns: `httpx.MockTransport` for HTTP, PostgreSQL fixtures skipped
-without `KTB_TEST_POSTGRES_DSN`.
+without `KTB_TEST_POSTGRES_DSN`. The fixtures truncate tables, so locally
+`KTB_TEST_POSTGRES_DSN` points at a separate `news_test` database, never at `news`.
 
 - `normalize`: `(주)`, `㈜`, `주식회사`, inner whitespace, English casefolding.
 - `sync_companies`: Kiwoom token and paging over `MockTransport`; the join/upsert on plain
