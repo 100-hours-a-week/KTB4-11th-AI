@@ -184,7 +184,7 @@ def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
     # only the network-touching edges (the index client's transport and the
     # QuestDB sink) and the leaf fetch/sync calls replaced by fakes/spies,
     # so a swapped or dropped argument on the way to fetch_members or
-    # sync_universe shows up here.
+    # upsert_members shows up here.
     _populate(monkeypatch)
     monkeypatch.setenv("MARKET_COLLECTOR_INDEX_CODE", "201")
 
@@ -218,11 +218,11 @@ def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
 
     sync_calls = []
 
-    def fake_sync_universe(sink, ts, index_code, members):
+    def fake_upsert_members(sink, ts, index_code, members):
         sync_calls.append((ts, index_code, members))
         return len(members)
 
-    monkeypatch.setattr(cli, "sync_universe", fake_sync_universe)
+    monkeypatch.setattr(cli, "upsert_members", fake_upsert_members)
 
     settings = Settings()
     now = datetime(2026, 9, 25, 6, 0, tzinfo=UTC)
