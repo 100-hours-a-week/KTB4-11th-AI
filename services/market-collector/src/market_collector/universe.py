@@ -34,7 +34,7 @@ from datetime import UTC, datetime
 from typing import LiteralString, Protocol, cast
 
 from market_collector.kiwoom.auth import TokenStore, Transport
-from market_collector.kiwoom.rest import RATE_LIMITED, KiwoomRateLimited, KiwoomRequestError, Page
+from market_collector.kiwoom.rest import Pager
 from market_collector.store import RowSink
 
 __all__ = [
@@ -108,78 +108,22 @@ class IndexClient:
         max_retries: int = 5,
         backoff_base: float = 2.0,
     ) -> None:
-        self._tokens = tokens
-        self._transport = transport
-        self._interval = interval
-        self._sleep = sleep
-        self._max_retries = max_retries
-        self._backoff_base = backoff_base
-        self._paced = False
+        self._pager = Pager(
+            tokens, transport, SECT_PATH, interval, sleep, max_retries, backoff_base
+        )
 
     def members(self, index_code: str) -> list[IndexMember]:
-        body: dict[str, object] = {"mrkt_tp": "0", "inds_cd": index_code, "stex_tp": "1"}
-        collected: list[IndexMember] = []
-        next_key: str | None = None
-        while True:
-            sent_key = next_key
-            page = self._page(body, sent_key)
-            collected.extend(
-                IndexMember(
-                    index_code=index_code,
-                    symbol=row["stk_cd"],
-                    stock_name=row.get("stk_nm", ""),
-                )
-                for row in page.rows
-            )
-            if not page.has_more:
-                return collected
-            next_key = page.next_key
-            if next_key == sent_key:
-                log.warning(
-                    "next_key did not advance for index members index_code=%s "
-                    "(stuck at %r after %d members collected)",
-                    index_code,
-                    next_key,
-                    len(collected),
-                )
-                raise KiwoomRequestError(
-                    f"stalled paging index members: index_code={index_code} next_key={next_key!r}"
-                )
-
-    def _page(self, body: dict[str, object], next_key: str | None) -> Page:
-        for attempt in range(self._max_retries + 1):
-            try:
-                return self._attempt(body, next_key)
-            except KiwoomRateLimited:
-                if attempt == self._max_retries:
-                    raise
-                self._sleep(self._backoff_base ** (attempt + 1))
-        raise AssertionError("unreachable")
-
-    def _attempt(self, body: dict[str, object], next_key: str | None) -> Page:
-        if self._paced:
-            self._sleep(self._interval)
-        self._paced = True
-
-        headers = {"authorization": f"Bearer {self._tokens.token()}", "api-id": MEMBERS_API_ID}
-        if next_key:
-            headers["cont-yn"] = "Y"
-            headers["next-key"] = next_key
-
-        response_headers, payload = self._transport.post(SECT_PATH, body, headers)
-        code = payload.get("return_code")
-        if code == RATE_LIMITED:
-            raise KiwoomRateLimited(str(payload.get("return_msg")))
-        if code != 0:
-            raise KiwoomRequestError(f"return_code={code} return_msg={payload.get('return_msg')}")
-
-        rows = payload.get(MEMBERS_ARRAY) or []
-        if not isinstance(rows, list):
-            raise KiwoomRequestError(f"{MEMBERS_ARRAY} is not a list")
-        cont = response_headers.get("cont-yn")
-        returned_key = response_headers.get("next-key") or None
-        has_more = bool(rows) and cont == "Y" and returned_key is not None
-        return Page(rows=rows, next_key=returned_key, has_more=has_more)
+        return self._pager.walk(
+            MEMBERS_API_ID,
+            MEMBERS_ARRAY,
+            {"mrkt_tp": "0", "inds_cd": index_code, "stex_tp": "1"},
+            lambda row: IndexMember(
+                index_code=index_code,
+                symbol=row["stk_cd"],
+                stock_name=row.get("stk_nm", ""),
+            ),
+            f"index members index_code={index_code}",
+        )
 
 
 def fetch_members(client: IndexSource, index_code: str) -> list[IndexMember]:
