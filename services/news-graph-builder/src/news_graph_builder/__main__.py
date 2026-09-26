@@ -14,6 +14,7 @@ from news_graph_builder.company import (
     sync_companies,
 )
 from news_graph_builder.graph import extract, resolve, write_graph
+from news_graph_builder.kiwoom import fetch_token
 from news_graph_builder.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -40,7 +41,8 @@ def main() -> None:
             sys.exit(0)
         run_lock.commit()
         try:
-            kospi = fetch_kospi(client)
+            token = fetch_token(client)
+            kospi = fetch_kospi(client, token=token)
             dart = fetch_corp_codes()
             with engine.begin() as conn:
                 joined, merged = sync_companies(conn, kospi, dart)

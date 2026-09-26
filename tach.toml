@@ -29,6 +29,7 @@ depends_on = [
     "news_graph_builder.cluster",
     "news_graph_builder.company",
     "news_graph_builder.graph",
+    "news_graph_builder.kiwoom",
 ]
 
 [[modules]]
@@ -40,8 +41,12 @@ path = "news_graph_builder.common"
 depends_on = []
 
 [[modules]]
+path = "news_graph_builder.kiwoom"
+depends_on = []
+
+[[modules]]
 path = "news_graph_builder.company"
-depends_on = ["news_graph_builder.common", "news_graph_builder.database"]
+depends_on = ["news_graph_builder.common", "news_graph_builder.database", "news_graph_builder.kiwoom"]
 
 [[modules]]
 path = "news_graph_builder.cluster"
@@ -62,6 +67,10 @@ from = ["news_graph_builder.database"]
 [[interfaces]]
 expose = ["normalize"]
 from = ["news_graph_builder.common"]
+
+[[interfaces]]
+expose = ["KiwoomSettings", "fetch_pages", "fetch_token"]
+from = ["news_graph_builder.kiwoom"]
 
 [[interfaces]]
 expose = [

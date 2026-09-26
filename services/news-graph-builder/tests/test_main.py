@@ -33,6 +33,7 @@ def env(monkeypatch, pg_dsn):
 
 @pytest.fixture
 def companies_api(monkeypatch):
+    monkeypatch.setattr(entry, "fetch_token", lambda client, **kwargs: "tok")
     monkeypatch.setattr(entry, "fetch_kospi", lambda client, **kwargs: [("005930", "삼성전자")])
     monkeypatch.setattr(entry, "fetch_corp_codes", lambda **kwargs: [SAMSUNG])
 
@@ -109,6 +110,7 @@ def test_a_failed_first_sync_exits_before_any_llm_call(env, engine, two_clusters
     def unreachable(client, **kwargs):
         raise RuntimeError("Kiwoom down")
 
+    monkeypatch.setattr(entry, "fetch_token", lambda client, **kwargs: "tok")
     monkeypatch.setattr(entry, "fetch_kospi", unreachable)
     monkeypatch.setattr(entry, "fetch_corp_codes", lambda **kwargs: [SAMSUNG])
 

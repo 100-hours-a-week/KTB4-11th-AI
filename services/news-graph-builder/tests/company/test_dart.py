@@ -7,9 +7,7 @@ from news_graph_builder.company.settings import CompanySettings
 
 
 def settings_with(dart_api_key: str) -> CompanySettings:
-    return CompanySettings(
-        kiwoom_app_key="app", kiwoom_secret_key="secret", dart_api_key=dart_api_key
-    )
+    return CompanySettings(dart_api_key=dart_api_key)
 
 
 def test_keeps_listed_companies(monkeypatch):

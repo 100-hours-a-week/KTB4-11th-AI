@@ -9,7 +9,4 @@ class CompanySettings(BaseSettings):
         hide_input_in_errors=True,
     )
 
-    kiwoom_app_key: SecretStr
-    kiwoom_secret_key: SecretStr
-    kiwoom_base_uri: str = "https://api.kiwoom.com"
     dart_api_key: SecretStr
