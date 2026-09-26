@@ -94,16 +94,14 @@ erDiagram
     }
 ```
 
-| 테이블 | 쓰는 서비스 | 마이그레이션 |
+| 테이블 | 관리 주체 서비스 | 마이그레이션 |
 |---|---|---|
-| `articles` | news-preprocessor | `0001` |
-| `clusters`, `article_clusters` | news-clusterer | `0002` |
-| `cluster_summaries`, `companies`, `company_aliases`, `entities`, `cluster_entities`, `relations` | news-graph-builder | `0003` |
+| `articles` | `news-preprocessor` | `0001` |
+| `clusters`, `article_clusters` | `news-clusterer` | `0002` |
+| `cluster_summaries`, `companies`, `company_aliases`, `entities`, `cluster_entities`, `relations` | `news-graph-builder` | `0003` |
 | `themes`, `theme_companies` | news-graph-builder | `0004` |
 
-- `entities` 의 유일성: 기업 노드는 `corp_code` 로, 그 외 개체는 `(name, type)` 으로 유일합니다 (둘 다 부분 유니크 인덱스).
-- `clusters` 를 참조하는 FK 는 모두 `ON DELETE CASCADE` 라서, news-clusterer 가 클러스터를 지우면 요약과 그래프 행도 함께 지워집니다.
-- `themes` / `theme_companies` 는 매 실행마다 통째로 교체되는 참조 데이터이며, 구성 종목은 KOSPI 200 이면서 `companies` 에 있는 종목만 저장합니다.
+- `themes` / `theme_companies` 는 KOSPI 200 이면서 `companies` 에 있는 종목만 저장합니다.
 
 ## 환경 변수
 
