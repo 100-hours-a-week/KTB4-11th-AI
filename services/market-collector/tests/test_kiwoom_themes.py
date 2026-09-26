@@ -1,7 +1,7 @@
 import pytest
 from market_collector.kiwoom.auth import TokenStore
-from market_collector.kiwoom.rest import KiwoomRequestError
-from market_collector.kiwoom.themes import RATE_LIMITED, ThemeClient
+from market_collector.kiwoom.rest import RATE_LIMITED, KiwoomRequestError
+from market_collector.kiwoom.themes import ThemeClient
 from market_collector.settings import KiwoomAccount
 
 ACCOUNT = KiwoomAccount(app_key="k", secret_key="s")

@@ -1,15 +1,20 @@
-"""Paging client for Kiwoom's chart endpoints.
+"""Kiwoom's list endpoints: the shared pager, and the chart client on top of it.
 
-Both endpoints are POST /api/dostk/chart and are told apart by the ``api-id``
-header. Continuation is carried in response headers, not the body, and is
-echoed back on the following request. Measured page sizes are 900 records for
-ka10080 and 600 for ka10081, and history can only be walked backwards — there
-is no date-jump parameter on ka10080, so ``dt`` is not sent.
+Every list endpoint Kiwoom exposes is a POST that is told apart from its
+siblings by the ``api-id`` header, carries continuation in *response* headers
+rather than the body, and expects that continuation echoed back on the next
+request. ``Pager`` holds that one shape so the chart, theme and index clients
+do not each restate it.
+
+The chart endpoints are POST /api/dostk/chart. Measured page sizes are 900
+records for ka10080 and 600 for ka10081, and history can only be walked
+backwards — there is no date-jump parameter on ka10080, so ``dt`` is not sent.
 """
 
+import logging
 import time
 from collections.abc import Callable
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, TypeVar
 
 import httpx
 
@@ -21,7 +26,12 @@ __all__ = [
     "KiwoomRateLimited",
     "KiwoomRequestError",
     "Page",
+    "Pager",
 ]
+
+log = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 CHART_PATH = "/api/dostk/chart"
 MINUTE_API_ID = "ka10080"
@@ -64,11 +74,21 @@ class HttpxTransport:
         self._client.close()
 
 
-class ChartClient:
+class Pager:
+    """Pacing, rate-limit backoff, and ``cont-yn`` paging for one endpoint.
+
+    One instance per client, and one client per account: Kiwoom's rate limit is
+    per account, so the pacing state lives here rather than being shared. The
+    theme and index endpoints use a different ``api-id`` and therefore a
+    different budget, which is why each gets its own ``Pager`` instead of all
+    three sharing one.
+    """
+
     def __init__(
         self,
         tokens: TokenStore,
         transport: Transport,
+        path: str,
         interval: float = 1.3,
         sleep: Callable[[float], None] = time.sleep,
         max_retries: int = 5,
@@ -76,35 +96,21 @@ class ChartClient:
     ) -> None:
         self._tokens = tokens
         self._transport = transport
+        self._path = path
         self._interval = interval
         self._sleep = sleep
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._paced = False
 
-    def minute_page(self, symbol: str, tic_scope: int, next_key: str | None = None) -> Page:
-        return self._page(
-            MINUTE_API_ID,
-            MINUTE_ARRAY,
-            {"stk_cd": symbol, "tic_scope": str(tic_scope), "upd_stkpc_tp": "1"},
-            next_key,
-        )
-
-    def daily_page(self, symbol: str, base_dt: str, next_key: str | None = None) -> Page:
-        return self._page(
-            DAILY_API_ID,
-            DAILY_ARRAY,
-            {"stk_cd": symbol, "base_dt": base_dt, "upd_stkpc_tp": "1"},
-            next_key,
-        )
-
-    def _page(
+    def page(
         self,
         api_id: str,
         array_field: str,
         body: dict[str, object],
-        next_key: str | None,
+        next_key: str | None = None,
     ) -> Page:
+        """One page, retrying a rate-limited response with exponential backoff."""
         for attempt in range(self._max_retries + 1):
             try:
                 return self._attempt(api_id, array_field, body, next_key)
@@ -113,6 +119,47 @@ class ChartClient:
                     raise
                 self._sleep(self._backoff_base ** (attempt + 1))
         raise AssertionError("unreachable")
+
+    def walk(
+        self,
+        api_id: str,
+        array_field: str,
+        body: dict[str, object],
+        build: Callable[[dict[str, str]], T],
+        what: str,
+    ) -> list[T]:
+        """Every page, from the first to the last, as built items.
+
+        ``what`` names the walk in the log and error messages ("theme groups
+        date_tp=5"), which is all that distinguishes one caller's failure from
+        another's.
+
+        A ``next_key`` that comes back unchanged from the one just sent is a
+        server bug, not a rate limit or a transport error, so the backoff in
+        ``page`` cannot see it. Left alone the walk would re-request the same
+        page forever, every iteration counting against the rate limit — the
+        cost this project can least afford. It raises instead: unlike
+        ``backfill.collect`` there is no cursor to resume from, so returning
+        what was collected so far would write a truncated result that looks
+        complete.
+        """
+        collected: list[T] = []
+        next_key: str | None = None
+        while True:
+            sent_key = next_key
+            page = self.page(api_id, array_field, body, sent_key)
+            collected.extend(build(row) for row in page.rows)
+            if not page.has_more:
+                return collected
+            next_key = page.next_key
+            if next_key == sent_key:
+                log.warning(
+                    "next_key did not advance for %s (stuck at %r after %d rows collected)",
+                    what,
+                    next_key,
+                    len(collected),
+                )
+                raise KiwoomRequestError(f"stalled paging {what}: next_key={next_key!r}")
 
     def _attempt(
         self,
@@ -130,7 +177,7 @@ class ChartClient:
             headers["cont-yn"] = "Y"
             headers["next-key"] = next_key
 
-        response_headers, payload = self._transport.post(CHART_PATH, body, headers)
+        response_headers, payload = self._transport.post(self._path, body, headers)
         code = payload.get("return_code")
         if code == RATE_LIMITED:
             raise KiwoomRateLimited(str(payload.get("return_msg")))
@@ -151,3 +198,34 @@ class ChartClient:
         if not isinstance(raw, list):
             raise KiwoomRequestError(f"{array_field} is not a list: {type(raw)!r}")
         return raw
+
+
+class ChartClient:
+    def __init__(
+        self,
+        tokens: TokenStore,
+        transport: Transport,
+        interval: float = 1.3,
+        sleep: Callable[[float], None] = time.sleep,
+        max_retries: int = 5,
+        backoff_base: float = 2.0,
+    ) -> None:
+        self._pager = Pager(
+            tokens, transport, CHART_PATH, interval, sleep, max_retries, backoff_base
+        )
+
+    def minute_page(self, symbol: str, tic_scope: int, next_key: str | None = None) -> Page:
+        return self._pager.page(
+            MINUTE_API_ID,
+            MINUTE_ARRAY,
+            {"stk_cd": symbol, "tic_scope": str(tic_scope), "upd_stkpc_tp": "1"},
+            next_key,
+        )
+
+    def daily_page(self, symbol: str, base_dt: str, next_key: str | None = None) -> Page:
+        return self._pager.page(
+            DAILY_API_ID,
+            DAILY_ARRAY,
+            {"stk_cd": symbol, "base_dt": base_dt, "upd_stkpc_tp": "1"},
+            next_key,
+        )
