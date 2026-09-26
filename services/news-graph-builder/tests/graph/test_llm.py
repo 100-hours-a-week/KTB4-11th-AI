@@ -137,13 +137,12 @@ def test_malformed_envelope_raises_value_error(body):
         call(client, [("a", "b")])
 
 
-def test_prompt_lists_basic_types_and_puts_the_example_before_the_articles():
+def test_prompt_puts_the_example_before_the_articles():
     seen = []
 
     call(client_replying(json.dumps(REPLY), seen=seen), [("기사", "본문")])
 
     messages = json.loads(seen[0].content)["messages"]
-    assert "'기업', '인물', '기관'" in messages[0]["content"]
     user = messages[-1]["content"]
     assert user.index(EXAMPLE_ARTICLE) < user.index("기사\n\n본문")
 

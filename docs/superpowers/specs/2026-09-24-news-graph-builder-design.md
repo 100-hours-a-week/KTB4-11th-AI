@@ -248,9 +248,8 @@ and `response_format` of type `json_schema`:
 
 - The prompt follows the structure and rules of langchain-neo4j's `LLMGraphTransformer`, in
   Korean: sections for overview, entities, relations, coreference and strict compliance; use
-  only facts stated in the articles; basic, general entity types chosen from `ENTITY_TYPES`
-  (`기업`, `인물`, `기관`, `국가`, `정책`, `제품`, `산업`, `지표`), adding an equally general type only
-  when none fits; general, lasting relation types (`공급`, not `공급 계약을 체결함`); the most
+  only facts stated in the articles; free-form but basic, general entity types (`인물`, not
+  `반도체 전문가`); general, lasting relation types (`공급`, not `공급 계약을 체결함`); the most
   complete name for an entity mentioned several ways, and people without titles.
 - The system prompt caps the reply at `max_entities` entities and `max_relations` relations.
   The cap keeps replies from being truncated, which would otherwise fail the same cluster on

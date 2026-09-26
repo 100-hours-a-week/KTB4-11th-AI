@@ -5,8 +5,6 @@ import httpx
 
 from news_graph_builder.graph.dto import Entity, Extraction, Relation
 
-ENTITY_TYPES = ("기업", "인물", "기관", "국가", "정책", "제품", "산업", "지표")
-
 # Structure and rules follow langchain-neo4j's LLMGraphTransformer prompt.
 SYSTEM_PROMPT = """\
 # 경제 뉴스 지식 그래프 추출 지침
@@ -19,8 +17,7 @@ SYSTEM_PROMPT = """\
 ## 2. 개체
 - 기사에 나온 기업, 인물, 기관, 국가, 정책, 제품 같은 대상을 최대 {max_entities}개 추출하세요.
 - name에는 기사에 나온 사람이 읽을 수 있는 이름을 쓰세요. 숫자 ID를 만들지 마세요.
-- type에는 기본적이고 일반적인 유형을 쓰세요. {entity_types} 중에서 고르고, 맞는 것이 없을 때만 \
-같은 수준의 일반적인 유형을 새로 쓰세요. 인물은 '반도체 전문가'가 아니라 '인물'로, \
+- type에는 기본적이고 일반적인 유형을 쓰세요. 인물은 '반도체 전문가'가 아니라 '인물'로, \
 기업은 '반도체 제조사'가 아니라 '기업'으로 쓰세요.
 ## 3. 관계
 - 두 개체 사이의 관계를 최대 {max_relations}개 추출하세요.
@@ -43,14 +40,16 @@ EXAMPLE_ARTICLE = (
 EXAMPLE_REPLY = {
     "title": "SK하이닉스, 엔비디아에 HBM3E 공급…청주 공장에 20조원 투자",
     "summary": (
-        "SK하이닉스가 엔비디아에 HBM3E를 공급한다. 곽노정 사장은 올해 HBM 물량이 이미 "
-        "매진됐다고 밝혔다. SK하이닉스는 청주 공장 증설에 20조원을 투자한다."
+        "SK하이닉스가 엔비디아에 HBM3E를 공급한다. 곽노정 SK하이닉스 사장은 SK하이닉스의 "
+        "올해 HBM 물량이 이미 매진됐다고 밝혔다. SK하이닉스는 청주 공장 증설에 20조원을 투자한다."
     ),
     "entities": [
         {"name": "SK하이닉스", "type": "기업"},
         {"name": "엔비디아", "type": "기업"},
         {"name": "HBM3E", "type": "제품"},
+        {"name": "HBM", "type": "제품"},
         {"name": "곽노정", "type": "인물"},
+        {"name": "청주 공장", "type": "시설"},
     ],
     "relations": [
         {
@@ -58,6 +57,18 @@ EXAMPLE_REPLY = {
             "target": "엔비디아",
             "type": "공급",
             "description": "SK하이닉스가 엔비디아에 HBM3E를 공급한다.",
+        },
+        {
+            "source": "SK하이닉스",
+            "target": "HBM",
+            "type": "판매",
+            "description": "SK하이닉스의 올해 HBM 물량은 이미 매진됐다.",
+        },
+        {
+            "source": "SK하이닉스",
+            "target": "청주 공장",
+            "type": "투자",
+            "description": "SK하이닉스는 청주 공장 증설에 20조원을 투자한다.",
         },
         {
             "source": "곽노정",
@@ -80,18 +91,6 @@ USER_PROMPT = """\
 # 기사
 {articles}"""
 
-STRING = {"type": "string"}
-
-
-def _object(*names: str) -> dict:
-    return {
-        "type": "object",
-        "properties": dict.fromkeys(names, STRING),
-        "required": list(names),
-        "additionalProperties": False,
-    }
-
-
 RESPONSE_FORMAT = {
     "type": "json_schema",
     "json_schema": {
@@ -99,12 +98,33 @@ RESPONSE_FORMAT = {
         "schema": {
             "type": "object",
             "properties": {
-                "title": STRING,
-                "summary": STRING,
-                "entities": {"type": "array", "items": _object("name", "type")},
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "entities": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "type": {"type": "string"},
+                        },
+                        "required": ["name", "type"],
+                        "additionalProperties": False,
+                    },
+                },
                 "relations": {
                     "type": "array",
-                    "items": _object("source", "target", "type", "description"),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "source": {"type": "string"},
+                            "target": {"type": "string"},
+                            "type": {"type": "string"},
+                            "description": {"type": "string"},
+                        },
+                        "required": ["source", "target", "type", "description"],
+                        "additionalProperties": False,
+                    },
                 },
             },
             "required": ["title", "summary", "entities", "relations"],
@@ -137,7 +157,6 @@ def extract(
     system_prompt = SYSTEM_PROMPT.format(
         max_entities=max_entities,
         max_relations=max_relations,
-        entity_types=", ".join(f"'{entity_type}'" for entity_type in ENTITY_TYPES),
     )
     user_prompt = USER_PROMPT.format(
         example_article=EXAMPLE_ARTICLE,
