@@ -57,6 +57,23 @@ class Settings(BaseSettings):
     ws_queue_size: int = Field(default=100_000, gt=0)
     live_flush_interval: float = Field(default=1.0, gt=0)
     live_window: int = Field(default=300, gt=0)
+    # The timeframes the intraday refresh covers. Not "1m": the live path
+    # produces those from ticks, and re-fetching them every cycle would
+    # overwrite the newest minute with a REST page that does not have it yet.
+    intraday_timeframes: list[str] = ["15m", "1h"]
+
+    @field_validator("intraday_timeframes", mode="after")
+    @classmethod
+    def _known_intraday_timeframes(cls, value: list[str]) -> list[str]:
+        from market_collector.backfill import DEFAULT_DEPTHS
+
+        unknown = [tf for tf in value if tf not in DEFAULT_DEPTHS]
+        if unknown or not value:
+            raise ValueError(
+                f"intraday_timeframes must be a non-empty subset of "
+                f"{sorted(DEFAULT_DEPTHS)}; got {value}"
+            )
+        return value
 
     @field_validator("backfill_depths", mode="after")
     @classmethod
