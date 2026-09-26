@@ -354,8 +354,8 @@ shapes. `tach.toml` enforces the dependencies and interfaces between the package
 | `company/dto.py` | `DartCompany` |
 | `company/service.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
 | `company/repository.py` | company upserts, aliases, entity merge, `find_corp_code()`, `upsert_company_entity()` |
-| `theme/dto.py` | `Theme` |
-| `theme/kiwoom.py` | `fetch_themes()`, `fetch_kospi200_codes()`, `fetch_theme_codes()` — §7 steps 1–4 |
+| `theme/dto.py` | `Theme`, `ThemeMember` |
+| `theme/kiwoom.py` | `fetch_themes()`, `fetch_kospi200_codes()`, `fetch_theme_members()` — §7 steps 1–4 |
 | `theme/service.py` | `sync_themes()` — §7 steps 5–9, on plain rows |
 | `theme/repository.py` | `find_corp_codes_by_stock_code()`, `replace_themes()` |
 | `cluster/repository.py` | `find_stale_clusters()`, `find_cluster_articles()`, `lock_cluster()` — §4.1 step 1 |
