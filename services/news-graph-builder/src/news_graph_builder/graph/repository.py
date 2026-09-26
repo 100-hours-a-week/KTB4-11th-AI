@@ -14,7 +14,6 @@ def upsert_plain_entity(conn: sa.Connection, *, raw_name: str, name: str, type_:
         statement.on_conflict_do_update(
             index_elements=[entities.c.name, entities.c.type],
             index_where=entities.c.corp_code.is_(None),
-            # A no-op update, so that RETURNING also yields the id of an existing row.
             set_={"name": statement.excluded.name},
         ).returning(entities.c.id)
     ).scalar_one()
@@ -54,9 +53,6 @@ def write_graph(
         cluster_id=cluster_id,
         title=extraction.title,
         summary=extraction.summary,
-        # Not now(): now() is this transaction's start time, and a clusterer update that
-        # waited on lock_cluster's FOR SHARE lock can commit an older updated_at, which
-        # would make the changed cluster look fresh.
         cluster_updated_at=seen,
     )
     conn.execute(
