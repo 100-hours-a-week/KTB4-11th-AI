@@ -47,17 +47,6 @@ class Settings(BaseSettings):
     backfill_depths: dict[str, int] = Field(default_factory=_default_backfill_depths)
     indicators_on_backfill: bool = False
 
-    # The live path. The first two are the assumptions the design could not
-    # measure -- Kiwoom's per-group symbol cap and whether one connection
-    # carries several groups -- kept here so a measurement that contradicts
-    # either is a configuration change and not a restructuring.
-    ws_url: str = "wss://api.kiwoom.com:10000/api/dostk/websocket"
-    ws_symbols_per_group: int = Field(default=100, gt=0)
-    ws_groups_per_connection: int = Field(default=2, gt=0)
-    ws_queue_size: int = Field(default=100_000, gt=0)
-    live_flush_interval: float = Field(default=1.0, gt=0)
-    live_window: int = Field(default=300, gt=0)
-
     @field_validator("backfill_depths", mode="after")
     @classmethod
     def _fill_missing_backfill_depths(cls, value: dict[str, int]) -> dict[str, int]:

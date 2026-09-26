@@ -6,7 +6,6 @@ subcommands.
 """
 
 import argparse
-import asyncio
 import logging
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -20,17 +19,6 @@ from market_collector.kiwoom.auth import TokenStore
 from market_collector.kiwoom.parse import KST
 from market_collector.kiwoom.rest import ChartClient, HttpxTransport
 from market_collector.kiwoom.themes import ThemeClient
-from market_collector.live import (
-    Aggregator,
-    Socket,
-    TickBuffer,
-    Window,
-    connection_plan,
-    drain,
-    seed_window,
-    session_date,
-    stream_forever,
-)
 from market_collector.settings import Settings
 from market_collector.store import Store, questdb_sink
 from market_collector.themes import snapshot
@@ -196,62 +184,6 @@ def run_universe(settings: Settings, now: datetime) -> int:
         transport.close()
 
 
-def run_live(settings: Settings, now: datetime) -> None:
-    """Subscribe to every group and write candles until interrupted.
-
-    ``websockets`` is imported here rather than in ``live.py`` so that module
-    stays importable -- and testable against a fake socket -- without a
-    WebSocket library present.
-    """
-    import websockets
-
-    symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
-    window = Window(settings.live_window)
-    seed_window(window, settings.questdb_dsn, symbols, settings.live_window)
-    buffer = TickBuffer(settings.ws_queue_size)
-    aggregator = Aggregator()
-    plan = connection_plan(
-        symbols, settings.ws_symbols_per_group, settings.ws_groups_per_connection
-    )
-    log.info(
-        "live: %d symbols over %d connection(s), %d group(s) total",
-        len(symbols),
-        len(plan),
-        sum(len(groups) for groups in plan),
-    )
-
-    transport = HttpxTransport()
-    tokens = TokenStore(settings.kiwoom_accounts[0], transport)
-    token = tokens.token()
-    on_date = session_date(now)
-
-    async def connect(url: str) -> Socket:
-        return await websockets.connect(url, ping_interval=None)
-
-    async def go() -> None:
-        with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
-            store = Store(sink)
-            readers = [
-                stream_forever(settings.ws_url, token, groups, buffer, on_date, connect)
-                for groups in plan
-            ]
-            await asyncio.gather(
-                drain(
-                    buffer,
-                    aggregator,
-                    window,
-                    lambda rows: store.write_candles("1m", rows),
-                    settings.live_flush_interval,
-                ),
-                *readers,
-            )
-
-    try:
-        asyncio.run(go())
-    finally:
-        transport.close()
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(prog="market-collector")
     sub = parser.add_subparsers(dest="command")
@@ -260,7 +192,6 @@ def main() -> None:
     sub.add_parser("preopen", help="write the previous session, extended included")
     sub.add_parser("themes", help="snapshot theme groups and memberships")
     sub.add_parser("universe", help="sync index constituents from Kiwoom")
-    sub.add_parser("live", help="aggregate WebSocket trade ticks into 1-minute candles")
 
     args = parser.parse_args()
     settings = Settings()
@@ -275,8 +206,6 @@ def main() -> None:
         run_themes(settings, now)
     elif args.command == "universe":
         run_universe(settings, now)
-    elif args.command == "live":
-        run_live(settings, now)
     else:
         log.info("market-collector started")
 
