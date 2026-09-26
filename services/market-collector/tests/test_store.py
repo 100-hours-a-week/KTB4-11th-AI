@@ -13,6 +13,7 @@ from market_collector.store import (
     Store,
     _without_nones,
     read_regular_candles,
+    read_symbol_themes,
     read_themes,
 )
 
@@ -499,3 +500,54 @@ def test_read_themes_raises_when_nothing_was_collected(monkeypatch):
 def test_read_themes_rejects_a_non_positive_limit():
     with pytest.raises(ValueError, match="0"):
         read_themes(DSN, 5, limit=0)
+
+
+def _two_themes():
+    return _fake_theme_psycopg(
+        [_snapshot("557", rate=12.5), _snapshot("103", name="반도체", rate=99.0)],
+        [
+            ("557", "006400", "삼성SDI"),
+            ("557", "005930", "삼성전자"),
+            ("103", "005930", "삼성전자"),
+            ("103", "000660", "SK하이닉스"),
+        ],
+    )
+
+
+def test_read_symbol_themes_returns_every_theme_holding_the_symbol(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    themes = read_symbol_themes(DSN, "005930", 5)
+
+    # Highest-rated first, inherited from read_themes.
+    assert [t.theme_code for t in themes] == ["103", "557"]
+
+
+def test_read_symbol_themes_keeps_the_peers_in_each_theme(monkeypatch):
+    # The other members are usually the point of asking.
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    themes = read_symbol_themes(DSN, "005930", 5)
+
+    peers = {t.theme_code: sorted(s for s, _ in t.members if s != "005930") for t in themes}
+    assert peers == {"103": ["000660"], "557": ["006400"]}
+
+
+def test_read_symbol_themes_excludes_themes_the_symbol_is_not_in(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    assert [t.theme_code for t in read_symbol_themes(DSN, "000660", 5)] == ["103"]
+
+
+def test_a_symbol_in_no_theme_returns_an_empty_list(monkeypatch):
+    # An ordinary answer, not an error: plenty of constituents belong to none.
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    assert read_symbol_themes(DSN, "999999", 5) == []
+
+
+def test_read_symbol_themes_still_raises_when_nothing_was_collected(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_theme_psycopg([], []))
+
+    with pytest.raises(EmptyThemeSnapshotError, match="themes"):
+        read_symbol_themes(DSN, "005930", 5)

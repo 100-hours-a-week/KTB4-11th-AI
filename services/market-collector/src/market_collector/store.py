@@ -49,6 +49,7 @@ __all__ = [
     "Theme",
     "questdb_sink",
     "read_regular_candles",
+    "read_symbol_themes",
     "read_themes",
 ]
 
@@ -423,3 +424,24 @@ def read_themes(dsn: str, date_tp: int, *, limit: int | None = None) -> list[The
     ]
     themes.sort(key=lambda t: (t.dt_prft_rt is None, -(t.dt_prft_rt or 0.0), t.theme_code))
     return themes if limit is None else themes[:limit]
+
+
+def read_symbol_themes(dsn: str, symbol: str, date_tp: int) -> list[Theme]:
+    """The themes one symbol belongs to, highest-rated first.
+
+    The reverse of ``read_themes``, and the question a reader asks about a
+    single stock: which themes is it in, how are those themes doing, and which
+    other symbols move with it. Each returned ``Theme`` keeps its full member
+    list for that last part -- the peers are usually the point.
+
+    A symbol in no theme returns an empty list, which is an ordinary answer:
+    plenty of constituents belong to none. Only a missing snapshot raises, and
+    that comes from ``read_themes``.
+
+    This filters the period's snapshot in Python rather than querying
+    ``theme_members`` by its ``symbol`` index. The answer needs every matching
+    theme's figures *and* its other members, so a narrower query would still
+    have to fetch both tables afterwards; at one row per theme per period the
+    whole snapshot costs less than the extra round trips.
+    """
+    return [theme for theme in read_themes(dsn, date_tp) if symbol in dict(theme.members)]

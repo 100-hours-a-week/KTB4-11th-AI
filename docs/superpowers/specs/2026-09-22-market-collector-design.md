@@ -281,7 +281,8 @@ services/
       indicators.py          a candle window -> the eight fields and their verdicts
       themes.py              the daily theme snapshot job
       store.py               QuestDB write (ILP) and read (Postgres wire):
-                             read_regular_candles, read_themes
+                             read_regular_candles, read_themes,
+                             read_symbol_themes
       cursor.py              per-symbol backfill progress
     tests/
 ```
@@ -726,6 +727,17 @@ The period is required rather than defaulted, because Kiwoom reports different f
 period for the same theme. Ordering and `limit` are applied in Python, unlike
 `read_regular_candles`: a snapshot is one row per theme per period — 142 on the measured
 day — and QuestDB has no `NULLS LAST`, which the nullable `dt_prft_rt` ordering needs.
+
+`read_symbol_themes(dsn, symbol, date_tp)` is the reverse: which themes one stock is in,
+how those themes are doing, and — because each returned theme keeps its full member list —
+which other symbols move with it. A symbol in no theme returns an empty list, which is an
+ordinary answer; plenty of constituents belong to none.
+
+It filters the period's snapshot in Python rather than querying `theme_members` by its
+`symbol` index. The answer needs every matching theme's figures *and* its other members,
+so a narrower query would still have to read both tables afterwards; at one row per theme
+per period the whole snapshot costs less than the extra round trips. The index remains
+worth having for an ad-hoc query from outside this service.
 
 An empty result raises `EmptyThemeSnapshotError` naming the `themes` command, for the same
 reason `EmptyUniverseError` exists: "no themes" would read as a claim about the market
