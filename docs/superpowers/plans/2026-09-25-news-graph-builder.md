@@ -2,6 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Later changes (after this plan ran, 2026-09-25/26).** The spec is the current authority;
+> this plan records how the first implementation was built. Since then:
+> - the service was reorganized into domain packages (`company/`, `cluster/`, `graph/`,
+>   `theme/`, `kiwoom/`, `common/`, `database.py`); `storage.py`, `resolve.py`,
+>   `sync_companies.py`, `extract.py` and friends moved (spec §9);
+> - functions were renamed verb-first: `company_entity_id` → `upsert_company_entity`,
+>   `due_clusters` → `find_stale_clusters`, `cluster_articles` → `find_cluster_articles`,
+>   `find_corp_code(conn, *, alias)`;
+> - settings were split per domain (`Settings`, `KiwoomSettings`, `CompanySettings`,
+>   `LlmSettings`) and `extract()` / the fetches read their own settings;
+> - the extraction prompt follows `LLMGraphTransformer`, entity types stay free-form, and an
+>   optional `NEWS_GRAPH_BUILDER_LLM_API_KEY` is sent as a bearer token;
+> - `normalize()` also folds full-width characters (NFKC); a run-level advisory lock and a
+>   urllib3 log cap were added.
+
 **Goal:** Add a cron service `news-graph-builder` that turns each changed news cluster into a title, a summary and a knowledge graph with one LLM call, resolving KOSPI companies to shared nodes; move summarization out of `news-clusterer`.
 
 **Architecture:** `news-clusterer` keeps writing `clusters` / `article_clusters`. `news-graph-builder` syncs KOSPI companies (Kiwoom `ka10099` joined with DART `corp_codes`), then, for every cluster whose `updated_at` moved past its stored summary, calls a vLLM OpenAI-compatible endpoint once and writes `cluster_summaries`, `entities`, `cluster_entities` and `relations` in one guarded transaction. Everything lives in PostgreSQL; services talk only through the database.

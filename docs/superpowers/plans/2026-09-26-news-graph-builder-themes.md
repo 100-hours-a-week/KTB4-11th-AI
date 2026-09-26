@@ -2,6 +2,12 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Later change (after this plan ran, 2026-09-26).** A failed theme sync is now only
+> logged: it keeps the old theme tables and no longer makes the run exit 1 (spec §4). Task 5's
+> `test_a_failed_theme_sync_keeps_old_themes_and_still_builds` became
+> `test_a_failed_theme_sync_is_only_logged`. A zero-kept-memberships guard was added to
+> `sync_themes` in the final review (spec §7 step 7).
+
 **Goal:** Sync Kiwoom themes and their KOSPI 200 members into `themes` / `theme_companies` on every news-graph-builder run, flagging each theme's main stocks.
 
 **Architecture:** A new shared `kiwoom` module issues one access token per run and pages through Kiwoom REST endpoints; `company` moves onto it. A new `theme` domain fetches all themes (`ka90001`), the KOSPI 200 constituents (`ka20002`) and each theme's members (`ka90002`), filters members to KOSPI 200 stocks present in `companies`, sets `is_main` from `main_stk`, and replaces both tables in one transaction. `main()` runs it after the company sync and before graph building; a theme failure does not stop graph building but makes the run exit 1.

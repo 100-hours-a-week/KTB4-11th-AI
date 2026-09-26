@@ -349,10 +349,12 @@ shapes. `tach.toml` enforces the dependencies and interfaces between the package
 | `settings.py` | `Settings` |
 | `database.py` | `metadata` and the table mirrors (the migrations own the schema) |
 | `common/normalize.py` | `normalize()` — §5 |
+| `kiwoom/settings.py` | `KiwoomSettings` |
 | `kiwoom/client.py` | `fetch_token()`, `fetch_pages()` (paging, request interval) |
 | `company/kiwoom.py` | `fetch_kospi()` — §6 step 1 |
 | `company/dart.py` | `fetch_corp_codes()` — §6 step 2 |
 | `company/dto.py` | `DartCompany` |
+| `company/settings.py` | `CompanySettings` |
 | `company/service.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
 | `company/repository.py` | company upserts, aliases, entity merge, `find_corp_code()`, `upsert_company_entity()` |
 | `theme/dto.py` | `Theme`, `ThemeMember` |
@@ -360,6 +362,7 @@ shapes. `tach.toml` enforces the dependencies and interfaces between the package
 | `theme/service.py` | `sync_themes()` — §7 steps 5–9, on plain rows |
 | `theme/repository.py` | `find_corp_codes_by_stock_code()`, `replace_themes()` |
 | `cluster/repository.py` | `find_stale_clusters()`, `find_cluster_articles()`, `lock_cluster()` — §4.1 step 1 |
+| `graph/settings.py` | `LlmSettings` |
 | `graph/dto.py` | `Entity`, `Relation`, `Extraction` |
 | `graph/llm.py` | `extract()` — §8 |
 | `graph/service.py` | `resolve()` — §5 |
