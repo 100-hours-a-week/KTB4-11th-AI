@@ -8,8 +8,8 @@ import sqlalchemy as sa
 _external_ids = count()
 
 TABLES = (
-    "relations, cluster_entities, cluster_summaries, entities, company_aliases, companies,"
-    " article_clusters, clusters, articles"
+    "theme_companies, themes, relations, cluster_entities, cluster_summaries, entities,"
+    " company_aliases, companies, article_clusters, clusters, articles"
 )
 
 

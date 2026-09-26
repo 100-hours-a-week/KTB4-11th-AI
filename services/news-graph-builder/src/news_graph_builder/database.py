@@ -122,3 +122,35 @@ relations = sa.Table(
     sa.Index("relations_source_entity_id_idx", "source_entity_id"),
     sa.Index("relations_target_entity_id_idx", "target_entity_id"),
 )
+
+themes = sa.Table(
+    "themes",
+    metadata,
+    sa.Column("theme_code", sa.Text, primary_key=True),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column(
+        "synced_at",
+        sa.DateTime(timezone=True),
+        nullable=False,
+        server_default=sa.text("now()"),
+    ),
+)
+
+theme_companies = sa.Table(
+    "theme_companies",
+    metadata,
+    sa.Column(
+        "theme_code",
+        sa.Text,
+        sa.ForeignKey("themes.theme_code", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column(
+        "corp_code",
+        sa.Text,
+        sa.ForeignKey("companies.corp_code", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column("is_main", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Index("theme_companies_corp_code_idx", "corp_code"),
+)
