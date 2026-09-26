@@ -8,8 +8,10 @@ dependencies = [
     "ktb-market-analyzer",
     "pydantic-settings>=2.7",
     "httpx>=0.28",
+    "numpy>=2.1",
     "questdb>=5.0",
     "psycopg[binary]>=3.3.6",
+    "websockets>=15.0",
 ]
 
 [project.scripts]
