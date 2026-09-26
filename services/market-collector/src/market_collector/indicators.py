@@ -1,39 +1,3 @@
-"""The eight persisted indicator fields and their verdicts, over a candle window.
-
-``INDICATOR_FIELDS`` is the set the collector computes during collection and
-stores in QuestDB beside the OHLCV. It is declared here by hand, and not
-derived from the analyzer's catalogue, because the two are meant to diverge:
-indicators added to ``ktb_market_analyzer`` later are computed on demand when
-the LLM calls them as a tool, over candles read back through
-``store.read_regular_candles``, and never get a column. Adding an indicator to
-the analyzer is therefore not a schema change. A field joins this tuple only
-when someone decides it is worth persisting on every candle.
-
-Indicators are recomputed over the whole series rather than updated from their
-own previous values. Three of the five underlying functions need a rolling
-high/low range or an earlier close regardless, and RSI and MACD would need
-hidden state columns because inverting them recovers only a ratio and one
-equation in two unknowns. Recomputing all eight for 200 symbols over a
-300-candle window measures 1.7 ms, so the incremental version would trade a
-hand-written reimplementation of TA-Lib's recursions for microseconds.
-
-``ktb_market_analyzer``'s top level answers about a single moment and needs
-price data (``interpret``) or nothing (``get_basic_market_data``); it does not
-expose whole series. This module imports the submodules that do:
-``ktb_market_analyzer.indicators`` for the five TA-Lib wrappers and
-``ktb_market_analyzer.comments`` for the verdict rules the package applies to
-seven of the eight fields.
-
-Values and verdicts are produced as two dicts shaped exactly like each other:
-every array/list here is the same length as the input and aligned with it by
-position, so a caller holding both a candle array and these two dicts can
-always read ``[i]`` on each to describe the candle at ``[i]``. Task 11's
-backfill computes ``indicator_series`` once over the regular-session candles,
-passes that same dict into ``comment_series_for`` to get verdicts without
-recomputing anything, and then maps both back onto the original candle
-positions by index — the reason the shape was chosen.
-"""
-
 import math
 
 import numpy as np

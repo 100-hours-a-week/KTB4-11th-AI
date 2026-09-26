@@ -1,20 +1,3 @@
-"""The daily theme snapshot.
-
-Groups are collected once per configured period, because dt_prft_rt differs by
-period and the response ordering means a different set of themes reaches page
-one for each. Memberships are collected once per theme rather than once per
-period: they do not depend on the period, and 142 requests is already the
-larger half of this job.
-
-Every row in one run shares a single timestamp, so a reader can select one
-snapshot without a range query.
-
-Memberships are stored only for symbols inside the universe. A theme whose
-members all fall outside it still gets a theme_snapshot row and simply no
-member rows: Kiwoom computes stock_count and dt_prft_rt over the theme's whole
-membership, so the snapshot row stays meaningful on its own.
-"""
-
 import logging
 from collections.abc import Sequence
 from datetime import datetime
@@ -29,13 +12,6 @@ log = logging.getLogger(__name__)
 
 
 class ThemeSource(Protocol):
-    """Structural shape of the theme client ``snapshot`` needs.
-
-    ``ThemeClient`` satisfies this without inheriting from it — the same
-    structural-typing pattern ``backfill.ChartSource`` uses — so a test's
-    fake theme client can stand in without subclassing the real one.
-    """
-
     def groups(self, date_tp: int) -> list[ThemeGroup]: ...
     def members(self, theme_code: str, date_tp: int) -> list[ThemeMember]: ...
 
