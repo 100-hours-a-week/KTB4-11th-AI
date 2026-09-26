@@ -46,11 +46,21 @@ The IP this machine runs from is not registered with Kiwoom, so none of the foll
 could be measured. Each is isolated so that a wrong value is a configuration or
 single-module change rather than a restructuring.
 
-| # | Assumption | Isolated in | If wrong |
+| # | Assumption | Status | Isolated in |
 |---|---|---|---|
-| A1 | A group (`grp_no`) carries at most 100 symbols | `ws_symbols_per_group` setting, default 100 | Change the setting. Group count is derived, never hard-coded |
-| A2 | One connection carries at least 2 groups | `ws_groups_per_connection` setting, default 2 | Set it to 1 and the runner opens two connections instead of one. The reader task is already per-connection |
-| A3 | A `0B` trade tick carries exchange time, last price and trade volume under the field ids in `live/fields.py` | `live/fields.py` — one dict, nothing else reads raw ids | Rewrite that dict. `Tick` and everything above it are unchanged |
+| A1 | A group (`grp_no`) carries at most 100 symbols | **Measured 2026-09-26: not enforced at 100.** A single group accepted 200 symbols with `return_code=0` | `ws_symbols_per_group`, kept at 100 |
+| A2 | One connection carries at least 2 groups | **Measured 2026-09-26: holds.** Four groups registered on one connection, all `return_code=0` | `ws_groups_per_connection`, kept at 2 |
+| A3 | A `0B` trade tick carries exchange time, last price and accumulated volume under the ids in `TICK_FIELDS` | **Still open.** The probe ran on a Saturday, so no tick arrived | `TICK_FIELDS` in `live.py` — one dict, nothing else reads raw ids |
+
+The probe also confirmed what mattered most operationally: **the IP allowlist covers
+the WebSocket endpoint too.** Token issue, socket connect and LOGIN all succeeded on
+the same registration the REST path uses, so no separate allowlist entry is needed.
+
+A1 came back looser than assumed, and the settings stay conservative anyway. A
+`return_code=0` on a 200-symbol registration proves the server did not reject it; it
+does not prove all 200 are actually subscribed, because silent truncation would look
+identical until ticks flow. 100 per group across two groups is the configuration that
+is both accepted and provable, so that is what ships.
 
 A3 is the one that cannot be resolved by reasoning: the field set has to be read off a
 live tick during market hours. Until then `live/fields.py` carries the ids from Kiwoom's
