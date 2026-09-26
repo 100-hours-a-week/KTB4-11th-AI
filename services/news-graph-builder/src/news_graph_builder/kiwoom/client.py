@@ -5,8 +5,6 @@ import httpx
 
 from news_graph_builder.kiwoom.settings import KiwoomSettings
 
-HEADERS = {"content-type": "application/json;charset=UTF-8"}
-
 
 def fetch_token(client: httpx.Client, *, settings: KiwoomSettings | None = None) -> str:
     settings = settings or KiwoomSettings()
@@ -16,7 +14,9 @@ def fetch_token(client: httpx.Client, *, settings: KiwoomSettings | None = None)
         "secretkey": settings.kiwoom_secret_key.get_secret_value(),
     }
     response = client.post(
-        f"{settings.kiwoom_base_uri.rstrip('/')}/oauth2/token", json=body, headers=HEADERS
+        f"{settings.kiwoom_base_uri.rstrip('/')}/oauth2/token",
+        json=body,
+        headers={"content-type": "application/json;charset=UTF-8"},
     )
     reply = response.raise_for_status().json()
     if "token" not in reply:
@@ -38,7 +38,8 @@ def fetch_pages(
 ) -> list[dict[str, Any]]:
     settings = settings or KiwoomSettings()
     url = f"{settings.kiwoom_base_uri.rstrip('/')}/api/dostk/{path}"
-    headers = HEADERS | {
+    headers = {
+        "content-type": "application/json;charset=UTF-8",
         "authorization": f"Bearer {token}",
         "api-id": api_id,
         "cont-yn": "N",
