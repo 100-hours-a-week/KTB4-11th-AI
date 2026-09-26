@@ -3,7 +3,7 @@ import logging
 import pytest
 import sqlalchemy as sa
 from news_graph_builder import __main__ as entry
-from news_graph_builder.cluster import due_clusters
+from news_graph_builder.cluster import stale_clusters
 from news_graph_builder.company import DartCompany
 from news_graph_builder.graph import Entity, Extraction, Relation
 
@@ -67,7 +67,7 @@ def count(engine, table: str) -> int:
         return conn.execute(sa.text(f"SELECT count(*) FROM {table}")).scalar_one()
 
 
-def test_builds_a_graph_for_every_due_cluster(env, engine, two_clusters, companies_api, llm):
+def test_builds_a_graph_for_every_stale_cluster(env, engine, two_clusters, companies_api, llm):
     assert run() == 0
 
     assert len(llm) == 2
@@ -146,7 +146,7 @@ def test_a_cluster_changed_during_extraction_is_skipped(
     assert run() == 0
     assert count(engine, "cluster_summaries") == 0
     with engine.connect() as conn:
-        assert len(due_clusters(conn)) == 2
+        assert len(stale_clusters(conn)) == 2
 
 
 def test_urllib3_debug_logging_is_silenced(env, engine, companies_api, llm):

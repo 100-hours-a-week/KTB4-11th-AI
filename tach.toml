@@ -76,7 +76,7 @@ expose = [
 from = ["news_graph_builder.company"]
 
 [[interfaces]]
-expose = ["cluster_articles", "due_clusters", "lock_cluster"]
+expose = ["cluster_articles", "stale_clusters", "lock_cluster"]
 from = ["news_graph_builder.cluster"]
 
 [[interfaces]]

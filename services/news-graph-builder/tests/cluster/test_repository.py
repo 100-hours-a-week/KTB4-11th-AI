@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
-from news_graph_builder.cluster import cluster_articles, due_clusters, lock_cluster
+from news_graph_builder.cluster import cluster_articles, lock_cluster, stale_clusters
 
 
 def summarize(conn, cluster_id: int, cluster_updated_at) -> None:
@@ -14,24 +14,24 @@ def summarize(conn, cluster_id: int, cluster_updated_at) -> None:
     )
 
 
-def test_a_cluster_without_a_summary_is_due(engine, article, cluster, updated_at):
+def test_a_cluster_without_a_summary_is_stale(engine, article, cluster, updated_at):
     with engine.begin() as conn:
         cluster_id = cluster(conn, [article(conn)])
 
     with engine.connect() as conn:
-        assert due_clusters(conn) == [(cluster_id, updated_at(conn, cluster_id))]
+        assert stale_clusters(conn) == [(cluster_id, updated_at(conn, cluster_id))]
 
 
-def test_a_summary_of_the_current_updated_at_is_not_due(engine, article, cluster, updated_at):
+def test_a_summary_of_the_current_updated_at_is_not_stale(engine, article, cluster, updated_at):
     with engine.begin() as conn:
         cluster_id = cluster(conn, [article(conn)])
         summarize(conn, cluster_id, updated_at(conn, cluster_id))
 
     with engine.connect() as conn:
-        assert due_clusters(conn) == []
+        assert stale_clusters(conn) == []
 
 
-def test_a_summary_of_an_older_updated_at_is_due(engine, article, cluster, updated_at):
+def test_a_summary_of_an_older_updated_at_is_stale(engine, article, cluster, updated_at):
     with engine.begin() as conn:
         cluster_id = cluster(conn, [article(conn)])
         summarize(conn, cluster_id, updated_at(conn, cluster_id))
@@ -39,7 +39,7 @@ def test_a_summary_of_an_older_updated_at_is_due(engine, article, cluster, updat
         conn.execute(sa.text("UPDATE clusters SET updated_at = now()"))
 
     with engine.connect() as conn:
-        assert [row[0] for row in due_clusters(conn)] == [cluster_id]
+        assert [row[0] for row in stale_clusters(conn)] == [cluster_id]
 
 
 def test_cluster_articles_are_newest_first(engine, article, cluster):

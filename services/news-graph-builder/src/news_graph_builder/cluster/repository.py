@@ -10,7 +10,7 @@ from news_graph_builder.database import (
 )
 
 
-def due_clusters(conn: sa.Connection) -> list[tuple[int, datetime]]:
+def stale_clusters(conn: sa.Connection) -> list[tuple[int, datetime]]:
     query = (
         sa.select(clusters.c.id, clusters.c.updated_at)
         .outerjoin(cluster_summaries, cluster_summaries.c.cluster_id == clusters.c.id)

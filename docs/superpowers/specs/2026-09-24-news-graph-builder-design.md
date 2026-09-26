@@ -35,8 +35,8 @@ clusters.
 | Company list | Kiwoom REST `ka10099` (`mrkt_tp=0`) decides KOSPI membership | DART does not say which market a company trades on |
 | Company details | DART `corp_codes` (via OpenDartReader) adds `corp_code` and `corp_eng_name`, joined on `stock_code` | Kiwoom has neither |
 | Entity identity | Company alias lookup, else unique `(name, type)` where `name = normalize(raw_name)` | Deterministic; no threshold to tune |
-| Summary table | `cluster_summaries`, owned by news-graph-builder; `title` / `summary` / `summarized_at` leave `clusters` | One writer per table; a missing row makes a cluster due, so no backfill hack |
-| Due marker | No `cluster_summaries` row, or `cluster_updated_at < clusters.updated_at` | The stored value is the `updated_at` that was summarized, not a wall-clock time |
+| Summary table | `cluster_summaries`, owned by news-graph-builder; `title` / `summary` / `summarized_at` leave `clusters` | One writer per table; a missing row makes a cluster stale, so no backfill hack |
+| Staleness marker | No `cluster_summaries` row, or `cluster_updated_at < clusters.updated_at` | The stored value is the `updated_at` that was summarized, not a wall-clock time |
 | Concurrency with the clusterer | Optimistic check on `updated_at` inside the write transaction (§4.1) | The LLM call is long and the clusterer can change the cluster meanwhile |
 
 ### Table ownership
@@ -69,16 +69,16 @@ clusters.
 1. **Sync companies** (§6). On failure, log it and continue with the existing
    `companies` table. If the sync failed **and** `companies` is empty, exit 1 before
    extracting anything, so a first run cannot turn every company into a plain entity.
-2. **Load due clusters:** `c.id, c.updated_at FROM clusters c LEFT JOIN cluster_summaries s
+2. **Load stale clusters:** `c.id, c.updated_at FROM clusters c LEFT JOIN cluster_summaries s
    ON s.cluster_id = c.id WHERE s.cluster_id IS NULL OR s.cluster_updated_at <
    c.updated_at`, ordered by `c.id`.
-3. **For each due cluster:**
+3. **For each stale cluster:**
    1. Load member articles ordered by `published_at DESC` and build the prompt text:
       `title\n\nbody` blocks, stopping before the total exceeds `summary_max_chars`; the
       newest article is always included, truncated to the budget.
    2. `extract()` (§7): one LLM call, outside any transaction.
    3. Guarded write (§4.1).
-4. On any HTTP, timeout or parse error for a cluster, log it, leave the cluster due and
+4. On any HTTP, timeout or parse error for a cluster, log it, leave the cluster stale and
    continue. Exit 1 if the company sync or any cluster failed, else 0.
 
 With no changed clusters the run syncs companies and makes no LLM call.
@@ -95,7 +95,7 @@ One transaction per cluster:
 3. Delete the cluster's `cluster_entities` and `relations`, then insert the new ones.
    Re-extraction replaces, it never appends.
 4. Upsert `cluster_summaries (cluster_id, title, summary, cluster_updated_at = :seen,
-   summarized_at = now())`. Storing `:seen` keeps the cluster due if `updated_at` moves
+   summarized_at = now())`. Storing `:seen` keeps the cluster stale if `updated_at` moves
    after this commit.
 
 The `FOR SHARE` lock makes the clusterer's update or delete of that row wait for this
@@ -148,7 +148,7 @@ relations
 ```
 
 Migration `0003` also drops `title`, `summary` and `summarized_at` from `clusters`.
-Every existing cluster then has no `cluster_summaries` row and is due, so the first run
+Every existing cluster then has no `cluster_summaries` row and is stale, so the first run
 makes one LLM call per existing cluster and rebuilds the summaries #29 wrote.
 
 For a company entity, `raw_name` is `corp_name`, `name` is `normalize(corp_name)` and
@@ -272,7 +272,7 @@ shapes. `tach.toml` enforces the dependencies and interfaces between the package
 | `company/dto.py` | `DartCompany` |
 | `company/service.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
 | `company/repository.py` | company upserts, aliases, entity merge, `company_entity_id()` |
-| `cluster/repository.py` | due clusters, member articles, `lock_cluster()` — §4.1 step 1 |
+| `cluster/repository.py` | `stale_clusters()`, member articles, `lock_cluster()` — §4.1 step 1 |
 | `graph/dto.py` | `Entity`, `Relation`, `Extraction` |
 | `graph/llm.py` | `extract()` — §7 |
 | `graph/service.py` | `resolve()` — §5 |
@@ -374,7 +374,7 @@ without `KTB_TEST_POSTGRES_DSN`. The fixtures truncate tables, so locally
   when `updated_at`
   moved and when the cluster was deleted; `cluster_updated_at` is set to the seen
   `updated_at`; a cluster with no summary row and one with an older
-  `cluster_updated_at` are both due; deleting a cluster cascades to its graph rows.
+  `cluster_updated_at` are both stale; deleting a cluster cascades to its graph rows.
 - `main`: end to end with mocked LLM, Kiwoom and DART; a second run makes no LLM call;
   a failed extraction exits 1 and is retried next run; a failed sync with an empty
   `companies` table exits 1 before any LLM call.

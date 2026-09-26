@@ -6,7 +6,7 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import setup_logging
 
-from news_graph_builder.cluster import cluster_articles, due_clusters, lock_cluster
+from news_graph_builder.cluster import cluster_articles, lock_cluster, stale_clusters
 from news_graph_builder.company import (
     fetch_corp_codes,
     fetch_kospi,
@@ -63,8 +63,8 @@ def main() -> None:
                     sys.exit(1)
 
         with engine.connect() as conn:
-            due = due_clusters(conn)
-        for cluster_id, seen in due:
+            stale = stale_clusters(conn)
+        for cluster_id, seen in stale:
             try:
                 with engine.connect() as conn:
                     articles = cluster_articles(conn, cluster_id)
@@ -93,7 +93,7 @@ def main() -> None:
                 continue
             if dropped:
                 logger.info("cluster %d: dropped %d dangling relations", cluster_id, dropped)
-        logger.info("built %d cluster graphs, %d failed", len(due) - failed, failed)
+        logger.info("built %d cluster graphs, %d failed", len(stale) - failed, failed)
     sys.exit(1 if sync_failed or failed else 0)
 
 

@@ -1,6 +1,6 @@
 import pytest
 import sqlalchemy as sa
-from news_graph_builder.cluster import due_clusters, lock_cluster
+from news_graph_builder.cluster import lock_cluster, stale_clusters
 from news_graph_builder.company import DartCompany, sync_companies
 from news_graph_builder.graph import Entity, Extraction, Relation, resolve, write_graph
 
@@ -42,7 +42,7 @@ def test_write_graph_stores_the_summary_and_drops_dangling_relations(
         assert summary.cluster_updated_at == updated_at(conn, cluster_id)
         assert conn.execute(sa.text("SELECT count(*) FROM cluster_entities")).scalar_one() == 2
         assert conn.execute(sa.text("SELECT type FROM relations")).scalars().all() == ["공급"]
-        assert due_clusters(conn) == []
+        assert stale_clusters(conn) == []
 
 
 def test_rewriting_a_cluster_replaces_its_graph(engine, article, cluster, build):
@@ -59,7 +59,7 @@ def test_rewriting_a_cluster_replaces_its_graph(engine, article, cluster, build)
         assert conn.execute(sa.text("SELECT count(*) FROM relations")).scalar_one() == 0
 
 
-def test_a_change_after_the_write_makes_the_cluster_due_again(engine, article, cluster, build):
+def test_a_change_after_the_write_makes_the_cluster_stale_again(engine, article, cluster, build):
     with engine.begin() as conn:
         cluster_id = cluster(conn, [article(conn)])
     build(cluster_id)
@@ -67,7 +67,7 @@ def test_a_change_after_the_write_makes_the_cluster_due_again(engine, article, c
         conn.execute(sa.text("UPDATE clusters SET updated_at = now()"))
 
     with engine.connect() as conn:
-        assert [row[0] for row in due_clusters(conn)] == [cluster_id]
+        assert [row[0] for row in stale_clusters(conn)] == [cluster_id]
 
 
 def test_deleting_a_cluster_cascades_to_its_graph(engine, article, cluster, build):
