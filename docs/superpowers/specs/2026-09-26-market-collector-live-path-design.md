@@ -2,16 +2,16 @@
 
 **Date:** 2026-09-26
 **Extends:** `2026-09-22-market-collector-design.md` §7 "Live — during market hours"
-**Status: on hold, not implemented.** The collector does not ingest trade ticks.
-The user ruled the whole path out — 체결 틱 데이터는 안 받아와도 돼. 체결은 백엔드
-쪽에서 로직처리 할거야 — and asked to be consulted if it ever becomes necessary.
-The implementation was reverted (commit f842ca8, reverted in the commit after it),
-so git holds it if that day comes.
+**Status:** implemented. Three inputs were assumed rather than measured; §2 states
+each one and what it costs to be wrong.
 
-What is worth keeping from this document is the reasoning, not the plan: why volume
-must come from differencing Kiwoom's accumulated counters rather than summing ticks,
-why the minute boundary has to come from the tick's own exchange time, and what the
-three unmeasured WebSocket inputs are. Read §2 and §4 before rebuilding any of it.
+The scope was briefly withdrawn and restored. Trade ticks looked unnecessary once
+execution logic moved to the backend, but the one-minute freshness requirement is
+the collector's own, and a WebSocket subscription is the only way to meet it:
+polling 200 symbols costs 96-184 seconds per cycle across five accounts, while
+computing all eight indicators for those 200 symbols over a 300-candle window
+measures 1.7 ms. The minute is spent fetching, not computing, which is why no
+amount of trimming the indicator work would have helped.
 
 Three inputs were assumed rather than measured; §2 states each one and what it costs
 to be wrong.
