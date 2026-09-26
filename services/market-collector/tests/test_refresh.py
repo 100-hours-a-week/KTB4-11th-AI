@@ -29,8 +29,7 @@ class FakeClient:
         return self.page
 
     def daily_page(self, symbol, base_dt, next_key=None):
-        # refresh_recent's timeframe branch never reaches this in these
-        # tests (all use "1m"), but ChartSource requires it structurally.
+
         raise NotImplementedError("this test only exercises the minute endpoint")
 
 
@@ -72,7 +71,7 @@ def test_only_rows_at_or_after_since_are_written():
         symbol="005930",
         timeframe="1m",
         base_dt="20260922",
-        since=datetime(2026, 9, 22, 5, 0, tzinfo=UTC),  # 14:00 KST
+        since=datetime(2026, 9, 22, 5, 0, tzinfo=UTC),
     )
 
     assert written == len(sink.rows)
@@ -90,7 +89,7 @@ def test_written_rows_have_a_warm_indicator_because_the_page_carries_history():
         "005930",
         "1m",
         "20260922",
-        since=datetime(2026, 9, 22, 6, 0, tzinfo=UTC),  # 15:00 KST
+        since=datetime(2026, 9, 22, 6, 0, tzinfo=UTC),
     )
 
     last = sink.rows[-1][2]
@@ -128,9 +127,7 @@ class TwoPageFakeClient:
 
 
 def test_1m_pages_further_back_when_since_is_not_covered_by_one_page():
-    # since reaches back to a day the newest page alone cannot cover (a
-    # Monday preopen run reaching Friday, per H3): the newest page is dated
-    # 2026-09-22 and since is 2026-09-19 09:00 KST, three trading days back.
+
     newest = Page([_row_on("20260922", i, 277000 + i) for i in range(390)], "NK1", True)
     older = Page([_row_on("20260919", i, 276000 + i) for i in range(390)], None, False)
     client = TwoPageFakeClient([newest, older])
@@ -142,7 +139,7 @@ def test_1m_pages_further_back_when_since_is_not_covered_by_one_page():
         "005930",
         "1m",
         "20260922",
-        since=datetime(2026, 9, 19, 0, 0, tzinfo=UTC),  # 2026-09-19 09:00 KST
+        since=datetime(2026, 9, 19, 0, 0, tzinfo=UTC),
     )
 
     assert len(client.calls) == 2
@@ -153,9 +150,7 @@ def test_1m_pages_further_back_when_since_is_not_covered_by_one_page():
 
 
 def test_1m_paging_stops_once_max_refresh_pages_is_hit():
-    # since is never reached (it is far older than either page), and history
-    # never ends (has_more stays True) — a pathological or very deep window
-    # must not turn into an unbounded page loop.
+
     pages = [
         Page([_row_on("20260922", i, 277000 + i) for i in range(390)], "NK1", True),
         Page([_row_on("20260921", i, 276000 + i) for i in range(390)], "NK2", True),

@@ -16,15 +16,9 @@ from market_collector.kiwoom.parse import KST, MinuteBar
 from market_collector.kiwoom.rest import Page
 from market_collector.store import Store
 
-# Just the base_dt argument collect()/backfill_one() forward to daily_page; the
-# minute endpoint ignores it entirely (ka10080 has no date-jump parameter).
 BASE_DT = "20260921"
 
-# The anchor _minute_row counts backward from. price doubles as the number of
-# minutes before this anchor, so two pages built from disjoint price ranges
-# (as every "stops before the API is exhausted" test below constructs them)
-# never collide, while two pages built from the *same* price range collide on
-# purpose, which is exactly what the overlapping-page dedup test wants.
+
 _ANCHOR = datetime(2026, 9, 22, 15, 29, tzinfo=KST)
 
 
@@ -106,8 +100,6 @@ def test_bars_come_back_oldest_first(tmp_path):
 def test_duplicate_timestamps_across_overlapping_pages_collapse(tmp_path):
     pages = [
         Page([_minute_row(i, 277000 + i) for i in range(50)], "NK1", True),
-        # i in [30, 50) reuses page one's price range, hence its timestamps:
-        # a genuine overlap, the kind two adjacent real pages can produce.
         Page([_minute_row(i, 277000 + i) for i in range(30, 80)], None, False),
     ]
     client = FakeClient(pages)
@@ -129,8 +121,6 @@ def test_collect_stops_once_the_depth_is_reached(tmp_path):
 
     bars = collect(client, "005930", "1m", cursors, BASE_DT, depth=1000)
 
-    # The second page completes rather than being truncated mid-page: already
-    # fetched data is not thrown away, and dedup makes a re-run safe.
     assert len(bars) >= 1000
     assert len(client.minute_calls) == 2
     assert cursors.get("005930", "1m").done is True
@@ -199,8 +189,6 @@ def test_collect_stops_when_next_key_stops_advancing(tmp_path):
 
     bars = collect(client, "005930", "1m", cursors, BASE_DT, depth=8000)
 
-    # One call to discover the stuck key, one more to confirm it repeats —
-    # not the unbounded loop a naive implementation would run forever.
     assert len(client.minute_calls) == 2
     assert client.minute_calls[0][2] is None
     assert client.minute_calls[1][2] == "STUCK"
@@ -229,10 +217,7 @@ def test_collect_pages_the_daily_endpoint_for_the_1d_timeframe(tmp_path):
 
 
 def test_an_empty_first_page_does_not_finish_the_pair(tmp_path):
-    # A halted symbol, a newly-listed one, or a transient upstream empty on
-    # the very first request must not be read as "history ended": there is
-    # no evidence for that, and marking the pair done would mean it is never
-    # retried while zero bars were ever collected.
+
     client = FakeClient([Page([], None, False)])
     cursors = CursorStore(tmp_path / "c.json")
 
@@ -243,8 +228,7 @@ def test_an_empty_first_page_does_not_finish_the_pair(tmp_path):
 
 
 def test_an_empty_later_page_still_finishes_the_pair(tmp_path):
-    # Unlike an empty first page, an empty page after real data already
-    # arrived is a legitimate end of history and must still finish.
+
     pages = [
         Page([_minute_row(i, 277000 + i) for i in range(5)], "NK1", True),
         Page([], None, False),
@@ -259,13 +243,7 @@ def test_an_empty_later_page_still_finishes_the_pair(tmp_path):
 
 
 def test_an_empty_page_after_a_resume_still_finishes_the_pair(tmp_path):
-    # The scoping bug: pages_fetched resets to 0 on every collect() call, so
-    # checking only "pages_fetched == 1" treats the first page fetched
-    # *after a resume* as evidence-free too -- even when it is the walk's
-    # genuine terminal empty page. That would make the pair permanently
-    # unfinishable: every later run re-fetches just that one page and hits
-    # the same false ambiguity again. cursor.pages (persisted across runs)
-    # must be consulted too.
+
     cursors = CursorStore(tmp_path / "c.json")
     interrupted = [
         Page([_minute_row(i, 277000 + i) for i in range(5)], "NK1", True),
@@ -275,9 +253,6 @@ def test_an_empty_page_after_a_resume_still_finishes_the_pair(tmp_path):
     assert cursors.get("005930", "1m").pages == 1
     assert cursors.get("005930", "1m").done is False
 
-    # Resume with a brand new client whose only page is the genuine,
-    # terminal empty one -- this is the first page *fetched this call*, but
-    # not the pair's first page ever.
     resumed_client = FakeClient([Page([], None, False)])
 
     bars = collect(resumed_client, "005930", "1m", cursors, BASE_DT, depth=1000)
@@ -296,7 +271,7 @@ def test_on_page_is_called_with_each_pages_bars_before_the_cursor_advances(tmp_p
     seen_pages: list[list] = []
 
     def on_page(bars):
-        # The cursor must not yet reflect this page while on_page runs.
+
         seen_pages.append(list(bars))
         assert cursors.get("005930", "1m").pages == len(seen_pages) - 1
 
@@ -319,9 +294,6 @@ def test_a_raising_on_page_leaves_the_cursor_at_the_previous_page(tmp_path):
     with pytest.raises(RuntimeError):
         collect(client, "005930", "1m", cursors, BASE_DT, depth=1000, on_page=on_page)
 
-    # The first page's write raised, so the cursor was never advanced past
-    # it and the pair was never marked done: a resume will retry that page
-    # rather than skip past data that was never stored.
     cursor = cursors.get("005930", "1m")
     assert cursor.next_key is None
     assert cursor.done is False
@@ -358,9 +330,6 @@ def test_a_raising_on_complete_leaves_the_pair_unfinished(tmp_path):
     with pytest.raises(RuntimeError):
         collect(client, "005930", "1m", cursors, BASE_DT, depth=1000, on_complete=on_complete)
 
-    # The bare OHLCV was already handed to on_page (not used here, but that
-    # is the point: on_complete failing must not lose it) and the pair is
-    # not marked done, so a later run's on_complete gets another chance.
     assert cursors.get("005930", "1m").done is False
 
 
@@ -471,9 +440,7 @@ def test_backfill_one_writes_to_the_timeframes_table_with_src_rest(tmp_path):
 
 
 def test_a_max_pages_stop_still_writes_the_pages_that_were_fetched(tmp_path):
-    # H1: a clean max_pages stop must return normally and its rows must
-    # still be written, not silently discarded because the walk never
-    # reached depth or history's end.
+
     pages = [
         Page([_minute_row(i, 277000 + i) for i in range(900)], "NK1", True),
         Page([_minute_row(i, 276000 + i) for i in range(900)], "NK2", True),
@@ -521,11 +488,7 @@ class FailOnSecondWriteSink(FakeSink):
 def test_a_failed_final_write_leaves_the_already_written_ohlcv_in_place_and_the_pair_unfinished(
     tmp_path,
 ):
-    # H1's core regression: collect() used to call cursors.finish() before
-    # backfill_one ever wrote anything, so a failing write left the pair
-    # done:true with nothing stored. Now the bare-OHLCV per-page write has
-    # already succeeded by the time the (here, failing) enriched write is
-    # attempted, and the pair is not marked done.
+
     sink = FailOnSecondWriteSink()
     pages = [Page([_minute_row(i, 277000 + i) for i in range(5)], None, False)]
     cursors = CursorStore(tmp_path / "c.json")
@@ -558,9 +521,7 @@ def _resumption_fixture() -> list[Page]:
 def test_resuming_an_interrupted_walk_produces_the_same_candles_as_an_uninterrupted_run(
     tmp_path,
 ):
-    # Design §10: "Backfill resumption is tested by interrupting a paging
-    # loop against a fake REST client and asserting that resuming from the
-    # cursor produces the same set of candles as an uninterrupted run."
+
     uninterrupted_sink = FakeSink()
     backfill_one(
         FakeClient(_resumption_fixture()),
@@ -576,8 +537,6 @@ def test_resuming_an_interrupted_walk_produces_the_same_candles_as_an_uninterrup
     resumed_store = Store(resumed_sink)
     resumed_cursors = CursorStore(tmp_path / "resumed.json")
 
-    # Run one: interrupted after page one, exactly as max_pages bounds a
-    # process that dies mid-walk. Only page one was ever fetched.
     backfill_one(
         FakeClient(_resumption_fixture()),
         resumed_store,
@@ -590,9 +549,6 @@ def test_resuming_an_interrupted_walk_produces_the_same_candles_as_an_uninterrup
     )
     assert resumed_cursors.get("005930", "1m").done is False
 
-    # Run two: a brand new REST client — standing in for a fresh process —
-    # but the same cursors and store. Resumes from the persisted next_key
-    # and completes the walk.
     backfill_one(
         FakeClient(_resumption_fixture()[1:]),
         resumed_store,
@@ -605,7 +561,7 @@ def test_resuming_an_interrupted_walk_produces_the_same_candles_as_an_uninterrup
     assert resumed_cursors.get("005930", "1m").done is True
 
     def latest_by_key(sink):
-        # Last write per (table, ts) wins, mirroring QuestDB's dedup upsert.
+
         return {(table, at): columns for table, _, columns, at in sink.rows}
 
     uninterrupted = latest_by_key(uninterrupted_sink)

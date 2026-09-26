@@ -34,10 +34,10 @@ log = logging.getLogger(__name__)
 TRADE_TYPE = "0B"
 
 TICK_FIELDS = {
-    "time": "20",  # 체결시간, HHMMSS in KST
-    "price": "10",  # 현재가, sign-prefixed
-    "cum_volume": "13",  # 누적거래량
-    "cum_value": "14",  # 누적거래대금
+    "time": "20",
+    "price": "10",
+    "cum_volume": "13",
+    "cum_value": "14",
 }
 
 
@@ -311,7 +311,7 @@ async def drain(
             continue
 
         now = loop.time()
-        if now - last_flush.get(tick.symbol, 0.0) < flush_interval:
+        if tick.symbol in last_flush and now - last_flush[tick.symbol] < flush_interval:
             continue
         pending = aggregator.in_progress(tick.symbol)
         if pending is not None:

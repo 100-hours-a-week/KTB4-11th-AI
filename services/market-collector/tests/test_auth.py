@@ -52,7 +52,7 @@ def test_refreshes_before_expiry_rather_than_after():
     store = TokenStore(ACCOUNT, transport, now=lambda: clock[0])
 
     assert store.token() == "t1"
-    # 15:55 KST is 06:55 UTC; the token expires at 16:00 KST, inside the margin.
+
     clock[0] = datetime(2026, 9, 22, 6, 55, tzinfo=UTC)
 
     assert store.token() == "t2"
