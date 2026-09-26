@@ -139,9 +139,32 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
     return total
 
 
-def run_preopen(settings: Settings, now: datetime) -> int:
+def today_start(now: datetime) -> datetime:
+    """KST midnight of ``now``'s own day, in UTC.
+
+    The intraday refresh needs the current session, not a trailing window: a
+    single ``ka10080`` page reaches well past this for every timeframe it
+    refreshes, so there is nothing to page back for.
+    """
+    local = now.astimezone(KST).replace(hour=0, minute=0, second=0, microsecond=0)
+    return local.astimezone(UTC)
+
+
+def _refresh(
+    settings: Settings,
+    now: datetime,
+    since: datetime,
+    timeframes: Sequence[str],
+    label: str,
+) -> int:
+    """Re-fetch ``timeframes`` from ``since`` for the whole universe.
+
+    Shared by ``preopen`` and ``intraday``, which differ only in how far back
+    they reach and which timeframes they cover. Both overwrite rather than
+    append: dedup on ``(ts, symbol)`` makes a re-fetch land on the same rows,
+    which is what lets REST correct whatever the live path aggregated.
+    """
     symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
-    since = previous_session_start(now)
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
@@ -152,7 +175,7 @@ def run_preopen(settings: Settings, now: datetime) -> int:
             with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
                 store = Store(sink)
                 for symbol in bucket:
-                    for timeframe in TIMEFRAMES:
+                    for timeframe in timeframes:
                         written += refresh_recent(client, store, symbol, timeframe, base_dt, since)
             return written
         finally:
@@ -162,8 +185,36 @@ def run_preopen(settings: Settings, now: datetime) -> int:
         totals = list(pool.map(lambda pair: worker(*pair), enumerate(groups)))
 
     total = sum(totals)
-    log.info("preopen wrote %d candles since %s", total, since.isoformat())
+    log.info(
+        "%s wrote %d candles for %s since %s",
+        label,
+        total,
+        ",".join(timeframes),
+        since.isoformat(),
+    )
     return total
+
+
+def run_preopen(settings: Settings, now: datetime) -> int:
+    return _refresh(settings, now, previous_session_start(now), TIMEFRAMES, "preopen")
+
+
+def run_intraday(settings: Settings, now: datetime) -> int:
+    """Refresh the timeframes the live path does not produce.
+
+    ``live`` aggregates 1-minute candles from trade ticks. Every other
+    timeframe is fetched from Kiwoom rather than resampled from those candles:
+    a 15-minute candle built locally would inherit every gap and dropped tick
+    in the 1-minute stream and then disagree with the broker's own chart, which
+    is the one discrepancy users notice immediately because they compare.
+
+    Fetching fits comfortably. One request per symbol per cycle is 40 requests
+    per account for 200 symbols across five accounts, at roughly 2.4-4.6 s each
+    (1.3 s pacing plus a measured 1.1-3.3 s response) -- 96-184 s inside a
+    900-second window. The same arithmetic against a 60-second budget is what
+    rules REST out for 1-minute candles and puts them on the WebSocket.
+    """
+    return _refresh(settings, now, today_start(now), settings.intraday_timeframes, "intraday")
 
 
 def run_themes(settings: Settings, now: datetime) -> tuple[int, int]:
@@ -261,6 +312,7 @@ def main() -> None:
     sub.add_parser("themes", help="snapshot theme groups and memberships")
     sub.add_parser("universe", help="sync index constituents from Kiwoom")
     sub.add_parser("live", help="aggregate WebSocket trade ticks into 1-minute candles")
+    sub.add_parser("intraday", help="refresh the timeframes the live path does not produce")
 
     args = parser.parse_args()
     settings = Settings()
@@ -277,6 +329,8 @@ def main() -> None:
         run_universe(settings, now)
     elif args.command == "live":
         run_live(settings, now)
+    elif args.command == "intraday":
+        run_intraday(settings, now)
     else:
         log.info("market-collector started")
 

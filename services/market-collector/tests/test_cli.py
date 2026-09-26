@@ -53,7 +53,9 @@ def test_previous_session_start_still_reaches_friday_from_a_monday_run():
     assert start <= datetime(2026, 9, 24, 15, 0, tzinfo=UTC)  # 2026-09-25 00:00 KST (Friday)
 
 
-@pytest.mark.parametrize("command", ["backfill", "preopen", "themes", "universe"])
+@pytest.mark.parametrize(
+    "command", ["backfill", "preopen", "themes", "universe", "intraday", "live"]
+)
 def test_each_subcommand_dispatches_to_its_runner(monkeypatch, command, capsys):
     _populate(monkeypatch)
     monkeypatch.setattr("sys.argv", ["market-collector", command])
@@ -62,6 +64,8 @@ def test_each_subcommand_dispatches_to_its_runner(monkeypatch, command, capsys):
     monkeypatch.setattr(cli, "run_preopen", lambda *a, **k: called.append("preopen") or 0)
     monkeypatch.setattr(cli, "run_themes", lambda *a, **k: called.append("themes") or (0, 0))
     monkeypatch.setattr(cli, "run_universe", lambda *a, **k: called.append("universe") or 0)
+    monkeypatch.setattr(cli, "run_intraday", lambda *a, **k: called.append("intraday") or 0)
+    monkeypatch.setattr(cli, "run_live", lambda *a, **k: called.append("live"))
 
     cli.main()
 
@@ -232,3 +236,82 @@ def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
     assert total == 2
     assert fetch_calls == ["201"]
     assert sync_calls == [(now, "201", ["member-1", "member-2"])]
+
+
+def test_today_start_is_kst_midnight_of_the_same_day():
+    # 2026-09-26 00:30 KST is still 2026-09-26 in Seoul, so the session start is
+    # that day's midnight -- 2026-09-25 15:00 UTC.
+    kst_after_midnight = datetime(2026, 9, 25, 15, 30, tzinfo=UTC)  # 00:30 KST on the 26th
+
+    assert cli.today_start(kst_after_midnight) == datetime(2026, 9, 25, 15, 0, tzinfo=UTC)
+
+
+def test_today_start_during_the_session_is_that_mornings_midnight():
+    mid_session = datetime(2026, 9, 26, 3, 0, tzinfo=UTC)  # 12:00 KST
+
+    assert cli.today_start(mid_session) == datetime(2026, 9, 25, 15, 0, tzinfo=UTC)
+
+
+def _capture_refresh(monkeypatch):
+    seen = {}
+
+    def fake(settings, now, since, timeframes, label):
+        seen.update(since=since, timeframes=tuple(timeframes), label=label)
+        return 0
+
+    monkeypatch.setattr(cli, "_refresh", fake)
+    return seen
+
+
+def test_intraday_refreshes_the_configured_timeframes_from_this_session(monkeypatch):
+    _populate(monkeypatch)
+    seen = _capture_refresh(monkeypatch)
+    now = datetime(2026, 9, 26, 3, 0, tzinfo=UTC)
+
+    cli.run_intraday(Settings(), now)
+
+    assert seen["timeframes"] == ("15m", "1h")
+    assert seen["since"] == cli.today_start(now)
+    assert seen["label"] == "intraday"
+
+
+def test_intraday_never_refreshes_1m_because_the_live_path_owns_it(monkeypatch):
+    # A REST page for the current minute does not have it yet, so re-fetching 1m
+    # here would overwrite the live path's newest candle with nothing.
+    _populate(monkeypatch)
+    seen = _capture_refresh(monkeypatch)
+
+    cli.run_intraday(Settings(), datetime(2026, 9, 26, 3, 0, tzinfo=UTC))
+
+    assert "1m" not in seen["timeframes"]
+
+
+def test_intraday_honours_an_override(monkeypatch):
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_INTRADAY_TIMEFRAMES", '["15m"]')
+    seen = _capture_refresh(monkeypatch)
+
+    cli.run_intraday(Settings(), datetime(2026, 9, 26, 3, 0, tzinfo=UTC))
+
+    assert seen["timeframes"] == ("15m",)
+
+
+def test_preopen_still_covers_every_timeframe_over_the_trailing_window(monkeypatch):
+    _populate(monkeypatch)
+    seen = _capture_refresh(monkeypatch)
+    now = datetime(2026, 9, 28, 0, 0, tzinfo=UTC)
+
+    cli.run_preopen(Settings(), now)
+
+    assert seen["timeframes"] == cli.TIMEFRAMES
+    assert seen["since"] == cli.previous_session_start(now)
+    assert seen["label"] == "preopen"
+
+
+@pytest.mark.parametrize("bad", ['["30m"]', "[]"])
+def test_an_unknown_or_empty_intraday_timeframe_is_rejected(monkeypatch, bad):
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_INTRADAY_TIMEFRAMES", bad)
+
+    with pytest.raises(ValueError):
+        Settings()
