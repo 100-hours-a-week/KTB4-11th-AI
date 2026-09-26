@@ -7,7 +7,7 @@ from market_collector.settings import KiwoomAccount
 ACCOUNT = KiwoomAccount(app_key="k", secret_key="s")
 TOKEN_OK = {"return_code": 0, "token": "t1", "token_type": "Bearer", "expires_dt": "20270101000000"}
 
-# Verbatim from the live API on 2026-09-22.
+
 GROUP = {
     "thema_grp_cd": "103",
     "thema_nm": "태양광_발전/설치/운영",
@@ -121,20 +121,14 @@ def test_rate_limited_is_shared_with_rest_rather_than_redefined():
 
 
 def test_groups_stops_and_raises_when_next_key_stops_advancing():
-    # A cont-yn: Y response whose next-key never changes must not be paged
-    # forever — that is the exact continuous-hammering risk the project's
-    # five-account/IP-registration setup exists to work around. Unlike
-    # backfill.collect there is no cursor to resume from here, so it raises
-    # rather than silently returning a partial theme list as if complete.
+
     stuck_page = ({"cont-yn": "Y", "next-key": "STUCK"}, {"return_code": 0, "thema_grp": [GROUP]})
     client, transport = _client(stuck_page, stuck_page)
 
     with pytest.raises(KiwoomRequestError, match="STUCK"):
         client.groups(date_tp=10)
 
-    # One call to discover the stuck key, one more to confirm it repeats —
-    # not an unbounded loop.
-    assert len(transport.calls) == 3  # token exchange + two page requests
+    assert len(transport.calls) == 3
 
 
 def test_members_stops_and_raises_when_next_key_stops_advancing():

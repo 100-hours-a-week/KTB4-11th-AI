@@ -19,17 +19,7 @@ def _prices(n: int):
 
 
 def test_every_stored_field_has_a_published_description():
-    # A subset, deliberately, not an equality. INDICATOR_FIELDS is what the
-    # collector persists to QuestDB; DESCRIPTIONS is everything the analyzer
-    # can describe, and that catalogue is meant to grow past this set —
-    # indicators added later are computed on demand when the LLM calls them as
-    # a tool, and never get a column. An equality here would fail the day the
-    # first tool-only indicator lands and would read as "add a column", which
-    # is the opposite of the intent.
-    #
-    # The direction that does matter: nothing may be stored that the analyzer
-    # cannot describe, or a stored column would reach an LLM with no statement
-    # of what it measures.
+
     assert set(INDICATOR_FIELDS) <= set(DESCRIPTIONS)
 
 
@@ -44,13 +34,7 @@ def test_series_returns_one_array_per_field_aligned_with_the_input():
 
 
 def test_series_maps_each_macd_and_stochastic_field_to_the_matching_talib_output():
-    # Regression guard for the exact failure mode the task dispatch warned
-    # about: MacdResult and StochasticResult are positional NamedTuples, and
-    # mapping .histogram into "macd_signal" or .d into "stochastic_k" would
-    # produce plausible-looking numbers rather than an error. The random-walk
-    # prices from _prices(400) keep macd/signal/histogram and k/d numerically
-    # distinct from each other (verified separately), so a transposition
-    # cannot pass this test by coincidence the way it could on flat input.
+
     high, low, close = _prices(400)
 
     series = indicator_series(high, low, close)

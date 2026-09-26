@@ -32,25 +32,19 @@ def test_shard_rejects_zero_buckets():
 
 
 def test_previous_session_start_trails_by_the_configured_window():
-    # A realistic pre-open moment: 2026-09-22 23:00 UTC is 08:00 KST on the
-    # 23rd, so the window starts PREOPEN_WINDOW_DAYS calendar days earlier,
-    # at 2026-09-19 00:00 KST.
+
     start = cli.previous_session_start(datetime(2026, 9, 22, 23, 0, tzinfo=UTC))
 
-    assert start == datetime(2026, 9, 18, 15, 0, tzinfo=UTC)  # 2026-09-19 00:00 KST
+    assert start == datetime(2026, 9, 18, 15, 0, tzinfo=UTC)
 
 
 def test_previous_session_start_still_reaches_friday_from_a_monday_run():
-    # 2026-09-28 is a Monday (see the weekday chain the adjacent test
-    # anchors: the 22nd is a Tuesday). "Midnight of the day before" alone
-    # would compute Sunday and filter every Friday row out of
-    # refresh_recent as older than `since`; the trailing window must still
-    # reach back across the Sat/Sun gap to Friday the 25th.
-    monday_preopen = datetime(2026, 9, 27, 23, 0, tzinfo=UTC)  # 2026-09-28 08:00 KST
+
+    monday_preopen = datetime(2026, 9, 27, 23, 0, tzinfo=UTC)
 
     start = cli.previous_session_start(monday_preopen)
 
-    assert start <= datetime(2026, 9, 24, 15, 0, tzinfo=UTC)  # 2026-09-25 00:00 KST (Friday)
+    assert start <= datetime(2026, 9, 24, 15, 0, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(
@@ -90,13 +84,7 @@ def test_backfill_accepts_a_page_bound(monkeypatch):
 def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
     monkeypatch, tmp_path
 ):
-    # The highest-value test on this branch: every blocking defect in this
-    # review wave hid in __main__'s runners because nothing drove them for
-    # real. This runs the actual run_backfill — sharding, the thread pool,
-    # the shared CursorStore, its own worker closures — with only the
-    # network-touching edges (the chart client and the QuestDB sink) and the
-    # leaf backfill_one call replaced by fakes/spies, so a swapped or
-    # dropped keyword argument on the way to backfill_one shows up here.
+
     _populate(monkeypatch)
     monkeypatch.setenv("MARKET_COLLECTOR_CURSOR_PATH", str(tmp_path / "cursors.json"))
     monkeypatch.setenv("MARKET_COLLECTOR_INDICATORS_ON_BACKFILL", "true")
@@ -184,11 +172,7 @@ def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
 def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
     monkeypatch,
 ):
-    # Mirrors the run_backfill wiring test: runs the real run_universe, with
-    # only the network-touching edges (the index client's transport and the
-    # QuestDB sink) and the leaf fetch/sync calls replaced by fakes/spies,
-    # so a swapped or dropped argument on the way to fetch_members or
-    # upsert_members shows up here.
+
     _populate(monkeypatch)
     monkeypatch.setenv("MARKET_COLLECTOR_INDEX_CODE", "201")
 
@@ -239,15 +223,14 @@ def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
 
 
 def test_today_start_is_kst_midnight_of_the_same_day():
-    # 2026-09-26 00:30 KST is still 2026-09-26 in Seoul, so the session start is
-    # that day's midnight -- 2026-09-25 15:00 UTC.
-    kst_after_midnight = datetime(2026, 9, 25, 15, 30, tzinfo=UTC)  # 00:30 KST on the 26th
+
+    kst_after_midnight = datetime(2026, 9, 25, 15, 30, tzinfo=UTC)
 
     assert cli.today_start(kst_after_midnight) == datetime(2026, 9, 25, 15, 0, tzinfo=UTC)
 
 
 def test_today_start_during_the_session_is_that_mornings_midnight():
-    mid_session = datetime(2026, 9, 26, 3, 0, tzinfo=UTC)  # 12:00 KST
+    mid_session = datetime(2026, 9, 26, 3, 0, tzinfo=UTC)
 
     assert cli.today_start(mid_session) == datetime(2026, 9, 25, 15, 0, tzinfo=UTC)
 
@@ -276,8 +259,7 @@ def test_intraday_refreshes_the_configured_timeframes_from_this_session(monkeypa
 
 
 def test_intraday_never_refreshes_1m_because_the_live_path_owns_it(monkeypatch):
-    # A REST page for the current minute does not have it yet, so re-fetching 1m
-    # here would overwrite the live path's newest candle with nothing.
+
     _populate(monkeypatch)
     seen = _capture_refresh(monkeypatch)
 

@@ -70,8 +70,7 @@ def test_members_are_collected_once_per_theme_not_once_per_period():
     _, members = snapshot(client, Store(FakeSink()), UNIVERSE, [5, 20], NOW)
 
     assert sorted(code for code, _ in client.member_calls) == ["103", "557"]
-    # Two themes, both members of each inside the universe -- not four per
-    # period, which is what collecting once per period would give.
+
     assert members == 4
 
 

@@ -28,9 +28,7 @@ def test_defaults_match_the_measured_safe_values(monkeypatch):
     settings = Settings()
 
     assert settings.log_level == "INFO"
-    # 9000 is the HTTP ILP port, which store.py connects to with
-    # Protocol.Http; 9009 is the TCP ILP port and is not open on the
-    # running QuestDB server.
+
     assert settings.questdb_ilp_port == 9000
     assert settings.request_interval == 1.3
     assert settings.theme_date_tps == [5, 20, 60]
@@ -64,11 +62,6 @@ def test_backfill_depths_can_be_overridden(monkeypatch):
 
     settings = Settings()
 
-    # A partial override fills in the other three timeframes from
-    # DEFAULT_DEPTHS rather than leaving them missing: __main__.run_backfill
-    # indexes backfill_depths[timeframe] for all four unconditionally, so an
-    # override that dropped the rest used to crash with KeyError after the
-    # first symbol's 1m walk had already written and marked itself done.
     assert settings.backfill_depths == {**DEFAULT_DEPTHS, "1m": 100}
 
 

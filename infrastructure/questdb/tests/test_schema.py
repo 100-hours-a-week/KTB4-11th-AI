@@ -21,19 +21,7 @@ BAR_TABLES = ["bars_1m", "bars_15m", "bars_1h", "bars_1d"]
 THEME_TABLES = ["theme_snapshot", "theme_members"]
 UNIVERSE_TABLES = ["universe_members"]
 
-# Derived from market_collector.indicators rather than hand-listed, because a
-# hand-maintained copy here would silently drift from what the collector
-# actually writes: the DDL would not declare the column, ILP would auto-create
-# it untyped and unindexed (or the server would reject the row), and this file
-# would still pass because it was only checking itself.
-#
-# Note what this does NOT track. INDICATOR_FIELDS is the collector's own list
-# of persisted fields, not the analyzer's catalogue of what it can compute.
-# Adding an indicator to ktb_market_analyzer does not add a column here and
-# must not: expansion indicators are computed on demand when the LLM calls
-# them as a tool, over candles read back out of QuestDB. A column appears only
-# when someone decides a given indicator is worth persisting and adds it to
-# INDICATOR_FIELDS.
+
 INDICATORS = list(INDICATOR_FIELDS)
 
 
@@ -96,10 +84,7 @@ def test_theme_tables_dedup_on_their_own_keys():
 
 
 def test_theme_members_records_membership_and_nothing_else():
-    # The collector's scope is the KOSPI 200, so themes.py stores only
-    # memberships inside it. There is deliberately no in_universe flag: it
-    # would be true on every row. This pins the column set so the flag cannot
-    # come back without the decision being revisited.
+
     assert _column_names(_statement_for("theme_members")) == {
         "ts",
         "theme_code",
@@ -109,23 +94,20 @@ def test_theme_members_records_membership_and_nothing_else():
 
 
 def test_universe_members_dedups_on_ts_index_code_and_symbol():
-    # This is what makes universe.py's day-truncated ts collapse
-    # two same-day runs into one snapshot rather than appending a second.
+
     keys = _dedup_keys(_statement_for("universe_members"))
     assert [k.strip() for k in keys.split(",")] == ["ts", "index_code", "symbol"]
 
 
 def test_universe_members_indexes_both_index_code_and_symbol():
-    # The read path (latest_members) filters on index_code; a consumer
-    # asking "which indices is this stock in" filters on symbol.
+
     statement = _statement_for("universe_members")
     assert re.search(r"\bindex_code\s+SYMBOL\s+INDEX\b", statement)
     assert re.search(r"\bsymbol\s+SYMBOL\s+INDEX\b", statement)
 
 
 def test_universe_members_partitions_by_month():
-    # A snapshot is roughly 200 rows and constituents change twice a year --
-    # a day partition would be almost all empty partitions.
+
     assert "PARTITION BY MONTH" in _statement_for("universe_members")
 
 
@@ -137,15 +119,10 @@ def test_candle_tables_carry_every_indicator_column():
 
 
 def test_candle_columns_exactly_match_the_stored_indicator_fields():
-    # Pins the DDL's column set to the collector's own field lists rather than
-    # to anything hand-maintained in this file, so a field added to
-    # INDICATOR_FIELDS shows up here as a failing test instead of a silently
-    # untyped, unindexed column (or a rejected row) in production. Growing the
-    # analyzer's catalogue does not move this set — see the note beside
-    # INDICATORS above.
+
     expected = (
-        {"ts", "symbol", "session", "src"}  # metadata
-        | {"open", "high", "low", "close", "volume", "trade_value"}  # OHLCV
+        {"ts", "symbol", "session", "src"}
+        | {"open", "high", "low", "close", "volume", "trade_value"}
         | set(INDICATOR_FIELDS)
     )
     for table in BAR_TABLES:

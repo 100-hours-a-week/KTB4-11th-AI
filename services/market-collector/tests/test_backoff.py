@@ -1,6 +1,6 @@
 import pytest
 from market_collector.kiwoom.auth import TokenStore
-from market_collector.kiwoom.rest import ChartClient, KiwoomRateLimited
+from market_collector.kiwoom.rest import ChartClient, KiwoomRateLimited, KiwoomRequestError
 from market_collector.kiwoom.themes import ThemeClient
 from market_collector.settings import KiwoomAccount
 
@@ -49,8 +49,7 @@ class FakeTransport:
 def test_a_rate_limited_response_is_retried_and_then_succeeds():
     transport = FakeTransport(({}, TOKEN_OK), LIMITED, LIMITED, CHART_OK)
     slept = []
-    # interval=0.0 so the per-request pacing sleeps are zero and filter out below;
-    # a retry re-enters the attempt and therefore paces again, which is intended.
+
     client = ChartClient(
         TokenStore(ACCOUNT, transport),
         transport,
@@ -74,7 +73,7 @@ def test_backoff_gives_up_after_max_retries_and_raises():
     with pytest.raises(KiwoomRateLimited):
         client.minute_page("005930", 1)
 
-    assert transport.calls == 4  # one token call plus three attempts
+    assert transport.calls == 4
 
 
 def test_a_non_rate_limit_error_is_not_retried():
@@ -82,7 +81,7 @@ def test_a_non_rate_limit_error_is_not_retried():
     transport = FakeTransport(({}, TOKEN_OK), bad)
     client = ChartClient(TokenStore(ACCOUNT, transport), transport, sleep=lambda _: None)
 
-    with pytest.raises(Exception):  # noqa: B017 - asserting only KiwoomRateLimited retries
+    with pytest.raises(KiwoomRequestError):
         client.minute_page("005930", 1)
 
     assert transport.calls == 2
