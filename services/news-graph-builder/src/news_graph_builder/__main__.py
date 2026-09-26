@@ -96,7 +96,6 @@ def main() -> None:
                 )
             except Exception:
                 logger.exception("theme sync failed")
-                sync_failed = True
 
         with engine.connect() as conn:
             clusters = find_stale_clusters(conn)

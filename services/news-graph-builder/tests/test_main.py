@@ -201,7 +201,7 @@ def test_syncs_themes_with_one_token(env, engine, two_clusters, market_data, llm
     assert market_data == ["tok"]
 
 
-def test_a_failed_theme_sync_keeps_old_themes_and_still_builds(
+def test_a_failed_theme_sync_is_only_logged(
     env, engine, article, cluster, market_data, llm, monkeypatch
 ):
     assert run() == 0
@@ -213,7 +213,7 @@ def test_a_failed_theme_sync_keeps_old_themes_and_still_builds(
 
     monkeypatch.setattr(entry, "fetch_themes", unreachable)
 
-    assert run() == 1
+    assert run() == 0
     assert len(llm) == 1
     assert [tuple(row) for row in theme_rows(engine)] == [("100", "00126380", True)]
 

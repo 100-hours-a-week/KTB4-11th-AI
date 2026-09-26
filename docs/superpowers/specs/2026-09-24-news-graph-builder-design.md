@@ -78,7 +78,8 @@ clusters. It also keeps a reference copy of Kiwoom's themes and their KOSPI 200 
    `companies` table. If the sync failed **and** `companies` is empty, exit 1 before
    extracting anything, so a first run cannot turn every company into a plain entity.
 2. **Sync themes** (§7), against whatever `companies` holds now. On failure, log it, keep
-   the existing theme tables and continue: the graph does not depend on themes.
+   the existing theme tables and continue: the graph does not depend on themes, and a
+   theme failure does not change the exit code.
 3. **Load stale clusters:** `c.id, c.updated_at FROM clusters c LEFT JOIN cluster_summaries s
    ON s.cluster_id = c.id WHERE s.cluster_id IS NULL OR s.cluster_updated_at <
    c.updated_at`, ordered by `c.id`.
@@ -89,7 +90,7 @@ clusters. It also keeps a reference copy of Kiwoom's themes and their KOSPI 200 
    2. `extract()` (§8): one LLM call, outside any transaction.
    3. Guarded write (§4.1).
 5. On any HTTP, timeout or parse error for a cluster, log it, leave the cluster stale and
-   continue. Exit 1 if the company sync, the theme sync or any cluster failed, else 0.
+   continue. Exit 1 if the token request, the company sync or any cluster failed, else 0.
 
 One Kiwoom access token is issued per run and shared by steps 1 and 2; if issuing it fails,
 both syncs count as failed. With no changed clusters the run syncs companies and themes and
@@ -487,7 +488,8 @@ without `KTB_TEST_POSTGRES_DSN`. The fixtures truncate tables, so locally
   `main_stk` given as a code, a name, or a comma-separated list, and stays false otherwise;
   zero themes or zero KOSPI 200 codes raises and writes nothing; a replace removes a theme
   that disappeared; deleting a theme or a company cascades to its memberships.
-- `main`: a failed theme sync keeps the old theme tables, still builds graphs and exits 1;
+- `main`: a failed theme sync is only logged: it keeps the old theme tables, still builds
+  graphs and exits 0;
   one token serves both syncs.
 - `test_migrations`: `0004` upgrades and downgrades and matches `database.py`; `0003`
   upgrades and downgrades, creates `cluster_summaries` and
