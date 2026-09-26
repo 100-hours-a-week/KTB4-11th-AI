@@ -408,18 +408,25 @@ theme_members
   theme_code    SYMBOL INDEX
   symbol        SYMBOL INDEX
   stock_name    SYMBOL
-  in_universe   BOOLEAN     true when this symbol is in the KOSPI 200, i.e. has candles
   PARTITION BY MONTH, DEDUP UPSERT KEYS(ts, theme_code, symbol)
 ```
 
 `theme_snapshot` is keyed on `date_tp` as well as theme, because the same theme yields a
 different `dt_prft_rt` per period and all the collected periods are worth keeping.
 
-`theme_members` records **every** membership — all 898 across 639 symbols — not just the
-KOSPI 200 intersection. Recording the full theme composition keeps `stock_count` and
-`dt_prft_rt` interpretable, since Kiwoom computes them over all members. `in_universe`
-tells a consumer which members it can actually drill into, so the LLM can distinguish
-"no data" from "no signal" rather than silently reasoning over an empty join.
+`theme_members` records **only** the KOSPI 200 memberships. Kiwoom returns every member —
+898 across 639 symbols on the measured day — but a row for a symbol with no candles is one
+nothing can join against, and with the KOSPI 200 as the whole scope a flag marking them
+would be true on every row worth keeping. Measured 2026-09-25: 115 distinct constituents
+across 142 themes.
+
+The consequence has to travel with the data. `stock_count`, `rising_count`,
+`falling_count` and `dt_prft_rt` are Kiwoom's figures over a theme's **whole market-wide**
+membership, so they do not match the stored row count. Combining the two into a ratio is
+wrong, and `read_themes`' docstring says so at the point of use.
+
+Rows here carry symbols and no fields. QuestDB stores that — the symbols are the series
+key — and the membership is the whole fact.
 
 ### Universe table
 
@@ -449,7 +456,7 @@ rather than two. The dedup key is what turns the rerun into an upsert.
 theme_snapshot ──┐
                  │ theme_code
 theme_members ───┤
-                 │ symbol (in_universe = true)
+                 │ symbol
                  └──> bars_1m / bars_15m / bars_1h / bars_1d
                             (ts, symbol)
 ```
@@ -722,14 +729,30 @@ addition on top of this schema.
 `Settings` class rather than inheriting a shared base, as the monorepo design argues.
 
 ```
-MARKET_COLLECTOR_LOG_LEVEL          default INFO
-MARKET_COLLECTOR_QUESTDB_DSN        Postgres wire, port 8812, for reads
-MARKET_COLLECTOR_QUESTDB_ILP_HOST   ILP ingestion endpoint
-MARKET_COLLECTOR_KIWOOM_ACCOUNTS    the five key pairs
-MARKET_COLLECTOR_REQUEST_INTERVAL   default 1.3 (seconds), the measured-safe value
-MARKET_COLLECTOR_THEME_DATE_TPS     which dt_prft_rt periods to snapshot, e.g. 5,20,60
-MARKET_COLLECTOR_INDICATOR_WINDOW   default 300 candles held in memory per symbol
+LOG_LEVEL                   default INFO
+QUESTDB_DSN                 Postgres wire, port 8812, for reads
+QUESTDB_ILP_HOST            ILP ingestion host
+QUESTDB_ILP_PORT            default 9000 — HTTP ILP. 9009 is TCP ILP, a different
+                            protocol, and compose never exposed it
+KIWOOM_ACCOUNTS             the five key pairs, JSON-encoded
+REQUEST_INTERVAL            default 1.3 (seconds), the measured-safe value
+INDEX_CODE                  default 201 (KOSPI 200), ka20002's inds_cd
+CURSOR_PATH                 default var/market-collector/cursors.json
+BACKFILL_DEPTHS             default {"1m": 8000, "15m": 300, "1h": 300, "1d": 300};
+                            a partial override is filled in from the defaults
+INDICATORS_ON_BACKFILL      default false — history is OHLCV; the live path attaches
+                            indicators
+THEME_DATE_TPS              default [5, 20, 60], which dt_prft_rt periods to snapshot
+INTRADAY_TIMEFRAMES         default ["15m", "1h"]; never "1m", which the live path owns
+WS_URL                      default wss://api.kiwoom.com:10000/api/dostk/websocket
+WS_SYMBOLS_PER_GROUP        default 100 (measured looser; see §9)
+WS_GROUPS_PER_CONNECTION    default 2 (measured looser; see §9)
+WS_QUEUE_SIZE               default 100000 ticks, drop-oldest when full
+LIVE_FLUSH_INTERVAL         default 1.0 (seconds) between in-progress candle writes
+LIVE_WINDOW                 default 300 candles held in memory per symbol
 ```
+
+All names take the `MARKET_COLLECTOR_` prefix, elided above for width.
 
 Five key pairs cannot be expressed as two scalars. They are supplied as a single
 JSON-encoded list of `{app_key, secret_key}` objects and parsed by a validator, so that
@@ -853,9 +876,9 @@ migrations do.
    the upstream name and an explicitly unconfirmed description until it is checked
    against Kiwoom's documentation or HTS. Nothing else in this design depends on the
    answer, but the consumer's prompt must not present it as a plain period return.
-2. **WebSocket limits.** The 100-symbols-per-group figure, multi-group connections, the
-   trade-tick field set, and observed latency. This is the only unmeasured input that
-   Phase 2 rests on.
+2. **The trade-tick field set, and observed latency.** The group cap and multi-group
+   connections were measured on 2026-09-26 (§9); the `0B` payload still needs a live
+   trading session, and `TICK_FIELDS` stays unverified until then.
 3. **Are extended candles only 시간외단일가, or also 장전 시간외?** This changes what
    `session` should record — a two-value column may need three.
 4. **Should users see extended-session candles?** Deferred by the user. Storage already
@@ -898,9 +921,12 @@ membership and metrics, which is most of what issue #1 asks for. It also has a h
 deadline of its own — the minute window slides daily, so any delay permanently narrows
 what can be collected.
 
-**Phase 2 — the live path.** WebSocket subscription, group allocation, tick
-aggregation, and post-close reconciliation. This rests on the one set of numbers nobody
-has measured, and its value only exists once users are watching a screen.
+**The live path was planned as a second phase** — WebSocket subscription, group
+allocation, tick aggregation, reconciliation — on the grounds that it rested on unmeasured
+numbers and only mattered once users were watching a screen. It shipped in the same branch
+instead: the one-minute requirement turned out to belong to the collector rather than the
+backend, so there was no version of this service that met its requirement without it. The
+group limits were measured before it landed; the tick field set was not.
 
-Phase 1 alone is a defensible 2026-09-28 deliverable. Bundling them risks shipping
+Phase 1 alone was a defensible 2026-09-28 deliverable. Bundling them risks shipping
 neither.

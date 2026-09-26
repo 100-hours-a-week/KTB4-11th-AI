@@ -6,7 +6,15 @@
 
 **Architecture:** A new `services/market-collector` owns everything except the QuestDB DDL, which lives in `infrastructure/questdb/` so that no service can create schema at boot. No timeframe is ever resampled from another: 15-minute, 1-hour and daily candles come from Kiwoom's chart endpoints, and 1-minute candles are aggregated from WebSocket trade ticks. Backfill pages backwards through `next-key` sequentially per symbol, parallel across five Kiwoom accounts, and persists a cursor per symbol and timeframe so an interrupted run resumes.
 
-**Scope note:** Tasks 1–15 below are Phase 1, which had no live path — every write went through REST. The live path and the intraday refresh landed after the plan; see *Beyond this plan* at the end for what changed and why.
+**Scope note — read this before following any task.** Tasks 1–15 are the plan **as it was written and executed**, and the code has since moved past them in ways the task text does not reflect. Where they disagree, the code and the spec are right and *Beyond this plan* at the end says why.
+
+Three divergences matter most for anyone reading a task literally:
+
+- **`universe/kospi200.csv` and its loader never survived.** The plan was written believing Kiwoom did not serve the KOSPI 200 constituent list. It does — `ka10101` with `mrkt_tp=2` carries `201`, and `ka20002` returns the constituents. Task 3's CSV is gone; `universe.py` fetches instead.
+- **`universe/` is not a package.** It was collapsed into a single `universe.py`.
+- **`theme_members.in_universe` does not exist.** Memberships are stored for the KOSPI 200 only, so the flag would be true on every row worth keeping.
+
+Phase 1 also had no live path — every write went through REST. It has one now.
 
 **Tech Stack:** Python 3.13 (CI also 3.14), uv workspace, `pydantic-settings`, `httpx`, `websockets`, `numpy`, `questdb` (ILP ingestion), `psycopg` (QuestDB reads over the Postgres wire protocol), `ktb-market-analyzer` (TA-Lib indicators), `ktb-core` (logging), pytest.
 
@@ -51,8 +59,9 @@
 | `pyproject.toml` | Package metadata, dependencies, `market-collector` console script |
 | `src/market_collector/__init__.py` | Docstring only |
 | `src/market_collector/settings.py` | `Settings`, including the five-account list |
-| `src/market_collector/universe/kospi200.csv` | Static constituent list from KRX |
-| `src/market_collector/universe/__init__.py` | Loads and validates that CSV |
+| ~~`src/market_collector/universe/kospi200.csv`~~ | **Superseded.** Kiwoom serves the list; `universe.py` fetches it from `ka20002` |
+| ~~`src/market_collector/universe/__init__.py`~~ | **Superseded** by a single `universe.py` |
+| `src/market_collector/live.py` | *Added after Task 15.* WebSocket ticks into 1-minute candles |
 | `src/market_collector/kiwoom/parse.py` | Sign-prefixed numbers, KST→UTC, session classification |
 | `src/market_collector/kiwoom/auth.py` | Token issue and refresh, one per account |
 | `src/market_collector/kiwoom/rest.py` | `ka10080`/`ka10081` with `cont-yn` paging and pacing |
@@ -90,7 +99,7 @@
 
 **Interfaces:**
 - Consumes: nothing.
-- Produces: `market_collector.settings.Settings` with fields `log_level: str`, `questdb_dsn: str`, `questdb_ilp_host: str`, `questdb_ilp_port: int`, `kiwoom_accounts: list[KiwoomAccount]`, `request_interval: float`, `theme_date_tps: list[int]`, `cursor_path: str`. The spec also lists `MARKET_COLLECTOR_INDICATOR_WINDOW`; it belongs to the live path and is deliberately absent here. `KiwoomAccount` is a pydantic model with `app_key: str` and `secret_key: str`. `market_collector.__main__.main()` returns `None`.
+- Produces: `market_collector.settings.Settings` with fields `log_level: str`, `questdb_dsn: str`, `questdb_ilp_host: str`, `questdb_ilp_port: int`, `kiwoom_accounts: list[KiwoomAccount]`, `request_interval: float`, `theme_date_tps: list[int]`, `cursor_path: str`. The spec also listed an indicator-window setting; it belonged to the live path and was deliberately absent here. The live path later shipped it as `MARKET_COLLECTOR_LIVE_WINDOW`. `KiwoomAccount` is a pydantic model with `app_key: str` and `secret_key: str`. `market_collector.__main__.main()` returns `None`.
 
 - [ ] **Step 1: Write the failing settings test**
 
@@ -3943,20 +3952,27 @@ None of this is code, and all of it blocks a working deployment. It comes from �
 
 ## Deliberately not in Phase 1
 
-Named so their absence is a decision rather than an oversight. All are specified in §7 of the design document.
+Named so their absence was a decision rather than an oversight. **Three of these have since
+landed** — marked below — so read this as the Phase 1 boundary, not as current scope.
 
-- The WebSocket live path, group allocation across the 100-symbols-per-group limit, and tick-to-candle aggregation.
-- The in-memory `IndicatorWindow` and the property test that it agrees with the batch computation.
-- Post-close reconciliation that overwrites WebSocket-derived candles with Kiwoom's own.
-- Intraday theme refresh. Snapshots are daily.
+- ~~The WebSocket live path, group allocation, and tick-to-candle aggregation.~~
+  **Landed** as `live.py`. The one-minute requirement turned out to be the collector's own,
+  so no version of this service met its requirement without it.
+- ~~The in-memory `IndicatorWindow`.~~ **Landed** as `live.Window`, seeded from QuestDB.
+- ~~Reconciliation that overwrites WebSocket-derived candles with Kiwoom's own.~~
+  **Landed**, but before the open rather than after the close: extended-session trading
+  happens after 15:30, so only a pre-open pass sees both sessions final.
+- Intraday theme refresh. Snapshots are still daily. `intraday` refreshes candles, not
+  themes.
 - Any change to `packages/core`.
-- Resolving what `dt_prft_rt` measures. The column ships under its upstream name with its semantics marked unconfirmed.
+- Resolving what `dt_prft_rt` measures. The column still ships under its upstream name with
+  its semantics marked unconfirmed.
 
 ## Self-review record
 
-**Spec coverage.** Every section of the design document maps to a task except §7's live path and reconciliation, which are Phase 2 by decision, and §12's open questions, which are not work. Two gaps were found while reviewing and are now closed: rate-limit backoff from §9 had no task and became Task 15, and §11's operational prerequisites had no home and became the pre-flight checklist above.
+**Spec coverage.** At the time of writing, every section of the design document mapped to a task except the live path and reconciliation, deferred by decision, and the open questions, which are not work. Both deferrals have since been built; the spec's section numbers have also changed, since the three design documents were consolidated into one. Two gaps were found while reviewing and are now closed: rate-limit backoff from §9 had no task and became Task 15, and §11's operational prerequisites had no home and became the pre-flight checklist above.
 
-**Scope correction.** The spec's `IndicatorWindow` and its `MARKET_COLLECTOR_INDICATOR_WINDOW` setting were removed from Tasks 1 and 8. Phase 1 computes indicators over a whole collected series and never holds a live window, so building one here would ship code with no caller.
+**Scope correction.** The spec's `IndicatorWindow` and its indicator-window setting were removed from Tasks 1 and 8. Phase 1 computes indicators over a whole collected series and never holds a live window, so building one here would have shipped code with no caller. The live path later brought both back as `live.Window` and `MARKET_COLLECTOR_LIVE_WINDOW`, with a caller.
 
 **Type consistency.** `Page(rows, next_key, has_more)`, `CandleRow`, `Cursor`, `ThemeGroup` and `ThemeMember` field names are used identically everywhere they appear. `backfill_one`'s interface block was missing the `max_pages` parameter its implementation takes, and now matches.
 
@@ -3978,7 +3994,12 @@ rulings behind each one.
 | Shared `Pager` extracted into `kiwoom/rest.py` | `8140d04` | Three clients each restated the same pacing, backoff, paging and stall guard |
 | The live path: WebSocket ticks into 1-minute candles | `f842ca8` (reverted, restored in `9afaef8`) | The one-minute freshness requirement is the collector's, and polling cannot meet it |
 | `intraday` refresh for the timeframes the live path does not produce | `baeaedf` | Nothing kept 15-minute and 1-hour candles current during a session |
+| Theme reads: `read_themes`, `read_symbol_themes` | `5a8893a`, `abcd6b3` | The collector could write theme snapshots but not read them, so nothing downstream could see a theme at all |
 
-**Still to measure**, all three during market hours (see the spec §4 "Not yet measured"):
-the `0B` trade-tick field ids, whether a `ka10080` page carries the minute currently
-forming, and the actual rate-limit ceiling behind the 1.3-second pacing.
+**Measured since** (spec §9): one WebSocket group accepted 200 symbols and one connection
+accepted four groups, both looser than the 100-per-group figure this plan assumed, and the
+IP allowlist covers the WebSocket endpoint.
+
+**Still to measure**, all during market hours (spec §4 "Not yet measured"): the `0B`
+trade-tick field ids, whether a `ka10080` page carries the minute currently forming, and
+the actual rate-limit ceiling behind the 1.3-second pacing.
