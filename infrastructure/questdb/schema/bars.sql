@@ -5,16 +5,16 @@
 -- rewrites the in-progress candle many times per minute and the post-close
 -- reconciliation overwrites what it wrote.
 --
--- Each indicator carries its value and, beside it, the verdict ktb_market_analyzer
--- computed for that value. The pairing is written adjacently on purpose: the one
--- field with no verdict, macd_signal, is then visible as a gap rather than as an
--- omission someone has to look up. Verdicts are a closed vocabulary of 18 tokens,
--- so SYMBOL's dictionary encoding stores them for almost nothing.
+-- Indicator values are stored; the verdicts ktb_market_analyzer derives from them
+-- are not. A verdict is a pure function of the value it describes -- a threshold
+-- pair for the banded fields, a sign and a comparison with the previous bar for
+-- the signed ones -- so storing it duplicates nothing and goes stale the moment a
+-- threshold changes, silently disagreeing with the value beside it. Callers get
+-- verdicts from ktb_market_analyzer at read time, against the rules in force then.
 --
--- Both columns are nullable, and a value with a null verdict is expected rather
--- than broken: indicators are only attached to candles collected after the
--- service starts running. Backfilled history carries OHLCV alone unless the
--- collector is explicitly told to compute over it.
+-- The indicator columns are nullable, and a null is expected rather than broken:
+-- backfilled history carries OHLCV alone unless the collector is explicitly told
+-- to compute over it.
 
 CREATE TABLE IF NOT EXISTS bars_1m (
     ts TIMESTAMP,
@@ -27,20 +27,13 @@ CREATE TABLE IF NOT EXISTS bars_1m (
     volume LONG,
     trade_value DOUBLE,
     rsi DOUBLE,
-    rsi_comment SYMBOL,
     macd DOUBLE,
-    macd_comment SYMBOL,
     macd_signal DOUBLE,
     macd_histogram DOUBLE,
-    macd_histogram_comment SYMBOL,
     stochastic_k DOUBLE,
-    stochastic_k_comment SYMBOL,
     stochastic_d DOUBLE,
-    stochastic_d_comment SYMBOL,
     roc DOUBLE,
-    roc_comment SYMBOL,
     williams_r DOUBLE,
-    williams_r_comment SYMBOL,
     src SYMBOL
 ) TIMESTAMP(ts) PARTITION BY DAY WAL DEDUP UPSERT KEYS(ts, symbol);
 
@@ -55,20 +48,13 @@ CREATE TABLE IF NOT EXISTS bars_15m (
     volume LONG,
     trade_value DOUBLE,
     rsi DOUBLE,
-    rsi_comment SYMBOL,
     macd DOUBLE,
-    macd_comment SYMBOL,
     macd_signal DOUBLE,
     macd_histogram DOUBLE,
-    macd_histogram_comment SYMBOL,
     stochastic_k DOUBLE,
-    stochastic_k_comment SYMBOL,
     stochastic_d DOUBLE,
-    stochastic_d_comment SYMBOL,
     roc DOUBLE,
-    roc_comment SYMBOL,
     williams_r DOUBLE,
-    williams_r_comment SYMBOL,
     src SYMBOL
 ) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(ts, symbol);
 
@@ -83,20 +69,13 @@ CREATE TABLE IF NOT EXISTS bars_1h (
     volume LONG,
     trade_value DOUBLE,
     rsi DOUBLE,
-    rsi_comment SYMBOL,
     macd DOUBLE,
-    macd_comment SYMBOL,
     macd_signal DOUBLE,
     macd_histogram DOUBLE,
-    macd_histogram_comment SYMBOL,
     stochastic_k DOUBLE,
-    stochastic_k_comment SYMBOL,
     stochastic_d DOUBLE,
-    stochastic_d_comment SYMBOL,
     roc DOUBLE,
-    roc_comment SYMBOL,
     williams_r DOUBLE,
-    williams_r_comment SYMBOL,
     src SYMBOL
 ) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(ts, symbol);
 
@@ -111,19 +90,12 @@ CREATE TABLE IF NOT EXISTS bars_1d (
     volume LONG,
     trade_value DOUBLE,
     rsi DOUBLE,
-    rsi_comment SYMBOL,
     macd DOUBLE,
-    macd_comment SYMBOL,
     macd_signal DOUBLE,
     macd_histogram DOUBLE,
-    macd_histogram_comment SYMBOL,
     stochastic_k DOUBLE,
-    stochastic_k_comment SYMBOL,
     stochastic_d DOUBLE,
-    stochastic_d_comment SYMBOL,
     roc DOUBLE,
-    roc_comment SYMBOL,
     williams_r DOUBLE,
-    williams_r_comment SYMBOL,
     src SYMBOL
 ) TIMESTAMP(ts) PARTITION BY YEAR WAL DEDUP UPSERT KEYS(ts, symbol);

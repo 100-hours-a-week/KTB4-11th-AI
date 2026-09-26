@@ -20,13 +20,11 @@ with indicators must be a strict superset of that first write's columns,
 never a narrower one — see ``backfill.py``'s module docstring for where this
 constrains the order backfill and preopen are allowed to run in.
 
-Each indicator field gets a value column and, beside it, a verdict column
-named ``<field>_comment`` — except ``macd_signal``, which ``COMMENT_FIELDS``
-excludes because ``ktb_market_analyzer`` has no verdict rule for it. Verdicts
-are written into ``symbols`` (QuestDB's dictionary-encoded SYMBOL type), not
-``columns``, because the 18-token verdict vocabulary then costs almost
-nothing to repeat across millions of rows; the numeric fields go into
-``columns`` as DOUBLE.
+Indicator values are stored; the verdicts ``ktb_market_analyzer`` derives from
+them are not. A verdict is a pure function of the value it describes, so storing
+it duplicates nothing and goes stale the moment a threshold moves — silently
+disagreeing with the value beside it. Callers get verdicts from the analyzer at
+read time, against the rules in force then.
 """
 
 from collections.abc import Iterable, Iterator
@@ -35,7 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, LiteralString, Protocol, cast
 
-from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS
+from market_collector.indicators import INDICATOR_FIELDS
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 
 if TYPE_CHECKING:
@@ -43,6 +41,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "TIMEFRAME_TABLES",
+    "Candle",
     "CandleRow",
     "RowSink",
     "Store",
@@ -62,6 +61,20 @@ THEME_MEMBERS_TABLE = "theme_members"
 
 
 @dataclass(frozen=True)
+class Candle:
+    """A stored candle as read back.
+
+    Prices only. The live path seeds its indicator window from these, and that
+    is the whole of what this service reads candles for.
+    """
+
+    ts: datetime
+    high: float
+    low: float
+    close: float
+
+
+@dataclass(frozen=True)
 class CandleRow:
     ts: datetime
     symbol: str
@@ -73,7 +86,6 @@ class CandleRow:
     volume: int
     trade_value: float | None
     indicators: dict[str, float | None]
-    comments: dict[str, str | None]
     src: str
 
 
@@ -125,9 +137,6 @@ class Store:
                 "session": candle.session,
                 "src": candle.src,
             }
-            for field in COMMENT_FIELDS:
-                symbols[f"{field}_comment"] = candle.comments.get(field)
-
             self._sink.row(
                 table,
                 symbols=_without_none_symbols(symbols),
@@ -239,12 +248,11 @@ def read_regular_candles(
     *,
     since: datetime | None = None,
     limit: int | None = None,
-) -> list[tuple[datetime, float, float, float]]:
-    """Regular-session candles for one symbol, oldest first, as (ts, high, low, close).
+) -> list[Candle]:
+    """Regular-session candles for one symbol, oldest first.
 
-    The column order is deliberate: it is exactly the three series
-    ``ktb_market_analyzer``'s ``Candles`` needs, so a caller builds one with a
-    single ``zip`` over the result.
+    The live path calls this at startup to seed each symbol's indicator window,
+    which is why prices are what it returns.
 
     ``since``, if given, bounds the window from that timestamp onward and is
     *inclusive*: a candle timestamped exactly ``since`` is returned.
@@ -290,7 +298,10 @@ def read_regular_candles(
 
     with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
         cursor.execute(query, params)
-        rows = [(ts, high, low, close) for ts, high, low, close in cursor.fetchall()]
+        rows = [
+            Candle(ts=ts, high=high, low=low, close=close)
+            for ts, high, low, close in cursor.fetchall()
+        ]
 
     if limit is not None:
         # We asked the DB for the newest `limit` rows in descending order;
