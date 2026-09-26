@@ -1,75 +1,4 @@
-"""Backfill one symbol's history for one timeframe, and shape it for storage.
-
-``collect`` is one loop for all four timeframes; it differs only in which
-Kiwoom endpoint it pages (``ka10080`` for ``1m``/``15m``/``1h`` via
-``tic_scope``, ``ka10081`` for ``1d``). ``ka10080`` cannot jump to a date, so
-history can only be walked backwards page by page with ``next-key`` — pages
-are accumulated into a dict keyed by timestamp, which both collapses the
-duplicate rows overlapping pages produce and lets the walk resume from
-``CursorStore`` after an interrupted run.
-
-``depth`` is a floor, not a ceiling: once the collected dict reaches it the
-loop stops, but the page already in hand is never truncated to land exactly
-on the target. Already-fetched candles are not worth discarding, and the
-per-timestamp dedup makes writing a few extra harmless. The cursor is marked
-done when ``depth`` is reached or Kiwoom's own history runs out — never on
-``max_pages``, which is a smoke-run bound only. Marking a bounded test run
-done would make it look like a completed backfill and the real run would
-then skip that pair forever.
-
-``to_candle_rows`` computes the eight indicator fields and seven verdicts
-over regular-session candles only, as one contiguous array excluding the
-extended-session rows entirely — leaving them in would change the period
-count every indicator is defined over — then maps the results back onto
-their original positions by index. v1's backfilled history stores OHLCV
-alone (``with_indicators=False``, ``backfill_one``'s default): indicators
-are attached only to candles that arrive after the service is running.
-
-A non-finite indicator value is treated as unjudged for both the value and
-its verdict. The analyzer's verdict rules already turn NaN into no verdict,
-but they check ``isnan`` only, not ``isinf`` — so an infinite value would
-otherwise clean to ``None`` while its verdict stayed a real label. Cleaning
-on ``math.isfinite`` here closes that gap; it takes a close of exactly zero
-to reach it with real prices, which is why this is a guard rather than a fix
-for something observed.
-
-``collect`` writes as it walks, and only marks a pair done after that write
-succeeds. Earlier, ``collect`` advanced the cursor per page while
-``backfill_one`` wrote once, after the whole walk, and the cursor was marked
-done before that write ever happened. A failed ``store.write_candles`` then
-left the pair ``done: true`` with nothing stored, and a process killed
-mid-walk resumed from the persisted ``next_key`` — which returns the page
-*after* the last one fetched — so pages already in flight when the process
-died were skipped entirely, and once ``depth`` was reached from the resume
-point ``finish`` fired and they were never collected. ``collect`` now takes
-two optional callbacks: ``on_page``, called with each page's bars before the
-cursor advances past that page, and ``on_complete``, called once with the
-full walk's bars only when ``depth`` is reached or history ends, before
-``cursors.finish`` is called. If either callback raises, the cursor is left
-exactly where it was — not advanced past an unwritten page, not marked done
-— so a later run resumes and retries rather than silently losing data.
-``backfill_one`` uses ``on_page`` to write each page's bare OHLCV (no
-indicators — recomputing them per page would restart TA-Lib's warm-up on
-every page) and, only when ``with_indicators`` is true, ``on_complete`` to
-write the same bars again with indicators computed over the whole
-contiguous regular-session series. Dedup makes that second write an upsert
-over the first, adding indicator columns rather than replacing OHLCV ones —
-see the QuestDB dedup-null warning below and in ``store.py`` before changing
-this order.
-
-QuestDB's ``DEDUP UPSERT KEYS`` does not leave an omitted column alone: a
-later write to the same ``(ts, symbol)`` that omits a column actively nulls
-it, it does not skip it. So a backfill pass over a range ``preopen`` has
-already enriched with indicators — normally impossible, since ``collect``
-skips a pair already marked done — would erase those indicators, because
-backfill defaults to ``with_indicators=False``. A lost or cleared cursor
-file, or the same interrupted-run scenario ``on_complete`` exists to close,
-reopens that exposure. There is no read-before-write guard against it here
-on purpose: that would add a QuestDB read per row. The rule instead is
-procedural — backfill must never be re-run over a range ``preopen`` has
-already enriched — and any two writes to the same rows in this module must
-go bare-OHLCV first, enriched second, never the reverse.
-"""
+"""Backfill historical OHLCV candles from Kiwoom into QuestDB."""
 
 import logging
 import math
@@ -117,13 +46,6 @@ Bar = MinuteBar | DailyBar
 
 
 class ChartSource(Protocol):
-    """Structural shape of the paging client ``collect`` needs.
-
-    ``ChartClient`` satisfies this without inheriting from it — the same
-    structural-typing pattern ``auth.Transport`` uses — so a test's fake
-    paging client can stand in without subclassing the real one.
-    """
-
     def minute_page(self, symbol: str, tic_scope: int, next_key: str | None = None) -> Page: ...
     def daily_page(self, symbol: str, base_dt: str, next_key: str | None = None) -> Page: ...
 
@@ -139,46 +61,10 @@ def collect(
     on_page: Callable[[list[Bar]], None] | None = None,
     on_complete: Callable[[list[Bar]], None] | None = None,
 ) -> list[Bar]:
-    """Walk one symbol/timeframe backwards until ``depth`` bars are collected.
+    """Collect one symbol and timeframe backwards, returning oldest first.
 
-    Returns bars oldest first. A pair already marked done in ``cursors``
-    returns immediately without any request. ``max_pages`` bounds a smoke
-    run and does not mark the cursor done, so a later unbounded run still
-    resumes and finishes the walk.
-
-    ``on_page``, if given, is called with each page's freshly parsed bars
-    before the cursor advances past that page — so a caller that writes
-    those bars to storage there never has the cursor move past data it
-    failed to write. ``on_complete``, if given, is called once with the full
-    walk's bars — but only when ``depth`` is reached or history ends, never
-    on a ``max_pages`` or stalled stop — and only *before* ``cursors.finish``
-    is called, so a caller that writes an indicator-enriched version of the
-    walk there never has the pair marked done before that write succeeds. If
-    either callback raises, the exception propagates and the cursor is left
-    exactly where it was: not advanced past the unwritten page, and not
-    marked done, so the next run resumes and retries rather than silently
-    losing that data. See the module docstring for why ``backfill_one``
-    needs both.
-
-    A page that comes back empty on the very first request ever made for
-    this pair — a halted symbol, a newly-listed one, or a transient
-    upstream empty — is not treated as history ending: an empty later page
-    after real data already arrived (in this run *or an earlier one*) is a
-    legitimate end of history, but an empty first-ever page carries no
-    evidence of that, and treating it as one would mark the pair done
-    having collected nothing, never to be retried. "First ever" is read
-    from ``cursor.pages``, not just this call's own page count — a resumed
-    walk's first *fetched-this-call* page is not the walk's first page,
-    and treating it as such would make a genuinely empty terminal page
-    after a resume permanently unfinishable: every later run would
-    re-fetch only that one page and hit the same false ambiguity again.
-
-    A ``next_key`` that comes back unchanged from the one just sent — a
-    server bug, not a rate limit or transport error, so ``ChartClient``'s own
-    retry/backoff cannot see it — means the walk cannot make progress. This
-    is detected and the loop stops, leaving the cursor un-done so a later,
-    corrected run resumes from the same point rather than looping against
-    Kiwoom forever with every iteration counting against the rate limit.
+    Page callbacks run before cursor advancement. Bounded or stalled walks
+    remain unfinished so a later run can resume them.
     """
     cursor = cursors.get(symbol, timeframe)
     if cursor.done:
@@ -279,16 +165,7 @@ def _empty_row(bar: Bar, symbol: str, src: str) -> CandleRow:
 def to_candle_rows(
     bars: Sequence[Bar], symbol: str, src: str = "rest", with_indicators: bool = True
 ) -> list[CandleRow]:
-    """Turn parsed bars into ``CandleRow``s, oldest first, unchanged in order.
-
-    With ``with_indicators=False`` every row's indicator dict is entirely
-    ``None``-valued, so ``Store`` omits all eight columns. Otherwise the eight
-    fields are computed over the regular-session candles as one contiguous
-    array — extended-session rows are excluded from that array rather than
-    masked afterwards, because leaving them in would shift the period count
-    every indicator is defined over — and mapped back onto their original
-    positions.
-    """
+    """Convert bars to rows, computing indicators from regular-session bars only."""
     if not with_indicators or not bars:
         return [_empty_row(bar, symbol, src) for bar in bars]
 
@@ -337,25 +214,10 @@ def backfill_one(
     with_indicators: bool = False,
     max_pages: int | None = None,
 ) -> int:
-    """Collect one symbol/timeframe's history and write it to its table.
+    """Collect and store one symbol/timeframe, writing before cursor advancement.
 
-    ``with_indicators`` defaults to False: v1's backfilled history is OHLCV
-    only, and indicators are attached only to candles that arrive after the
-    service is running. Returns the number of rows written.
-
-    Each page's bare OHLCV is written as it arrives (``collect``'s
-    ``on_page``), before the cursor advances past that page — so an
-    interrupted run, or a page whose write fails, never has the cursor skip
-    ahead of data that was never stored. Only when ``with_indicators`` is
-    true is there a second write: ``collect``'s ``on_complete`` recomputes
-    indicators over the whole contiguous regular-session walk and rewrites
-    every row with them attached, and only after that write succeeds does
-    ``collect`` mark the pair done. Dedup makes that second write an
-    upsert that adds indicator columns onto the OHLCV already stored, never
-    a write that could null them out — see the module docstring's QuestDB
-    dedup warning before changing this order. The returned count reflects
-    that final, complete write when ``with_indicators`` is true, rather than
-    the sum of every provisional per-page write it supersedes.
+    QuestDB upserts null omitted columns, so bare rows must be written before
+    indicator-enriched rows. Do not rerun bare backfill over enriched data.
     """
     written = 0
 
@@ -407,26 +269,7 @@ def refresh_recent(
     base_dt: str,
     since: datetime,
 ) -> int:
-    """Fetch enough of the newest history to reach ``since``, and write only
-    the candles at or after it.
-
-    For "15m"/"1h"/"1d" a single page already reaches well past any
-    realistic ``since``, so only one page is ever fetched — unchanged from
-    before. "1m" is the exception a multi-day preopen window makes real: one
-    900-row page covers about 2.2 trading days, so reaching a ``since``
-    several days back needs more than one page (see MAX_1M_REFRESH_PAGES for
-    the arithmetic). Paging stops as soon as the oldest bar collected so far
-    is at or before ``since``, history runs out, or MAX_1M_REFRESH_PAGES is
-    hit, whichever comes first — the same stall guard ``collect`` uses
-    covers a ``next_key`` that fails to advance too.
-
-    Indicators are computed over the whole accumulated series but only the
-    tail at or after ``since`` is written. Even a single page's tail alone is
-    at most about 450 candles (a single session), so every written candle
-    has well over the 300-candle warm-up behind it. Writing the whole series
-    instead would overwrite good indicator values from the backfill with
-    nulls, because the head of the oldest page has no warm-up.
-    """
+    """Refresh candles since a timestamp with enough history for indicator warm-up."""
     is_daily = timeframe == "1d"
     parse = parse_daily_bar if is_daily else parse_minute_bar
     max_pages = MAX_1M_REFRESH_PAGES if timeframe == "1m" else 1
