@@ -144,6 +144,7 @@ erDiagram
 | `NEWS_GRAPH_BUILDER_LOG_LEVEL` | | `INFO` | |
 | `NEWS_GRAPH_BUILDER_LLM_BASE_URI` | 필수 | | OpenAI 호환 LLM 서버 주소 (`/v1` 포함) |
 | `NEWS_GRAPH_BUILDER_LLM_MODEL` | 필수 | | |
+| `NEWS_GRAPH_BUILDER_LLM_API_KEY` | | | OpenAI 호환 API 키. 설정하면 `Authorization: Bearer` 로 보냄 (키가 필요 없는 로컬 vLLM 은 비워 둠) |
 | `NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS` | | `24000` | LLM에 넣는 기사 본문 글자 수 상한 |
 | `NEWS_GRAPH_BUILDER_LLM_TIMEOUT` | | `120` | 초 |
 | `NEWS_GRAPH_BUILDER_MAX_ENTITIES` | | `30` | 클러스터당 개체 수 상한 |

@@ -163,3 +163,16 @@ def test_settings_default_to_the_environment(monkeypatch):
 
     assert str(seen[0].url) == "http://env-llm.test/v1/chat/completions"
     assert json.loads(seen[0].content)["model"] == "env-model"
+
+
+def test_the_api_key_is_sent_as_a_bearer_token_only_when_set():
+    seen = []
+    client = client_replying(json.dumps(REPLY), seen=seen)
+    base = {"llm_base_uri": BASE_URI, "llm_model": "test-model"}
+
+    extract(client, [("a", "b")], settings=LlmSettings(**base, llm_api_key="FAKE-LLM-KEY"))
+    extract(client, [("a", "b")], settings=LlmSettings(**base))
+
+    with_key, without_key = seen
+    assert with_key.headers["authorization"] == "Bearer FAKE-LLM-KEY"
+    assert "authorization" not in without_key.headers

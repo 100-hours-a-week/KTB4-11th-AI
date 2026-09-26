@@ -386,6 +386,7 @@ only passes what it uses itself. All classes set `hide_input_in_errors=True`.
 | `company.settings.CompanySettings` | `dart_api_key` | required |
 | `graph.settings.LlmSettings` | `llm_base_uri` | required (includes `/v1`) |
 | | `llm_model` | required |
+| | `llm_api_key` | none; sent as `Authorization: Bearer` when set |
 | | `summary_max_chars` | `24000` |
 | | `llm_timeout` | `120` seconds |
 | | `max_entities` | `30` |

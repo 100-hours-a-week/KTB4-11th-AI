@@ -61,6 +61,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `NEWS_GRAPH_BUILDER_LOG_LEVEL` | news-graph-builder | `INFO` |
 | `NEWS_GRAPH_BUILDER_LLM_BASE_URI` | news-graph-builder `graph` (OpenAI-compatible, includes `/v1`) | required |
 | `NEWS_GRAPH_BUILDER_LLM_MODEL` | news-graph-builder `graph` | required |
+| `NEWS_GRAPH_BUILDER_LLM_API_KEY` | news-graph-builder `graph`; sent as `Authorization: Bearer` when set (leave unset for a keyless local vLLM) | — |
 | `NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS` | news-graph-builder `graph` | `24000` |
 | `NEWS_GRAPH_BUILDER_LLM_TIMEOUT` | news-graph-builder `graph` (seconds) | `120` |
 | `NEWS_GRAPH_BUILDER_MAX_ENTITIES` | news-graph-builder `graph` | `30` |

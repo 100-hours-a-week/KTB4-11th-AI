@@ -45,3 +45,13 @@ def test_non_positive_values_raise(required_env, monkeypatch, name):
 
     with pytest.raises(ValidationError):
         LlmSettings()
+
+
+def test_the_api_key_is_optional_and_hidden_from_repr(required_env, monkeypatch):
+    assert LlmSettings().llm_api_key is None
+
+    monkeypatch.setenv("NEWS_GRAPH_BUILDER_LLM_API_KEY", "FAKE-LLM-KEY")
+    settings = LlmSettings()
+
+    assert settings.llm_api_key.get_secret_value() == "FAKE-LLM-KEY"
+    assert "FAKE-LLM-KEY" not in repr(settings)

@@ -162,6 +162,11 @@ def extract(
         example_reply=json.dumps(EXAMPLE_REPLY, ensure_ascii=False, indent=2),
         articles="\n\n---\n\n".join(blocks),
     )
+    headers = (
+        {"authorization": f"Bearer {settings.llm_api_key.get_secret_value()}"}
+        if settings.llm_api_key
+        else {}
+    )
     response = client.post(
         f"{settings.llm_base_uri.rstrip('/')}/chat/completions",
         json={
@@ -172,6 +177,7 @@ def extract(
             ],
             "response_format": RESPONSE_FORMAT,
         },
+        headers=headers,
         timeout=settings.llm_timeout,
     )
     response.raise_for_status()
