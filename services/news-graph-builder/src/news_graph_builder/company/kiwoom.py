@@ -38,5 +38,6 @@ def fetch_kospi(
             )
         rows += [(item["code"], item["name"]) for item in page["list"]]
         if response.headers.get("cont-yn") != "Y":
-            return rows
+            break
         headers |= {"cont-yn": "Y", "next-key": response.headers["next-key"]}
+    return rows
