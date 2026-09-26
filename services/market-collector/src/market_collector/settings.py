@@ -60,8 +60,14 @@ class Settings(BaseSettings):
     live_flush_interval: float = Field(default=1.0, gt=0)
     live_window: int = Field(default=300, gt=0)
     # The timeframes the intraday refresh covers. Not "1m": the live path
-    # produces those from ticks, and re-fetching them every cycle would
-    # overwrite the newest minute with a REST page that does not have it yet.
+    # produces those from ticks, and a REST sweep cannot keep up with them
+    # anyway -- 200 symbols is 96-184 s per cycle across five accounts against
+    # a 60-second budget.
+    #
+    # Whether a ka10080 page even carries the minute currently forming is
+    # **unmeasured**: every page observed so far was fetched after the close.
+    # If it does not, no number of accounts would make a REST sweep serve live
+    # data. Worth measuring during market hours before anyone proposes one.
     intraday_timeframes: list[str] = ["15m", "1h"]
 
     @field_validator("intraday_timeframes", mode="after")
