@@ -82,7 +82,7 @@ expose = ["KiwoomSettings", "fetch_pages", "fetch_token"]
 from = ["news_graph_builder.kiwoom"]
 
 [[interfaces]]
-expose = ["Theme", "ThemeMember", "fetch_kospi200_codes", "fetch_theme_members", "fetch_themes"]
+expose = ["Theme", "ThemeMember", "fetch_kospi200_codes", "fetch_theme_members", "fetch_themes", "sync_themes"]
 from = ["news_graph_builder.theme"]
 
 [[interfaces]]
