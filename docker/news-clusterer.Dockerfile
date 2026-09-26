@@ -22,7 +22,6 @@ WORKDIR /app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
-EXPOSE 8000
 
 USER app
 CMD ["news-clusterer"]
