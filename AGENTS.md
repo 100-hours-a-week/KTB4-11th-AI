@@ -27,11 +27,6 @@ KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run al
 KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest
 ```
 
-`news-graph-builder` reads `NEWS_GRAPH_BUILDER_LLM_BASE_URI`, `NEWS_GRAPH_BUILDER_LLM_MODEL`,
-`NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY` and `NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY` from the shell
-environment, and the DART key from `OPENDART_API_KEY` in the `.env` file next to
-`compose.dev.yaml`. Export the keys from a file rather than typing them on the command line.
-
 pytest runs with `--import-mode=importlib`, so test files with the same name (e.g. `test_settings.py`) can exist in several members without `__init__.py`.
 
 **After changing any member's dependencies**, run `uv lock`, then regenerate that service's image requirements. The Dockerfiles install from these hash-pinned files, not from `uv.lock`:
@@ -41,6 +36,46 @@ uv export --package <svc> --no-dev --no-emit-workspace --format requirements-txt
 ```
 
 Use exactly this path. `uv export` writes the command into the file header, so a different `-o` produces a diff.
+
+## Environment variables
+
+Each service reads its own prefix through `pydantic-settings`; values without "required" have a default. The same table is in `README.md` (Korean).
+
+| Variable | Used by | Default |
+|---|---|---|
+| `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
+| `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `news_test`, never `news` | — |
+| `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
+| `KTB_EMBEDDING_MODEL` | news-preprocessor | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` |
+| `KTB_EMBEDDING_DIMENSIONS` | news-preprocessor, news-clusterer; must equal the `vector(2000)` column | `2000` |
+| `KTB_EMBEDDING_MAX_TOKENS` | news-preprocessor | `16384` |
+| `NEWS_PREPROCESSOR_POSTGRES_DSN` | news-preprocessor | required |
+| `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` | news-preprocessor | `100` |
+| `NEWS_PREPROCESSOR_USER_AGENT` | news-preprocessor | `ktb-ai/0.1` |
+| `NEWS_PREPROCESSOR_LOG_LEVEL` | news-preprocessor | `INFO` |
+| `NEWS_CLUSTERER_POSTGRES_DSN` | news-clusterer | required |
+| `NEWS_CLUSTERER_EPS` | news-clusterer (cosine distance, 0 < eps ≤ 2) | `0.2` |
+| `NEWS_CLUSTERER_MIN_SAMPLES` | news-clusterer | `3` |
+| `NEWS_CLUSTERER_LOG_LEVEL` | news-clusterer | `INFO` |
+| `NEWS_GRAPH_BUILDER_POSTGRES_DSN` | news-graph-builder | required |
+| `NEWS_GRAPH_BUILDER_LOG_LEVEL` | news-graph-builder | `INFO` |
+| `NEWS_GRAPH_BUILDER_LLM_BASE_URI` | news-graph-builder `graph` (OpenAI-compatible, includes `/v1`) | required |
+| `NEWS_GRAPH_BUILDER_LLM_MODEL` | news-graph-builder `graph` | required |
+| `NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS` | news-graph-builder `graph` | `24000` |
+| `NEWS_GRAPH_BUILDER_LLM_TIMEOUT` | news-graph-builder `graph` (seconds) | `120` |
+| `NEWS_GRAPH_BUILDER_MAX_ENTITIES` | news-graph-builder `graph` | `30` |
+| `NEWS_GRAPH_BUILDER_MAX_RELATIONS` | news-graph-builder `graph` | `50` |
+| `NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY` | news-graph-builder `kiwoom` | required |
+| `NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY` | news-graph-builder `kiwoom` | required |
+| `NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI` | news-graph-builder `kiwoom` (swap in the paper-trading domain) | `https://api.kiwoom.com` |
+| `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | news-graph-builder `kiwoom` (seconds between calls) | `0.2` |
+| `NEWS_GRAPH_BUILDER_DART_API_KEY` | news-graph-builder `company`; compose fills it from `OPENDART_API_KEY` in `.env` | required |
+| `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder | required |
+| `PORTFOLIO_BUILDER_QUESTDB_DSN` | portfolio-builder | required |
+| `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | portfolio-builder | required |
+| `PORTFOLIO_BUILDER_LOG_LEVEL` | portfolio-builder | `INFO` |
+
+Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
 
 ## Architecture
 
