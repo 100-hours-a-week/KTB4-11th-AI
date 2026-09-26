@@ -1,15 +1,70 @@
-# market-collector — design
+# market-collector — Kiwoom Candle and Indicator Ingestion
 
-Status: proposed. Target deployment 2026-09-28 (Mon).
+**Date:** 2026-09-22 (status and measured facts updated 2026-09-26)
+**Status:** Implemented. Three upstream inputs remain unmeasured; see §4 "Not yet
+measured".
+**Supersedes:** the separate universe and live-path design notes, whose content is folded
+into §4, §7 and §9 here. One document for one service.
 
-`market-collector` ingests OHLCV candles for the KOSPI 200 from Kiwoom, computes
-technical indicators over each candle, and stores candles and indicators together in
-QuestDB. It is the first module in this repository that **writes** to QuestDB.
+## 1. Purpose and scope
+
+`market-collector` ingests OHLCV candles for the KOSPI 200 from Kiwoom, computes eight
+technical indicators over each regular-session candle, and stores candles and indicators
+together in QuestDB. It is the first module in this repository that **writes** to QuestDB.
+
+Four timeframes (1m, 15m, 1h, 1d), a one-shot backfill, live collection during market
+hours with sub-minute freshness, daily theme snapshots and theme membership, and
+ownership of QuestDB's market-candle schema.
+
+### Non-goals
+
+- Order placement or any authenticated trading call.
+- Serving this data over HTTP. Consumers read QuestDB directly, over the PostgreSQL wire
+  protocol on 8812 or HTTP `/exec` on 9000; QuestDB has no MySQL wire protocol.
+- The LLM tool surface over these indicators. That lives in the graph layer, which
+  composes `ktb_market_analyzer` with `store.read_regular_candles`.
+- Storing individual trade ticks. Only the candles built from them are stored.
+- Changes to `packages/core`.
+- Symbols outside the KOSPI 200.
+- Deployment mechanics and scheduling. Each command runs once; cron drives cadence.
+
+## 2. Decisions
+
+| Decision | Choice | Why |
+|---|---|---|
+| Data source | Kiwoom REST and WebSocket | GitHub issue #1 says KIS; the issue text is the error (§3) |
+| Universe | KOSPI 200, from `ka20002` `inds_cd=201` | The tradeable universe. A judgement about a stock outside it could not be acted on |
+| Store | QuestDB, one table per timeframe | Candle density differs by three orders of magnitude, so partitioning does too |
+| Schema ownership | `infrastructure/questdb/`, never a service | No service can reach a `CREATE TABLE` at boot |
+| Write protocol | ILP over HTTP on 9000 | 9009 is TCP ILP, a different protocol, and compose never exposed it |
+| Read protocol | PostgreSQL wire on 8812 | QuestDB's own SQL endpoint; unrelated to any consumer's own database |
+| Resampling | Never. Every timeframe comes from its own source | A locally built 15-minute candle disagrees with the broker's chart, which users compare against |
+| 1-minute candles | Aggregated from WebSocket ticks | Polling 200 symbols is 96-184 s per cycle against a 60-second budget |
+| Other timeframes | Fetched from `ka10080` / `ka10081` on their own cadence | 96-184 s fits comfortably inside a 900-second window |
+| Indicators | Eight fields with seven verdicts, regular session only | Extended-session rows would shift every indicator's period count |
+| Indicators on history | Off by default (`INDICATORS_ON_BACKFILL`) | Backfilled rows are OHLCV; the live path is what attaches indicators |
+| Deduplication | `DEDUP UPSERT KEYS(ts, symbol)` on every candle table | Re-fetching is how REST corrects the live path. **A write that omits a column nulls it** |
+| Resumability | A cursor per symbol and timeframe, written before it advances | Minute history is a rolling window; what is not collected now is lost permanently |
+| Rate limiting | 1.3 s between requests per account, five accounts | A 112-page walk at 1.3 s drew zero `return_code=5`. The true ceiling is unprobed |
+| Membership source | `ka20002` with `inds_cd=201` | Returns the constituents directly. Measured 2026-09-25: 201 rows over 3 pages |
+| Index code discovery | `ka10101` with `mrkt_tp=2` | `mrkt_tp=0` returns 31 sector codes with no index among them, which is why an earlier reading concluded Kiwoom had no such list |
+| Not `ka10099` | — | All KOSPI listings, no index-membership field. `news-graph-builder` uses it to decide *KOSPI* membership, a different question |
+| Stock code shape | Six characters, alphanumeric | `0126Z0` and `0220W0` are real constituents with real chart data; a six-digit-numeric check rejects them |
+| Universe reads | Latest stored snapshot, not a live fetch | Three commands would otherwise each spend a Kiwoom call on the same list, and a run should not change behaviour because the index moved mid-run |
+| Empty universe | `EmptyUniverseError` naming the `universe` command | A misconfiguration, like an unregistered IP: fail at startup rather than collect nothing quietly |
+| Theme memberships | KOSPI 200 only; no `in_universe` flag | Nothing outside the universe can be joined against, so the flag would be true on every row worth keeping |
+| Ticks stored? | No — only the candles built from them | Nothing reads individual executions; the backend owns that |
+| Minute boundary | The tick's own exchange time | Clock skew must not be able to split a minute |
+| Volume and trade value | Differences of Kiwoom's accumulated counters | The buffer drops ticks under backpressure, so a sum of received ticks is wrong by exactly what was dropped, silently |
+| The connect-minute candle | Discarded, logged | Its starting accumulated total happened before the first tick was seen; reconciliation fetches it from REST |
+| Indicator warm-up | Seeded from QuestDB at startup, `limit=300` | Backfill already stored those candles, so the session's first candle has full warm-up instead of 300 NaNs |
+| In-progress candle writes | At most once per second per symbol | Per tick is tens of writes a second per symbol for nothing a user could see |
+| WebSocket library | Injected, not imported by `live.py` | The module is then tested against a fake socket, and no test needs a server |
 
 This document supersedes two statements written before it. Both source documents are
 left unchanged on purpose; the corrections live here.
 
-## 1. What this supersedes
+## 3. What this supersedes
 
 **§2 of `2026-09-20-monorepo-init-design.md`** says:
 
@@ -26,7 +81,7 @@ new ownership is declared, mirroring `infrastructure/postgres/migrations/`.
 OHLCV ingestion", which is correct, while GitHub issue #1 says "KIS API로 차트 데이터
 가져오기". The data source is **Kiwoom**, not KIS. The issue text is the error.
 
-## 2. Upstream facts, measured
+## 4. Upstream facts, measured
 
 Everything in this section was measured against the live Kiwoom REST API on 2026-09-22
 with the project's own credentials, not taken from documentation. Numbers that drive the
@@ -46,7 +101,7 @@ only way to tell them apart:
 | 2 | `8030: 투자구분(실전/모의)이 달라서 Appkey를 사용할수가 없습니다` — live key used against the mock host, or vice versa |
 
 **IP allowlisting is mandatory** and is registered per account on the Kiwoom REST API
-site. This is an operational prerequisite, covered in §11.
+site. This is an operational prerequisite, covered in §14.
 
 ### Chart endpoints
 
@@ -79,7 +134,7 @@ available across symbols. `ka10081` does accept `base_dt`.
 **Extended-session candles are included.** A page contained `cntr_tm=20260917170500`
 — 17:05, well after the 15:30 close. Measured candle counts per trading day are about
 408 for 1-minute (390 regular + extended), 28.9 for 15-minute (26 regular) and 7.5 for
-60-minute (7 regular). Indicator correctness depends on excluding these; see §6.
+60-minute (7 regular). Indicator correctness depends on excluding these; see §8.
 
 **Minute prices carry a sign prefix; daily prices do not.** `ka10080` returns
 `"cur_prc": "+277500"` and `"open_pric": "+277750"`, while `ka10081` returns
@@ -128,16 +183,24 @@ the upstream name `dt_prft_rt` rather than being renamed to something like
 `period_return`, and its description says the semantics are unconfirmed. Naming it after
 a guess would invite the LLM to reason on a misunderstanding.
 
-### The KOSPI 200 constituent list is not available from Kiwoom
+### The KOSPI 200 constituent list — corrected 2026-09-25
 
-`ka10099` returns all 2,486 KOSPI-listed stocks but carries no index-membership field.
-`ka10101` lists 31 sector codes — 대형주/중형주/소형주, 코스피고배당50,
-코스피배당성장50, 변동성지수 — with **no KOSPI 200 entry**. Approximating the index from
-`upSizeName` would be wrong, since the 200 are selected from 300 candidates by further
-rules.
+This section previously concluded that Kiwoom does not serve the constituent list, and
+that it had to be committed as a static CSV maintained by hand from KRX. **That was
+wrong, and the error was a search that stopped too early.**
 
-The list therefore comes from KRX and is committed to the repository as a static file.
-Constituents change twice a year, which the user has accepted as not worth automating.
+`ka10099` does return all KOSPI-listed stocks with no index-membership field, which is
+true. But `ka10101` was queried with `mrkt_tp=0` only, which returns 31 sector codes with
+no index among them. With **`mrkt_tp=2`** the same endpoint carries `201 = KOSPI200`, and
+`ka20002` with `inds_cd=201` returns the constituents: measured 2026-09-25 at 201 rows
+over 3 pages, 100 per page.
+
+The CSV and its loader are gone. Constituents change twice a year and are now a stored
+snapshot time series rather than a reviewed commit, so "who was in the index on date X"
+stays answerable. See `2026-09-25-market-collector-universe-design.md`.
+
+Two of the 201 codes are not six digits — `0126Z0` and `0220W0` — both real constituents
+with real chart data. Any shape check must accept six alphanumeric characters.
 
 ### Rate limiting
 
@@ -153,27 +216,29 @@ would not hold for five keys on one account.
 
 ### Not yet measured
 
-- Kiwoom's WebSocket real-time interface: the per-group symbol cap (reported elsewhere
-  as 100 per `grp_no`), whether one connection can carry several groups, the trade-tick
-  field set, and delivery latency. §7 is written against the 100-per-group figure and
-  must be re-checked before implementation.
+- Kiwoom's WebSocket trade-tick field set, and delivery latency. **The group cap and
+  connection multiplexing were measured on 2026-09-26**: one group accepted 200 symbols
+  and one connection accepted four groups, both looser than the 100-per-group figure §9
+  was written against. The settings stay conservative because a `return_code=0` on an
+  over-large registration cannot be told from silent truncation until ticks flow.
 - The precise per-`api-id` request ceiling, and whether it is enforced per account. The
   five accounts are separate, so independence is expected but unproven.
 - Whether the extra candles beyond the regular session are exclusively
   시간외단일가, or also include 장전 시간외.
 - What `dt_prft_rt` measures.
-- The exact KOSPI 200 intersection with theme constituents, which needs the real
-  constituent list rather than the 대형주/중형주 approximation used in §2.
+- Whether a `ka10080` page carries the minute currently forming. Every page observed so
+  far was fetched after the close, so a REST fallback for live 1-minute data cannot be
+  ruled in or out.
 
-## 3. Scope
+## 5. Coverage and history depth
 
-In scope: four timeframes (1m, 15m, 1h, 1d) for the KOSPI 200, a one-shot backfill,
+Four timeframes (1m, 15m, 1h, 1d) for the KOSPI 200, a one-shot backfill,
 live collection during market hours with sub-minute freshness, indicator computation over
 regular-session candles, daily theme snapshots and theme membership, and QuestDB schema
 ownership.
 
 **Candle history is one year for every timeframe.** Minute candles cannot reach further
-back (§2), and daily candles are deliberately cut to match even though they are available
+back (§4), and daily candles are deliberately cut to match even though they are available
 to 1985. The asymmetry that makes this safe is worth stating: minute history is a rolling
 window, so anything not collected now is lost permanently, whereas daily history is
 static and can be extended later at any time with no loss. One year of daily candles fits
@@ -184,11 +249,7 @@ all 639 constituent symbols, but OHLCV and indicators are collected only for con
 that intersect the KOSPI 200. The KOSPI 200 is the tradeable universe, so a judgement
 about a stock outside it could not be acted on.
 
-Out of scope: order placement or any authenticated trading call; serving this data over
-HTTP (consumers read QuestDB directly); the LLM tool surface over these indicators;
-changes to `packages/core`; symbols outside the KOSPI 200.
-
-## 4. Module boundaries
+## 6. Module boundaries
 
 Everything lives inside the service, with one exception. `packages/core` is not touched:
 the user will write it later with a teammate, so shared-looking code stays local until
@@ -204,19 +265,21 @@ services/
   market-collector/
     pyproject.toml
     src/market_collector/
-      __main__.py            subcommands: backfill, preopen, live, themes, reconcile
+      __main__.py            subcommands: universe, backfill, live, intraday,
+                             preopen, themes
       settings.py            MARKET_COLLECTOR_ prefix
-      universe/
-        kospi200.csv         static constituent list from KRX, reviewed twice a year
-        __init__.py          loads and validates it
+      universe.py            ka20002 constituents: fetch, validate, store, read
       kiwoom/
         auth.py              token issue and refresh, one per account
-        rest.py              ka10080 / ka10081, cont-yn paging, rate limiting
+        rest.py              Pager (pacing, backoff, cont-yn paging, stall
+                             guard) + the ka10080 / ka10081 chart client
         themes.py            ka90001 / ka90002
-        ws.py                real-time trade subscription, group allocation
         parse.py             sign-prefixed numbers, KST timestamps, session tagging
-      bars.py                trade ticks -> 1-minute candles
-      indicators.py          rolling window -> the eight indicator fields
+      live.py                ticks -> 1-minute candles: TICK_FIELDS, Aggregator,
+                             Window, TickBuffer, connection_plan, stream, drain
+      backfill.py            resumable history walk, recent-window refresh
+      indicators.py          a candle window -> the eight fields and their verdicts
+      themes.py              the daily theme snapshot job
       store.py               QuestDB write (ILP) and read (Postgres wire)
       cursor.py              per-symbol backfill progress
     tests/
@@ -234,6 +297,20 @@ Alembic is not used. QuestDB's `ALTER` support is narrow and it has no SQLAlchem
 dialect worth targeting, so the schema is idempotent `CREATE TABLE IF NOT EXISTS`
 statements applied by `apply.py`.
 
+**Why this service does not mirror the news services' storage shape.** They define
+tables as SQLAlchemy `sa.Table` objects mirroring the Alembic migrations, and their
+repositories are plain functions taking a `Connection`. This service cannot: it writes
+over the InfluxDB line protocol, which is not SQL and has no SQLAlchemy dialect, and
+QuestDB has neither foreign keys nor `ON CONFLICT` — its upsert is a table-level `DEDUP`
+declared in DDL. So writes take a `RowSink` and reads take a DSN. What does follow is the
+rule that the DDL owns the schema while the code holds only the names it needs.
+
+**A note for whoever owns `news-graph-builder`.** Its decision table records "Kiwoom REST
+`ka10099` (`mrkt_tp=0`) decides KOSPI membership". That is correct for KOSPI *listing*,
+which is the question that service asks. If it ever needs KOSPI *200* membership,
+`ka20002` with `inds_cd=201` is the call, and `ka10101` with `mrkt_tp=2` is where the
+index codes live.
+
 **Why there is no shared QuestDB package.** `portfolio-builder` carries a `questdb_dsn`
 setting but its entire body logs one line and returns; it reads nothing. A shared
 package today would be built for one real consumer and one skeleton, which is the exact
@@ -244,7 +321,7 @@ work.
 Service dependencies: `ktb-core` (logging only, unchanged), `ktb-market-analyzer`,
 `questdb` (ILP), `psycopg` (reads), `pydantic-settings`, and a WebSocket client.
 
-## 5. Data model
+## 7. Data model
 
 Six tables: four candle tables and two theme tables.
 
@@ -298,7 +375,7 @@ description without a second mapping.
 
 Every table is created `WAL` with `DEDUP UPSERT KEYS(ts, symbol)`. This is load-bearing
 in two places: the in-progress live candle is rewritten many times per minute and must
-collapse to one row, and the post-close reconciliation in §7 must be able to overwrite
+collapse to one row, and the post-close reconciliation in §9 must be able to overwrite
 what the WebSocket path wrote. Without dedup, a single minute would accumulate dozens of
 duplicate rows.
 
@@ -318,7 +395,7 @@ theme_snapshot
   theme_code    SYMBOL INDEX   thema_grp_cd
   theme_name    SYMBOL         thema_nm
   date_tp       INT            the period parameter this row was requested with
-  dt_prft_rt    DOUBLE         upstream name kept on purpose; semantics unconfirmed (§2)
+  dt_prft_rt    DOUBLE         upstream name kept on purpose; semantics unconfirmed (§4)
   change_rate   DOUBLE         flu_rt, same-day
   stock_count   INT            stk_num
   rising_count  INT            rising_stk_num
@@ -343,6 +420,28 @@ KOSPI 200 intersection. Recording the full theme composition keeps `stock_count`
 `dt_prft_rt` interpretable, since Kiwoom computes them over all members. `in_universe`
 tells a consumer which members it can actually drill into, so the LLM can distinguish
 "no data" from "no signal" rather than silently reasoning over an empty join.
+
+### Universe table
+
+```sql
+CREATE TABLE IF NOT EXISTS universe_members (
+    ts TIMESTAMP,
+    index_code SYMBOL INDEX,
+    index_name SYMBOL,
+    symbol SYMBOL INDEX,
+    stock_name SYMBOL,
+    src SYMBOL
+) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(ts, index_code, symbol);
+```
+
+`PARTITION BY MONTH` because a snapshot is roughly 200 rows and constituents change twice
+a year — a day partition would be almost all empty partitions.
+
+Both `index_code` and `symbol` are indexed: the read path filters on `index_code`, and a
+consumer asking "which indices is this stock in" filters on `symbol`.
+
+`ts` is truncated to the day before writing, so two runs on one day produce one snapshot
+rather than two. The dedup key is what turns the rerun into an upsert.
 
 ### The relationship, and what QuestDB does not enforce
 
@@ -377,7 +476,7 @@ verbatim alongside `theme_code` — matching news text to a theme will most like
 through the name, and a normalised or translated name would break that. How news is
 actually mapped to themes belongs to the consumer's own spec.
 
-## 6. Candles and indicators
+## 8. Candles and indicators
 
 **All four timeframes are fetched directly from Kiwoom. Nothing is resampled locally.**
 `tic_scope` supplies 15-minute and 60-minute candles at the source, so the values match
@@ -387,7 +486,7 @@ of the request budget while introducing a class of bug that only shows up as a
 disagreement with the broker's chart.
 
 This rule is about candles derived from *other candles*. It does not conflict with the
-live path in §7, which aggregates raw trade ticks into 1-minute candles: aggregating
+live path in §9, which aggregates raw trade ticks into 1-minute candles: aggregating
 ticks is the only way to meet the freshness requirement, and those candles are
 overwritten by Kiwoom's own after the close. No timeframe is ever computed from another
 timeframe's rows.
@@ -455,7 +554,7 @@ produce two subtly different answers — for a saving measured in microseconds. 
 in-memory window keeps one implementation and one definition. Memory is not a
 constraint either: 200 symbols × 300 candles × three arrays of float64 is about 1.4 MB.
 
-## 7. Collection
+## 9. Collection
 
 ### Backfill — one shot, before deployment
 
@@ -475,51 +574,126 @@ reached. A job killed two hours in resumes from those cursors rather than restar
 Symbols are distributed across the five accounts, and each account's worker paces itself
 at 1.3 s per request, backing off on `return_code=5`.
 
+### Universe — index constituents
+
+The `universe` command fetches `ka20002` with `inds_cd=201`, validates each code as six
+alphanumeric characters, and upserts a snapshot with `ts` truncated to the day. Every
+other command reads the latest snapshot rather than fetching it again: three commands
+would otherwise each spend a Kiwoom call on the same list, and a run should not change
+behaviour because the index moved mid-run. An empty result raises rather than collecting
+nothing quietly.
+
 ### Live — during market hours
 
-Polling cannot meet the freshness requirement. At 1–3 seconds per response, refreshing
-200 symbols costs roughly 400 seconds serially and about 80 seconds across five
-accounts, which overruns a one-minute budget. Users watch this data to trade, so the
-live path is **WebSocket real-time trades aggregated into candles locally**.
+Polling cannot meet the freshness requirement. A request costs 1.3 s of pacing plus a
+measured 1.1–3.3 s response, so 200 symbols across five accounts is **96–184 s per
+cycle** against a 60-second budget. Adding accounts does not rescue it: response latency
+alone caps one account at 18–55 requests a minute, so covering 200 symbols inside a
+minute would need 4–11 accounts even with pacing removed entirely. And the work that
+could be trimmed is not the expensive part — all eight indicators for 200 symbols over a
+300-candle window measure **1.7 ms**. The minute is spent fetching, not computing.
+
+So the live path is **WebSocket trade ticks aggregated into 1-minute candles locally**.
+Kiwoom pushes ticks, not finished candles, which is why aggregation is not optional.
 
 ```
-WebSocket reader ──> asyncio.Queue(100_000) ──> aggregator ──> QuestDB writer
-     (one task)         bounded, drop-oldest        (per symbol)      (batched ILP)
+WebSocket reader ──> bounded buffer (100_000) ──> aggregator ──> QuestDB writer
+     (one task)          drop-oldest              (per symbol)      (batched ILP)
 ```
 
-The queue is in-process and deliberately not SQS or Redis. Its only consumer is in the
-same process; a broker would add a network round trip inside the one-minute budget for
-no gain; per-symbol ordering, which candle aggregation depends on, is free in-process;
-and loss is recoverable, because a restart can re-fetch the day's candles from
-`ka10080`. Durability is not worth buying here.
+The buffer is in-process and deliberately not SQS or Redis. Its only consumer is in the
+same process; a broker would add a network round trip inside the one-minute budget for no
+gain; per-symbol ordering, which candle aggregation depends on, is free in-process; and
+loss is recoverable, because reconciliation re-fetches the day from `ka10080`.
 
-Note that the monorepo design already reserves the name `Queue` for a different thing —
-an SQS/Redis protocol for distributing work to `portfolio-builder`. That is
-service-to-service work distribution. This is an in-process stream buffer. The two
-should not be conflated.
+The monorepo design reserves the name `Queue` for an SQS/Redis protocol that distributes
+work to `portfolio-builder`. That is service-to-service work distribution; this is an
+in-process stream buffer. The two should not be conflated.
 
-The queue is **bounded** at 100,000 ticks, and full means drop the oldest tick. The
-bound is sized to absorb a burst of several seconds across 200 symbols while staying
-well under a gigabyte of resident memory; it is a tuning knob, not a contract. An unbounded queue grows
-until the process is killed, and that happens during market hours under load, which is
-the worst possible time. Dropping ticks degrades the in-progress candle slightly and the
-reconciliation below repairs it.
+Full means **drop the oldest tick**, counted and logged. An unbounded buffer grows until
+the process is killed, and that happens during market hours under load.
 
-Symbols are allocated across WebSocket groups at 100 per group, so the KOSPI 200 needs
-at least two. Group and connection allocation is a concrete task, and the 100 figure is
-the main unmeasured number in this design.
+**A tick becomes a candle.** Open is the first tick's price in the minute, high and low
+track the extremes, close is the latest. The minute boundary comes from the tick's own
+exchange time, never the local clock — clock skew must not be able to split a minute.
 
-15-minute, 1-hour and daily candles are polled from `ka10080`/`ka10081` on their own
-cadence rather than derived from the aggregated 1-minute stream. At 200 symbols every
-15 minutes this is about 13 requests per minute, which is affordable, and it keeps the
-"no local resampling" rule intact.
+**Volume and trade value are differences of Kiwoom's accumulated counters**, not sums of
+tick quantities. The buffer drops ticks, and a sum would then be wrong by exactly what was
+dropped, with nothing to say so; a difference survives a dropped middle tick as long as
+some tick near each boundary arrives. One candle cannot be reported this way: the minute a
+connection opens in, whose starting total happened before the first tick was seen. It is
+discarded and logged rather than guessed, and reconciliation fetches it from REST.
 
-### Pre-open batch
+A minute with no trades produces no candle, which matches what `ka10080` returns for the
+same minute and keeps reconciliation a comparison rather than a diff full of phantom rows.
 
-Before the market opens, two jobs run. The previous session's extended-session candles
-are fetched from `ka10080` and written with `session='extended'`. The live path's
-in-memory indicator windows are then seeded from QuestDB, so the first candle of the day
-has full warm-up behind it rather than 300 candles of `NaN`.
+**Indicator windows are seeded from QuestDB at startup**, not from Kiwoom:
+`read_regular_candles(dsn, "1m", symbol, limit=300)`. Backfill already stored those
+candles, so the session's first candle has full warm-up instead of 300 NaNs. On each write
+the window plus the in-progress candle form the series handed to the analyzer.
+
+**Write cadence.** A finalised candle is written as soon as its boundary passes; the
+in-progress candle at most once per second per symbol. Per tick would be tens of writes a
+second per symbol for nothing a user could see. Dedup makes every rewrite land on the same
+row — and the hazard in §7 applies: a write that omits a column nulls it, so the live
+writer always sends the indicator columns for regular-session rows.
+
+**Connections and groups** are derived, never written down:
+
+```
+groups      = ceil(len(universe) / ws_symbols_per_group)
+connections = ceil(groups / ws_groups_per_connection)
+```
+
+Measured 2026-09-26: one group accepted 200 symbols and one connection accepted four
+groups, both looser than the 100-per-group figure this design was written against. The
+settings stay at 100 and 2 anyway, because a `return_code=0` on an over-large registration
+cannot be told from silent truncation until ticks flow. The same probe confirmed the IP
+allowlist covers the WebSocket endpoint, so no separate registration is needed.
+
+The server sends `PING`; the session echoes it back unchanged, since a missed echo is how
+Kiwoom decides the client is gone. On disconnect the session reconnects with exponential
+backoff, re-logs in, re-registers every group, and logs the gap so reconciliation is known
+to be covering a real hole.
+
+**The reader performs no I/O other than reading the socket**, so a slow or unreachable
+QuestDB can never stall it.
+
+### Intraday — the other timeframes
+
+15-minute, 1-hour and daily candles are fetched from `ka10080`/`ka10081` on their own
+cadence rather than derived from the aggregated 1-minute stream. A locally built
+15-minute candle would inherit every gap and dropped tick in that stream and then
+disagree with the broker's own chart, which is the one discrepancy users notice
+immediately because they compare against their HTS.
+
+The same 96–184 s that overruns a one-minute budget occupies 11–20% of a 900-second one,
+so fetching fits with room to spare. `1m` is deliberately absent: the live path owns it.
+
+### Pre-open — extended-session candles and reconciliation in one pass
+
+This design originally split the pre-open batch from a post-close `reconcile`. The
+implementation has one command because both purposes need the same moment.
+
+**Extended-session trading (시간외 단일가) happens after the 15:30 close**, so a job
+running right after the close cannot see that day's extended candles — they have not
+traded yet. By the next open, the previous session's regular *and* extended candles are
+both final, and a single `ka10080` pass returns them together.
+
+That same pass is the reconciliation. Aggregation drifts: ticks are dropped under
+backpressure and reconnects leave gaps. Re-fetching writes REST values over whatever the
+live path aggregated, dedup makes it an overwrite rather than a duplication, and `src`
+flips from `ws` to `rest`. The rule is **the WebSocket path serves the live display, REST
+is the source of truth**, and any aggregation bug is corrected within a day rather than
+persisting in storage.
+
+The window is four calendar days, not one, because no trading calendar is available: on a
+Monday "yesterday" is Sunday and would filter Friday out entirely, and a Tuesday after a
+Monday holiday needs four. Overlap on ordinary days is free — dedup absorbs it.
+
+Indicators are computed over the whole fetched series but written only for the tail at or
+after `since`. The head of the oldest page has no warm-up, and writing it would overwrite
+good values with nulls.
 
 ### Themes — daily snapshot
 
@@ -528,8 +702,10 @@ Once per day, after the close:
 1. `ka90001` is paged to collect all 142 themes, once per configured `date_tp`. With a
    handful of periods this is a few dozen requests.
 2. `ka90002` is called once per theme code, 142 requests, to collect memberships.
-3. Each membership row is tagged `in_universe` by testing the symbol against the static
-   KOSPI 200 list.
+3. Memberships are written only for symbols inside the stored universe. There is no
+   `in_universe` flag: with the KOSPI 200 as the whole scope it would be true on every
+   row worth keeping, and a row for a symbol with no candles is one nothing can join
+   against.
 
 At 1.3 s per request this is a few minutes on a single account and needs no coordination
 with the candle collectors, which use a different `api-id` and therefore a different rate
@@ -540,18 +716,7 @@ selection is a research-grade decision informed by news, not a per-minute tradin
 If the trading screen later needs live theme movement, an intraday refresh is a small
 addition on top of this schema.
 
-### Reconciliation — after the close
-
-WebSocket aggregation drifts: ticks are dropped under backpressure, and reconnections
-leave gaps. After the close, re-fetch the day's candles from `ka10080` for every symbol
-and write them over the aggregated rows. Dedup makes this an overwrite rather than a
-duplication, and `src` flips from `ws` to `rest`.
-
-This gives the system a clear rule: **the WebSocket path serves the live display, and
-REST is the source of truth.** Any aggregation bug is corrected within a day instead of
-persisting in storage.
-
-## 8. Configuration
+## 10. Configuration
 
 `MARKET_COLLECTOR_` prefix, following the existing services. Each service keeps its own
 `Settings` class rather than inheriting a shared base, as the monorepo design argues.
@@ -571,13 +736,12 @@ JSON-encoded list of `{app_key, secret_key}` objects and parsed by a validator, 
 adding a sixth account is a configuration change. Secrets stay in `.env`, which is
 already ignored at `.gitignore:296`; the repository holds none of them.
 
-The KOSPI 200 list is **not** configuration. It is a file in the package
-(`universe/kospi200.csv`), because it is data the code is correct or incorrect against
-rather than something an operator tunes per environment, and because a constituent change
-should arrive as a reviewed commit with a date attached. Kiwoom does not serve this list
-(§2), so it is maintained by hand from KRX twice a year.
+The KOSPI 200 list is **not** configuration and **not** a committed file. It is fetched
+from `ka20002` by the `universe` command and stored as a snapshot time series in QuestDB;
+only the index code (`201`) is a setting. The earlier CSV-in-the-package design rested on
+the mistaken belief that Kiwoom does not serve the list — see §4.
 
-## 9. Failure handling
+## 11. Failure handling
 
 | Failure | Response |
 | --- | --- |
@@ -592,7 +756,27 @@ should arrive as a reviewed commit with a date attached. Kiwoom does not serve t
 Two invariants: the WebSocket reader never performs I/O other than reading the socket,
 and the service never issues DDL.
 
-## 10. Testing
+## 12. Limits
+
+- A live candle is only as good as the ticks that arrived. Dropped ticks under
+  backpressure move the high and low; the accumulated-counter arithmetic keeps volume
+  right. Every figure is corrected by `preopen` before the next open.
+- A minute with no trades produces no candle. That matches what `ka10080` returns for the
+  same minute, which keeps reconciliation a comparison rather than a diff full of phantom
+  rows.
+- The candle for the minute a connection opens in is lost until reconciliation.
+- A registration accepted with `return_code=0` is not proof that every symbol in it is
+  subscribed; silent truncation would look identical until ticks flow.
+- `theme_snapshot`'s `stock_count`, `rising_count`, `falling_count` and `dt_prft_rt` are
+  Kiwoom's figures over a theme's whole market-wide membership. They do not match the
+  stored member rows, and a consumer must not combine the two into a ratio.
+- Nothing coordinates two collector processes. `live` makes exactly one REST call (its
+  token), so it does not contend with `intraday` for the chart rate limit today — but a
+  future REST call inside `live` would double the request rate on that account.
+- Indicators are stored only for the eight fields in `interpret`. Anything added to the
+  analyzer later is computed on demand by the graph layer and never gets a column.
+
+## 13. Testing
 
 Parsing is where correctness is cheapest to pin down, and the measured quirks give
 concrete cases: sign-prefixed minute prices against unsigned daily prices, `cur_prc`
@@ -610,10 +794,10 @@ Backfill resumption is tested by interrupting a paging loop against a fake REST 
 and asserting that resuming from the cursor produces the same set of candles as an
 uninterrupted run.
 
-Theme parsing is tested on the recorded shapes of `ka90001` and `ka90002`, including
-that `in_universe` is true exactly for symbols in `universe/kospi200.csv`, and that a
-theme whose members are all outside the index still produces a `theme_snapshot` row —
-the metrics stay interpretable even when nothing is drillable.
+Theme parsing is tested on the recorded shapes of `ka90001` and `ka90002`, including that
+only symbols inside the stored universe are written as memberships, and that a theme whose
+members all fall outside the index still produces a `theme_snapshot` row — its
+market-wide metrics stay meaningful even when nothing is drillable.
 
 Schema tests assert that every table declares a `DEDUP UPSERT KEYS` clause and a
 partition clause — the properties the live path and the reconciliation silently depend
@@ -624,7 +808,7 @@ Live WebSocket behaviour is tested against a fake server, not Kiwoom. Nothing in
 touches the real API, which has no sandbox for market data on these credentials and is
 IP-restricted anyway.
 
-## 11. Operations
+## 14. Operations
 
 **IP allowlisting is a deployment blocker.** Every one of the five accounts must have
 both the developers' IPs and the deployed environment's egress IP registered. A
@@ -643,7 +827,27 @@ means the production deployment needs a snapshot policy from day one.
 The backfill runs as a job, not as part of service startup, for the same reason
 migrations do.
 
-## 12. Open questions
+## 15. Done criteria
+
+1. `market-collector universe` writes ~201 rows to `universe_members` and logs the count;
+   rerunning it the same day leaves the row count unchanged.
+2. `latest_members` returns a `frozenset` of those symbols, including `0126Z0` and
+   `0220W0`.
+3. An empty `universe_members` makes every other command fail with `EmptyUniverseError`
+   naming the `universe` command.
+4. `themes` writes memberships only for KOSPI 200 constituents — measured 2026-09-25 at
+   115 distinct symbols across 142 themes — and still writes a `theme_snapshot` row for a
+   theme with none.
+5. `backfill` fills every timeframe to its configured depth, resumes from its cursor after
+   an interrupted run, and stores OHLCV only.
+6. `live` registers every group on the planned connections, and a scripted tick sequence
+   produces the expected candles with volume taken from accumulated differences.
+7. `intraday` refreshes 15-minute and 1-hour candles and never `1m`.
+8. `preopen` writes the previous session's extended candles and flips `src` to `rest` over
+   whatever the live path wrote.
+9. `uv run pytest`, `ruff check`, `ruff format --check` and `ty check` all clean.
+
+## 16. Open questions
 
 1. **What does `dt_prft_rt` actually measure?** Resolved as deferred: the column keeps
    the upstream name and an explicitly unconfirmed description until it is checked
@@ -666,12 +870,14 @@ migrations do.
    zero in-universe members are dead ends for the LLM's theme-to-stock step, and the
    count is worth measuring once the real constituent list is in place.
 
-## 13. Schedule risk
+## 17. Schedule risk
 
-Six days to 2026-09-28, and the critical path runs through things that are not code:
-IP registration across five accounts plus the deployment target, a fixed egress IP, the
-KOSPI 200 constituent list from KRX, and the unmeasured WebSocket limits. The backfill
-itself is 2.2 hours and can run the day before.
+Written on 2026-09-22 with six days to the target date. What remained on the critical
+path was never code: IP registration across every account plus the deployment target, and
+a **fixed egress IP** — this machine's address changed mid-session on 2026-09-26, and an
+allowlist cannot be maintained against a rotating address. The constituent list resolved
+itself once `ka20002` was found (§4), and the WebSocket group limits were measured on
+2026-09-26. The backfill itself is 2.2 hours and can run the day before.
 
 The live path is the largest piece of new code and the only one with no measured
 foundation yet. If WebSocket work slips, a degraded fallback exists: poll `ka10080` for
