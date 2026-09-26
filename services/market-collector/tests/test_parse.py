@@ -11,7 +11,6 @@ from market_collector.kiwoom.parse import (
     parse_volume,
 )
 
-# Verbatim responses recorded from the live API on 2026-09-22.
 MINUTE_ROW = {
     "cur_prc": "+277500",
     "trde_qty": "38961",

@@ -168,8 +168,7 @@ def test_theme_members_outside_the_universe_are_not_written():
     assert written == 1
     assert [row[1]["symbol"] for row in sink.rows] == ["005930"]
     assert sink.rows[0][0] == "theme_members"
-    # Symbols, no fields. The membership is the whole fact, and QuestDB stores
-    # a symbols-only row because the symbols are the series key.
+
     assert sink.rows[0][2] == {}
 
 
@@ -231,7 +230,7 @@ def _fake_psycopg(rows: list[tuple]):
         def execute(self, query, params) -> None:
             query_l = str(query).lower()
             params_iter = iter(params)
-            next(params_iter)  # symbol; every row here already matches it
+            next(params_iter)
             result = list(rows)
             if "ts >=" in query_l:
                 since = next(params_iter)
@@ -280,10 +279,7 @@ _FIVE_ROWS = [
 
 
 def test_read_regular_candles_limit_selects_the_newest_not_the_oldest(monkeypatch):
-    # Five distinct timestamps: the two oldest and two newest are disjoint
-    # sets, so a naive `ORDER BY ts ASC LIMIT 2` (which returns the two
-    # oldest) fails this assertion; only selecting the newest two and
-    # returning them oldest-first satisfies it.
+
     monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
 
     result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=2)
@@ -312,15 +308,11 @@ def test_read_regular_candles_since_and_limit_combine_to_newest_after_since(monk
         limit=2,
     )
 
-    # since keeps rows 1..4; the newest 2 of those are rows 3 and 4.
     assert result == [_candle_of(_FIVE_ROWS[3]), _candle_of(_FIVE_ROWS[4])]
 
 
 def test_read_regular_candles_since_past_the_newest_row_returns_empty(monkeypatch):
-    # An empty list here means "no candles in that window", which is a real
-    # answer the caller must handle -- not an error. It also pins that the
-    # since clause is spliced into the query at all: a dropped `ts >=` would
-    # return all five rows.
+
     monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
 
     result = read_regular_candles(
@@ -334,10 +326,7 @@ def test_read_regular_candles_since_past_the_newest_row_returns_empty(monkeypatc
 
 
 def test_read_regular_candles_limit_beyond_the_row_count_returns_every_row(monkeypatch):
-    # Asking for more than exists is not an error, and the rows must still
-    # arrive oldest-first -- the DESC-then-reverse path runs here exactly as
-    # it does for a limit that truncates, so a missing reverse() would show
-    # up as the whole series backwards.
+
     monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg(_FIVE_ROWS))
 
     result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=500)
@@ -353,12 +342,7 @@ def test_read_regular_candles_rejects_non_positive_limit():
 
 
 def test_without_nones_keeps_falsy_but_non_none_values():
-    # This is the filter that protects a genuine 0.0 MACD/ROC value — and any
-    # falsy value a later column introduces — from being silently dropped
-    # instead of stored. `is not None` is
-    # correct; `if value` (a plausible future "simplification") is not —
-    # this test fails against that simplification because 0.0 and False are
-    # falsy but must still survive.
+
     result = _without_nones({"a": 0.0, "b": False, "c": None, "d": 1, "e": ""})
 
     assert result == {"a": 0.0, "b": False, "d": 1, "e": ""}

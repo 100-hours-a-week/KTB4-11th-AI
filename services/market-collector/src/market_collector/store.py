@@ -217,10 +217,6 @@ class _QuestDbSink:
     ) -> None:
         from questdb import TimestampNanos
 
-        # RowSink's dict types are invariant on the value type and narrower
-        # than questdb's own (which also allow None values, numpy arrays,
-        # etc.); Any at this one call is the interop boundary with the
-        # native client, not a loosening of RowSink's own contract.
         self._sender.row(
             table,
             symbols=cast(Any, symbols),
@@ -280,11 +276,7 @@ def read_regular_candles(
     table = TIMEFRAME_TABLES[timeframe]
     since_clause = " AND ts >= %s" if since is not None else ""
     order_clause = "ORDER BY ts DESC LIMIT %s" if limit is not None else "ORDER BY ts ASC"
-    # The table name comes from TIMEFRAME_TABLES, not caller input;
-    # since_clause and order_clause are each picked from a fixed pair of
-    # literal strings, never built from since/limit/symbol themselves. So
-    # the f-string is safe; it is only not a LiteralString because of that
-    # interpolation, which is what the cast below tells the type checker.
+
     query = cast(
         LiteralString,
         f"SELECT ts, high, low, close FROM {table} "
@@ -304,8 +296,5 @@ def read_regular_candles(
         ]
 
     if limit is not None:
-        # We asked the DB for the newest `limit` rows in descending order;
-        # reverse them so the function's contract (oldest first) still
-        # holds regardless of which bounds a caller combined.
         rows.reverse()
     return rows

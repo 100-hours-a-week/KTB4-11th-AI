@@ -54,14 +54,12 @@ log = logging.getLogger(__name__)
 
 TRADE_TYPE = "0B"
 
-# A3. From Kiwoom's documentation for 주식체결 (0B); not yet seen on a live
-# tick. Measuring one payload during market hours is the only way to confirm
-# these, and this dict is the only place that knows the raw ids.
+
 TICK_FIELDS = {
-    "time": "20",  # 체결시간, HHMMSS in KST
-    "price": "10",  # 현재가, sign-prefixed
-    "cum_volume": "13",  # 누적거래량
-    "cum_value": "14",  # 누적거래대금
+    "time": "20",
+    "price": "10",
+    "cum_volume": "13",
+    "cum_value": "14",
 }
 
 
@@ -156,10 +154,6 @@ class Aggregator:
         finished: LiveCandle | None = None
         if current is not None:
             if minute < current.minute:
-                # A tick for a minute already closed. Dropping it is the only
-                # safe move: reopening that minute would need a baseline we
-                # have already advanced past, and closing the current minute
-                # early would attribute its trades to the wrong candle.
                 return None
             if minute != current.minute:
                 finished = self._finalise(tick.symbol, current)

@@ -40,9 +40,6 @@ def apply(dsn: str) -> int:
     with psycopg.connect(dsn, autocommit=True) as connection:
         for path in schema_files():
             for statement in statements(path.read_text(encoding="utf-8")):
-                # Statements come from our own schema files, not user input;
-                # psycopg's stub requires LiteralString, which a runtime-read
-                # string can never satisfy.
                 query = sql.SQL(typing.cast(typing.LiteralString, statement))
                 with connection.cursor() as cursor:
                     cursor.execute(query)

@@ -50,20 +50,6 @@ def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
     return [group for group in groups if group]
 
 
-# Calendar days the preopen window trails behind ``now``, not exactly one.
-# "Midnight KST of the day before" misses Friday entirely on a Monday run:
-# Monday minus one calendar day is Sunday, and refresh_recent then filters
-# every Friday row out as older than ``since``. Phase 1 has no live path, so
-# preopen is the only ongoing candle writer and backfill will not fill the
-# gap behind it (those pairs are marked done) — a Monday-Friday schedule
-# would lose one trading day every week, permanently, for 1-minute data.
-#
-# 4 is the smallest window that reaches Friday not only from a plain Monday
-# run (Monday - 3 calendar days already gets there) but also from a Tuesday
-# run following a Monday holiday (Tuesday - 4 calendar days = Friday), with
-# no trading calendar available to compute that precisely. Dedup on
-# (ts, symbol) makes the resulting overlap on every ordinary day free to
-# write twice.
 PREOPEN_WINDOW_DAYS = 4
 
 
@@ -101,11 +87,6 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
     base_dt = today.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
-    # One CursorStore, shared across every worker. A store per worker would
-    # give each thread its own in-memory copy of the whole cursor dict, and
-    # every write would serialise that copy — so the last worker to finish
-    # would silently erase the entries the others had written. CursorStore
-    # is thread-safe for exactly this reason.
     cursors = CursorStore(settings.cursor_path)
 
     def worker(index: int, bucket: list[str]) -> int:
