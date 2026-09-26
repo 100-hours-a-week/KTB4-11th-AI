@@ -53,7 +53,7 @@ def fetch_pages(
             raise RuntimeError(
                 f"Kiwoom {api_id} failed: {page.get('return_code')} {page.get('return_msg')}"
             )
-        rows += page.get(list_key, [])
+        rows += page.get(list_key) or []
         if response.headers.get("cont-yn") != "Y":
             break
         headers |= {"cont-yn": "Y", "next-key": response.headers["next-key"]}

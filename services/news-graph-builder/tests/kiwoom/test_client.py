@@ -97,6 +97,22 @@ def test_a_page_without_the_list_key_contributes_no_rows():
     assert rows == []
 
 
+def test_a_null_list_contributes_no_rows():
+    client = replying([({"return_code": 0, "rows": None}, {})], [])
+
+    rows = fetch_pages(
+        client,
+        token="tok",
+        api_id="ka99999",
+        path="thme",
+        body={},
+        list_key="rows",
+        settings=SETTINGS,
+    )
+
+    assert rows == []
+
+
 def test_a_failed_page_raises():
     client = replying([({"return_code": 5, "return_msg": "rate limited"}, {})], [])
 

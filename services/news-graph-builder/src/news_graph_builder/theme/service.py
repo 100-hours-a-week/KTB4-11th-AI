@@ -25,7 +25,7 @@ def sync_themes(
     skipped = 0
     for theme in unique_themes:
         main_parts = {part.strip() for part in theme.main_stocks.split(",") if part.strip()}
-        main_names = {normalize(part) for part in main_parts}
+        main_names = {name for part in main_parts if (name := normalize(part))}
         for member in members.get(theme.code, []):
             corp_code = corp_codes.get(member.stock_code)
             if member.stock_code not in kospi200_codes or corp_code is None:

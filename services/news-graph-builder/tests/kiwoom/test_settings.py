@@ -44,10 +44,11 @@ def test_a_negative_interval_raises(required_env, monkeypatch):
 
 
 def test_secrets_not_in_validation_error(required_env, monkeypatch):
-    monkeypatch.delenv("NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY")
-    monkeypatch.setenv("NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY", "FAKE-APP-KEY-123")
+    monkeypatch.setenv("NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY", "FAKE-SECRET-123")
+    monkeypatch.setenv("NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL", "-1")
 
     with pytest.raises(ValidationError) as info:
         KiwoomSettings()
 
-    assert "FAKE-APP-KEY-123" not in str(info.value)
+    assert "FAKE-SECRET-123" not in str(info.value)
+    assert "input_value" not in str(info.value)
