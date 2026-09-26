@@ -176,8 +176,8 @@ def test_theme_members_outside_the_universe_are_not_written():
     assert sink.rows[0][2] == {}
 
 
-def test_read_regular_candles_pins_the_column_order(monkeypatch):
-    rows = [_db_row(TS, 278000.0, 277500.0, 277500.0)]
+def test_read_regular_candles_returns_the_stored_indicator_values(monkeypatch):
+    rows = [_db_row(TS, 278000.0, 277500.0, 277500.0, rsi=61.5)]
     calls: dict[str, object] = {}
 
     class FakeCursor:
@@ -210,8 +210,12 @@ def test_read_regular_candles_pins_the_column_order(monkeypatch):
     result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930")
 
     assert result == [_candle_of(rows[0])]
+    # Returned as stored; nothing recomputes it.
+    assert result[0].indicators["rsi"] == 61.5
+    # A null column reads back as None, the normal state for backfilled history.
+    assert result[0].indicators["macd"] is None
     query = str(calls["query"]).lower()
-    assert "select ts, high, low, close" in query
+    assert "select ts, high, low, close, " + ", ".join(INDICATOR_FIELDS).lower() in query
     assert "bars_1m" in query
     assert calls["params"] == ("005930",)
 
@@ -267,13 +271,19 @@ def _fake_psycopg(rows: list[tuple]):
     return types.SimpleNamespace(connect=lambda dsn: FakeConnection())
 
 
-def _db_row(ts, high, low, close):
-    """One row as the driver returns it."""
-    return (ts, high, low, close)
+def _db_row(ts, high, low, close, *, rsi=55.0):
+    """One row as the driver returns it: ts, prices, then the eight indicators."""
+    return (ts, high, low, close, rsi, *[None] * (len(INDICATOR_FIELDS) - 1))
 
 
 def _candle_of(row) -> Candle:
-    return Candle(ts=row[0], high=row[1], low=row[2], close=row[3])
+    return Candle(
+        ts=row[0],
+        high=row[1],
+        low=row[2],
+        close=row[3],
+        indicators=dict(zip(INDICATOR_FIELDS, row[4:], strict=True)),
+    )
 
 
 _FIVE_ROWS = [

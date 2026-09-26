@@ -95,16 +95,27 @@ class Theme:
 
 @dataclass(frozen=True)
 class Candle:
-    """A stored candle as read back.
+    """A stored candle as read back: prices, and the indicators stored with it.
 
-    Prices only. The live path seeds its indicator window from these, and that
-    is the whole of what this service reads candles for.
+    ``indicators`` holds every field in ``INDICATOR_FIELDS``, with ``None`` where
+    the column is null — the normal state for backfilled history, which stores
+    OHLCV alone.
+
+    Prices are here for the indicators that are *not* stored: the analyzer
+    computes those on demand from a candle window. The stored values are here so
+    a caller that only needs them does not recompute what is already in the table.
+
+    Verdicts are absent because they are not stored. A caller that wants them
+    passes the values to ``ktb_market_analyzer``'s ``comment_series``, which
+    applies the rules in force at read time rather than whatever they were when
+    the row was written.
     """
 
     ts: datetime
     high: float
     low: float
     close: float
+    indicators: dict[str, float | None]
 
 
 @dataclass(frozen=True)
@@ -284,8 +295,10 @@ def read_regular_candles(
 ) -> list[Candle]:
     """Regular-session candles for one symbol, oldest first.
 
-    The live path calls this at startup to seed each symbol's indicator window,
-    which is why prices are what it returns.
+    Each ``Candle`` carries the prices and the eight indicator values stored with
+    that row, so one call serves both readers: the live path seeds its indicator
+    window from the prices, and the graph layer reads the stored values without
+    recomputing them.
 
     ``since``, if given, bounds the window from that timestamp onward and is
     *inclusive*: a candle timestamped exactly ``since`` is returned.
@@ -318,9 +331,10 @@ def read_regular_candles(
     # literal strings, never built from since/limit/symbol themselves. So
     # the f-string is safe; it is only not a LiteralString because of that
     # interpolation, which is what the cast below tells the type checker.
+    columns = ", ".join(("ts", "high", "low", "close", *INDICATOR_FIELDS))
     query = cast(
         LiteralString,
-        f"SELECT ts, high, low, close FROM {table} "
+        f"SELECT {columns} FROM {table} "
         f"WHERE symbol = %s AND session = 'regular'{since_clause} {order_clause}",
     )
     params: tuple[object, ...] = (symbol,)
@@ -332,8 +346,14 @@ def read_regular_candles(
     with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
         cursor.execute(query, params)
         rows = [
-            Candle(ts=ts, high=high, low=low, close=close)
-            for ts, high, low, close in cursor.fetchall()
+            Candle(
+                ts=row[0],
+                high=row[1],
+                low=row[2],
+                close=row[3],
+                indicators=dict(zip(INDICATOR_FIELDS, row[4:], strict=True)),
+            )
+            for row in cursor.fetchall()
         ]
 
     if limit is not None:
