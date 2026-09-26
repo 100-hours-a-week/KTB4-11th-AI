@@ -271,8 +271,8 @@ shapes. `tach.toml` enforces the dependencies and interfaces between the package
 | `company/dart.py` | `fetch_corp_codes()` — §6 step 2 |
 | `company/dto.py` | `DartCompany` |
 | `company/service.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
-| `company/repository.py` | company upserts, aliases, entity merge, `company_entity_id()` |
-| `cluster/repository.py` | `stale_clusters()`, member articles, `lock_cluster()` — §4.1 step 1 |
+| `company/repository.py` | company upserts, aliases, entity merge, `find_corp_code()`, `upsert_company_entity()` |
+| `cluster/repository.py` | `find_stale_clusters()`, `find_cluster_articles()`, `lock_cluster()` — §4.1 step 1 |
 | `graph/dto.py` | `Entity`, `Relation`, `Extraction` |
 | `graph/llm.py` | `extract()` — §7 |
 | `graph/service.py` | `resolve()` — §5 |

@@ -8,7 +8,7 @@ from news_graph_builder.database import cluster_entities, cluster_summaries, ent
 from news_graph_builder.graph.dto import Extraction
 
 
-def upsert_plain_entity(conn: sa.Connection, raw_name: str, name: str, type_: str) -> int:
+def upsert_plain_entity(conn: sa.Connection, *, raw_name: str, name: str, type_: str) -> int:
     statement = insert(entities).values(raw_name=raw_name, name=name, type=type_)
     return conn.execute(
         statement.on_conflict_do_update(

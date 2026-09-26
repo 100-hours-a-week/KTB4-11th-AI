@@ -5,11 +5,11 @@ import sqlalchemy as sa
 from news_graph_builder.common import normalize
 from news_graph_builder.company.dto import DartCompany
 from news_graph_builder.company.repository import (
-    aliased_plain_entities,
-    company_entity_id,
+    find_plain_entities_matching_aliases,
     insert_aliases,
     merge_entity,
     upsert_companies,
+    upsert_company_entity,
 )
 
 
@@ -39,7 +39,8 @@ def sync_companies(
         ],
     )
 
-    plain = aliased_plain_entities(conn)
+    plain = find_plain_entities_matching_aliases(conn)
     for entity_id, corp_code in plain:
-        merge_entity(conn, entity_id, company_entity_id(conn, corp_code))
+        company_id = upsert_company_entity(conn, corp_code=corp_code)
+        merge_entity(conn, source_id=entity_id, target_id=company_id)
     return len(joined), len(plain)

@@ -6,7 +6,7 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import setup_logging
 
-from news_graph_builder.cluster import cluster_articles, lock_cluster, stale_clusters
+from news_graph_builder.cluster import find_cluster_articles, find_stale_clusters, lock_cluster
 from news_graph_builder.company import (
     fetch_corp_codes,
     fetch_kospi,
@@ -63,11 +63,11 @@ def main() -> None:
                     sys.exit(1)
 
         with engine.connect() as conn:
-            stale = stale_clusters(conn)
-        for cluster_id, seen in stale:
+            clusters = find_stale_clusters(conn)
+        for cluster_id, seen in clusters:
             try:
                 with engine.connect() as conn:
-                    articles = cluster_articles(conn, cluster_id)
+                    articles = find_cluster_articles(conn, cluster_id)
                 if not articles:
                     continue
                 extraction = extract(
@@ -84,16 +84,15 @@ def main() -> None:
                     if not lock_cluster(conn, cluster_id, seen):
                         logger.info("cluster %d changed during extraction, skipped", cluster_id)
                         continue
-                    dropped = write_graph(
-                        conn, cluster_id, seen, extraction, resolve(conn, extraction.entities)
-                    )
+                    entity_ids = resolve(conn, extraction.entities)
+                    dropped = write_graph(conn, cluster_id, seen, extraction, entity_ids)
             except Exception:
                 logger.exception("graph extraction failed for cluster %d", cluster_id)
                 failed += 1
                 continue
             if dropped:
                 logger.info("cluster %d: dropped %d dangling relations", cluster_id, dropped)
-        logger.info("built %d cluster graphs, %d failed", len(stale) - failed, failed)
+        logger.info("built %d cluster graphs, %d failed", len(clusters) - failed, failed)
     sys.exit(1 if sync_failed or failed else 0)
 
 

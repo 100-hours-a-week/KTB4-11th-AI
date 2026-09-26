@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
-from news_graph_builder.cluster import cluster_articles, lock_cluster, stale_clusters
+from news_graph_builder.cluster import find_cluster_articles, find_stale_clusters, lock_cluster
 
 
 def summarize(conn, cluster_id: int, cluster_updated_at) -> None:
@@ -19,7 +19,9 @@ def test_a_cluster_without_a_summary_is_stale(engine, article, cluster, updated_
         cluster_id = cluster(conn, [article(conn)])
 
     with engine.connect() as conn:
-        assert stale_clusters(conn) == [(cluster_id, updated_at(conn, cluster_id))]
+        clusters = find_stale_clusters(conn)
+        seen = updated_at(conn, cluster_id)
+        assert clusters == [(cluster_id, seen)]
 
 
 def test_a_summary_of_the_current_updated_at_is_not_stale(engine, article, cluster, updated_at):
@@ -28,7 +30,8 @@ def test_a_summary_of_the_current_updated_at_is_not_stale(engine, article, clust
         summarize(conn, cluster_id, updated_at(conn, cluster_id))
 
     with engine.connect() as conn:
-        assert stale_clusters(conn) == []
+        clusters = find_stale_clusters(conn)
+        assert clusters == []
 
 
 def test_a_summary_of_an_older_updated_at_is_stale(engine, article, cluster, updated_at):
@@ -39,7 +42,8 @@ def test_a_summary_of_an_older_updated_at_is_stale(engine, article, cluster, upd
         conn.execute(sa.text("UPDATE clusters SET updated_at = now()"))
 
     with engine.connect() as conn:
-        assert [row[0] for row in stale_clusters(conn)] == [cluster_id]
+        clusters = find_stale_clusters(conn)
+        assert [row[0] for row in clusters] == [cluster_id]
 
 
 def test_cluster_articles_are_newest_first(engine, article, cluster):
@@ -49,7 +53,8 @@ def test_cluster_articles_are_newest_first(engine, article, cluster):
         cluster_id = cluster(conn, [old, new])
 
     with engine.connect() as conn:
-        assert cluster_articles(conn, cluster_id) == [("new", "body"), ("old", "body")]
+        articles = find_cluster_articles(conn, cluster_id)
+        assert articles == [("new", "body"), ("old", "body")]
 
 
 def test_lock_fails_when_the_cluster_changed_or_vanished(engine, article, cluster, updated_at):

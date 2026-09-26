@@ -10,7 +10,7 @@ from news_graph_builder.database import (
 )
 
 
-def stale_clusters(conn: sa.Connection) -> list[tuple[int, datetime]]:
+def find_stale_clusters(conn: sa.Connection) -> list[tuple[int, datetime]]:
     query = (
         sa.select(clusters.c.id, clusters.c.updated_at)
         .outerjoin(cluster_summaries, cluster_summaries.c.cluster_id == clusters.c.id)
@@ -25,7 +25,7 @@ def stale_clusters(conn: sa.Connection) -> list[tuple[int, datetime]]:
     return [(row.id, row.updated_at) for row in conn.execute(query)]
 
 
-def cluster_articles(conn: sa.Connection, cluster_id: int) -> list[tuple[str, str]]:
+def find_cluster_articles(conn: sa.Connection, cluster_id: int) -> list[tuple[str, str]]:
     query = (
         sa.select(articles.c.title, articles.c.body)
         .join(article_clusters, article_clusters.c.article_id == articles.c.id)
