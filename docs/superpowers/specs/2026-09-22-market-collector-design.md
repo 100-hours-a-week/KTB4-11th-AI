@@ -197,7 +197,7 @@ over 3 pages, 100 per page.
 
 The CSV and its loader are gone. Constituents change twice a year and are now a stored
 snapshot time series rather than a reviewed commit, so "who was in the index on date X"
-stays answerable. See `2026-09-25-market-collector-universe-design.md`.
+stays answerable — see §7's universe table and §9's universe flow.
 
 Two of the 201 codes are not six digits — `0126Z0` and `0220W0` — both real constituents
 with real chart data. Any shape check must accept six alphanumeric characters.
