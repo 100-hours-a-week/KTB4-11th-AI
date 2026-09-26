@@ -7,7 +7,6 @@ def fetch_corp_codes(api_key: str) -> list[DartCompany]:
     try:
         frame = corp_codes(api_key)
     except Exception as error:
-        # requests puts the request URL, which carries the key, into its error messages.
         # DART status errors are a ValueError holding a {'status', 'message'} dict.
         detail = (
             error.args[0]
