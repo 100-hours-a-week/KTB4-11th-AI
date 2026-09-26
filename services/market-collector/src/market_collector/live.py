@@ -390,7 +390,7 @@ async def drain(
             continue
 
         now = loop.time()
-        if now - last_flush.get(tick.symbol, 0.0) < flush_interval:
+        if tick.symbol in last_flush and now - last_flush[tick.symbol] < flush_interval:
             continue
         pending = aggregator.in_progress(tick.symbol)
         if pending is not None:
