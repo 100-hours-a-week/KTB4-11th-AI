@@ -16,6 +16,12 @@ from news_graph_builder.company import (
 from news_graph_builder.graph import extract, resolve, write_graph
 from news_graph_builder.kiwoom import fetch_token
 from news_graph_builder.settings import Settings
+from news_graph_builder.theme import (
+    fetch_kospi200_codes,
+    fetch_theme_members,
+    fetch_themes,
+    sync_themes,
+)
 
 logger = logging.getLogger(__name__)
 # Session-level advisory lock key that lets only one run build graphs at a time:
@@ -40,26 +46,57 @@ def main() -> None:
             logger.info("another news-graph-builder run is in progress, exiting")
             sys.exit(0)
         run_lock.commit()
+        token = None
         try:
             token = fetch_token(client)
-            kospi = fetch_kospi(client, token=token)
-            dart = fetch_corp_codes()
-            with engine.begin() as conn:
-                joined, merged = sync_companies(conn, kospi, dart)
-            logger.info(
-                "synced companies: kiwoom=%d dart=%d joined=%d merged=%d",
-                len(kospi),
-                len(dart),
-                joined,
-                merged,
-            )
         except Exception:
-            logger.exception("company sync failed")
+            logger.exception("Kiwoom token request failed")
             sync_failed = True
+
+        if token is not None:
+            try:
+                kospi = fetch_kospi(client, token=token)
+                dart = fetch_corp_codes()
+                with engine.begin() as conn:
+                    joined, merged = sync_companies(conn, kospi, dart)
+                logger.info(
+                    "synced companies: kiwoom=%d dart=%d joined=%d merged=%d",
+                    len(kospi),
+                    len(dart),
+                    joined,
+                    merged,
+                )
+            except Exception:
+                logger.exception("company sync failed")
+                sync_failed = True
+
+        if sync_failed:
             with engine.connect() as conn:
                 if not has_companies(conn):
                     # Without companies every company would become a plain entity for good.
                     sys.exit(1)
+
+        if token is not None:
+            try:
+                themes = fetch_themes(client, token=token)
+                kospi200_codes = fetch_kospi200_codes(client, token=token)
+                theme_codes = [theme.code for theme in themes]
+                members = fetch_theme_members(client, token=token, theme_codes=theme_codes)
+                with engine.begin() as conn:
+                    kept, main_stocks, skipped = sync_themes(
+                        conn, themes=themes, kospi200_codes=kospi200_codes, members=members
+                    )
+                logger.info(
+                    "synced themes: themes=%d kospi200=%d members=%d main=%d skipped=%d",
+                    len(themes),
+                    len(kospi200_codes),
+                    kept,
+                    main_stocks,
+                    skipped,
+                )
+            except Exception:
+                logger.exception("theme sync failed")
+                sync_failed = True
 
         with engine.connect() as conn:
             clusters = find_stale_clusters(conn)
