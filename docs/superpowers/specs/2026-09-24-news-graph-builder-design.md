@@ -1,7 +1,7 @@
 # news-graph-builder — Cluster Summaries and Knowledge Graph
 
 **Date:** 2026-09-24
-**Status:** Draft for review
+**Status:** Draft for review (revised 2026-09-26: themes, §7)
 **Depends on:** #19, #27, #29 (news-clusterer). Open this PR after #29 merges, or stack it
 on top of `feat/10/news-clusterer`.
 
@@ -11,7 +11,8 @@ A new cron service, `news-graph-builder`, that turns each news cluster into a ti
 summary and a small knowledge graph with one LLM call. Entities that are KOSPI companies
 resolve to a shared company node, so the graph connects clusters through the companies
 they mention. It takes over summarization from `news-clusterer`, which from now on only
-clusters.
+clusters. It also keeps a reference copy of Kiwoom's themes and their KOSPI 200 members
+(§7) for `portfolio-builder`; themes are not part of the graph.
 
 ### Non-goals
 
@@ -19,6 +20,9 @@ clusters.
 - Alias merging beyond the seeded company names (§5).
 - Cleaning up entities that no cluster references any more.
 - Companies outside KOSPI.
+- Theme nodes in the graph, or resolving theme names the LLM extracts from news. Themes are
+  reference tables only; `entities` and `relations` come only from news clusters.
+- Theme members outside KOSPI 200.
 - Any graph query API or visualization.
 - Deployment mechanics (ECS task, schedule).
 
@@ -37,13 +41,17 @@ clusters.
 | Entity identity | Company alias lookup, else unique `(name, type)` where `name = normalize(raw_name)` | Deterministic; no threshold to tune |
 | Summary table | `cluster_summaries`, owned by news-graph-builder; `title` / `summary` / `summarized_at` leave `clusters` | One writer per table; a missing row makes a cluster stale, so no backfill hack |
 | Staleness marker | No `cluster_summaries` row, or `cluster_updated_at < clusters.updated_at` | The stored value is the `updated_at` that was summarized, not a wall-clock time |
+| Themes | Kiwoom `ka90001` (all themes) and `ka90002` (one theme's stocks), stored in `themes` / `theme_companies` | Kiwoom is the only theme source; portfolio-builder reads the tables directly |
+| Theme membership | Only stocks that are KOSPI 200 constituents (Kiwoom `ka20002`, sector `201`) and already in `companies` | The graph and portfolio-builder work on large caps; the `corp_code` FK keeps membership joinable to company nodes |
+| Theme refresh | Every run, full replace of both tables in one transaction | Nothing references the rows, so there is no identity to preserve; readers always see one consistent snapshot |
 | Concurrency with the clusterer | Optimistic check on `updated_at` inside the write transaction (§4.1) | The LLM call is long and the clusterer can change the cluster meanwhile |
 
 ### Table ownership
 
 - `news-clusterer` writes `clusters` and `article_clusters`.
 - `news-graph-builder` writes `cluster_summaries`, `companies`, `company_aliases`,
-  `entities`, `cluster_entities` and `relations`. It only reads `clusters`.
+  `entities`, `cluster_entities`, `relations`, `themes` and `theme_companies`. It only
+  reads `clusters`.
 
 ## 3. Changes to news-clusterer (#29)
 
@@ -69,26 +77,30 @@ clusters.
 1. **Sync companies** (§6). On failure, log it and continue with the existing
    `companies` table. If the sync failed **and** `companies` is empty, exit 1 before
    extracting anything, so a first run cannot turn every company into a plain entity.
-2. **Load stale clusters:** `c.id, c.updated_at FROM clusters c LEFT JOIN cluster_summaries s
+2. **Sync themes** (§7), against whatever `companies` holds now. On failure, log it, keep
+   the existing theme tables and continue: the graph does not depend on themes.
+3. **Load stale clusters:** `c.id, c.updated_at FROM clusters c LEFT JOIN cluster_summaries s
    ON s.cluster_id = c.id WHERE s.cluster_id IS NULL OR s.cluster_updated_at <
    c.updated_at`, ordered by `c.id`.
-3. **For each stale cluster:**
+4. **For each stale cluster:**
    1. Load member articles ordered by `published_at DESC` and build the prompt text:
       `title\n\nbody` blocks, stopping before the total exceeds `summary_max_chars`; the
       newest article is always included, truncated to the budget.
-   2. `extract()` (§7): one LLM call, outside any transaction.
+   2. `extract()` (§8): one LLM call, outside any transaction.
    3. Guarded write (§4.1).
-4. On any HTTP, timeout or parse error for a cluster, log it, leave the cluster stale and
-   continue. Exit 1 if the company sync or any cluster failed, else 0.
+5. On any HTTP, timeout or parse error for a cluster, log it, leave the cluster stale and
+   continue. Exit 1 if the company sync, the theme sync or any cluster failed, else 0.
 
-With no changed clusters the run syncs companies and makes no LLM call.
+One Kiwoom access token is issued per run and shared by steps 1 and 2; if issuing it fails,
+both syncs count as failed. With no changed clusters the run syncs companies and themes and
+makes no LLM call.
 
 ### 4.1 Guarded write
 
 One transaction per cluster:
 
 1. `SELECT 1 FROM clusters WHERE id = :id AND updated_at = :seen FOR SHARE`, where
-   `:seen` is the `updated_at` read in step 2. No row means the clusterer changed or
+   `:seen` is the `updated_at` read in step 3. No row means the clusterer changed or
    deleted the cluster during the LLM call: log at INFO, skip, not a failure. The next
    run picks it up again if it still exists.
 2. Resolve entities (§5).
@@ -189,11 +201,12 @@ Then:
 The fetches stay at the edge; the join and upsert take plain rows so tests need no
 patched clients.
 
-1. **Kiwoom:** `POST {kiwoom_base_uri}/oauth2/token` with
-   `{"grant_type": "client_credentials", "appkey", "secretkey"}`, then
+1. **Kiwoom:** with the run's token (issued by `POST {kiwoom_base_uri}/oauth2/token`,
+   `{"grant_type": "client_credentials", "appkey", "secretkey"}`),
    `POST {kiwoom_base_uri}/api/dostk/stkinfo` with headers `api-id: ka10099` and
    `authorization: Bearer <token>`, body `{"mrkt_tp": "0"}`, following continuation
-   headers until the list ends. Keep `code` and `name`.
+   headers until the list ends. Keep `code` and `name`. Token issuing and paging live in
+   the shared `kiwoom` module, which the theme sync (§7) uses too.
 2. **DART:** `opendartreader.dart_list.corp_codes(dart_api_key)`, called directly: the
    `OpenDartReader` constructor also loads `.env` from the working directory and writes a
    pickle cache to `./docs_cache/`, neither of which a cron task wants. Keep listed rows
@@ -224,12 +237,74 @@ patched clients.
 ### Credentials
 
 - The Kiwoom app key can place trades. Prefer a paper-trading (모의투자) key or a
-  dedicated account; `kiwoom_base_uri` switches the domain.
+  dedicated account; `kiwoom_base_uri` switches the domain. The theme and sector
+  endpoints are read-only market data like `ka10099`.
 - Kiwoom only accepts requests from registered IP addresses, so the production task's
   outbound IP has to be registered.
 - All keys come from the environment and are never committed.
 
-## 7. LLM extraction (`graph/llm.py`)
+## 7. Theme sync (`theme/service.py`)
+
+Themes are Kiwoom's stock groupings (e.g. `2차전지`, `HBM`). They are reference data for
+`portfolio-builder`: no theme node, no relation, no LLM resolution.
+
+### Schema (migration `0004`)
+
+```
+themes
+  theme_code  text PRIMARY KEY          -- Kiwoom thema_grp_cd
+  name        text NOT NULL             -- Kiwoom thema_nm
+  synced_at   timestamptz NOT NULL DEFAULT now()
+
+theme_companies
+  theme_code  text NOT NULL REFERENCES themes(theme_code) ON DELETE CASCADE
+  corp_code   text NOT NULL REFERENCES companies(corp_code) ON DELETE CASCADE
+  is_main     boolean NOT NULL DEFAULT false   -- listed in the theme's main_stk
+  PRIMARY KEY (theme_code, corp_code)
+  INDEX (corp_code)
+```
+
+A reader goes from a company node to its themes with `entities.corp_code →
+theme_companies → themes`, and from a theme to news with the reverse join through
+`cluster_entities`.
+
+### Steps
+
+All three endpoints are `POST {kiwoom_base_uri}/api/dostk/<path>` with the run's token and
+the same `cont-yn` / `next-key` paging as `ka10099`; the shared `kiwoom` module waits
+`kiwoom_request_interval` seconds between calls.
+
+1. **Themes:** `ka90001` (테마그룹별요청) on `thme` with
+   `{"qry_tp": "0", "date_tp": "1", "flu_pl_amt_tp": "1", "stex_tp": "1"}`. From each
+   `thema_grp` row keep `thema_grp_cd`, `thema_nm` and `main_stk` (주요종목). `qry_tp=0`
+   means all themes; the other three fields are required by the API and only affect price
+   statistics we ignore.
+2. **KOSPI 200:** `ka20002` (업종별주가요청) on `sect` with
+   `{"mrkt_tp": "2", "inds_cd": "201", "stex_tp": "1"}`. Keep `stk_cd` from each
+   `inds_stkpc` row.
+3. **Members:** for each theme, `ka90002` (테마구성종목요청) on `thme` with
+   `{"thema_grp_cd": <code>, "stex_tp": "1", "date_tp": "1"}`. Keep `stk_cd` and `stk_nm`
+   from each `thema_comp_stk` row.
+4. **Codes:** Kiwoom may append a market suffix (`005930_AL`); requests use KRX only
+   (`stex_tp=1`) and every `stk_cd` is cut at the first `_`.
+5. **Filter:** keep a member only if its code is in the KOSPI 200 set **and** a
+   `companies` row has that `stock_code`. If several rows share the code (§5), take the
+   most recently synced one. Count the rest as skipped.
+6. **Main flag:** a kept member gets `is_main = true` when it appears in its theme's
+   `main_stk`. The format of `main_stk` is not documented, so it is split on `,`, each
+   part is trimmed, and a member matches when a part equals its `stk_cd` or its
+   `normalize()`d `stk_nm` equals the `normalize()`d part. A main stock that is not a kept
+   member simply has no row.
+7. **Guard:** zero themes or zero KOSPI 200 codes is a failure, and nothing is written, so
+   an outage never empties the tables.
+8. **Replace**, in one transaction: delete `theme_companies` and `themes`, then insert
+   every theme from step 1 (including themes with no KOSPI 200 member) and the kept
+   memberships with their `is_main` flag.
+9. **Log** `synced themes: themes=… kospi200=… members=… main=… skipped=…`.
+
+The fetches stay at the edge; the filter and replace take plain rows, as in §6.
+
+## 8. LLM extraction (`graph/llm.py`)
 
 `POST {llm_base_uri}/chat/completions`, the same shape as the clusterer's former
 `summarize()`: `model`, a Korean system prompt, the article text as the user message,
@@ -259,7 +334,7 @@ and `response_format` of type `json_schema`:
 - The reply is validated at the boundary: every field present with the right type,
   otherwise `ValueError`. Entries beyond the caps are cut.
 
-## 8. Code, configuration and packaging
+## 9. Code, configuration and packaging
 
 ### Modules (`services/news-graph-builder/src/news_graph_builder/`)
 
@@ -273,20 +348,25 @@ shapes. `tach.toml` enforces the dependencies and interfaces between the package
 | `settings.py` | `Settings` |
 | `database.py` | `metadata` and the table mirrors (the migrations own the schema) |
 | `common/normalize.py` | `normalize()` — §5 |
+| `kiwoom/client.py` | `fetch_token()`, `fetch_pages()` (paging, request interval) |
 | `company/kiwoom.py` | `fetch_kospi()` — §6 step 1 |
 | `company/dart.py` | `fetch_corp_codes()` — §6 step 2 |
 | `company/dto.py` | `DartCompany` |
 | `company/service.py` | `sync_companies()` — §6 steps 3–5, on plain rows |
 | `company/repository.py` | company upserts, aliases, entity merge, `find_corp_code()`, `upsert_company_entity()` |
+| `theme/dto.py` | `Theme` |
+| `theme/kiwoom.py` | `fetch_themes()`, `fetch_kospi200_codes()`, `fetch_theme_codes()` — §7 steps 1–4 |
+| `theme/service.py` | `sync_themes()` — §7 steps 5–9, on plain rows |
+| `theme/repository.py` | `find_corp_codes_by_stock_code()`, `replace_themes()` |
 | `cluster/repository.py` | `find_stale_clusters()`, `find_cluster_articles()`, `lock_cluster()` — §4.1 step 1 |
 | `graph/dto.py` | `Entity`, `Relation`, `Extraction` |
-| `graph/llm.py` | `extract()` — §7 |
+| `graph/llm.py` | `extract()` — §8 |
 | `graph/service.py` | `resolve()` — §5 |
 | `graph/repository.py` | plain-entity upsert, `write_graph()` — §4.1 steps 3–4 |
 
 Dependencies: `graph` → `company`; `company`, `graph` → `database`, `common`;
-`cluster` → `database`.
-`company` never imports `graph`.
+`company`, `theme` → `kiwoom`; `theme`, `cluster` → `database`; `theme` → `common`.
+`company` never imports `graph`; `theme` imports neither `company` nor `graph`.
 
 ### Settings (`NEWS_GRAPH_BUILDER_` prefix)
 
@@ -298,10 +378,11 @@ only passes what it uses itself. All classes set `hide_input_in_errors=True`.
 |---|---|---|
 | `settings.Settings` | `postgres_dsn` | required |
 | | `log_level` | `INFO` |
-| `company.settings.CompanySettings` | `kiwoom_app_key` | required |
+| `kiwoom.settings.KiwoomSettings` | `kiwoom_app_key` | required |
 | | `kiwoom_secret_key` | required |
 | | `kiwoom_base_uri` | `https://api.kiwoom.com` |
-| | `dart_api_key` | required |
+| | `kiwoom_request_interval` | `0.2` seconds (Kiwoom's own examples) |
+| `company.settings.CompanySettings` | `dart_api_key` | required |
 | `graph.settings.LlmSettings` | `llm_base_uri` | required (includes `/v1`) |
 | | `llm_model` | required |
 | | `summary_max_chars` | `24000` |
@@ -333,7 +414,7 @@ only passes what it uses itself. All classes set `hide_input_in_errors=True`.
   readers join `clusters` to `cluster_summaries` for titles), the
   settings-prefix list and the compose run command.
 
-## 9. Verification status
+## 10. Verification status
 
 Checked during planning (2026-09-25):
 
@@ -343,13 +424,21 @@ Checked during planning (2026-09-25):
 - `opendartreader` 0.3.3 installs and imports on Python 3.13 and 3.14.
 - Kiwoom paging uses `cont-yn` / `next-key` request and response headers (library docs).
 
+Checked 2026-09-26 from Kiwoom's official examples (`Kiwoom-Securities/Kiwoom-REST-API`),
+not yet against the live API: `ka90001` / `ka90002` on `/api/dostk/thme` with the fields in
+§7, `ka20002` on `/api/dostk/sect` with `mrkt_tp=2` / `inds_cd=201` for KOSPI 200.
+
 Still open, covered by the zero-join guard and the first real run:
 
 - Kiwoom `code` uses the same six-digit format as DART `stock_code`.
 - The paper-trading domain serves `ka10099`.
-- vLLM accepts the nested `json_schema` in §7.
+- vLLM accepts the nested `json_schema` in §8.
+- `stk_cd` from `ka90002` / `ka20002` matches `companies.stock_code` after the `_` cut.
+- The format of `ka90001` `main_stk` (names or codes, one or several); §7 step 6 accepts
+  either, and the log's `main=` count shows whether anything matched.
+- Kiwoom's rate limit with one `ka90002` call per theme at `kiwoom_request_interval`.
 
-## 10. Limits
+## 11. Limits
 
 - LLM cost scales with changed clusters. After `0003` the first run is a one-time pass
   over every existing cluster.
@@ -357,10 +446,14 @@ Still open, covered by the zero-join guard and the first real run:
   types. Company resolution ignores type; everything else waits for a later taxonomy.
 - Company names outside the seeded aliases (nicknames, group names such as "SK") stay
   plain entities until an alias is added; the next sync then merges them (§6 step 5).
+- The theme sync makes one `ka90002` call per theme (a few hundred), so it adds about a
+  minute per run at the default request interval.
+- KOSPI 200 is rebalanced twice a year; memberships follow on the next run. A theme
+  member that is KOSPI 200 but missing from `companies` (no DART row) is skipped.
 - A merge is only as correct as the alias: a person or product sharing a company's
   normalized name is merged into that company. Forward resolution takes the same risk.
 
-## 11. Testing
+## 12. Testing
 
 Follows the existing patterns: `httpx.MockTransport` for HTTP, PostgreSQL fixtures skipped
 without `KTB_TEST_POSTGRES_DSN`. The fixtures truncate tables, so locally
@@ -388,6 +481,15 @@ without `KTB_TEST_POSTGRES_DSN`. The fixtures truncate tables, so locally
 - `main`: end to end with mocked LLM, Kiwoom and DART; a second run makes no LLM call;
   a failed extraction exits 1 and is retried next run; a failed sync with an empty
   `companies` table exits 1 before any LLM call.
-- `test_migrations`: `0003` upgrades and downgrades, creates `cluster_summaries` and
+- `kiwoom`: token, paging with the request interval, a non-zero `return_code` raising.
+- `theme`: the three fetches over `MockTransport` with the `_` cut; the filter keeps
+  KOSPI 200 members found in `companies` and counts the rest; `is_main` is set from
+  `main_stk` given as a code, a name, or a comma-separated list, and stays false otherwise;
+  zero themes or zero KOSPI 200 codes raises and writes nothing; a replace removes a theme
+  that disappeared; deleting a theme or a company cascades to its memberships.
+- `main`: a failed theme sync keeps the old theme tables, still builds graphs and exits 1;
+  one token serves both syncs.
+- `test_migrations`: `0004` upgrades and downgrades and matches `database.py`; `0003`
+  upgrades and downgrades, creates `cluster_summaries` and
   drops `title`, `summary` and `summarized_at` from `clusters`.
 - news-clusterer: its trimmed tests pass without any LLM setting.
