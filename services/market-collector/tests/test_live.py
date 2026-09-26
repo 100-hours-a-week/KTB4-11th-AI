@@ -22,8 +22,15 @@ from market_collector.live import (
     stream,
     ticks_from,
 )
+from market_collector.store import Candle
 
 DAY = datetime(2026, 9, 25, tzinfo=UTC)
+
+
+def _stored(ts, high, low, close) -> Candle:
+    """A candle as ``read_regular_candles`` returns it: prices, which is all the
+    window needs."""
+    return Candle(ts=ts, high=high, low=low, close=close)
 
 
 def _values(time="090000", price="+70000", cum_volume="1000", cum_value="70000000"):
@@ -190,7 +197,10 @@ def _candle(high=100.0, low=90.0, close=95.0, session="regular", symbol="005930"
 
 def test_window_seeds_from_read_regular_candles_shape():
     window = Window(size=3)
-    rows = [(datetime(2026, 9, 25, 0, i, tzinfo=UTC), 10.0 + i, 9.0 + i, 9.5 + i) for i in range(5)]
+    rows = [
+        _stored(datetime(2026, 9, 25, 0, i, tzinfo=UTC), 10.0 + i, 9.0 + i, 9.5 + i)
+        for i in range(5)
+    ]
 
     window.seed("005930", rows)
     high, low, close = window.series_with(_candle())
@@ -219,18 +229,17 @@ def _seeded_window(n=400):
     price = 70000 + np.cumsum(rng.normal(0, 100, n))
     window.seed(
         "005930",
-        [(datetime(2026, 9, 25, tzinfo=UTC), p + 50, p - 50, p) for p in price.tolist()],
+        [_stored(datetime(2026, 9, 25, tzinfo=UTC), p + 50, p - 50, p) for p in price.tolist()],
     )
     return window
 
 
-def test_a_regular_session_candle_carries_indicators_and_verdicts():
+def test_a_regular_session_candle_carries_indicator_values():
     row = candle_row(_seeded_window(), _candle(session="regular"))
 
     assert row.src == "ws"
     assert set(row.indicators) == set(INDICATOR_FIELDS)
     assert row.indicators["rsi"] is not None
-    assert row.comments["rsi"] in {"OVERBOUGHT", "OVERSOLD", "NEUTRAL"}
 
 
 def test_an_extended_session_candle_carries_no_indicators():
@@ -238,7 +247,6 @@ def test_an_extended_session_candle_carries_no_indicators():
     row = candle_row(_seeded_window(), _candle(session="extended"))
 
     assert row.indicators == {}
-    assert row.comments == {}
     assert row.session == "extended"
 
 

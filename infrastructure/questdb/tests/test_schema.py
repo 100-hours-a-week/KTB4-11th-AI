@@ -3,7 +3,7 @@ import pathlib
 import re
 
 import pytest
-from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS
+from market_collector.indicators import INDICATOR_FIELDS
 
 REPO_ROOT = next(
     parent
@@ -35,11 +35,6 @@ UNIVERSE_TABLES = ["universe_members"]
 # when someone decides a given indicator is worth persisting and adds it to
 # INDICATOR_FIELDS.
 INDICATORS = list(INDICATOR_FIELDS)
-
-# Every indicator except macd_signal carries a verdict beside its value. The
-# exception is deliberate: macd_signal is a smoothed copy of the MACD line, so
-# every event involving it is already reported on macd_histogram.
-COMMENTED = list(COMMENT_FIELDS)
 
 
 def _all_sql() -> str:
@@ -141,22 +136,7 @@ def test_candle_tables_carry_every_indicator_column():
             assert re.search(rf"\b{column}\s+DOUBLE", statement), f"{table}.{column}"
 
 
-def test_candle_tables_carry_a_verdict_column_beside_each_indicator():
-    for table in BAR_TABLES:
-        statement = _statement_for(table)
-        for column in COMMENTED:
-            assert re.search(rf"\b{column}_comment\s+SYMBOL", statement), f"{table}.{column}"
-
-
-def test_macd_signal_has_no_verdict_column():
-    # A verdict here would duplicate what macd_histogram already reports, and a
-    # column nothing ever writes reads as a gap in the collector rather than a
-    # decision.
-    for table in BAR_TABLES:
-        assert "macd_signal_comment" not in _statement_for(table), table
-
-
-def test_candle_columns_exactly_match_the_analyzers_indicator_and_comment_fields():
+def test_candle_columns_exactly_match_the_stored_indicator_fields():
     # Pins the DDL's column set to the collector's own field lists rather than
     # to anything hand-maintained in this file, so a field added to
     # INDICATOR_FIELDS shows up here as a failing test instead of a silently
@@ -167,7 +147,6 @@ def test_candle_columns_exactly_match_the_analyzers_indicator_and_comment_fields
         {"ts", "symbol", "session", "src"}  # metadata
         | {"open", "high", "low", "close", "volume", "trade_value"}  # OHLCV
         | set(INDICATOR_FIELDS)
-        | {f"{field}_comment" for field in COMMENT_FIELDS}
     )
     for table in BAR_TABLES:
         assert _column_names(_statement_for(table)) == expected, table

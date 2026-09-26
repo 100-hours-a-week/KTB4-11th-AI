@@ -38,13 +38,10 @@ import math
 
 import numpy as np
 import numpy.typing as npt
-from ktb_market_analyzer.comments import COMMENTED_FIELDS, comment_series
 from ktb_market_analyzer.indicators import macd, roc, rsi, stochastic, williams_r
 
 __all__ = [
-    "COMMENT_FIELDS",
     "INDICATOR_FIELDS",
-    "comment_series_for",
     "indicator_series",
     "indicators_for_latest",
 ]
@@ -58,14 +55,6 @@ INDICATOR_FIELDS: tuple[str, ...] = (
     "stochastic_d",
     "roc",
     "williams_r",
-)
-
-# Every field except "macd_signal" carries a verdict; see the module docstring
-# in ktb_market_analyzer.comments for why that one field has none. Derived from
-# COMMENTED_FIELDS rather than listed by hand, so this stays correct if the
-# package ever changes which fields it judges.
-COMMENT_FIELDS: tuple[str, ...] = tuple(
-    field for field in INDICATOR_FIELDS if field in COMMENTED_FIELDS
 )
 
 Array = npt.NDArray[np.float64]
@@ -84,16 +73,6 @@ def indicator_series(high: Array, low: Array, close: Array) -> dict[str, Array]:
         "roc": roc(close),
         "williams_r": williams_r(high, low, close),
     }
-
-
-def comment_series_for(series: dict[str, Array]) -> dict[str, list[str | None]]:
-    """One verdict list per ``COMMENT_FIELDS`` field, aligned with ``series``.
-
-    Takes the dict ``indicator_series`` already produced rather than
-    recomputing any indicator, so a caller holding both never computes the
-    same number twice.
-    """
-    return {field: comment_series(field, series[field]) for field in COMMENT_FIELDS}
 
 
 def _clean(value: float) -> float | None:

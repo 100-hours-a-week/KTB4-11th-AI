@@ -3,10 +3,11 @@ import types
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS
+from market_collector.indicators import INDICATOR_FIELDS
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 from market_collector.store import (
     TIMEFRAME_TABLES,
+    Candle,
     CandleRow,
     Store,
     _without_nones,
@@ -40,7 +41,6 @@ def _candle(
     volume: int = 38961,
     trade_value: float | None = None,
     indicators: dict[str, float | None] | None = None,
-    comments: dict[str, str | None] | None = None,
     src: str = "rest",
 ) -> CandleRow:
     return CandleRow(
@@ -54,7 +54,6 @@ def _candle(
         volume=volume,
         trade_value=trade_value,
         indicators=dict.fromkeys(INDICATOR_FIELDS, 1.0) if indicators is None else indicators,
-        comments=dict.fromkeys(COMMENT_FIELDS, "neutral") if comments is None else comments,
         src=src,
     )
 
@@ -103,7 +102,6 @@ def test_extended_rows_carry_ohlcv_and_no_indicators():
     row = _candle(
         session="extended",
         indicators=dict.fromkeys(INDICATOR_FIELDS, None),
-        comments=dict.fromkeys(COMMENT_FIELDS, None),
     )
 
     Store(sink).write_candles("1m", [row])
@@ -112,7 +110,6 @@ def test_extended_rows_carry_ohlcv_and_no_indicators():
     assert symbols["session"] == "extended"
     assert columns["close"] == 277500.0
     assert not any(field in columns for field in INDICATOR_FIELDS)
-    assert not any(f"{field}_comment" in symbols for field in COMMENT_FIELDS)
 
 
 def test_an_unknown_timeframe_is_rejected_before_any_write():
@@ -176,37 +173,8 @@ def test_theme_members_outside_the_universe_are_not_written():
     assert sink.rows[0][2] == {}
 
 
-def test_verdict_symbols_are_named_field_comment_and_macd_signal_has_none():
-    sink = FakeSink()
-    comments: dict[str, str | None] = dict.fromkeys(COMMENT_FIELDS, "overbought")
-
-    Store(sink).write_candles("1m", [_candle(comments=comments)])
-
-    _, symbols, _, _ = sink.rows[0]
-    for field in COMMENT_FIELDS:
-        assert symbols[f"{field}_comment"] == "overbought"
-    assert "macd_signal_comment" not in symbols
-    # Only the seven commented fields plus macd_signal make up the eight
-    # indicator fields, so no stray "_comment" symbols beyond COMMENT_FIELDS.
-    comment_symbols = {name for name in symbols if name.endswith("_comment")}
-    assert comment_symbols == {f"{field}_comment" for field in COMMENT_FIELDS}
-
-
-def test_none_valued_comments_are_omitted():
-    sink = FakeSink()
-    comments: dict[str, str | None] = dict.fromkeys(COMMENT_FIELDS, None)
-    comments["rsi"] = "oversold"
-
-    Store(sink).write_candles("1m", [_candle(comments=comments)])
-
-    _, symbols, _, _ = sink.rows[0]
-    assert symbols["rsi_comment"] == "oversold"
-    other_fields = [field for field in COMMENT_FIELDS if field != "rsi"]
-    assert not any(f"{field}_comment" in symbols for field in other_fields)
-
-
-def test_read_regular_candles_pins_ts_high_low_close_column_order(monkeypatch):
-    rows = [(TS, 278000.0, 277500.0, 277500.0)]
+def test_read_regular_candles_pins_the_column_order(monkeypatch):
+    rows = [_db_row(TS, 278000.0, 277500.0, 277500.0)]
     calls: dict[str, object] = {}
 
     class FakeCursor:
@@ -238,7 +206,7 @@ def test_read_regular_candles_pins_ts_high_low_close_column_order(monkeypatch):
 
     result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930")
 
-    assert result == [(TS, 278000.0, 277500.0, 277500.0)]
+    assert result == [_candle_of(rows[0])]
     query = str(calls["query"]).lower()
     assert "select ts, high, low, close" in query
     assert "bars_1m" in query
@@ -250,7 +218,7 @@ def test_read_regular_candles_rejects_unknown_timeframe():
         read_regular_candles("postgresql://localhost:8812/qdb", "4h", "005930")
 
 
-def _fake_psycopg(rows: list[tuple[datetime, float, float, float]]):
+def _fake_psycopg(rows: list[tuple]):
     """A ``psycopg`` stand-in whose fake cursor behaves like a real
     ``ORDER BY`` / ``LIMIT`` query over ``rows`` -- filtering by ``ts >=``,
     sorting ascending or descending, and truncating to a limit, each only if
@@ -296,8 +264,17 @@ def _fake_psycopg(rows: list[tuple[datetime, float, float, float]]):
     return types.SimpleNamespace(connect=lambda dsn: FakeConnection())
 
 
+def _db_row(ts, high, low, close):
+    """One row as the driver returns it."""
+    return (ts, high, low, close)
+
+
+def _candle_of(row) -> Candle:
+    return Candle(ts=row[0], high=row[1], low=row[2], close=row[3])
+
+
 _FIVE_ROWS = [
-    (datetime(2026, 9, 22, hour, tzinfo=UTC), float(i), float(i) - 1, float(i))
+    _db_row(datetime(2026, 9, 22, hour, tzinfo=UTC), float(i), float(i) - 1, float(i))
     for i, hour in enumerate(range(9, 14))
 ]
 
@@ -311,7 +288,7 @@ def test_read_regular_candles_limit_selects_the_newest_not_the_oldest(monkeypatc
 
     result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=2)
 
-    assert result == [_FIVE_ROWS[3], _FIVE_ROWS[4]]
+    assert result == [_candle_of(_FIVE_ROWS[3]), _candle_of(_FIVE_ROWS[4])]
 
 
 def test_read_regular_candles_since_is_inclusive(monkeypatch):
@@ -321,7 +298,7 @@ def test_read_regular_candles_since_is_inclusive(monkeypatch):
         "postgresql://localhost:8812/qdb", "1m", "005930", since=_FIVE_ROWS[2][0]
     )
 
-    assert result == [_FIVE_ROWS[2], _FIVE_ROWS[3], _FIVE_ROWS[4]]
+    assert result == [_candle_of(r) for r in _FIVE_ROWS[2:]]
 
 
 def test_read_regular_candles_since_and_limit_combine_to_newest_after_since(monkeypatch):
@@ -336,7 +313,7 @@ def test_read_regular_candles_since_and_limit_combine_to_newest_after_since(monk
     )
 
     # since keeps rows 1..4; the newest 2 of those are rows 3 and 4.
-    assert result == [_FIVE_ROWS[3], _FIVE_ROWS[4]]
+    assert result == [_candle_of(_FIVE_ROWS[3]), _candle_of(_FIVE_ROWS[4])]
 
 
 def test_read_regular_candles_since_past_the_newest_row_returns_empty(monkeypatch):
@@ -365,7 +342,7 @@ def test_read_regular_candles_limit_beyond_the_row_count_returns_every_row(monke
 
     result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930", limit=500)
 
-    assert result == _FIVE_ROWS
+    assert result == [_candle_of(r) for r in _FIVE_ROWS]
 
 
 def test_read_regular_candles_rejects_non_positive_limit():

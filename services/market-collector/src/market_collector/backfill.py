@@ -82,9 +82,7 @@ import numpy.typing as npt
 
 from market_collector.cursor import CursorStore
 from market_collector.indicators import (
-    COMMENT_FIELDS,
     INDICATOR_FIELDS,
-    comment_series_for,
     indicator_series,
 )
 from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
@@ -274,7 +272,6 @@ def _empty_row(bar: Bar, symbol: str, src: str) -> CandleRow:
         volume=bar.volume,
         trade_value=bar.trade_value,
         indicators=dict.fromkeys(INDICATOR_FIELDS),
-        comments=dict.fromkeys(COMMENT_FIELDS),
         src=src,
     )
 
@@ -284,13 +281,13 @@ def to_candle_rows(
 ) -> list[CandleRow]:
     """Turn parsed bars into ``CandleRow``s, oldest first, unchanged in order.
 
-    With ``with_indicators=False`` every row's indicator and verdict dicts
-    are entirely ``None``-valued, so ``Store`` omits all fifteen columns.
-    Otherwise the eight fields and seven verdicts are computed over the
-    regular-session candles as one contiguous array — extended-session rows
-    are excluded from that array rather than masked afterwards, because
-    leaving them in would shift the period count every indicator is defined
-    over — and mapped back onto their original positions.
+    With ``with_indicators=False`` every row's indicator dict is entirely
+    ``None``-valued, so ``Store`` omits all eight columns. Otherwise the eight
+    fields are computed over the regular-session candles as one contiguous
+    array — extended-session rows are excluded from that array rather than
+    masked afterwards, because leaving them in would shift the period count
+    every indicator is defined over — and mapped back onto their original
+    positions.
     """
     if not with_indicators or not bars:
         return [_empty_row(bar, symbol, src) for bar in bars]
@@ -301,23 +298,16 @@ def to_candle_rows(
     close: Array = np.array([bars[i].close for i in regular_positions], dtype=np.float64)
 
     series = indicator_series(high, low, close)
-    comments = comment_series_for(series)
 
     indicators_by_index: dict[int, dict[str, float | None]] = {}
-    comments_by_index: dict[int, dict[str, str | None]] = {}
     for position, original_index in enumerate(regular_positions):
         indicators_by_index[original_index] = {
             field: _clean(series[field][position]) for field in INDICATOR_FIELDS
-        }
-        comments_by_index[original_index] = {
-            field: comments[field][position] if math.isfinite(series[field][position]) else None
-            for field in COMMENT_FIELDS
         }
 
     rows = []
     for i, bar in enumerate(bars):
         indicators = indicators_by_index.get(i, dict.fromkeys(INDICATOR_FIELDS))
-        row_comments = comments_by_index.get(i, dict.fromkeys(COMMENT_FIELDS))
         rows.append(
             CandleRow(
                 ts=bar.ts,
@@ -330,7 +320,6 @@ def to_candle_rows(
                 volume=bar.volume,
                 trade_value=bar.trade_value,
                 indicators=indicators,
-                comments=row_comments,
                 src=src,
             )
         )

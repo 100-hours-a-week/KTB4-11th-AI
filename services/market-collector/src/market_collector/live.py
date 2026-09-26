@@ -30,9 +30,9 @@ from typing import Protocol
 
 import numpy as np
 
-from market_collector.indicators import comment_series_for, indicator_series
+from market_collector.indicators import indicator_series
 from market_collector.kiwoom.parse import KST, classify_session, parse_price, parse_volume
-from market_collector.store import CandleRow
+from market_collector.store import Candle, CandleRow
 
 __all__ = [
     "TICK_FIELDS",
@@ -230,10 +230,8 @@ class Window:
         self._size = size
         self._rows: dict[str, deque[tuple[float, float, float]]] = {}
 
-    def seed(self, symbol: str, candles: Iterable[tuple[datetime, float, float, float]]) -> None:
-        self._rows[symbol] = deque(
-            ((high, low, close) for _, high, low, close in candles), maxlen=self._size
-        )
+    def seed(self, symbol: str, candles: Iterable[Candle]) -> None:
+        self._rows[symbol] = deque(((c.high, c.low, c.close) for c in candles), maxlen=self._size)
 
     def append(self, candle: LiveCandle) -> None:
         self._rows.setdefault(candle.symbol, deque(maxlen=self._size)).append(
@@ -251,19 +249,15 @@ def candle_row(window: Window, candle: LiveCandle, src: str = "ws") -> CandleRow
     """A ``CandleRow`` for ``candle``, with indicators for regular-session rows.
 
     Extended-session candles are stored without indicators, the same rule the
-    REST path follows: verdicts are computed for the regular session only.
+    REST path follows: indicators are computed for the regular session only.
     """
     indicators: dict[str, float | None] = {}
-    comments: dict[str, str | None] = {}
     if candle.session == "regular":
         high, low, close = window.series_with(candle)
-        series = indicator_series(high, low, close)
-        verdicts = comment_series_for(series)
         indicators = {
             field: None if not np.isfinite(values[-1]) else float(values[-1])
-            for field, values in series.items()
+            for field, values in indicator_series(high, low, close).items()
         }
-        comments = {field: values[-1] for field, values in verdicts.items()}
 
     return CandleRow(
         ts=candle.ts,
@@ -276,7 +270,6 @@ def candle_row(window: Window, candle: LiveCandle, src: str = "ws") -> CandleRow
         volume=candle.volume,
         trade_value=candle.trade_value,
         indicators=indicators,
-        comments=comments,
         src=src,
     )
 

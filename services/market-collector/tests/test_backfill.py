@@ -11,7 +11,7 @@ from market_collector.backfill import (
     to_candle_rows,
 )
 from market_collector.cursor import CursorStore
-from market_collector.indicators import COMMENT_FIELDS, INDICATOR_FIELDS, indicator_series
+from market_collector.indicators import INDICATOR_FIELDS, indicator_series
 from market_collector.kiwoom.parse import KST, MinuteBar
 from market_collector.kiwoom.rest import Page
 from market_collector.store import Store
@@ -426,7 +426,6 @@ def test_indicators_are_computed_only_over_regular_session_rows():
     for i, session in enumerate(sessions):
         if session == "extended":
             assert rows[i].indicators == dict.fromkeys(INDICATOR_FIELDS)
-            assert rows[i].comments == dict.fromkeys(COMMENT_FIELDS)
 
 
 def test_backfill_without_indicators_stores_ohlcv_alone(tmp_path):
@@ -447,7 +446,6 @@ def test_backfill_without_indicators_stores_ohlcv_alone(tmp_path):
     _, symbols, columns, _ = sink.rows[0]
     assert columns["close"] == 277000.0
     assert not any(field in columns for field in INDICATOR_FIELDS)
-    assert not any(f"{field}_comment" in symbols for field in COMMENT_FIELDS)
 
 
 def test_backfill_one_writes_to_the_timeframes_table_with_src_rest(tmp_path):
