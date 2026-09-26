@@ -423,7 +423,7 @@ across 142 themes.
 The consequence has to travel with the data. `stock_count`, `rising_count`,
 `falling_count` and `dt_prft_rt` are Kiwoom's figures over a theme's **whole market-wide**
 membership, so they do not match the stored row count. Combining the two into a ratio is
-wrong, and `read_themes`' docstring says so at the point of use.
+wrong.
 
 Rows here carry symbols and no fields. QuestDB stores that — the symbols are the series
 key — and the membership is the whole fact.
