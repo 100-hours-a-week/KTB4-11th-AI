@@ -1,14 +1,3 @@
-"""Per-symbol, per-timeframe backfill progress.
-
-ka10080 ignores any date parameter, so a symbol's history can only be walked
-backwards one page at a time with next-key. A run that dies partway through
-cannot restart from a date, which makes persisting the key the difference
-between resuming and starting over.
-
-State is a single JSON file because it is small, human-readable when a run
-goes wrong, and needs no service to be up.
-"""
-
 import json
 import os
 import threading

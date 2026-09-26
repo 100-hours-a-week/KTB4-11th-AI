@@ -1,24 +1,3 @@
-"""The live path: Kiwoom WebSocket trade ticks folded into 1-minute candles.
-
-Historical candles are collected once and stored as OHLCV alone. Everything
-after that arrives here, and **these are the rows that carry indicators and
-verdicts**. Both paths write the same tables through the same ``store.Store``,
-so this is a second source feeding one pipeline.
-
-Three inputs could not be measured -- the deployment IP is not registered with
-Kiwoom -- so each is isolated to a setting or to one dict:
-
-* the per-group symbol cap is ``ws_symbols_per_group`` (assumed 100),
-* how many groups one connection carries is ``ws_groups_per_connection``
-  (assumed 2), and
-* the field ids on a ``0B`` trade tick are ``TICK_FIELDS`` below, taken from
-  Kiwoom's documentation and **unverified against a live tick**.
-
-``parse_tick`` raises on a missing id rather than defaulting to zero. A candle
-built from zeros looks like a real candle, and nothing downstream could tell
-it apart from a minute in which the price really was zero.
-"""
-
 import asyncio
 import json
 import logging
@@ -86,11 +65,7 @@ class LiveCandle:
 
 
 def parse_tick(symbol: str, values: dict[str, str], session_date: datetime) -> Tick:
-    """One ``0B`` payload as a ``Tick``, in UTC.
-
-    ``session_date`` supplies the day: the payload carries only HHMMSS, so the
-    caller must say which trading day it belongs to.
-    """
+    """Parse a ``0B`` payload using ``session_date`` because ticks contain only HHMMSS."""
     missing = [name for name, fid in TICK_FIELDS.items() if fid not in values]
     if missing:
         raise ValueError(f"trade tick for {symbol} is missing {missing}: {sorted(values)}")
@@ -125,21 +100,9 @@ class _Building:
 
 
 class Aggregator:
-    """Trade ticks into 1-minute candles, one in-progress candle per symbol.
+    """Aggregate by exchange minute using differences of Kiwoom's cumulative counters.
 
-    **The minute boundary comes from the tick's own exchange time**, never from
-    the local clock: clock skew must not be able to split a minute.
-
-    **Volume and trade value are differences of Kiwoom's accumulated counters,
-    not sums of the ticks seen.** The buffer drops ticks under backpressure, and
-    a sum would then be wrong by exactly what was dropped, with nothing to say
-    so. A difference is right as long as some tick near each boundary arrives.
-
-    That leaves one candle unreportable: the minute a connection opens in. Its
-    volume is the accumulated total at its end minus the total at its start, and
-    the start happened before the first tick was seen. ``add`` finalises it as
-    ``None`` rather than guessing a number, and the post-close reconciliation
-    fetches that minute from REST like any other.
+    The connection's first partial minute is discarded because it has no baseline.
     """
 
     def __init__(self) -> None:
@@ -147,7 +110,6 @@ class Aggregator:
         self._baseline: dict[str, tuple[int, float]] = {}
 
     def add(self, tick: Tick) -> LiveCandle | None:
-        """Fold one tick in, returning a candle only when a minute completes."""
         minute = tick.ts.replace(second=0, microsecond=0)
         current = self._building.get(tick.symbol)
 
@@ -214,12 +176,6 @@ class Aggregator:
 
 
 class Window:
-    """The trailing candles each symbol's indicators are computed over.
-
-    Seeded from QuestDB at startup rather than from Kiwoom, so the session's
-    first candle has full warm-up behind it instead of 300 rows of ``NaN``.
-    """
-
     def __init__(self, size: int = 300) -> None:
         self._size = size
         self._rows: dict[str, deque[tuple[float, float, float]]] = {}
@@ -233,18 +189,13 @@ class Window:
         )
 
     def series_with(self, candle: LiveCandle) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The window plus ``candle`` as its newest element, as three arrays."""
         rows = list(self._rows.get(candle.symbol, ())) + [(candle.high, candle.low, candle.close)]
         array = np.array(rows, dtype=np.float64)
         return array[:, 0], array[:, 1], array[:, 2]
 
 
 def candle_row(window: Window, candle: LiveCandle, src: str = "ws") -> CandleRow:
-    """A ``CandleRow`` for ``candle``, with indicators for regular-session rows.
-
-    Extended-session candles are stored without indicators, the same rule the
-    REST path follows: indicators are computed for the regular session only.
-    """
+    """Build a row, computing indicators only for regular-session candles."""
     indicators: dict[str, float | None] = {}
     if candle.session == "regular":
         high, low, close = window.series_with(candle)
@@ -269,13 +220,7 @@ def candle_row(window: Window, candle: LiveCandle, src: str = "ws") -> CandleRow
 
 
 class TickBuffer:
-    """A bounded queue that drops the oldest tick when it is full.
-
-    An unbounded queue grows until the process is killed, and that happens
-    during market hours under load. Dropping degrades the in-progress candle
-    slightly; the accumulated-counter arithmetic in ``Aggregator`` keeps the
-    finalised volume correct anyway, and reconciliation repairs the rest.
-    """
+    """Bounded queue that drops the oldest tick under backpressure."""
 
     def __init__(self, maxsize: int = 100_000) -> None:
         self._items: deque[Tick] = deque(maxlen=maxsize)
@@ -301,13 +246,6 @@ class TickBuffer:
 def connection_plan(
     symbols: Sequence[str], per_group: int, groups_per_connection: int
 ) -> list[list[list[str]]]:
-    """Symbols split into groups, and groups split across connections.
-
-    Both figures are assumptions (A1, A2). Nothing above this function knows
-    them, so a measurement that contradicts either is a settings change: with
-    ``groups_per_connection=1`` the same 200 symbols come back as two
-    connections of one group instead of one connection of two.
-    """
     if per_group < 1 or groups_per_connection < 1:
         raise ValueError(
             f"per_group and groups_per_connection must be positive: "
@@ -320,7 +258,6 @@ def connection_plan(
 
 
 def session_date(now: datetime) -> datetime:
-    """KST midnight of ``now``'s trading day, as an aware datetime."""
     return now.astimezone(KST).replace(hour=0, minute=0, second=0, microsecond=0)
 
 
@@ -340,11 +277,6 @@ def login_message(token: str) -> str:
 
 
 def ticks_from(payload: Mapping[str, object], on_date: datetime) -> list[Tick]:
-    """Every trade tick in one ``REAL`` frame.
-
-    Frames for other real-time types are ignored rather than rejected: a group
-    registration only asks for ``0B``, but the server is free to send more.
-    """
     data = payload.get("data")
     if not isinstance(data, list):
         return []
@@ -366,12 +298,7 @@ async def drain(
     write: Callable[[Sequence[CandleRow]], int],
     flush_interval: float = 1.0,
 ) -> None:
-    """Fold ticks into candles and write them until cancelled.
-
-    A finalised candle is written as soon as its minute closes. The in-progress
-    candle is written at most once per ``flush_interval`` per symbol -- per tick
-    would be tens of writes a second per symbol for nothing a user could see.
-    """
+    """Write completed candles and throttle in-progress writes per symbol."""
     last_flush: dict[str, float] = {}
     loop = asyncio.get_running_loop()
     while True:
@@ -393,7 +320,6 @@ async def drain(
 
 
 def seed_window(window: Window, dsn: str, symbols: Iterable[str], size: int = 300) -> int:
-    """Fill each symbol's window from QuestDB. Returns how many were seeded."""
     from market_collector.store import read_regular_candles
 
     seeded = 0
@@ -423,13 +349,7 @@ async def stream(
     on_date: datetime,
     connect: Callable[[str], Awaitable["Socket"]],
 ) -> None:
-    """One connection: log in, register every group, then read until it closes.
-
-    ``PING`` frames are echoed back unchanged -- a missed echo is how Kiwoom
-    decides the client is gone. Ticks go straight into ``buffer``; **the reader
-    performs no other I/O**, so a slow or unreachable QuestDB can never stall
-    the socket.
-    """
+    """Log in, register groups, echo PING frames, and enqueue ticks."""
     socket = await connect(url)
     await socket.send(login_message(token))
     reply = json.loads(await socket.recv())
@@ -465,13 +385,6 @@ async def stream_forever(
     connect: Callable[[str], Awaitable["Socket"]],
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
-    """``stream`` with reconnection.
-
-    Every reconnect leaves a gap: ticks that happened while the socket was
-    down are simply not delivered. The gap is logged with its length so the
-    post-close reconciliation is known to be covering a real hole rather than
-    running as a formality.
-    """
     attempt = 0
     while True:
         opened = datetime.now(UTC)
@@ -493,17 +406,6 @@ type Frame = str | bytes
 
 
 class Socket(Protocol):
-    """The part of a WebSocket that ``stream`` uses.
-
-    Narrow on purpose: a test's fake speaks these three things and nothing
-    else, so no test needs a real server.
-
-    Frames are ``str | bytes`` because that is what the library delivers.
-    ``json.loads`` reads either, and a ``PING`` is echoed back as the exact
-    object that arrived rather than a re-encoding of it -- the server compares
-    what it sent.
-    """
-
     async def send(self, message: Frame) -> None: ...
     async def recv(self) -> Frame: ...
     def __aiter__(self) -> "AsyncIterator[Frame]": ...

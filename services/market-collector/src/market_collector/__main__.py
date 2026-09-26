@@ -1,10 +1,3 @@
-"""Entry point for the market-collector.
-
-A bare invocation validates settings and exits 0, because CI runs every
-service image with --network none and expects that. Real work sits behind
-subcommands.
-"""
-
 import argparse
 import asyncio
 import logging
@@ -54,9 +47,6 @@ PREOPEN_WINDOW_DAYS = 4
 
 
 def previous_session_start(now: datetime) -> datetime:
-    """Start of the trailing preopen window (``PREOPEN_WINDOW_DAYS`` calendar
-    days before ``now``), at KST midnight, expressed in UTC.
-    """
     local = now.astimezone(KST)
     start = (local - timedelta(days=PREOPEN_WINDOW_DAYS)).replace(
         hour=0, minute=0, second=0, microsecond=0
@@ -65,15 +55,6 @@ def previous_session_start(now: datetime) -> datetime:
 
 
 def _client(settings: Settings, index: int) -> tuple[ChartClient, HttpxTransport]:
-    """Build one account's client, and the transport backing it.
-
-    Each worker gets its own ChartClient — and so its own TokenStore and
-    pacing state — because Kiwoom's rate limit is per account; sharing a
-    client across workers would serialise all of them onto one budget. The
-    transport is returned alongside so the caller can close it when the
-    worker finishes: HttpxTransport opens an httpx.Client that nothing
-    closes on its own.
-    """
     transport = HttpxTransport()
     account = settings.kiwoom_accounts[index]
     client = ChartClient(
@@ -121,12 +102,6 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
 
 
 def today_start(now: datetime) -> datetime:
-    """KST midnight of ``now``'s own day, in UTC.
-
-    The intraday refresh needs the current session, not a trailing window: a
-    single ``ka10080`` page reaches well past this for every timeframe it
-    refreshes, so there is nothing to page back for.
-    """
     local = now.astimezone(KST).replace(hour=0, minute=0, second=0, microsecond=0)
     return local.astimezone(UTC)
 
@@ -138,13 +113,6 @@ def _refresh(
     timeframes: Sequence[str],
     label: str,
 ) -> int:
-    """Re-fetch ``timeframes`` from ``since`` for the whole universe.
-
-    Shared by ``preopen`` and ``intraday``, which differ only in how far back
-    they reach and which timeframes they cover. Both overwrite rather than
-    append: dedup on ``(ts, symbol)`` makes a re-fetch land on the same rows,
-    which is what lets REST correct whatever the live path aggregated.
-    """
     symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
@@ -181,20 +149,7 @@ def run_preopen(settings: Settings, now: datetime) -> int:
 
 
 def run_intraday(settings: Settings, now: datetime) -> int:
-    """Refresh the timeframes the live path does not produce.
-
-    ``live`` aggregates 1-minute candles from trade ticks. Every other
-    timeframe is fetched from Kiwoom rather than resampled from those candles:
-    a 15-minute candle built locally would inherit every gap and dropped tick
-    in the 1-minute stream and then disagree with the broker's own chart, which
-    is the one discrepancy users notice immediately because they compare.
-
-    Fetching fits comfortably. One request per symbol per cycle is 40 requests
-    per account for 200 symbols across five accounts, at roughly 2.4-4.6 s each
-    (1.3 s pacing plus a measured 1.1-3.3 s response) -- 96-184 s inside a
-    900-second window. The same arithmetic against a 60-second budget is what
-    rules REST out for 1-minute candles and puts them on the WebSocket.
-    """
+    """Fetch non-live timeframes directly from Kiwoom to avoid resampling gaps."""
     return _refresh(settings, now, today_start(now), settings.intraday_timeframes, "intraday")
 
 
@@ -229,12 +184,6 @@ def run_universe(settings: Settings, now: datetime) -> int:
 
 
 def run_live(settings: Settings, now: datetime) -> None:
-    """Subscribe to every group and write candles until interrupted.
-
-    ``websockets`` is imported here rather than in ``live.py`` so that module
-    stays importable -- and testable against a fake socket -- without a
-    WebSocket library present.
-    """
     import websockets
 
     symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))

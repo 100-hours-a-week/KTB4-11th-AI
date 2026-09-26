@@ -1,17 +1,3 @@
-"""Theme groups and their constituents.
-
-Measured on 2026-09-22: ka90001 returns 100 groups per page and 142 in total.
-Results are ordered by dt_prft_rt, so which groups land on page one depends on
-date_tp — the caller must page to the end to see every theme.
-
-dt_prft_rt is kept under its upstream name because its semantics are
-unconfirmed: it reads +299.34 at date_tp=3 and +68.45 at date_tp=120 for the
-same theme, which no plain N-day return explains.
-
-Paging, pacing, rate-limit backoff and the stall guard all live in
-``rest.Pager``; this module is the two request bodies and the two row shapes.
-"""
-
 import time
 from collections.abc import Callable
 from dataclasses import dataclass

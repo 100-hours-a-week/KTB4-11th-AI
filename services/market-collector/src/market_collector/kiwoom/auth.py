@@ -1,11 +1,3 @@
-"""Access-token lifecycle, one store per Kiwoom account.
-
-Token failures are configuration failures, not transient ones: return_code 3
-means this machine's IP is not allowlisted and return_code 2 means a live key
-was used against the mock host or the reverse. Retrying either one only hides
-it, so both raise.
-"""
-
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Protocol

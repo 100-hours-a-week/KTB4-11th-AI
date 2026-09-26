@@ -1,30 +1,7 @@
-"""Write candles and theme data to QuestDB, and read candles back.
+"""Write QuestDB rows over ILP and read candles over PostgreSQL wire protocol.
 
-Writes go over the InfluxDB line protocol, which is the ingestion path; reads
-go over the Postgres wire protocol on port 8812. They are two distinct paths
-and the distinction is easy to lose, so they are named apart here.
-
-A column whose value is None is omitted from the row rather than sent. The
-line protocol has no null literal, and omitting the column is what leaves it
-null in storage — which is exactly what an extended-session candle's indicator
-and verdict columns need, and what every column stays for v1's backfilled
-history, which carries OHLCV with no indicators or verdicts attached at all.
-
-That omission is not harmless on a row that already exists. Every candle
-table is ``DEDUP UPSERT KEYS(ts, symbol)`` (§5 of the design), and confirmed
-against the live server: writing ``rsi=55.0`` for a ``(ts, symbol)`` and then
-rewriting the same key while omitting ``rsi`` does not leave the stored value
-alone — it sets it to null. An omitted column is not "not sent this time", it
-is "cleared". So a second write over a row a first write already enriched
-with indicators must be a strict superset of that first write's columns,
-never a narrower one — see ``backfill.py``'s module docstring for where this
-constrains the order backfill and preopen are allowed to run in.
-
-Indicator values are stored; the verdicts ``ktb_market_analyzer`` derives from
-them are not. A verdict is a pure function of the value it describes, so storing
-it duplicates nothing and goes stale the moment a threshold moves — silently
-disagreeing with the value beside it. Callers get verdicts from the analyzer at
-read time, against the rules in force then.
+QuestDB dedup upserts clear omitted columns, so later writes to the same key
+must not omit values already stored.
 """
 
 from collections.abc import Iterable, Iterator
@@ -62,12 +39,6 @@ THEME_MEMBERS_TABLE = "theme_members"
 
 @dataclass(frozen=True)
 class Candle:
-    """A stored candle as read back.
-
-    Prices only. The live path seeds its indicator window from these, and that
-    is the whole of what this service reads candles for.
-    """
-
     ts: datetime
     high: float
     low: float
@@ -174,16 +145,7 @@ class Store:
     def write_theme_members(
         self, ts: datetime, members: Iterable[ThemeMember], universe: frozenset[str]
     ) -> int:
-        """Write the memberships inside ``universe``, and only those.
-
-        Symbols outside it are dropped rather than stored under a flag. The
-        collector's scope is the KOSPI 200 and nothing else, so a row for a
-        symbol that has no candles is a row no consumer can join against.
-
-        The rows carry symbols and no fields. QuestDB accepts that — the
-        symbols are the series key — and the membership is the entire fact
-        there is to record.
-        """
+        """Write memberships whose symbols belong to ``universe``."""
         written = 0
         for member in members:
             if member.symbol not in universe:
@@ -245,26 +207,10 @@ def read_regular_candles(
     since: datetime | None = None,
     limit: int | None = None,
 ) -> list[Candle]:
-    """Regular-session candles for one symbol, oldest first.
+    """Read regular-session candles oldest first.
 
-    The live path calls this at startup to seed each symbol's indicator window,
-    which is why prices are what it returns.
-
-    ``since``, if given, bounds the window from that timestamp onward and is
-    *inclusive*: a candle timestamped exactly ``since`` is returned.
-
-    ``limit``, if given, returns the newest ``limit`` candles -- not the
-    oldest -- though the result is still returned oldest-first. Combined
-    with ``since``, the two together mean "the newest ``limit`` candles at
-    or after ``since``". ``limit`` must be a positive integer; zero or a
-    negative value raises ``ValueError`` rather than returning an empty
-    list, since an empty list would misleadingly read as "no data for this
-    symbol" rather than "you asked for zero rows".
-
-    Bound your request generously: ``ktb_market_analyzer``'s indicators need
-    warm-up history before they produce a value -- RSI needs 14 prior
-    candles, MACD needs 33 -- so asking for only the newest candle, or a
-    narrow window, returns candles whose indicators are all NaN.
+    ``since`` is inclusive. ``limit`` selects the newest rows while preserving
+    oldest-first output and must be positive.
     """
     if timeframe not in TIMEFRAME_TABLES:
         raise KeyError(f"unknown timeframe: {timeframe}")
