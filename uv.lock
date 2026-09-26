@@ -433,9 +433,11 @@ dependencies = [
     { name = "httpx" },
     { name = "ktb-core" },
     { name = "ktb-market-analyzer" },
+    { name = "numpy" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "questdb" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -443,9 +445,11 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "ktb-market-analyzer", editable = "packages/market-analyzer" },
+    { name = "numpy", specifier = ">=2.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "questdb", specifier = ">=5.0" },
+    { name = "websockets", specifier = ">=15.0" },
 ]
 
 [[package]]
