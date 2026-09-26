@@ -1,16 +1,3 @@
-"""Kiwoom's list endpoints: the shared pager, and the chart client on top of it.
-
-Every list endpoint Kiwoom exposes is a POST that is told apart from its
-siblings by the ``api-id`` header, carries continuation in *response* headers
-rather than the body, and expects that continuation echoed back on the next
-request. ``Pager`` holds that one shape so the chart, theme and index clients
-do not each restate it.
-
-The chart endpoints are POST /api/dostk/chart. Measured page sizes are 900
-records for ka10080 and 600 for ka10081, and history can only be walked
-backwards — there is no date-jump parameter on ka10080, so ``dt`` is not sent.
-"""
-
 import logging
 import time
 from collections.abc import Callable
@@ -75,14 +62,7 @@ class HttpxTransport:
 
 
 class Pager:
-    """Pacing, rate-limit backoff, and ``cont-yn`` paging for one endpoint.
-
-    One instance per client, and one client per account: Kiwoom's rate limit is
-    per account, so the pacing state lives here rather than being shared. The
-    theme and index endpoints use a different ``api-id`` and therefore a
-    different budget, which is why each gets its own ``Pager`` instead of all
-    three sharing one.
-    """
+    """Apply account-scoped pacing, rate-limit backoff, and header-based paging."""
 
     def __init__(
         self,
@@ -110,7 +90,6 @@ class Pager:
         body: dict[str, object],
         next_key: str | None = None,
     ) -> Page:
-        """One page, retrying a rate-limited response with exponential backoff."""
         for attempt in range(self._max_retries + 1):
             try:
                 return self._attempt(api_id, array_field, body, next_key)
@@ -128,21 +107,7 @@ class Pager:
         build: Callable[[dict[str, str]], T],
         what: str,
     ) -> list[T]:
-        """Every page, from the first to the last, as built items.
-
-        ``what`` names the walk in the log and error messages ("theme groups
-        date_tp=5"), which is all that distinguishes one caller's failure from
-        another's.
-
-        A ``next_key`` that comes back unchanged from the one just sent is a
-        server bug, not a rate limit or a transport error, so the backoff in
-        ``page`` cannot see it. Left alone the walk would re-request the same
-        page forever, every iteration counting against the rate limit — the
-        cost this project can least afford. It raises instead: unlike
-        ``backfill.collect`` there is no cursor to resume from, so returning
-        what was collected so far would write a truncated result that looks
-        complete.
-        """
+        """Read every page, raising if the continuation key stops advancing."""
         collected: list[T] = []
         next_key: str | None = None
         while True:

@@ -1,5 +1,3 @@
-"""Backfill historical OHLCV candles from Kiwoom into QuestDB."""
-
 import logging
 import math
 from collections.abc import Callable, Sequence
@@ -165,7 +163,6 @@ def _empty_row(bar: Bar, symbol: str, src: str) -> CandleRow:
 def to_candle_rows(
     bars: Sequence[Bar], symbol: str, src: str = "rest", with_indicators: bool = True
 ) -> list[CandleRow]:
-    """Convert bars to rows, computing indicators from regular-session bars only."""
     if not with_indicators or not bars:
         return [_empty_row(bar, symbol, src) for bar in bars]
 
@@ -269,7 +266,6 @@ def refresh_recent(
     base_dt: str,
     since: datetime,
 ) -> int:
-    """Refresh candles since a timestamp with enough history for indicator warm-up."""
     is_daily = timeframe == "1d"
     parse = parse_daily_bar if is_daily else parse_minute_bar
     max_pages = MAX_1M_REFRESH_PAGES if timeframe == "1m" else 1

@@ -1,11 +1,3 @@
-"""Turn Kiwoom's chart rows into typed candles.
-
-Two quirks drive this module. Minute-chart prices arrive with a sign prefix
-(``"+277500"``) while daily prices do not, and the close is named ``cur_prc`` in
-both, which reads as "current price". Timestamps arrive in KST; everything
-stored is UTC.
-"""
-
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta, timezone
 

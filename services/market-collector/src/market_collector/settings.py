@@ -1,5 +1,3 @@
-"""Configuration for the market-collector."""
-
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -86,18 +84,6 @@ class Settings(BaseSettings):
     @field_validator("backfill_depths", mode="after")
     @classmethod
     def _fill_missing_backfill_depths(cls, value: dict[str, int]) -> dict[str, int]:
-        """Fill any timeframe an override omits from ``DEFAULT_DEPTHS``.
-
-        ``__main__.run_backfill`` indexes ``backfill_depths[timeframe]`` for
-        all four timeframes unconditionally. Before this validator, a partial
-        override such as ``'{"1m": 120000}'`` — the obvious operator move to
-        deepen just the minute walk — left the other three keys missing and
-        crashed with ``KeyError: '15m'`` after the first symbol's 1m walk had
-        already written and marked itself done. Lazily imported for the same
-        reason ``_default_backfill_depths`` is: importing ``backfill`` at
-        module load time would deadlock on the kiwoom.auth -> kiwoom.rest ->
-        backfill -> settings import cycle.
-        """
         from market_collector.backfill import DEFAULT_DEPTHS
 
         unknown = set(value) - set(DEFAULT_DEPTHS)
