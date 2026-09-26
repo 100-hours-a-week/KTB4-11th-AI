@@ -2,8 +2,19 @@
 
 **Date:** 2026-09-26
 **Extends:** `2026-09-22-market-collector-design.md` §7 "Live — during market hours"
-**Status:** design. Three inputs are assumed rather than measured; §2 states each one
-and what it costs to be wrong.
+**Status: on hold, not implemented.** The collector does not ingest trade ticks.
+The user ruled the whole path out — 체결 틱 데이터는 안 받아와도 돼. 체결은 백엔드
+쪽에서 로직처리 할거야 — and asked to be consulted if it ever becomes necessary.
+The implementation was reverted (commit f842ca8, reverted in the commit after it),
+so git holds it if that day comes.
+
+What is worth keeping from this document is the reasoning, not the plan: why volume
+must come from differencing Kiwoom's accumulated counters rather than summing ticks,
+why the minute boundary has to come from the tick's own exchange time, and what the
+three unmeasured WebSocket inputs are. Read §2 and §4 before rebuilding any of it.
+
+Three inputs were assumed rather than measured; §2 states each one and what it costs
+to be wrong.
 
 The 2026-09-22 design fixed the shape of the live path — WebSocket reader, bounded
 queue, per-symbol aggregator, batched ILP writer — and named the group cap as its main
