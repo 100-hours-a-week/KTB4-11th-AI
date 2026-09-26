@@ -5,7 +5,6 @@ import httpx
 
 from news_graph_builder.graph.dto import Entity, Extraction, Relation
 
-# Structure and rules follow langchain-neo4j's LLMGraphTransformer prompt.
 SYSTEM_PROMPT = """\
 # 경제 뉴스 지식 그래프 추출 지침
 ## 1. 개요
