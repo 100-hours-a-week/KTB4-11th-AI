@@ -42,22 +42,11 @@ THEME_MEMBERS_TABLE = "theme_members"
 
 
 class EmptyThemeSnapshotError(RuntimeError):
-    """Raised when no theme snapshot exists to read.
-
-    The same treatment ``universe.EmptyUniverseError`` gets: an empty result
-    would read as "no themes moved", which is a claim about the market. It is
-    actually a claim about the collector not having run.
-    """
+    pass
 
 
 @dataclass(frozen=True)
 class Theme:
-    """One theme's latest snapshot for one period, with its constituents.
-
-    ``members`` holds ``(symbol, stock_name)`` pairs and covers the KOSPI 200
-    only, so its length does not match ``stock_count`` -- see that field.
-    """
-
     theme_code: str
     theme_name: str
     date_tp: int
@@ -213,10 +202,6 @@ class _QuestDbSink:
     ) -> None:
         from questdb import TimestampNanos
 
-        # RowSink's dict types are invariant on the value type and narrower
-        # than questdb's own (which also allow None values, numpy arrays,
-        # etc.); Any at this one call is the interop boundary with the
-        # native client, not a loosening of RowSink's own contract.
         self._sender.row(
             table,
             symbols=cast(Any, symbols),
@@ -260,11 +245,6 @@ def read_regular_candles(
     table = TIMEFRAME_TABLES[timeframe]
     since_clause = " AND ts >= %s" if since is not None else ""
     order_clause = "ORDER BY ts DESC LIMIT %s" if limit is not None else "ORDER BY ts ASC"
-    # The table name comes from TIMEFRAME_TABLES, not caller input;
-    # since_clause and order_clause are each picked from a fixed pair of
-    # literal strings, never built from since/limit/symbol themselves. So
-    # the f-string is safe; it is only not a LiteralString because of that
-    # interpolation, which is what the cast below tells the type checker.
     columns = ", ".join(("ts", "high", "low", "close", *INDICATOR_FIELDS))
     query = cast(
         LiteralString,
@@ -291,47 +271,21 @@ def read_regular_candles(
         ]
 
     if limit is not None:
-        # We asked the DB for the newest `limit` rows in descending order;
-        # reverse them so the function's contract (oldest first) still
-        # holds regardless of which bounds a caller combined.
         rows.reverse()
     return rows
 
 
 def read_themes(dsn: str, date_tp: int, *, limit: int | None = None) -> list[Theme]:
-    """The latest theme snapshot for one period, with each theme's constituents.
+    """Read the latest period snapshot, highest return first.
 
-    One call answers what a reader needs to know about themes: the name, the
-    figures Kiwoom reports, and which of our symbols belong to it.
-
-    ``date_tp`` selects the period, because Kiwoom reports different figures
-    per period for the same theme -- the same theme measured +299.34 at
-    ``date_tp=3`` and +68.45 at ``date_tp=120``, which is why the period is
-    part of the dedup key and cannot be defaulted away here.
-
-    Ordered by ``dt_prft_rt`` descending with unknown values last, so the
-    themes Kiwoom rates highest come first, and ``limit`` then caps how many
-    a caller reads.
-
-    **``stock_count``, ``rising_count``, ``falling_count`` and ``dt_prft_rt``
-    are Kiwoom's figures over a theme's whole market-wide membership**, while
-    ``members`` holds only the KOSPI 200 constituents this service stores. The
-    two do not match and must never be combined into a ratio -- "3 of our 5
-    members are rising" is not a statement these numbers support.
-
-    Raises ``EmptyThemeSnapshotError`` when nothing has been collected for
-    ``date_tp``, naming the subcommand that fixes it.
+    Kiwoom's statistics cover all members, while ``members`` contains only the
+    stored KOSPI 200 subset. Raises when the requested snapshot is missing.
     """
     if limit is not None and limit <= 0:
         raise ValueError(f"limit must be positive, got {limit}")
 
     import psycopg
 
-    # Unlike read_regular_candles, the ordering and the limit are applied here
-    # rather than in SQL. A candle table holds thousands of rows per symbol, so
-    # bounding the query matters; a snapshot holds one row per theme per period
-    # -- 142 on the measured day -- and QuestDB has no NULLS LAST, which the
-    # dt_prft_rt ordering needs because that column is nullable.
     snapshot_query = cast(
         LiteralString,
         f"SELECT theme_code, theme_name, date_tp, dt_prft_rt, change_rate, stock_count, "
@@ -339,8 +293,6 @@ def read_themes(dsn: str, date_tp: int, *, limit: int | None = None) -> list[The
         f"WHERE date_tp = %s AND ts = "
         f"(SELECT max(ts) FROM {THEME_SNAPSHOT_TABLE} WHERE date_tp = %s)",
     )
-    # theme_members carries no date_tp: memberships do not vary by period, so
-    # snapshot() collects them once per run against one reference period.
     members_query = cast(
         LiteralString,
         f"SELECT theme_code, symbol, stock_name FROM {THEME_MEMBERS_TABLE} "
@@ -381,21 +333,5 @@ def read_themes(dsn: str, date_tp: int, *, limit: int | None = None) -> list[The
 
 
 def read_symbol_themes(dsn: str, symbol: str, date_tp: int) -> list[Theme]:
-    """The themes one symbol belongs to, highest-rated first.
-
-    The reverse of ``read_themes``, and the question a reader asks about a
-    single stock: which themes is it in, how are those themes doing, and which
-    other symbols move with it. Each returned ``Theme`` keeps its full member
-    list for that last part -- the peers are usually the point.
-
-    A symbol in no theme returns an empty list, which is an ordinary answer:
-    plenty of constituents belong to none. Only a missing snapshot raises, and
-    that comes from ``read_themes``.
-
-    This filters the period's snapshot in Python rather than querying
-    ``theme_members`` by its ``symbol`` index. The answer needs every matching
-    theme's figures *and* its other members, so a narrower query would still
-    have to fetch both tables afterwards; at one row per theme per period the
-    whole snapshot costs less than the extra round trips.
-    """
+    """Return a symbol's themes, or an empty list when it has none."""
     return [theme for theme in read_themes(dsn, date_tp) if symbol in dict(theme.members)]

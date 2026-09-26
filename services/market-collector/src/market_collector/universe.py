@@ -27,13 +27,8 @@ MEMBERS_API_ID = "ka20002"
 MEMBERS_ARRAY = "inds_stkpc"
 UNIVERSE_MEMBERS_TABLE = "universe_members"
 
-# Six characters, alphanumeric -- not six-digit-numeric. See the module
-# docstring for the two real constituents this must accept.
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{6}$")
 
-# ka10101 with mrkt_tp=2 carries "201 = KOSPI200"; no other index is in scope,
-# so a small lookup covers the one name needed rather than a setting nobody
-# would populate differently yet.
 INDEX_NAMES: dict[str, str] = {"201": "KOSPI200"}
 
 

@@ -27,17 +27,8 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-# The three minute timeframes ka10080 serves, keyed by tic_scope. Kiwoom
-# supplies 15m and 1h candles directly at these scopes rather than having
-# them resampled from 1m locally, so they match Kiwoom's own values exactly.
 TIC_SCOPES: dict[str, int] = {"1m": 1, "15m": 15, "1h": 60}
 
-# Bar-count floors, not date cutoffs, so every timeframe shares one loop.
-# 8,000 one-minute candles is about a month (~20 trading days at ~408
-# candles a day, extended session included). The other three stay at 300:
-# input enough for the newest indicator calculation (MACD's 33-bar lookback
-# is the longest of the eight) without storing a long series nobody reads,
-# since v1 backfill keeps OHLCV only.
 DEFAULT_DEPTHS: dict[str, int] = {"1m": 8000, "15m": 300, "1h": 300, "1d": 300}
 
 Bar = MinuteBar | DailyBar
@@ -95,14 +86,6 @@ def collect(
         next_key = page.next_key
         cursors.advance(symbol, timeframe, next_key, oldest_raw)
 
-        # cursor.pages is the count persisted from earlier runs; a
-        # resumed walk starts this call's pages_fetched back at 0, so
-        # checking only pages_fetched == 1 would treat the first page
-        # fetched *after resume* as evidence-free even when it is the
-        # walk's genuine terminal empty page -- the pair would then
-        # never finish, re-fetching that one page forever. Gating on
-        # cursor.pages == 0 too means "no page has ever been fetched
-        # for this pair, in this run or any earlier one".
         first_page_empty = cursor.pages == 0 and pages_fetched == 1 and not page.rows
         depth_reached = len(collected) >= depth
         history_ended = (not page.has_more) and not first_page_empty
@@ -248,13 +231,6 @@ def backfill_one(
     return written
 
 
-# How many ka10080 pages refresh_recent will fetch for "1m" before giving up
-# on reaching `since`. __main__.PREOPEN_WINDOW_DAYS is 4 calendar days; its
-# worst case (no weekend inside the window) is 5 consecutive trading days.
-# One 900-row page covers about 2.2 trading days (measured, extended session
-# included), so ceil(5 / 2.2) = 3 pages. "15m"/"1h"/"1d" need no such loop:
-# one page already covers roughly 31, 120 and 120+ days respectively, far
-# more than any preopen window asks for, which is why only "1m" pages.
 MAX_1M_REFRESH_PAGES = 3
 
 
