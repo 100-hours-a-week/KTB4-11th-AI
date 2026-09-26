@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 from news_graph_builder.graph import Entity, Extraction, Relation, extract
+from news_graph_builder.graph.llm import EXAMPLE_ARTICLE, EXAMPLE_REPLY
 
 BASE_URI = "http://llm.test/v1"
 
@@ -134,3 +135,21 @@ def test_malformed_envelope_raises_value_error(body):
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(ValueError):
         call(client, [("a", "b")])
+
+
+def test_prompt_lists_basic_types_and_puts_the_example_before_the_articles():
+    seen = []
+
+    call(client_replying(json.dumps(REPLY), seen=seen), [("기사", "본문")])
+
+    messages = json.loads(seen[0].content)["messages"]
+    assert "'기업', '인물', '기관'" in messages[0]["content"]
+    user = messages[-1]["content"]
+    assert user.index(EXAMPLE_ARTICLE) < user.index("기사\n\n본문")
+
+
+def test_the_example_reply_matches_the_schema():
+    extraction = call(client_replying(json.dumps(EXAMPLE_REPLY)), [("a", "b")])
+
+    assert len(extraction.entities) == len(EXAMPLE_REPLY["entities"])
+    assert len(extraction.relations) == len(EXAMPLE_REPLY["relations"])
