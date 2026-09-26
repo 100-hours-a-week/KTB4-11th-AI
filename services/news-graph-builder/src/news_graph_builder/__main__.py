@@ -17,7 +17,9 @@ from news_graph_builder.graph import extract, resolve, write_graph
 from news_graph_builder.settings import Settings
 
 logger = logging.getLogger(__name__)
-RUN_LOCK = 0x6E677262
+# Session-level advisory lock key that lets only one run build graphs at a time:
+# https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS
+RUN_LOCK = int.from_bytes(b"ngrb")
 
 
 def main() -> None:

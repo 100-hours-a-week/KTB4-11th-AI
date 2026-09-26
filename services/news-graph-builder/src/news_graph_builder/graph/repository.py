@@ -54,6 +54,9 @@ def write_graph(
         cluster_id=cluster_id,
         title=extraction.title,
         summary=extraction.summary,
+        # Not now(): now() is this transaction's start time, and a clusterer update that
+        # waited on lock_cluster's FOR SHARE lock can commit an older updated_at, which
+        # would make the changed cluster look fresh.
         cluster_updated_at=seen,
     )
     conn.execute(
