@@ -65,11 +65,29 @@ services:
       dockerfile: docker/news-clusterer.Dockerfile
     environment:
       - NEWS_CLUSTERER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
-      - NEWS_CLUSTERER_LLM_BASE_URI
-      - NEWS_CLUSTERER_LLM_MODEL
       - NEWS_CLUSTERER_EPS=${NEWS_CLUSTERER_EPS:-0.2}
       - NEWS_CLUSTERER_MIN_SAMPLES=${NEWS_CLUSTERER_MIN_SAMPLES:-3}
       - NEWS_CLUSTERER_LOG_LEVEL=${NEWS_CLUSTERER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  news-graph-builder:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/news-graph-builder.Dockerfile
+    environment:
+      - NEWS_GRAPH_BUILDER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
+      - NEWS_GRAPH_BUILDER_LLM_BASE_URI
+      - NEWS_GRAPH_BUILDER_LLM_MODEL
+      - NEWS_GRAPH_BUILDER_LLM_API_KEY
+      - NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY
+      - NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY
+      - NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI=${NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI:-https://api.kiwoom.com}
+      - NEWS_GRAPH_BUILDER_DART_API_KEY=${OPENDART_API_KEY:-}
+      - NEWS_GRAPH_BUILDER_LOG_LEVEL=${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
         condition: service_healthy

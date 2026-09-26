@@ -87,6 +87,19 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
     [
         ("news_preprocessor.storage", {"articles"}),
         ("news_clusterer.storage", {"clusters", "article_clusters"}),
+        (
+            "news_graph_builder.database",
+            {
+                "companies",
+                "company_aliases",
+                "entities",
+                "cluster_summaries",
+                "cluster_entities",
+                "relations",
+                "themes",
+                "theme_companies",
+            },
+        ),
     ],
 )
 def test_service_tables_match_the_migrated_schema(
@@ -118,3 +131,107 @@ def test_downgrade_removes_the_cluster_tables(pg_dsn, pg_engine, monkeypatch):
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT to_regclass('clusters')")).scalar() is not None
+
+
+def _columns(conn, table: str) -> set[str]:
+    return set(
+        conn.execute(
+            sa.text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+            {"t": table},
+        ).scalars()
+    )
+
+
+def test_summaries_live_outside_clusters(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+
+    command.upgrade(_alembic_config(), "head")
+
+    with pg_engine.connect() as conn:
+        assert _columns(conn, "clusters") == {"id", "updated_at"}
+        assert _columns(conn, "cluster_summaries") == {
+            "cluster_id",
+            "title",
+            "summary",
+            "cluster_updated_at",
+            "summarized_at",
+        }
+
+
+def test_downgrade_to_0002_copies_summaries_back(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+    with pg_engine.begin() as conn:
+        cluster_id = conn.execute(
+            sa.text("INSERT INTO clusters DEFAULT VALUES RETURNING id")
+        ).scalar_one()
+        conn.execute(
+            sa.text(
+                "INSERT INTO cluster_summaries (cluster_id, title, summary, cluster_updated_at)"
+                " VALUES (:id, '제목', '요약', now())"
+            ),
+            {"id": cluster_id},
+        )
+
+    try:
+        command.downgrade(config, "0002")
+        with pg_engine.connect() as conn:
+            row = conn.execute(
+                sa.text("SELECT title, summary, summarized_at FROM clusters WHERE id = :id"),
+                {"id": cluster_id},
+            ).one()
+        assert (row.title, row.summary) == ("제목", "요약")
+        assert row.summarized_at is not None
+    finally:
+        command.upgrade(config, "head")
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE clusters CASCADE"))
+
+
+def test_theme_memberships_cascade_from_themes_and_companies(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO companies (corp_code, stock_code, corp_name)"
+                    " VALUES ('00126380', '005930', '삼성전자'), ('00164779', '000660',"
+                    " 'SK하이닉스')"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO themes (theme_code, name) VALUES ('1', 'HBM'), ('2', '반도체')"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO theme_companies (theme_code, corp_code, is_main)"
+                    " VALUES ('1', '00126380', true), ('2', '00164779', false)"
+                )
+            )
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("DELETE FROM themes WHERE theme_code = '1'"))
+            conn.execute(sa.text("DELETE FROM companies WHERE corp_code = '00164779'"))
+        with pg_engine.connect() as conn:
+            remaining = conn.execute(sa.text("SELECT count(*) FROM theme_companies")).scalar_one()
+        assert remaining == 0
+    finally:
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE theme_companies, themes, companies CASCADE"))
+
+
+def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+
+    command.downgrade(config, "0003")
+    with pg_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT to_regclass('themes')")).scalar() is None
+        assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is None
+
+    command.upgrade(config, "head")
+    with pg_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None

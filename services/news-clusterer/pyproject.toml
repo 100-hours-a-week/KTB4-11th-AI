@@ -1,7 +1,7 @@
 [project]
 name = "news-clusterer"
 version = "0.1.0"
-description = "Cron-triggered news clustering and summarization"
+description = "Cron-triggered news clustering"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
@@ -9,7 +9,6 @@ dependencies = [
     "sqlalchemy>=2.0.54",
     "psycopg[binary]>=3.3.6",
     "pgvector>=0.5.0",
-    "httpx>=0.28",
     "numpy>=2.5",
 ]
 

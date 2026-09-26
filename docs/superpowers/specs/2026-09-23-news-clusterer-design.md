@@ -122,6 +122,9 @@ left unmatched.
 
 ## 6. Summaries
 
+> **Superseded (2026-09-25):** summaries moved to news-graph-builder and to the
+> `cluster_summaries` table; see `2026-09-24-news-graph-builder-design.md`.
+
 For each cluster that needs a summary:
 
 - Load member articles ordered by `published_at DESC`. Concatenate `title\n\nbody`

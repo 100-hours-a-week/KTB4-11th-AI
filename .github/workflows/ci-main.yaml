@@ -95,6 +95,7 @@ jobs:
         service:
           - news-preprocessor
           - news-clusterer
+          - news-graph-builder
           - portfolio-builder
     steps:
       - uses: actions/checkout@v7

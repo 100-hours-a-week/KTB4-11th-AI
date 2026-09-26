@@ -3,6 +3,7 @@ source_roots = [
     "packages/market-analyzer/src",
     "services/news-preprocessor/src",
     "services/news-clusterer/src",
+    "services/news-graph-builder/src",
     "services/portfolio-builder/src",
 ]
 root_module = "forbid"
@@ -20,6 +21,89 @@ depends_on = ["ktb_core"]
 [[modules]]
 path = "news_clusterer"
 depends_on = ["ktb_core"]
+
+[[modules]]
+path = "news_graph_builder"
+depends_on = [
+    "ktb_core",
+    "news_graph_builder.cluster",
+    "news_graph_builder.company",
+    "news_graph_builder.graph",
+    "news_graph_builder.kiwoom",
+    "news_graph_builder.theme",
+]
+
+[[modules]]
+path = "news_graph_builder.database"
+depends_on = []
+
+[[modules]]
+path = "news_graph_builder.common"
+depends_on = []
+
+[[modules]]
+path = "news_graph_builder.kiwoom"
+depends_on = []
+
+[[modules]]
+path = "news_graph_builder.theme"
+depends_on = [
+    "news_graph_builder.common",
+    "news_graph_builder.database",
+    "news_graph_builder.kiwoom",
+]
+
+[[modules]]
+path = "news_graph_builder.company"
+depends_on = ["news_graph_builder.common", "news_graph_builder.database", "news_graph_builder.kiwoom"]
+
+[[modules]]
+path = "news_graph_builder.cluster"
+depends_on = ["news_graph_builder.database"]
+
+[[modules]]
+path = "news_graph_builder.graph"
+depends_on = [
+    "news_graph_builder.common",
+    "news_graph_builder.company",
+    "news_graph_builder.database",
+]
+
+[[interfaces]]
+expose = [".*"]
+from = ["news_graph_builder.database"]
+
+[[interfaces]]
+expose = ["normalize"]
+from = ["news_graph_builder.common"]
+
+[[interfaces]]
+expose = ["KiwoomSettings", "fetch_pages", "fetch_token"]
+from = ["news_graph_builder.kiwoom"]
+
+[[interfaces]]
+expose = ["Theme", "ThemeMember", "fetch_kospi200_codes", "fetch_theme_members", "fetch_themes", "sync_themes"]
+from = ["news_graph_builder.theme"]
+
+[[interfaces]]
+expose = [
+    "DartCompany",
+    "upsert_company_entity",
+    "fetch_corp_codes",
+    "fetch_kospi",
+    "find_corp_code",
+    "has_companies",
+    "sync_companies",
+]
+from = ["news_graph_builder.company"]
+
+[[interfaces]]
+expose = ["find_cluster_articles", "find_stale_clusters", "lock_cluster"]
+from = ["news_graph_builder.cluster"]
+
+[[interfaces]]
+expose = ["Entity", "Extraction", "Relation", "extract", "resolve", "write_graph"]
+from = ["news_graph_builder.graph"]
 
 [[modules]]
 path = "portfolio_builder"
