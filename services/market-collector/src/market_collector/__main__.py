@@ -43,6 +43,7 @@ def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
     return [group for group in groups if group]
 
 
+# Covers a weekend plus a Monday holiday without a trading calendar.
 PREOPEN_WINDOW_DAYS = 4
 
 
@@ -68,6 +69,7 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
     base_dt = today.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
+    # Sharing prevents workers from overwriting each other's cursor file state.
     cursors = CursorStore(settings.cursor_path)
 
     def worker(index: int, bucket: list[str]) -> int:

@@ -33,7 +33,6 @@ log = logging.getLogger(__name__)
 
 TRADE_TYPE = "0B"
 
-
 TICK_FIELDS = {
     "time": "20",
     "price": "10",
@@ -116,6 +115,7 @@ class Aggregator:
         finished: LiveCandle | None = None
         if current is not None:
             if minute < current.minute:
+                # Reopening a closed minute would use the wrong cumulative baseline.
                 return None
             if minute != current.minute:
                 finished = self._finalise(tick.symbol, current)

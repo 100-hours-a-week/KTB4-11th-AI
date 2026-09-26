@@ -9,9 +9,12 @@ from market_collector.store import (
     TIMEFRAME_TABLES,
     Candle,
     CandleRow,
+    EmptyThemeSnapshotError,
     Store,
     _without_nones,
     read_regular_candles,
+    read_symbol_themes,
+    read_themes,
 )
 
 TS = datetime(2026, 9, 22, 6, 19, tzinfo=UTC)
@@ -172,8 +175,8 @@ def test_theme_members_outside_the_universe_are_not_written():
     assert sink.rows[0][2] == {}
 
 
-def test_read_regular_candles_pins_the_column_order(monkeypatch):
-    rows = [_db_row(TS, 278000.0, 277500.0, 277500.0)]
+def test_read_regular_candles_returns_the_stored_indicator_values(monkeypatch):
+    rows = [_db_row(TS, 278000.0, 277500.0, 277500.0, rsi=61.5)]
     calls: dict[str, object] = {}
 
     class FakeCursor:
@@ -206,8 +209,12 @@ def test_read_regular_candles_pins_the_column_order(monkeypatch):
     result = read_regular_candles("postgresql://localhost:8812/qdb", "1m", "005930")
 
     assert result == [_candle_of(rows[0])]
+    # Returned as stored; nothing recomputes it.
+    assert result[0].indicators["rsi"] == 61.5
+    # A null column reads back as None, the normal state for backfilled history.
+    assert result[0].indicators["macd"] is None
     query = str(calls["query"]).lower()
-    assert "select ts, high, low, close" in query
+    assert "select ts, high, low, close, " + ", ".join(INDICATOR_FIELDS).lower() in query
     assert "bars_1m" in query
     assert calls["params"] == ("005930",)
 
@@ -263,13 +270,19 @@ def _fake_psycopg(rows: list[tuple]):
     return types.SimpleNamespace(connect=lambda dsn: FakeConnection())
 
 
-def _db_row(ts, high, low, close):
-    """One row as the driver returns it."""
-    return (ts, high, low, close)
+def _db_row(ts, high, low, close, *, rsi=55.0):
+    """One row as the driver returns it: ts, prices, then the eight indicators."""
+    return (ts, high, low, close, rsi, *[None] * (len(INDICATOR_FIELDS) - 1))
 
 
 def _candle_of(row) -> Candle:
-    return Candle(ts=row[0], high=row[1], low=row[2], close=row[3])
+    return Candle(
+        ts=row[0],
+        high=row[1],
+        low=row[2],
+        close=row[3],
+        indicators=dict(zip(INDICATOR_FIELDS, row[4:], strict=True)),
+    )
 
 
 _FIVE_ROWS = [
@@ -359,3 +372,176 @@ def test_zero_valued_indicators_survive_the_write_not_just_none_ones():
     _, _, columns, _ = sink.rows[0]
     assert columns["macd"] == 0.0
     assert columns["roc"] == 0.0
+
+
+def _fake_theme_psycopg(snapshots, members):
+    """A ``psycopg`` stand-in that answers the two queries ``read_themes`` makes.
+
+    Told apart by which table the query names, so the test exercises the real
+    query text rather than call order.
+    """
+
+    class FakeCursor:
+        def execute(self, query, params=None):
+            self._rows = snapshots if "theme_snapshot" in str(query) else members
+
+        def fetchall(self):
+            return self._rows
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    class FakeConnection:
+        def cursor(self):
+            return FakeCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    return types.SimpleNamespace(connect=lambda dsn: FakeConnection())
+
+
+def _snapshot(code="557", name="2차전지", rate=12.5, count=30):
+    return (code, name, 5, rate, 1.2, count, 20, 10, "삼성SDI, LG화학")
+
+
+DSN = "postgresql://localhost:8812/qdb"
+
+
+def test_read_themes_attaches_each_themes_members(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        _fake_theme_psycopg(
+            [_snapshot("557"), _snapshot("103", name="반도체", rate=3.0)],
+            [
+                ("557", "006400", "삼성SDI"),
+                ("557", "051910", "LG화학"),
+                ("103", "005930", "삼성전자"),
+            ],
+        ),
+    )
+
+    themes = read_themes(DSN, 5)
+
+    by_code = {t.theme_code: t for t in themes}
+    assert by_code["557"].theme_name == "2차전지"
+    assert by_code["557"].members == (("006400", "삼성SDI"), ("051910", "LG화학"))
+    assert by_code["103"].members == (("005930", "삼성전자"),)
+
+
+def test_read_themes_orders_by_kiwooms_rating_with_unknowns_last(monkeypatch):
+    # The negative rate is what makes "unknown last" testable. Coercing None to
+    # 0.0 and sorting on that alone would place the unknown theme *above* the
+    # falling one, which is a different claim: "we do not know" is not "flat".
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        _fake_theme_psycopg(
+            [
+                _snapshot("a", rate=1.0),
+                _snapshot("b", rate=None),
+                _snapshot("c", rate=99.0),
+                _snapshot("d", rate=-5.0),
+            ],
+            [],
+        ),
+    )
+
+    codes = [t.theme_code for t in read_themes(DSN, 5)]
+
+    # QuestDB has no NULLS LAST, which is why this ordering is applied in Python.
+    assert codes == ["c", "a", "d", "b"]
+
+
+def test_read_themes_limit_keeps_the_highest_rated(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules,
+        "psycopg",
+        _fake_theme_psycopg([_snapshot("a", rate=1.0), _snapshot("c", rate=99.0)], []),
+    )
+
+    assert [t.theme_code for t in read_themes(DSN, 5, limit=1)] == ["c"]
+
+
+def test_read_themes_keeps_a_theme_with_no_stored_members(monkeypatch):
+    # Kiwoom's figures cover the whole market, so a theme none of whose members
+    # are in the KOSPI 200 still says something. Dropping it would hide that.
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_theme_psycopg([_snapshot("557")], []))
+
+    themes = read_themes(DSN, 5)
+
+    assert len(themes) == 1
+    assert themes[0].members == ()
+    assert themes[0].stock_count == 30
+
+
+def test_read_themes_raises_when_nothing_was_collected(monkeypatch):
+    # An empty list would read as "no themes moved" -- a claim about the market
+    # rather than about the collector never having run.
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_theme_psycopg([], []))
+
+    with pytest.raises(EmptyThemeSnapshotError, match="themes"):
+        read_themes(DSN, 5)
+
+
+def test_read_themes_rejects_a_non_positive_limit():
+    with pytest.raises(ValueError, match="0"):
+        read_themes(DSN, 5, limit=0)
+
+
+def _two_themes():
+    return _fake_theme_psycopg(
+        [_snapshot("557", rate=12.5), _snapshot("103", name="반도체", rate=99.0)],
+        [
+            ("557", "006400", "삼성SDI"),
+            ("557", "005930", "삼성전자"),
+            ("103", "005930", "삼성전자"),
+            ("103", "000660", "SK하이닉스"),
+        ],
+    )
+
+
+def test_read_symbol_themes_returns_every_theme_holding_the_symbol(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    themes = read_symbol_themes(DSN, "005930", 5)
+
+    # Highest-rated first, inherited from read_themes.
+    assert [t.theme_code for t in themes] == ["103", "557"]
+
+
+def test_read_symbol_themes_keeps_the_peers_in_each_theme(monkeypatch):
+    # The other members are usually the point of asking.
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    themes = read_symbol_themes(DSN, "005930", 5)
+
+    peers = {t.theme_code: sorted(s for s, _ in t.members if s != "005930") for t in themes}
+    assert peers == {"103": ["000660"], "557": ["006400"]}
+
+
+def test_read_symbol_themes_excludes_themes_the_symbol_is_not_in(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    assert [t.theme_code for t in read_symbol_themes(DSN, "000660", 5)] == ["103"]
+
+
+def test_a_symbol_in_no_theme_returns_an_empty_list(monkeypatch):
+    # An ordinary answer, not an error: plenty of constituents belong to none.
+    monkeypatch.setitem(sys.modules, "psycopg", _two_themes())
+
+    assert read_symbol_themes(DSN, "999999", 5) == []
+
+
+def test_read_symbol_themes_still_raises_when_nothing_was_collected(monkeypatch):
+    monkeypatch.setitem(sys.modules, "psycopg", _fake_theme_psycopg([], []))
+
+    with pytest.raises(EmptyThemeSnapshotError, match="themes"):
+        read_symbol_themes(DSN, "005930", 5)

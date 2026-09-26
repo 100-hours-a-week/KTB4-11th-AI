@@ -27,9 +27,7 @@ MEMBERS_API_ID = "ka20002"
 MEMBERS_ARRAY = "inds_stkpc"
 UNIVERSE_MEMBERS_TABLE = "universe_members"
 
-
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{6}$")
-
 
 INDEX_NAMES: dict[str, str] = {"201": "KOSPI200"}
 

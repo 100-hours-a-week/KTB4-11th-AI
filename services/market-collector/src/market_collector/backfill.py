@@ -27,9 +27,7 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-
 TIC_SCOPES: dict[str, int] = {"1m": 1, "15m": 15, "1h": 60}
-
 
 DEFAULT_DEPTHS: dict[str, int] = {"1m": 8000, "15m": 300, "1h": 300, "1d": 300}
 

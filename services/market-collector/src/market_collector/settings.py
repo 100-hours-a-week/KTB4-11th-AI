@@ -8,7 +8,6 @@ class KiwoomAccount(BaseModel):
 
 
 def _default_backfill_depths() -> dict[str, int]:
-
     from market_collector.backfill import DEFAULT_DEPTHS
 
     return dict(DEFAULT_DEPTHS)
@@ -23,12 +22,10 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     questdb_dsn: str
     questdb_ilp_host: str
-
     questdb_ilp_port: int = 9000
     kiwoom_accounts: list[KiwoomAccount] = Field(min_length=1)
     request_interval: float = 1.3
     theme_date_tps: list[int] = [5, 20, 60]
-
     index_code: str = "201"
     cursor_path: str = "var/market-collector/cursors.json"
     backfill_depths: dict[str, int] = Field(default_factory=_default_backfill_depths)
@@ -40,7 +37,6 @@ class Settings(BaseSettings):
     ws_queue_size: int = Field(default=100_000, gt=0)
     live_flush_interval: float = Field(default=1.0, gt=0)
     live_window: int = Field(default=300, gt=0)
-
     intraday_timeframes: list[str] = ["15m", "1h"]
 
     @field_validator("intraday_timeframes", mode="after")

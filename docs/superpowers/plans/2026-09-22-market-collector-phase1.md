@@ -3994,6 +3994,7 @@ rulings behind each one.
 | Shared `Pager` extracted into `kiwoom/rest.py` | `8140d04` | Three clients each restated the same pacing, backoff, paging and stall guard |
 | The live path: WebSocket ticks into 1-minute candles | `f842ca8` (reverted, restored in `9afaef8`) | The one-minute freshness requirement is the collector's, and polling cannot meet it |
 | `intraday` refresh for the timeframes the live path does not produce | `baeaedf` | Nothing kept 15-minute and 1-hour candles current during a session |
+| Theme reads: `read_themes`, `read_symbol_themes` | `f056f08`, `8a44cc7` | The collector could write theme snapshots but not read them, so nothing downstream could see a theme at all |
 
 **Measured since** (spec §9): one WebSocket group accepted 200 symbols and one connection
 accepted four groups, both looser than the 100-per-group figure this plan assumed, and the
