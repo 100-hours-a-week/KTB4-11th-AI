@@ -47,10 +47,12 @@ class Settings(BaseSettings):
     backfill_depths: dict[str, int] = Field(default_factory=_default_backfill_depths)
     indicators_on_backfill: bool = False
 
-    # The live path. The first two are the assumptions the design could not
-    # measure -- Kiwoom's per-group symbol cap and whether one connection
-    # carries several groups -- kept here so a measurement that contradicts
-    # either is a configuration change and not a restructuring.
+    # The live path. Measured against Kiwoom on 2026-09-26: one connection
+    # accepted four groups, and a single group accepted 200 symbols, so both
+    # figures below are conservative rather than binding. They stay settings
+    # because a return_code=0 on an over-large registration cannot be told
+    # from silent truncation until ticks actually flow -- 100 per group over
+    # two groups is the shape that is both accepted and verifiable.
     ws_url: str = "wss://api.kiwoom.com:10000/api/dostk/websocket"
     ws_symbols_per_group: int = Field(default=100, gt=0)
     ws_groups_per_connection: int = Field(default=2, gt=0)
