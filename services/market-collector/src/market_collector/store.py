@@ -43,10 +43,13 @@ __all__ = [
     "TIMEFRAME_TABLES",
     "Candle",
     "CandleRow",
+    "EmptyThemeSnapshotError",
     "RowSink",
     "Store",
+    "Theme",
     "questdb_sink",
     "read_regular_candles",
+    "read_themes",
 ]
 
 TIMEFRAME_TABLES: dict[str, str] = {
@@ -58,6 +61,35 @@ TIMEFRAME_TABLES: dict[str, str] = {
 
 THEME_SNAPSHOT_TABLE = "theme_snapshot"
 THEME_MEMBERS_TABLE = "theme_members"
+
+
+class EmptyThemeSnapshotError(RuntimeError):
+    """Raised when no theme snapshot exists to read.
+
+    The same treatment ``universe.EmptyUniverseError`` gets: an empty result
+    would read as "no themes moved", which is a claim about the market. It is
+    actually a claim about the collector not having run.
+    """
+
+
+@dataclass(frozen=True)
+class Theme:
+    """One theme's latest snapshot for one period, with its constituents.
+
+    ``members`` holds ``(symbol, stock_name)`` pairs and covers the KOSPI 200
+    only, so its length does not match ``stock_count`` -- see that field.
+    """
+
+    theme_code: str
+    theme_name: str
+    date_tp: int
+    dt_prft_rt: float | None
+    change_rate: float | None
+    stock_count: int
+    rising_count: int
+    falling_count: int
+    main_stocks: str
+    members: tuple[tuple[str, str], ...]
 
 
 @dataclass(frozen=True)
@@ -309,3 +341,85 @@ def read_regular_candles(
         # holds regardless of which bounds a caller combined.
         rows.reverse()
     return rows
+
+
+def read_themes(dsn: str, date_tp: int, *, limit: int | None = None) -> list[Theme]:
+    """The latest theme snapshot for one period, with each theme's constituents.
+
+    One call answers what a reader needs to know about themes: the name, the
+    figures Kiwoom reports, and which of our symbols belong to it.
+
+    ``date_tp`` selects the period, because Kiwoom reports different figures
+    per period for the same theme -- the same theme measured +299.34 at
+    ``date_tp=3`` and +68.45 at ``date_tp=120``, which is why the period is
+    part of the dedup key and cannot be defaulted away here.
+
+    Ordered by ``dt_prft_rt`` descending with unknown values last, so the
+    themes Kiwoom rates highest come first, and ``limit`` then caps how many
+    a caller reads.
+
+    **``stock_count``, ``rising_count``, ``falling_count`` and ``dt_prft_rt``
+    are Kiwoom's figures over a theme's whole market-wide membership**, while
+    ``members`` holds only the KOSPI 200 constituents this service stores. The
+    two do not match and must never be combined into a ratio -- "3 of our 5
+    members are rising" is not a statement these numbers support.
+
+    Raises ``EmptyThemeSnapshotError`` when nothing has been collected for
+    ``date_tp``, naming the subcommand that fixes it.
+    """
+    if limit is not None and limit <= 0:
+        raise ValueError(f"limit must be positive, got {limit}")
+
+    import psycopg
+
+    # Unlike read_regular_candles, the ordering and the limit are applied here
+    # rather than in SQL. A candle table holds thousands of rows per symbol, so
+    # bounding the query matters; a snapshot holds one row per theme per period
+    # -- 142 on the measured day -- and QuestDB has no NULLS LAST, which the
+    # dt_prft_rt ordering needs because that column is nullable.
+    snapshot_query = cast(
+        LiteralString,
+        f"SELECT theme_code, theme_name, date_tp, dt_prft_rt, change_rate, stock_count, "
+        f"rising_count, falling_count, main_stocks FROM {THEME_SNAPSHOT_TABLE} "
+        f"WHERE date_tp = %s AND ts = "
+        f"(SELECT max(ts) FROM {THEME_SNAPSHOT_TABLE} WHERE date_tp = %s)",
+    )
+    # theme_members carries no date_tp: memberships do not vary by period, so
+    # snapshot() collects them once per run against one reference period.
+    members_query = cast(
+        LiteralString,
+        f"SELECT theme_code, symbol, stock_name FROM {THEME_MEMBERS_TABLE} "
+        f"WHERE ts = (SELECT max(ts) FROM {THEME_MEMBERS_TABLE}) ORDER BY symbol",
+    )
+    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute(snapshot_query, (date_tp, date_tp))
+        snapshots = cursor.fetchall()
+        cursor.execute(members_query)
+        member_rows = cursor.fetchall()
+
+    if not snapshots:
+        raise EmptyThemeSnapshotError(
+            f"no theme_snapshot rows for date_tp={date_tp}; run `market-collector themes` first"
+        )
+
+    by_theme: dict[str, list[tuple[str, str]]] = {}
+    for theme_code, symbol, stock_name in member_rows:
+        by_theme.setdefault(theme_code, []).append((symbol, stock_name))
+
+    themes = [
+        Theme(
+            theme_code=row[0],
+            theme_name=row[1],
+            date_tp=row[2],
+            dt_prft_rt=row[3],
+            change_rate=row[4],
+            stock_count=row[5],
+            rising_count=row[6],
+            falling_count=row[7],
+            main_stocks=row[8],
+            members=tuple(by_theme.get(row[0], ())),
+        )
+        for row in snapshots
+    ]
+    themes.sort(key=lambda t: (t.dt_prft_rt is None, -(t.dt_prft_rt or 0.0), t.theme_code))
+    return themes if limit is None else themes[:limit]

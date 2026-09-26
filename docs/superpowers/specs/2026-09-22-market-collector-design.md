@@ -280,7 +280,8 @@ services/
       backfill.py            resumable history walk, recent-window refresh
       indicators.py          a candle window -> the eight fields and their verdicts
       themes.py              the daily theme snapshot job
-      store.py               QuestDB write (ILP) and read (Postgres wire)
+      store.py               QuestDB write (ILP) and read (Postgres wire):
+                             read_regular_candles, read_themes
       cursor.py              per-symbol backfill progress
     tests/
 ```
@@ -717,6 +718,18 @@ Once per day, after the close:
 At 1.3 s per request this is a few minutes on a single account and needs no coordination
 with the candle collectors, which use a different `api-id` and therefore a different rate
 limiter.
+
+**Reading themes back.** `read_themes(dsn, date_tp, limit=None)` returns the latest
+snapshot for one period, each theme carrying Kiwoom's figures and the KOSPI 200
+constituents stored for it, ordered by `dt_prft_rt` descending with unknown values last.
+The period is required rather than defaulted, because Kiwoom reports different figures per
+period for the same theme. Ordering and `limit` are applied in Python, unlike
+`read_regular_candles`: a snapshot is one row per theme per period — 142 on the measured
+day — and QuestDB has no `NULLS LAST`, which the nullable `dt_prft_rt` ordering needs.
+
+An empty result raises `EmptyThemeSnapshotError` naming the `themes` command, for the same
+reason `EmptyUniverseError` exists: "no themes" would read as a claim about the market
+rather than about the collector not having run.
 
 Theme snapshots are daily, not intraday. `flu_rt` does move during the session, but theme
 selection is a research-grade decision informed by news, not a per-minute trading signal.
