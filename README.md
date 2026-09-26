@@ -2,6 +2,105 @@
 
 척척개미단 AI 서비스 모노레포입니다. 뉴스를 수집·임베딩하고(news-preprocessor), 사건 단위로 묶고(news-clusterer), 요약과 지식 그래프를 만들며(news-graph-builder), 이를 바탕으로 포트폴리오를 구성합니다(portfolio-builder). 개발 명령과 구조는 [AGENTS.md](AGENTS.md)를 참고하세요.
 
+## 데이터베이스 (ERD)
+
+모든 서비스는 PostgreSQL `news` 데이터베이스를 통해서만 데이터를 주고받습니다. 스키마는 `infrastructure/postgres/migrations/` 가 소유합니다.
+
+```mermaid
+erDiagram
+    articles ||--o| article_clusters : "클러스터 소속 (노이즈는 행 없음)"
+    clusters ||--|{ article_clusters : "구성 기사"
+    clusters ||--o| cluster_summaries : "요약"
+    clusters ||--o{ cluster_entities : "언급 개체"
+    clusters ||--o{ relations : "출처 클러스터"
+    entities ||--o{ cluster_entities : ""
+    entities ||--o{ relations : "source"
+    entities ||--o{ relations : "target"
+    companies ||--o{ company_aliases : "별칭"
+    companies ||--o| entities : "기업 노드"
+    companies ||--o{ theme_companies : ""
+    themes ||--o{ theme_companies : "구성 종목"
+
+    articles {
+        bigint id PK
+        text source UK "source + external_id 유일"
+        text external_id UK
+        text url
+        text title
+        text body
+        timestamptz published_at "인덱스"
+        text raw_payload "원본 RSS 아이템"
+        timestamptz fetched_at "기본값 now()"
+        vector_2000 embedding "nullable, HNSW 코사인 인덱스"
+    }
+    clusters {
+        bigint id PK
+        timestamptz updated_at "구성 기사가 바뀌면 갱신"
+    }
+    article_clusters {
+        bigint article_id PK, FK
+        bigint cluster_id FK "ON DELETE CASCADE"
+    }
+    cluster_summaries {
+        bigint cluster_id PK, FK "ON DELETE CASCADE"
+        text title
+        text summary
+        timestamptz cluster_updated_at "요약한 시점의 clusters.updated_at"
+        timestamptz summarized_at
+    }
+    companies {
+        text corp_code PK "DART 고유번호"
+        text stock_code "종목코드, 의도적으로 unique 아님"
+        text corp_name
+        text corp_eng_name "nullable"
+        timestamptz synced_at
+    }
+    company_aliases {
+        text alias PK "normalize 결과"
+        text corp_code FK
+    }
+    entities {
+        bigint id PK
+        text raw_name "처음 본 표기"
+        text name "normalize 결과"
+        text type
+        text corp_code FK "기업 노드만, 그 외 NULL"
+    }
+    cluster_entities {
+        bigint cluster_id PK, FK "ON DELETE CASCADE"
+        bigint entity_id PK, FK
+    }
+    relations {
+        bigint id PK
+        bigint cluster_id FK "ON DELETE CASCADE"
+        bigint source_entity_id FK
+        bigint target_entity_id FK
+        text type
+        text description
+    }
+    themes {
+        text theme_code PK "키움 thema_grp_cd"
+        text name
+        timestamptz synced_at
+    }
+    theme_companies {
+        text theme_code PK, FK "ON DELETE CASCADE"
+        text corp_code PK, FK "ON DELETE CASCADE"
+        boolean is_main "테마 주요종목 여부"
+    }
+```
+
+| 테이블 | 쓰는 서비스 | 마이그레이션 |
+|---|---|---|
+| `articles` | news-preprocessor | `0001` |
+| `clusters`, `article_clusters` | news-clusterer | `0002` |
+| `cluster_summaries`, `companies`, `company_aliases`, `entities`, `cluster_entities`, `relations` | news-graph-builder | `0003` |
+| `themes`, `theme_companies` | news-graph-builder | `0004` |
+
+- `entities` 의 유일성: 기업 노드는 `corp_code` 로, 그 외 개체는 `(name, type)` 으로 유일합니다 (둘 다 부분 유니크 인덱스).
+- `clusters` 를 참조하는 FK 는 모두 `ON DELETE CASCADE` 라서, news-clusterer 가 클러스터를 지우면 요약과 그래프 행도 함께 지워집니다.
+- `themes` / `theme_companies` 는 매 실행마다 통째로 교체되는 참조 데이터이며, 구성 종목은 KOSPI 200 이면서 `companies` 에 있는 종목만 저장합니다.
+
 ## 환경 변수
 
 서비스별 설정은 각 서비스의 접두사가 붙은 환경 변수로 읽습니다. "필수"가 아닌 값은 기본값이 있습니다.
