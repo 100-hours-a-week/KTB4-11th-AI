@@ -114,7 +114,7 @@ def test_theme_members_records_membership_and_nothing_else():
 
 
 def test_universe_members_dedups_on_ts_index_code_and_symbol():
-    # This is what makes universe/repository.py's day-truncated ts collapse
+    # This is what makes universe.py's day-truncated ts collapse
     # two same-day runs into one snapshot rather than appending a second.
     keys = _dedup_keys(_statement_for("universe_members"))
     assert [k.strip() for k in keys.split(",")] == ["ts", "index_code", "symbol"]

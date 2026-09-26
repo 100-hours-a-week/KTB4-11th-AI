@@ -22,7 +22,7 @@ from market_collector.kiwoom.themes import ThemeClient
 from market_collector.settings import Settings
 from market_collector.store import Store, questdb_sink
 from market_collector.themes import snapshot
-from market_collector.universe import IndexClient, fetch_members, latest_members, sync_universe
+from market_collector.universe import IndexClient, fetch_members, latest_members, upsert_members
 
 TIMEFRAMES = ("1m", "15m", "1h", "1d")
 
@@ -179,7 +179,7 @@ def run_universe(settings: Settings, now: datetime) -> int:
         )
         members = fetch_members(client, settings.index_code)
         with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
-            return sync_universe(sink, now, settings.index_code, members)
+            return upsert_members(sink, now, settings.index_code, members)
     finally:
         transport.close()
 
