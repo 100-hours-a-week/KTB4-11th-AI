@@ -4,9 +4,11 @@
 
 **Goal:** Collect one year of 1-minute, 15-minute, 1-hour and daily candles for the KOSPI 200 from Kiwoom, compute eight technical indicators over regular-session candles, and store candles, indicators and daily theme data in QuestDB.
 
-**Architecture:** A new `services/market-collector` owns everything except the QuestDB DDL, which lives in `infrastructure/questdb/` so that no service can create schema at boot. All four timeframes are fetched directly from Kiwoom's chart endpoints — nothing is resampled. Backfill pages backwards through `next-key` sequentially per symbol, parallel across five Kiwoom accounts, and persists a cursor per symbol and timeframe so an interrupted run resumes. Phase 1 has no WebSocket and no live path; every write goes through REST.
+**Architecture:** A new `services/market-collector` owns everything except the QuestDB DDL, which lives in `infrastructure/questdb/` so that no service can create schema at boot. No timeframe is ever resampled from another: 15-minute, 1-hour and daily candles come from Kiwoom's chart endpoints, and 1-minute candles are aggregated from WebSocket trade ticks. Backfill pages backwards through `next-key` sequentially per symbol, parallel across five Kiwoom accounts, and persists a cursor per symbol and timeframe so an interrupted run resumes.
 
-**Tech Stack:** Python 3.13, uv workspace, `pydantic-settings`, `httpx`, `questdb` (ILP ingestion), `psycopg` (QuestDB reads over the Postgres wire protocol), `ktb-market-analyzer` (TA-Lib indicators), `ktb-core` (logging), pytest.
+**Scope note:** Tasks 1–15 below are Phase 1, which had no live path — every write went through REST. The live path and the intraday refresh landed after the plan; see *Beyond this plan* at the end for what changed and why.
+
+**Tech Stack:** Python 3.13 (CI also 3.14), uv workspace, `pydantic-settings`, `httpx`, `websockets`, `numpy`, `questdb` (ILP ingestion), `psycopg` (QuestDB reads over the Postgres wire protocol), `ktb-market-analyzer` (TA-Lib indicators), `ktb-core` (logging), pytest.
 
 **Spec:** `docs/superpowers/specs/2026-09-22-market-collector-design.md`
 
@@ -24,7 +26,10 @@
 - Environment variables use the `MARKET_COLLECTOR_` prefix.
 - Ruff line length 100, lint rules `E,F,I,UP,B`. `uv run ruff format` decides formatting.
 - **`uv run ty check` must pass**, though CI no longer runs it. `dev` replaced `ci.yaml` with `ci-dev.yaml` and `ci-main.yaml` and dropped the type-check job along with the dependency-isolation and exported-requirements jobs; the tool is still pinned at `ty==0.0.82` in the dev group and this repository's code passes it. Run it with the `migrations` group synced or it reports two false `unresolved-import` errors for `alembic` and `sqlalchemy`.
-- Commit messages are conventional-commit prefixed, in English, matching the existing history.
+- Before every commit run `uv run ruff check --fix . && uv run ruff format .`; the code blocks below may need import re-ordering or line wrapping.
+- Commit messages are conventional-commit prefixed (`feat` / `fix` / `refactor` / `chore` / `docs`), in English, matching the existing history, and end with:
+  `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`
+- **Secrets:** never `cat`, print, log or commit the Kiwoom app or secret keys. Tests use fake values only; no step in this plan needs a real key.
 
 ---
 
@@ -73,7 +78,7 @@
 
 ---
 
-## Task 1: Service scaffold and settings
+### Task 1: Service scaffold and settings
 
 **Files:**
 - Create: `services/market-collector/pyproject.toml`
@@ -308,7 +313,7 @@ git commit -m "feat: scaffold market-collector service and settings"
 
 ---
 
-## Task 2: Kiwoom response parsing
+### Task 2: Kiwoom response parsing
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/kiwoom/__init__.py`
@@ -575,7 +580,7 @@ git commit -m "feat: parse Kiwoom chart rows into typed candles"
 
 ---
 
-## Task 3: KOSPI 200 universe
+### Task 3: KOSPI 200 universe
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/universe/__init__.py`
@@ -714,7 +719,7 @@ git commit -m "feat: ship the KOSPI 200 constituent list with a validating loade
 
 ---
 
-## Task 4: Kiwoom authentication
+### Task 4: Kiwoom authentication
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/kiwoom/auth.py`
@@ -923,7 +928,7 @@ git commit -m "feat: manage Kiwoom access tokens per account"
 
 ---
 
-## Task 5: Chart paging client
+### Task 5: Chart paging client
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/kiwoom/rest.py`
@@ -1233,7 +1238,7 @@ git commit -m "feat: page Kiwoom chart endpoints with continuation headers"
 
 ---
 
-## Task 6: Theme client
+### Task 6: Theme client
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/kiwoom/themes.py`
@@ -1546,7 +1551,7 @@ git commit -m "feat: collect Kiwoom theme groups and constituents"
 
 ---
 
-## Task 7: QuestDB schema and its apply job
+### Task 7: QuestDB schema and its apply job
 
 **Files:**
 - Create: `infrastructure/questdb/schema/bars.sql`
@@ -1931,7 +1936,7 @@ git commit -m "feat: own the QuestDB candle and theme schema"
 
 ---
 
-## Task 8: Indicator computation
+### Task 8: Indicator computation
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/indicators.py`
@@ -2092,7 +2097,7 @@ git commit -m "feat: compute the eight indicator fields over a candle window"
 
 ---
 
-## Task 9: QuestDB store
+### Task 9: QuestDB store
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/store.py`
@@ -2483,7 +2488,7 @@ git commit -m "feat: write candles and theme rows to QuestDB over ILP"
 
 ---
 
-## Task 10: Backfill cursors
+### Task 10: Backfill cursors
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/cursor.py`
@@ -2706,7 +2711,7 @@ git commit -m "feat: persist backfill cursors so an interrupted run resumes"
 
 ---
 
-## Task 11: Backfill one symbol and timeframe
+### Task 11: Backfill one symbol and timeframe
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/backfill.py`
@@ -2861,7 +2866,7 @@ git commit -m "feat: backfill one symbol and timeframe to a bar-count depth"
 
 ---
 
-## Task 12: Daily theme snapshot
+### Task 12: Daily theme snapshot
 
 **Files:**
 - Create: `services/market-collector/src/market_collector/themes.py`
@@ -3056,7 +3061,7 @@ git commit -m "feat: snapshot theme groups and memberships daily"
 
 ---
 
-## Task 13: Subcommands and account sharding
+### Task 13: Subcommands and account sharding
 
 **Files:**
 - Modify: `services/market-collector/src/market_collector/backfill.py` (add `refresh_recent`)
@@ -3531,7 +3536,7 @@ git commit -m "feat: add backfill, preopen and themes subcommands"
 
 ---
 
-## Task 14: Image and CI integration
+### Task 14: Image and CI integration
 
 **Files:**
 - Create: `docker/market-collector.Dockerfile`
@@ -3677,7 +3682,7 @@ git commit -m "ci: build the market-collector image on dev and main"
 
 ---
 
-## Task 15: Rate-limit backoff
+### Task 15: Rate-limit backoff
 
 **Files:**
 - Modify: `services/market-collector/src/market_collector/kiwoom/rest.py`
@@ -3954,3 +3959,26 @@ Named so their absence is a decision rather than an oversight. All are specified
 **Scope correction.** The spec's `IndicatorWindow` and its `MARKET_COLLECTOR_INDICATOR_WINDOW` setting were removed from Tasks 1 and 8. Phase 1 computes indicators over a whole collected series and never holds a live window, so building one here would ship code with no caller.
 
 **Type consistency.** `Page(rows, next_key, has_more)`, `CandleRow`, `Cursor`, `ThemeGroup` and `ThemeMember` field names are used identically everywhere they appear. `backfill_one`'s interface block was missing the `max_pages` parameter its implementation takes, and now matches.
+
+---
+
+## Beyond this plan
+
+Tasks 1–15 delivered Phase 1. The work below landed afterwards, driven by scope
+changes rather than by a plan task, and the SDD ledger
+(`.superpowers/sdd/2026-09-22-market-collector-phase1/progress.md`) carries the
+rulings behind each one.
+
+| Change | Commit | Why |
+|---|---|---|
+| Time and count bounds on `read_regular_candles` (`since`, `limit`) | `4f0fac3`, `ef38763` | The graph layer reads a recent window or the newest N, never the whole history. `limit` means the *newest* N — the naive `ORDER BY ts ASC LIMIT n` is silently wrong |
+| The analyzer's catalogue may grow past the stored field set | `534ad9b` | Indicators added for tool use are computed on demand, not persisted. A test that pinned the two as equal would have read as "add a column" |
+| Theme memberships stored for the KOSPI 200 only; `in_universe` dropped | `0386fa4` | Nothing outside the universe can be joined against. `theme_snapshot`'s counts stay market-wide and must not be combined with the stored rows |
+| `universe/` collapsed into `universe.py` | `55f5f63` | Five files for one responsibility, 45 of 329 lines pure ceremony |
+| Shared `Pager` extracted into `kiwoom/rest.py` | `8140d04` | Three clients each restated the same pacing, backoff, paging and stall guard |
+| The live path: WebSocket ticks into 1-minute candles | `f842ca8` (reverted, restored in `9afaef8`) | The one-minute freshness requirement is the collector's, and polling cannot meet it |
+| `intraday` refresh for the timeframes the live path does not produce | `baeaedf` | Nothing kept 15-minute and 1-hour candles current during a session |
+
+**Still to measure**, all three during market hours (see the spec §4 "Not yet measured"):
+the `0B` trade-tick field ids, whether a `ka10080` page carries the minute currently
+forming, and the actual rate-limit ceiling behind the 1.3-second pacing.
