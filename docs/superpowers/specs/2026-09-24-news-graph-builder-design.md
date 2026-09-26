@@ -290,20 +290,24 @@ Dependencies: `graph` → `company`; `company`, `graph` → `database`, `common`
 
 ### Settings (`NEWS_GRAPH_BUILDER_` prefix)
 
-| Setting | Default |
-|---|---|
-| `postgres_dsn` | required |
-| `llm_base_uri` | required (includes `/v1`) |
-| `llm_model` | required |
-| `kiwoom_app_key` | required |
-| `kiwoom_secret_key` | required |
-| `dart_api_key` | required |
-| `kiwoom_base_uri` | `https://api.kiwoom.com` |
-| `summary_max_chars` | `24000` |
-| `llm_timeout` | `120` seconds |
-| `max_entities` | `30` |
-| `max_relations` | `50` |
-| `log_level` | `INFO` |
+Each domain owns its settings, like NestJS per-feature config. A function that needs them
+takes `settings: X | None = None` and reads the environment when it gets `None`, so `main()`
+only passes what it uses itself. All classes set `hide_input_in_errors=True`.
+
+| Class | Setting | Default |
+|---|---|---|
+| `settings.Settings` | `postgres_dsn` | required |
+| | `log_level` | `INFO` |
+| `company.settings.CompanySettings` | `kiwoom_app_key` | required |
+| | `kiwoom_secret_key` | required |
+| | `kiwoom_base_uri` | `https://api.kiwoom.com` |
+| | `dart_api_key` | required |
+| `graph.settings.LlmSettings` | `llm_base_uri` | required (includes `/v1`) |
+| | `llm_model` | required |
+| | `summary_max_chars` | `24000` |
+| | `llm_timeout` | `120` seconds |
+| | `max_entities` | `30` |
+| | `max_relations` | `50` |
 
 ### Dependencies and packaging
 

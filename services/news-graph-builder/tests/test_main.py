@@ -34,7 +34,7 @@ def env(monkeypatch, pg_dsn):
 @pytest.fixture
 def companies_api(monkeypatch):
     monkeypatch.setattr(entry, "fetch_kospi", lambda client, **kwargs: [("005930", "삼성전자")])
-    monkeypatch.setattr(entry, "fetch_corp_codes", lambda api_key: [SAMSUNG])
+    monkeypatch.setattr(entry, "fetch_corp_codes", lambda **kwargs: [SAMSUNG])
 
 
 @pytest.fixture
@@ -110,7 +110,7 @@ def test_a_failed_first_sync_exits_before_any_llm_call(env, engine, two_clusters
         raise RuntimeError("Kiwoom down")
 
     monkeypatch.setattr(entry, "fetch_kospi", unreachable)
-    monkeypatch.setattr(entry, "fetch_corp_codes", lambda api_key: [SAMSUNG])
+    monkeypatch.setattr(entry, "fetch_corp_codes", lambda **kwargs: [SAMSUNG])
 
     assert run() == 1
     assert llm == []
@@ -123,7 +123,7 @@ def test_a_failed_later_sync_still_builds_but_exits_1(
     with engine.begin() as conn:
         cluster(conn, [article(conn)])
 
-    def unreachable(api_key):
+    def unreachable(**kwargs):
         raise RuntimeError("DART down")
 
     monkeypatch.setattr(entry, "fetch_corp_codes", unreachable)

@@ -1,10 +1,15 @@
 import httpx
 
+from news_graph_builder.company.settings import CompanySettings
+
 
 def fetch_kospi(
-    client: httpx.Client, *, base_uri: str, app_key: str, secret_key: str
+    client: httpx.Client, *, settings: CompanySettings | None = None
 ) -> list[tuple[str, str]]:
-    base_uri = base_uri.rstrip("/")
+    settings = settings or CompanySettings()
+    base_uri = settings.kiwoom_base_uri.rstrip("/")
+    app_key = settings.kiwoom_app_key.get_secret_value()
+    secret_key = settings.kiwoom_secret_key.get_secret_value()
     headers = {"content-type": "application/json;charset=UTF-8"}
     reply = (
         client.post(

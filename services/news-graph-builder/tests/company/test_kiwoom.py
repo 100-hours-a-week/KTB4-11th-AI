@@ -3,6 +3,7 @@ import json
 import httpx
 import pytest
 from news_graph_builder.company import fetch_kospi
+from news_graph_builder.company.settings import CompanySettings
 
 BASE_URI = "https://kiwoom.test"
 
@@ -24,7 +25,13 @@ def kiwoom(pages: list[tuple[list[dict], dict]], token_reply: dict | None = None
 
 
 def fetch(client):
-    return fetch_kospi(client, base_uri=BASE_URI, app_key="app", secret_key="secret")
+    settings = CompanySettings(
+        kiwoom_app_key="app",
+        kiwoom_secret_key="secret",
+        kiwoom_base_uri=BASE_URI,
+        dart_api_key="dart",
+    )
+    return fetch_kospi(client, settings=settings)
 
 
 def test_follows_continuation_pages():

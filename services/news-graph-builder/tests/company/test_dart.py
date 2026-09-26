@@ -3,6 +3,13 @@ import traceback
 import pandas as pd
 import pytest
 from news_graph_builder.company import DartCompany, dart, fetch_corp_codes
+from news_graph_builder.company.settings import CompanySettings
+
+
+def settings_with(dart_api_key: str) -> CompanySettings:
+    return CompanySettings(
+        kiwoom_app_key="app", kiwoom_secret_key="secret", dart_api_key=dart_api_key
+    )
 
 
 def test_keeps_listed_companies(monkeypatch):
@@ -18,7 +25,7 @@ def test_keeps_listed_companies(monkeypatch):
     )
     monkeypatch.setattr(dart, "corp_codes", lambda api_key: frame)
 
-    assert fetch_corp_codes("key") == [
+    assert fetch_corp_codes(settings=settings_with("key")) == [
         DartCompany("00126380", "삼성전자", "SAMSUNG ELECTRONICS CO,.LTD", "005930"),
         DartCompany("00164779", "SK하이닉스", None, "000660"),
         DartCompany("00266961", "NAVER", None, "035420"),
@@ -33,7 +40,7 @@ def test_errors_never_carry_the_key(monkeypatch):
 
     key = "SECRET"
     with pytest.raises(RuntimeError) as info:
-        fetch_corp_codes(key)
+        fetch_corp_codes(settings=settings_with(key))
 
     assert "SECRET" not in "".join(traceback.format_exception(info.value))
     assert info.value.__suppress_context__ is True
@@ -46,4 +53,4 @@ def test_dart_status_errors_keep_their_message(monkeypatch):
     monkeypatch.setattr(dart, "corp_codes", refusing)
 
     with pytest.raises(RuntimeError, match="020"):
-        fetch_corp_codes("key")
+        fetch_corp_codes(settings=settings_with("key"))

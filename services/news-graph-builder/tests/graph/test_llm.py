@@ -4,6 +4,7 @@ import httpx
 import pytest
 from news_graph_builder.graph import Entity, Extraction, Relation, extract
 from news_graph_builder.graph.llm import EXAMPLE_ARTICLE, EXAMPLE_REPLY
+from news_graph_builder.graph.settings import LlmSettings
 
 BASE_URI = "http://llm.test/v1"
 
@@ -27,16 +28,15 @@ def client_replying(content: str, status: int = 200, seen: list | None = None) -
 
 
 def call(client, articles, max_chars=1000, max_entities=30, max_relations=50):
-    return extract(
-        client,
-        articles,
-        base_uri=BASE_URI,
-        model="test-model",
-        max_chars=max_chars,
-        timeout=5,
+    settings = LlmSettings(
+        llm_base_uri=BASE_URI,
+        llm_model="test-model",
+        summary_max_chars=max_chars,
+        llm_timeout=5,
         max_entities=max_entities,
         max_relations=max_relations,
     )
+    return extract(client, articles, settings=settings)
 
 
 def test_returns_the_summary_and_graph():
@@ -152,3 +152,14 @@ def test_the_example_reply_matches_the_schema():
 
     assert len(extraction.entities) == len(EXAMPLE_REPLY["entities"])
     assert len(extraction.relations) == len(EXAMPLE_REPLY["relations"])
+
+
+def test_settings_default_to_the_environment(monkeypatch):
+    monkeypatch.setenv("NEWS_GRAPH_BUILDER_LLM_BASE_URI", "http://env-llm.test/v1")
+    monkeypatch.setenv("NEWS_GRAPH_BUILDER_LLM_MODEL", "env-model")
+    seen = []
+
+    extract(client_replying(json.dumps(REPLY), seen=seen), [("a", "b")])
+
+    assert str(seen[0].url) == "http://env-llm.test/v1/chat/completions"
+    assert json.loads(seen[0].content)["model"] == "env-model"

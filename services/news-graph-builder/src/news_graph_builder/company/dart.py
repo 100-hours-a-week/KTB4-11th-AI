@@ -1,9 +1,12 @@
 from opendartreader.dart_list import corp_codes
 
 from news_graph_builder.company.dto import DartCompany
+from news_graph_builder.company.settings import CompanySettings
 
 
-def fetch_corp_codes(api_key: str) -> list[DartCompany]:
+def fetch_corp_codes(*, settings: CompanySettings | None = None) -> list[DartCompany]:
+    settings = settings or CompanySettings()
+    api_key = settings.dart_api_key.get_secret_value()
     try:
         frame = corp_codes(api_key)
     except Exception as error:

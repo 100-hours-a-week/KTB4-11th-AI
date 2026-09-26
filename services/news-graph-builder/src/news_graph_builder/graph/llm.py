@@ -4,6 +4,7 @@ from collections.abc import Sequence
 import httpx
 
 from news_graph_builder.graph.dto import Entity, Extraction, Relation
+from news_graph_builder.graph.settings import LlmSettings
 
 SYSTEM_PROMPT = """\
 # 경제 뉴스 지식 그래프 추출 지침
@@ -137,13 +138,12 @@ def extract(
     client: httpx.Client,
     articles: Sequence[tuple[str, str]],
     *,
-    base_uri: str,
-    model: str,
-    max_chars: int,
-    timeout: float,
-    max_entities: int,
-    max_relations: int,
+    settings: LlmSettings | None = None,
 ) -> Extraction:
+    settings = settings or LlmSettings()
+    max_chars = settings.summary_max_chars
+    max_entities = settings.max_entities
+    max_relations = settings.max_relations
     blocks: list[str] = []
     used = 0
     for title, body in articles:
@@ -163,16 +163,16 @@ def extract(
         articles="\n\n---\n\n".join(blocks),
     )
     response = client.post(
-        f"{base_uri.rstrip('/')}/chat/completions",
+        f"{settings.llm_base_uri.rstrip('/')}/chat/completions",
         json={
-            "model": model,
+            "model": settings.llm_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             "response_format": RESPONSE_FORMAT,
         },
-        timeout=timeout,
+        timeout=settings.llm_timeout,
     )
     response.raise_for_status()
     content = None

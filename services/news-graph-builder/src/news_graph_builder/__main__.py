@@ -40,13 +40,8 @@ def main() -> None:
             sys.exit(0)
         run_lock.commit()
         try:
-            kospi = fetch_kospi(
-                client,
-                base_uri=settings.kiwoom_base_uri,
-                app_key=settings.kiwoom_app_key.get_secret_value(),
-                secret_key=settings.kiwoom_secret_key.get_secret_value(),
-            )
-            dart = fetch_corp_codes(settings.dart_api_key.get_secret_value())
+            kospi = fetch_kospi(client)
+            dart = fetch_corp_codes()
             with engine.begin() as conn:
                 joined, merged = sync_companies(conn, kospi, dart)
             logger.info(
@@ -72,16 +67,7 @@ def main() -> None:
                     articles = find_cluster_articles(conn, cluster_id)
                 if not articles:
                     continue
-                extraction = extract(
-                    client,
-                    articles,
-                    base_uri=settings.llm_base_uri,
-                    model=settings.llm_model,
-                    max_chars=settings.summary_max_chars,
-                    timeout=settings.llm_timeout,
-                    max_entities=settings.max_entities,
-                    max_relations=settings.max_relations,
-                )
+                extraction = extract(client, articles)
                 with engine.begin() as conn:
                     if not lock_cluster(conn, cluster_id, seen):
                         logger.info("cluster %d changed during extraction, skipped", cluster_id)
