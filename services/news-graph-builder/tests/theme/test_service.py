@@ -65,7 +65,11 @@ def test_main_stocks_match_by_code_or_normalized_name(engine, companies, main_st
 
 
 def test_themes_without_kospi200_members_are_still_stored(engine, companies):
-    sync(engine, [Theme("100", "HBM", ""), Theme("200", "2차전지", "")], {"100": [], "200": []})
+    sync(
+        engine,
+        [Theme("100", "HBM", ""), Theme("200", "2차전지", "")],
+        {"100": [ThemeMember("005930", "삼성전자")], "200": []},
+    )
 
     with engine.connect() as conn:
         names = conn.execute(sa.text("SELECT name FROM themes ORDER BY theme_code")).scalars().all()
@@ -92,6 +96,15 @@ def test_empty_kiwoom_data_raises_and_keeps_the_old_tables(engine, companies, th
 
     with pytest.raises(ValueError):
         sync(engine, themes, {}, kospi200=kospi200)
+
+    assert memberships(engine) == [("100", "00126380", False)]
+
+
+def test_no_kept_member_raises_and_keeps_the_old_tables(engine, companies):
+    sync(engine, [Theme("100", "HBM", "")], {"100": [ThemeMember("005930", "삼성전자")]})
+
+    with pytest.raises(ValueError):
+        sync(engine, [Theme("200", "2차전지", "")], {"200": [ThemeMember("999999", "없는회사")]})
 
     assert memberships(engine) == [("100", "00126380", False)]
 

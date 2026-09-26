@@ -39,6 +39,8 @@ def sync_themes(
         (theme_code, corp_code, is_main)
         for (theme_code, corp_code), is_main in is_main_by_key.items()
     ]
+    if not memberships:
+        raise ValueError("no theme member is a KOSPI 200 company")
     replace_themes(conn, themes=unique_themes, memberships=memberships)
     main = sum(is_main for _, _, is_main in memberships)
     return len(memberships), main, skipped

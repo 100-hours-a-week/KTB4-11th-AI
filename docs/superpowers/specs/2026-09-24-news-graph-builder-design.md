@@ -295,8 +295,8 @@ the same `cont-yn` / `next-key` paging as `ka10099`; the shared `kiwoom` module 
    part is trimmed, and a member matches when a part equals its `stk_cd` or its
    `normalize()`d `stk_nm` equals the `normalize()`d part. A main stock that is not a kept
    member simply has no row.
-7. **Guard:** zero themes or zero KOSPI 200 codes is a failure, and nothing is written, so
-   an outage never empties the tables.
+7. **Guard:** zero themes, zero KOSPI 200 codes, or zero kept memberships is a failure,
+   and nothing is written, so an outage never empties the tables.
 8. **Replace**, in one transaction: delete `theme_companies` and `themes`, then insert
    every theme from step 1 (including themes with no KOSPI 200 member) and the kept
    memberships with their `is_main` flag.
