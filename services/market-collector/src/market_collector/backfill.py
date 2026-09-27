@@ -4,8 +4,8 @@ from datetime import datetime
 from typing import Protocol
 
 from market_collector.cursor import CursorStore
+from market_collector.kiwoom.official import Page
 from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
-from market_collector.kiwoom.rest import Page
 from market_collector.store import CandleRow, Store
 
 __all__ = [

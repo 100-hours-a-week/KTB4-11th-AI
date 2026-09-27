@@ -9,8 +9,8 @@ from market_collector.backfill import (
     collect,
 )
 from market_collector.cursor import CursorStore
+from market_collector.kiwoom.official import Page
 from market_collector.kiwoom.parse import KST
-from market_collector.kiwoom.rest import Page
 from market_collector.store import Store
 
 BASE_DT = "20260921"

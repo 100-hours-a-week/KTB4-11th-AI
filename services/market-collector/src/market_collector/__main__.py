@@ -10,9 +10,8 @@ from ktb_core.logging import setup_logging
 
 from market_collector.backfill import backfill_one, refresh_recent
 from market_collector.cursor import CursorStore
-from market_collector.kiwoom.auth import TokenStore
+from market_collector.kiwoom.official import ChartClient, build_auth, build_client
 from market_collector.kiwoom.parse import KST
-from market_collector.kiwoom.rest import ChartClient, HttpxTransport
 from market_collector.kiwoom.themes import ThemeClient
 from market_collector.live import (
     Aggregator,
@@ -53,13 +52,9 @@ def previous_session_start(now: datetime) -> datetime:
     return start.astimezone(UTC)
 
 
-def _client(settings: Settings, index: int) -> tuple[ChartClient, HttpxTransport]:
-    transport = HttpxTransport()
+def _client(settings: Settings, index: int) -> ChartClient:
     account = settings.kiwoom_accounts[index]
-    client = ChartClient(
-        TokenStore(account, transport), transport, interval=settings.request_interval
-    )
-    return client, transport
+    return ChartClient(build_client(account, settings.kiwoom_mode))
 
 
 def run_backfill(settings: Settings, today: datetime, max_pages: int | None = None) -> int:
@@ -71,26 +66,23 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
     cursors = CursorStore(settings.cursor_path)
 
     def worker(index: int, bucket: list[str]) -> int:
-        client, transport = _client(settings, index)
-        try:
-            written = 0
-            with questdb.connect(settings.questdb_conf) as db:
-                store = Store(db)
-                for symbol in bucket:
-                    for timeframe in TIMEFRAMES:
-                        written += backfill_one(
-                            client,
-                            store,
-                            cursors,
-                            symbol,
-                            timeframe,
-                            base_dt,
-                            settings.backfill_depths[timeframe],
-                            max_pages=max_pages,
-                        )
-            return written
-        finally:
-            transport.close()
+        client = _client(settings, index)
+        written = 0
+        with questdb.connect(settings.questdb_conf) as db:
+            store = Store(db)
+            for symbol in bucket:
+                for timeframe in TIMEFRAMES:
+                    written += backfill_one(
+                        client,
+                        store,
+                        cursors,
+                        symbol,
+                        timeframe,
+                        base_dt,
+                        settings.backfill_depths[timeframe],
+                        max_pages=max_pages,
+                    )
+        return written
 
     with ThreadPoolExecutor(max_workers=len(groups)) as pool:
         totals = list(pool.map(lambda pair: worker(*pair), enumerate(groups)))
@@ -118,17 +110,14 @@ def _refresh(
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
     def worker(index: int, bucket: list[str]) -> int:
-        client, transport = _client(settings, index)
-        try:
-            written = 0
-            with questdb.connect(settings.questdb_conf) as db:
-                store = Store(db)
-                for symbol in bucket:
-                    for timeframe in timeframes:
-                        written += refresh_recent(client, store, symbol, timeframe, base_dt, since)
-            return written
-        finally:
-            transport.close()
+        client = _client(settings, index)
+        written = 0
+        with questdb.connect(settings.questdb_conf) as db:
+            store = Store(db)
+            for symbol in bucket:
+                for timeframe in timeframes:
+                    written += refresh_recent(client, store, symbol, timeframe, base_dt, since)
+        return written
 
     with ThreadPoolExecutor(max_workers=len(groups)) as pool:
         totals = list(pool.map(lambda pair: worker(*pair), enumerate(groups)))
@@ -154,34 +143,24 @@ def run_intraday(settings: Settings, now: datetime) -> int:
 
 
 def run_themes(settings: Settings, now: datetime) -> tuple[int, int]:
-    transport = HttpxTransport()
-    try:
-        client = ThemeClient(
-            TokenStore(settings.kiwoom_accounts[0], transport),
-            transport,
-            interval=settings.request_interval,
-        )
-        with questdb.connect(settings.questdb_conf) as db:
-            store = Store(db)
-            universe = store.latest_members(settings.index_code)
-            return snapshot(client, store, universe, settings.theme_date_tps, now)
-    finally:
-        transport.close()
+    client = ThemeClient(
+        build_client(settings.kiwoom_accounts[0], settings.kiwoom_mode),
+        interval=settings.request_interval,
+    )
+    with questdb.connect(settings.questdb_conf) as db:
+        store = Store(db)
+        universe = store.latest_members(settings.index_code)
+        return snapshot(client, store, universe, settings.theme_date_tps, now)
 
 
 def run_universe(settings: Settings, now: datetime) -> int:
-    transport = HttpxTransport()
-    try:
-        client = IndexClient(
-            TokenStore(settings.kiwoom_accounts[0], transport),
-            transport,
-            interval=settings.request_interval,
-        )
-        members = fetch_members(client, settings.index_code)
-        with questdb.connect(settings.questdb_conf) as db:
-            return upsert_members(Store(db), now, settings.index_code, members)
-    finally:
-        transport.close()
+    client = IndexClient(
+        build_client(settings.kiwoom_accounts[0], settings.kiwoom_mode),
+        interval=settings.request_interval,
+    )
+    members = fetch_members(client, settings.index_code)
+    with questdb.connect(settings.questdb_conf) as db:
+        return upsert_members(Store(db), now, settings.index_code, members)
 
 
 def run_live(settings: Settings, now: datetime) -> None:
@@ -201,9 +180,8 @@ def run_live(settings: Settings, now: datetime) -> None:
         sum(len(groups) for groups in plan),
     )
 
-    transport = HttpxTransport()
-    tokens = TokenStore(settings.kiwoom_accounts[0], transport)
-    token = tokens.token()
+    auth = build_auth(settings.kiwoom_accounts[0], settings.kiwoom_mode)
+    token = auth.access_token()
     on_date = session_date(now)
 
     async def connect(url: str) -> Socket:
@@ -226,10 +204,7 @@ def run_live(settings: Settings, now: datetime) -> None:
                 *readers,
             )
 
-    try:
-        asyncio.run(go())
-    finally:
-        transport.close()
+    asyncio.run(go())
 
 
 def main() -> None:

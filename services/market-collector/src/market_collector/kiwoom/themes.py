@@ -1,9 +1,6 @@
-import time
-from collections.abc import Callable
 from dataclasses import dataclass
 
-from market_collector.kiwoom.auth import TokenStore, Transport
-from market_collector.kiwoom.rest import Pager
+from kiwoom import KiwoomClient
 
 __all__ = ["ThemeClient", "ThemeGroup", "ThemeMember"]
 
@@ -53,16 +50,31 @@ class ThemeMember:
 class ThemeClient:
     def __init__(
         self,
-        tokens: TokenStore,
-        transport: Transport,
+        client: KiwoomClient,
         interval: float = 1.3,
-        sleep: Callable[[float], None] = time.sleep,
-        max_retries: int = 5,
-        backoff_base: float = 2.0,
     ) -> None:
-        self._pager = Pager(
-            tokens, transport, THEME_PATH, interval, sleep, max_retries, backoff_base
-        )
+        self._client = client
+        self._interval = interval
+
+    def _rows(self, api_id: str, array_field: str, body: dict[str, object]):
+        rows = []
+        seen = set()
+        for response in self._client.iterate_pages(
+            api_id=api_id,
+            path=THEME_PATH,
+            body=body,
+            max_pages=0,
+            page_delay_seconds=self._interval,
+        ):
+            key = response.continuation.next_key
+            if response.continuation.has_next and key in seen:
+                raise RuntimeError(f"stalled paging {api_id}: next_key={key!r}")
+            seen.add(key)
+            page_rows = response.body.get(array_field, [])
+            if not isinstance(page_rows, list):
+                raise TypeError(f"{array_field} is not a list: {type(page_rows)!r}")
+            rows.extend(page_rows)
+        return rows
 
     def groups(self, date_tp: int) -> list[ThemeGroup]:
         body: dict[str, object] = {
@@ -73,11 +85,8 @@ class ThemeClient:
             "flu_pl_amt_tp": "1",
             "stex_tp": "1",
         }
-        return self._pager.walk(
-            GROUPS_API_ID,
-            "thema_grp",
-            body,
-            lambda row: ThemeGroup(
+        return [
+            ThemeGroup(
                 code=row["thema_grp_cd"],
                 name=row["thema_nm"],
                 date_tp=date_tp,
@@ -87,9 +96,9 @@ class ThemeClient:
                 rising_count=_count(row.get("rising_stk_num")),
                 falling_count=_count(row.get("fall_stk_num")),
                 main_stocks=row.get("main_stk", ""),
-            ),
-            f"theme groups date_tp={date_tp}",
-        )
+            )
+            for row in self._rows(GROUPS_API_ID, "thema_grp", body)
+        ]
 
     def members(self, theme_code: str, date_tp: int) -> list[ThemeMember]:
         body: dict[str, object] = {
@@ -97,14 +106,11 @@ class ThemeClient:
             "thema_grp_cd": theme_code,
             "stex_tp": "1",
         }
-        return self._pager.walk(
-            MEMBERS_API_ID,
-            "thema_comp_stk",
-            body,
-            lambda row: ThemeMember(
+        return [
+            ThemeMember(
                 theme_code=theme_code,
                 symbol=row["stk_cd"],
                 stock_name=row.get("stk_nm", ""),
-            ),
-            f"theme members theme_code={theme_code}",
-        )
+            )
+            for row in self._rows(MEMBERS_API_ID, "thema_comp_stk", body)
+        ]

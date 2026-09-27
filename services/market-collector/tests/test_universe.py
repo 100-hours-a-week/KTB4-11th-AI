@@ -1,11 +1,8 @@
-import types
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-from market_collector.kiwoom.auth import TokenStore
-from market_collector.kiwoom.rest import KiwoomRequestError
-from market_collector.settings import KiwoomAccount
+from kiwoom import Continuation, KiwoomResponse
 from market_collector.store import Store
 from market_collector.universe import (
     MEMBERS_API_ID,
@@ -17,8 +14,6 @@ from market_collector.universe import (
     upsert_members,
 )
 
-ACCOUNT = KiwoomAccount(app_key="k", secret_key="s")
-TOKEN_OK = {"return_code": 0, "token": "t1", "token_type": "Bearer", "expires_dt": "20270101000000"}
 TS = datetime(2026, 9, 25, 6, 0, tzinfo=UTC)
 
 
@@ -26,14 +21,14 @@ ROW = {"stk_cd": "005930", "stk_nm": "삼성전자"}
 ALPHANUMERIC_ROW = {"stk_cd": "0126Z0", "stk_nm": "삼성에피스홀딩스"}
 
 
-class FakeTransport:
+class FakeClient:
     def __init__(self, *responses):
-        self.responses = list(responses)
+        self.responses = responses
         self.calls = []
 
-    def post(self, path, body, headers):
-        self.calls.append((path, dict(body), dict(headers)))
-        return self.responses.pop(0)
+    def iterate_pages(self, **kwargs):
+        self.calls.append(kwargs)
+        yield from self.responses
 
 
 class FakeSink:
@@ -51,91 +46,64 @@ class FakeSink:
         return nullcontext(self)
 
 
-def _client(*responses):
-    transport = FakeTransport(({}, TOKEN_OK), *responses)
-    return IndexClient(TokenStore(ACCOUNT, transport), transport, sleep=lambda _: None), transport
+def _response(rows, next_key=None):
+    return KiwoomResponse(
+        {"return_code": 0, "inds_stkpc": rows},
+        Continuation(next_key is not None, next_key, "Y" if next_key else "N"),
+        {},
+    )
 
 
 def _member(symbol="005930", index_code="201", stock_name="삼성전자"):
     return IndexMember(index_code=index_code, symbol=symbol, stock_name=stock_name)
 
 
-def _fake_psycopg(rows, seen=None):
-    class FakeCursor:
-        def execute(self, query, params):
-            if seen is not None:
-                seen["query"], seen["params"] = str(query), params
-
-        def fetchall(self):
-            return rows
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    class FakeConnection:
-        def cursor(self):
-            return FakeCursor()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-    return types.SimpleNamespace(connect=lambda dsn: FakeConnection())
-
-
 def test_members_parses_a_single_page():
-    client, transport = _client(({"cont-yn": "N"}, {"return_code": 0, "inds_stkpc": [ROW]}))
+    official = FakeClient(_response([ROW]))
+    client = IndexClient(official, interval=0)
 
     members = client.members("201")
 
     assert len(members) == 1
     assert members[0] == IndexMember(index_code="201", symbol="005930", stock_name="삼성전자")
 
-    path, sent, headers = transport.calls[1]
-    assert path == "/api/dostk/sect"
-    assert headers["api-id"] == MEMBERS_API_ID
-    assert sent == {"mrkt_tp": "0", "inds_cd": "201", "stex_tp": "1"}
+    call = official.calls[0]
+    assert call["path"] == "/api/dostk/sect"
+    assert call["api_id"] == MEMBERS_API_ID
+    assert call["body"] == {"mrkt_tp": "0", "inds_cd": "201", "stex_tp": "1"}
 
 
 def test_members_follows_continuation_to_the_end():
-    page1 = ({"cont-yn": "Y", "next-key": "NK1"}, {"return_code": 0, "inds_stkpc": [ROW]})
-    page2 = (
-        {"cont-yn": "N"},
-        {"return_code": 0, "inds_stkpc": [{**ROW, "stk_cd": "000660", "stk_nm": "SK하이닉스"}]},
+    client = IndexClient(
+        FakeClient(
+            _response([ROW], "NK1"),
+            _response([{**ROW, "stk_cd": "000660", "stk_nm": "SK하이닉스"}]),
+        ),
+        interval=0,
     )
-    client, transport = _client(page1, page2)
 
     members = client.members("201")
 
     assert [m.symbol for m in members] == ["005930", "000660"]
-    assert transport.calls[2][2]["next-key"] == "NK1"
 
 
 def test_members_stops_and_raises_when_next_key_stops_advancing():
-    stuck = ({"cont-yn": "Y", "next-key": "STUCK"}, {"return_code": 0, "inds_stkpc": [ROW]})
-    client, transport = _client(stuck, stuck)
+    client = IndexClient(FakeClient(_response([ROW], "STUCK"), _response([ROW], "STUCK")), 0)
 
-    with pytest.raises(KiwoomRequestError, match="STUCK"):
+    with pytest.raises(RuntimeError, match="STUCK"):
         client.members("201")
-
-    assert len(transport.calls) == 3
 
 
 def test_fetch_members_accepts_alphanumeric_codes_that_are_not_six_digits():
 
-    client, _ = _client(({"cont-yn": "N"}, {"return_code": 0, "inds_stkpc": [ALPHANUMERIC_ROW]}))
+    client = IndexClient(FakeClient(_response([ALPHANUMERIC_ROW])), 0)
 
     assert fetch_members(client, "201")[0].symbol == "0126Z0"
 
 
 def test_fetch_members_rejects_a_symbol_that_is_not_six_alphanumeric_characters():
     body = {"return_code": 0, "inds_stkpc": [{"stk_cd": "5930", "stk_nm": "bad"}]}
-    client, _ = _client(({"cont-yn": "N"}, body))
+    client = IndexClient(FakeClient(_response(body["inds_stkpc"])), 0)
 
     with pytest.raises(ValueError, match="5930"):
         fetch_members(client, "201")

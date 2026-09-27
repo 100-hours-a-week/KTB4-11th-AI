@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,6 +25,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     questdb_conf: str
     kiwoom_accounts: list[KiwoomAccount] = Field(min_length=1)
+    kiwoom_mode: Literal["real", "demo"] = "real"
     request_interval: float = 1.3
     theme_date_tps: list[int] = [5, 20, 60]
 

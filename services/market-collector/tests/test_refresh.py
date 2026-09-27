@@ -2,7 +2,7 @@ from contextlib import nullcontext
 from datetime import UTC, datetime
 
 from market_collector.backfill import refresh_recent
-from market_collector.kiwoom.rest import Page
+from market_collector.kiwoom.official import Page
 from market_collector.store import Store
 
 
