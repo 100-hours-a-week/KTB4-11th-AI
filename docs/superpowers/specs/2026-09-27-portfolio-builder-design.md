@@ -238,8 +238,8 @@ JSON lines on stdout, one object per event, every line carrying `run_id`, `ts`, 
 
 | Event | Fields |
 |---|---|
-| `run_start` | provider, model, reasoning level, temperature (`null` when not sent), max turns, news window, previous portfolio id |
-| `ingestion` | cluster ids and count, company count, theme count, previous holdings/exits, briefing length in characters |
+| `run_start` | provider, model, reasoning level, temperature (`null` when not sent), max turns, news window |
+| `ingestion` | previous portfolio id, cluster ids and count, company count, theme count, previous holdings/exits, briefing length in characters |
 | `prompt` | full system prompt and full briefing, once per run |
 | `llm_request` | per turn, from `onPayload`: model, temperature, reasoning effort, tool names, message count — not message bodies, which repeat the whole context every turn |
 | `llm_response` | per turn: assistant text, reasoning summary if returned, tool calls, stop reason, latency, usage `input`, `output`, `cache_read`, `cache_write`, cost |
@@ -257,11 +257,15 @@ Tokens and credentials are never logged.
 package.json  bun.lock  tsconfig.json  biome.json
 src/
   main.ts  settings.ts  log.ts
+  agent.ts         -- builds the Pi Agent, turn limit, event logging
+  credentials.ts   -- file CredentialStore + openai-codex Models
+  pg_array.ts      -- Postgres array literal for ANY(...) parameters
   portfolio/
     briefing.ts  validate_portfolio.ts  normalize_weights.ts  save_portfolio.ts
   tools/
     analyze_technicals.ts  normalize_company_name.ts  get_news_cluster.ts
-    search_news_cluster.ts  search_graph.ts  find_graph_paths.ts  submit_portfolio.ts
+    search_news_cluster.ts  graph_seeds.ts  search_graph.ts  find_graph_paths.ts
+    submit_portfolio.ts
 tests/
 ```
 
@@ -279,7 +283,8 @@ The Python stub is removed: `services/portfolio-builder` leaves the uv workspace
 |---|---|
 | `POSTGRES_DSN` | required |
 | `MARKET_MCP_URL` | required (Streamable HTTP endpoint of market-analyzer-mcp) |
-| `LLM_MODEL` | required (an `openai-codex` model id) |
+| `LLM_MODEL` | required (an `openai-codex` model id, e.g. `gpt-5.5`) |
+| `THINKING_LEVEL` | `medium` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`) |
 | `OPENAI_ACCESS_TOKEN` | seeds the credential store when it is empty |
 | `OPENAI_REFRESH_TOKEN` | seeds the credential store when it is empty |
 | `OPENAI_TOKEN_EXPIRES_EPOCH` | seeds the credential store when it is empty (epoch ms) |
