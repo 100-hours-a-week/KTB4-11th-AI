@@ -11,24 +11,15 @@ def _populate(monkeypatch):
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_ACCOUNTS", ACCOUNTS)
 
 
-def test_loads_from_the_environment(monkeypatch):
+def test_loads_archive_runtime_inputs_from_the_environment(monkeypatch):
     _populate(monkeypatch)
 
     settings = Settings()
 
     assert settings.questdb_conf == QDB
-    assert [a.app_key for a in settings.kiwoom_accounts] == ["k1", "k2"]
-
-
-def test_defaults_match_the_measured_safe_values(monkeypatch):
-    _populate(monkeypatch)
-
-    settings = Settings()
-
+    assert [account.app_key for account in settings.kiwoom_accounts] == ["k1", "k2"]
     assert settings.log_level == "INFO"
-
     assert settings.request_interval == 1.3
-    assert settings.theme_date_tps == [5, 20, 60]
     assert settings.index_code == "201"
 
 
@@ -36,9 +27,7 @@ def test_index_code_can_be_overridden(monkeypatch):
     _populate(monkeypatch)
     monkeypatch.setenv("MARKET_COLLECTOR_INDEX_CODE", "150")
 
-    settings = Settings()
-
-    assert settings.index_code == "150"
+    assert Settings().index_code == "150"
 
 
 def test_kiwoom_mode_is_validated(monkeypatch):
@@ -49,41 +38,9 @@ def test_kiwoom_mode_is_validated(monkeypatch):
         Settings()
 
 
-def test_backfill_depths_default_to_the_backfill_modules_depths(monkeypatch):
-    from market_collector.backfill import DEFAULT_DEPTHS
-
-    _populate(monkeypatch)
-
-    settings = Settings()
-
-    assert settings.backfill_depths == DEFAULT_DEPTHS
-
-
-def test_backfill_depths_can_be_overridden(monkeypatch):
-    from market_collector.backfill import DEFAULT_DEPTHS
-
-    _populate(monkeypatch)
-    monkeypatch.setenv("MARKET_COLLECTOR_BACKFILL_DEPTHS", '{"1m": 100}')
-
-    settings = Settings()
-
-    assert settings.backfill_depths == {**DEFAULT_DEPTHS, "1m": 100}
-
-
-def test_backfill_depths_rejects_an_unknown_timeframe(monkeypatch):
-    _populate(monkeypatch)
-    monkeypatch.setenv("MARKET_COLLECTOR_BACKFILL_DEPTHS", '{"5m": 100}')
-
-    with pytest.raises(ValidationError, match="5m"):
-        Settings()
-
-
 @pytest.mark.parametrize(
     "missing",
-    [
-        "MARKET_COLLECTOR_QUESTDB_CONF",
-        "MARKET_COLLECTOR_KIWOOM_ACCOUNTS",
-    ],
+    ["MARKET_COLLECTOR_QUESTDB_CONF", "MARKET_COLLECTOR_KIWOOM_ACCOUNTS"],
 )
 def test_every_required_field_is_required(monkeypatch, missing):
     _populate(monkeypatch)
