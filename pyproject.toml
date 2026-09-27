@@ -1,5 +1,6 @@
 [tool.uv.workspace]
 members = ["packages/*", "services/*"]
+exclude = ["services/portfolio-builder"]
 
 [dependency-groups]
 dev = [

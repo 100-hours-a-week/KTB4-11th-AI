@@ -86,6 +86,7 @@ jobs:
           set -euo pipefail
           audit_status=0
           for member in packages/* services/*; do
+            [ -f "$member/pyproject.toml" ] || continue
             echo "::group::$member"
             uv run deptry "$member/src" --config "$member/pyproject.toml" || audit_status=1
             echo "::endgroup::"
@@ -102,7 +103,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer news-graph-builder portfolio-builder; do
+          for pkg in news-preprocessor news-clusterer news-graph-builder; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done

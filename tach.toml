@@ -4,7 +4,6 @@ source_roots = [
     "services/news-preprocessor/src",
     "services/news-clusterer/src",
     "services/news-graph-builder/src",
-    "services/portfolio-builder/src",
 ]
 root_module = "forbid"
 
@@ -104,7 +103,3 @@ from = ["news_graph_builder.cluster"]
 [[interfaces]]
 expose = ["Entity", "Extraction", "Relation", "extract", "resolve", "write_graph"]
 from = ["news_graph_builder.graph"]
-
-[[modules]]
-path = "portfolio_builder"
-depends_on = ["ktb_core", "ktb_market_analyzer"]

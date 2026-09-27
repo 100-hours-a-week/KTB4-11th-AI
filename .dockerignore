@@ -10,3 +10,4 @@ docs/
 .github/
 compose.dev.yaml
 .superpowers/
+node_modules/
