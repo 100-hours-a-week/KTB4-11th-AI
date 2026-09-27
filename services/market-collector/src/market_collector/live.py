@@ -8,10 +8,11 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import numpy as np
+from ktb_market_reader import Candle
 
 from market_collector.indicators import indicator_series
 from market_collector.kiwoom.parse import KST, classify_session, parse_price, parse_volume
-from market_collector.store import Candle, CandleRow
+from market_collector.store import CandleRow
 
 __all__ = [
     "TICK_FIELDS",
@@ -320,7 +321,7 @@ async def drain(
 
 
 def seed_window(window: Window, dsn: str, symbols: Iterable[str], size: int = 300) -> int:
-    from market_collector.store import read_regular_candles
+    from ktb_market_reader import read_regular_candles
 
     seeded = 0
     for symbol in symbols:

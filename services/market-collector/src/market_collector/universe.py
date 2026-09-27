@@ -4,19 +4,19 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import LiteralString, Protocol, cast
+from typing import Protocol
+
+from ktb_market_reader import EmptyUniverseError
 
 from market_collector.kiwoom.auth import TokenStore, Transport
 from market_collector.kiwoom.rest import Pager
 from market_collector.store import RowSink
 
 __all__ = [
-    "EmptyUniverseError",
     "IndexClient",
     "IndexMember",
     "IndexSource",
     "fetch_members",
-    "latest_members",
     "upsert_members",
 ]
 
@@ -39,10 +39,6 @@ class IndexMember:
     index_code: str
     symbol: str
     stock_name: str
-
-
-class EmptyUniverseError(RuntimeError):
-    pass
 
 
 class IndexSource(Protocol):
@@ -118,23 +114,3 @@ def upsert_members(
     sink.flush()
     log.info("wrote %d universe_members rows for index_code=%s", written, index_code)
     return written
-
-
-def latest_members(dsn: str, index_code: str) -> frozenset[str]:
-    import psycopg
-
-    query = cast(
-        LiteralString,
-        f"SELECT symbol FROM {UNIVERSE_MEMBERS_TABLE} WHERE index_code = %s "
-        f"AND ts = (SELECT max(ts) FROM {UNIVERSE_MEMBERS_TABLE} WHERE index_code = %s)",
-    )
-    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
-        cursor.execute(query, (index_code, index_code))
-        symbols = frozenset(row[0] for row in cursor.fetchall())
-
-    if not symbols:
-        raise EmptyUniverseError(
-            f"no universe_members snapshot for index_code={index_code!r}; "
-            "run `market-collector universe` first"
-        )
-    return symbols

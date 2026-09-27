@@ -3,23 +3,13 @@ import math
 import numpy as np
 import numpy.typing as npt
 from ktb_market_analyzer.indicators import macd, roc, rsi, stochastic, williams_r
+from ktb_market_reader import INDICATOR_FIELDS
 
 __all__ = [
     "INDICATOR_FIELDS",
     "indicator_series",
     "indicators_for_latest",
 ]
-
-INDICATOR_FIELDS: tuple[str, ...] = (
-    "rsi",
-    "macd",
-    "macd_signal",
-    "macd_histogram",
-    "stochastic_k",
-    "stochastic_d",
-    "roc",
-    "williams_r",
-)
 
 Array = npt.NDArray[np.float64]
 

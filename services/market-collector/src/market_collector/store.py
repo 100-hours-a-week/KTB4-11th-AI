@@ -1,5 +1,6 @@
-"""Write QuestDB rows over ILP and read candles over PostgreSQL wire protocol.
+"""Write QuestDB rows over ILP.
 
+Reading is ktb_market_reader's job and uses the Postgres wire instead.
 QuestDB dedup upserts clear omitted columns, so later writes to the same key
 must not omit values already stored.
 """
@@ -8,41 +9,24 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, LiteralString, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from market_collector.indicators import INDICATOR_FIELDS
+from ktb_market_reader import INDICATOR_FIELDS, TIMEFRAME_TABLES
+
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 
 if TYPE_CHECKING:
     from questdb import Sender as QuestDbSender
 
 __all__ = [
-    "TIMEFRAME_TABLES",
-    "Candle",
     "CandleRow",
     "RowSink",
     "Store",
     "questdb_sink",
-    "read_regular_candles",
 ]
-
-TIMEFRAME_TABLES: dict[str, str] = {
-    "1m": "bars_1m",
-    "15m": "bars_15m",
-    "1h": "bars_1h",
-    "1d": "bars_1d",
-}
 
 THEME_SNAPSHOT_TABLE = "theme_snapshot"
 THEME_MEMBERS_TABLE = "theme_members"
-
-
-@dataclass(frozen=True)
-class Candle:
-    ts: datetime
-    high: float
-    low: float
-    close: float
 
 
 @dataclass(frozen=True)
@@ -197,50 +181,3 @@ def questdb_sink(host: str, port: int) -> Iterator[RowSink]:
 
     with Sender(IlpProtocol.Http, host, port) as sender:
         yield _QuestDbSink(sender)
-
-
-def read_regular_candles(
-    dsn: str,
-    timeframe: str,
-    symbol: str,
-    *,
-    since: datetime | None = None,
-    limit: int | None = None,
-) -> list[Candle]:
-    """Read regular-session candles oldest first.
-
-    ``since`` is inclusive. ``limit`` selects the newest rows while preserving
-    oldest-first output and must be positive.
-    """
-    if timeframe not in TIMEFRAME_TABLES:
-        raise KeyError(f"unknown timeframe: {timeframe}")
-    if limit is not None and limit <= 0:
-        raise ValueError(f"limit must be positive, got {limit}")
-
-    import psycopg
-
-    table = TIMEFRAME_TABLES[timeframe]
-    since_clause = " AND ts >= %s" if since is not None else ""
-    order_clause = "ORDER BY ts DESC LIMIT %s" if limit is not None else "ORDER BY ts ASC"
-
-    query = cast(
-        LiteralString,
-        f"SELECT ts, high, low, close FROM {table} "
-        f"WHERE symbol = %s AND session = 'regular'{since_clause} {order_clause}",
-    )
-    params: tuple[object, ...] = (symbol,)
-    if since is not None:
-        params += (since,)
-    if limit is not None:
-        params += (limit,)
-
-    with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
-        cursor.execute(query, params)
-        rows = [
-            Candle(ts=ts, high=high, low=low, close=close)
-            for ts, high, low, close in cursor.fetchall()
-        ]
-
-    if limit is not None:
-        rows.reverse()
-    return rows
