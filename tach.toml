@@ -118,5 +118,8 @@ depends_on = ["ktb_core"]
 
 [[modules]]
 path = "market_collector"
+depends_on = ["ktb_core"]
+
+[[modules]]
 path = "portfolio_rebalancer_http"
 depends_on = ["ktb_core"]
