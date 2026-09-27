@@ -2,12 +2,12 @@ from typing import Literal
 
 from mcp.server import MCPServer
 
-from market_mcp.analysis import describe, normalize_symbol, read_candles
-from market_mcp.settings import Settings
+from market_analyzer_mcp.analysis import describe, normalize_symbol, read_candles
+from market_analyzer_mcp.settings import Settings
 
 
 def build_server(settings: Settings) -> MCPServer:
-    mcp = MCPServer("market-mcp")
+    mcp = MCPServer("market-analyzer-mcp")
 
     @mcp.tool()
     def analyze_market(symbol: str, timeframe: Literal["1m", "15m", "1h", "1d"] = "1d") -> str:

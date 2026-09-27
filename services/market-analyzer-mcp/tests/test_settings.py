@@ -1,8 +1,8 @@
 import pytest
-from market_mcp.settings import Settings
+from market_analyzer_mcp.settings import Settings
 from pydantic import ValidationError
 
-REQUIRED = {"MARKET_MCP_QUESTDB_DSN": "postgresql://admin:quest@localhost:8812/qdb"}
+REQUIRED = {"MARKET_ANALYZER_MCP_QUESTDB_DSN": "postgresql://admin:quest@localhost:8812/qdb"}
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def test_missing_required_value_raises(required_env, monkeypatch, missing):
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("MARKET_MCP_PORT", "0"), ("MARKET_MCP_CANDLE_LIMIT", "0")],
+    [("MARKET_ANALYZER_MCP_PORT", "0"), ("MARKET_ANALYZER_MCP_CANDLE_LIMIT", "0")],
 )
 def test_out_of_range_values_raise(required_env, monkeypatch, name, value):
     monkeypatch.setenv(name, value)

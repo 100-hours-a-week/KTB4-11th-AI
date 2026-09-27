@@ -3,8 +3,8 @@ from datetime import datetime
 
 import numpy as np
 from ktb_market_analyzer import Candles
-from market_mcp import server
-from market_mcp.settings import Settings
+from market_analyzer_mcp import server
+from market_analyzer_mcp.settings import Settings
 from mcp import Client
 from mcp.types import TextContent
 

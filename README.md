@@ -5,7 +5,7 @@
 - `news-clusterer`: 뉴스 이벤트 단위 클러스터링
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스 데이터를 바탕으로 포트폴리오 생성
-- `market-mcp`: 종목 코드를 받아 QuestDB 봉 데이터로 기술 지표를 분석하는 MCP 서버
+- `market-analyzer-mcp`: 종목 코드를 받아 QuestDB 봉 데이터로 기술 지표를 분석하는 MCP 서버
 
 ## 데이터베이스 (ERD)
 
@@ -167,14 +167,14 @@ erDiagram
 | `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | 필수 | |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` |
 
-### market-mcp (`MARKET_MCP_`)
+### market-analyzer-mcp (`MARKET_ANALYZER_MCP_`)
 
 | 변수 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
-| `MARKET_MCP_QUESTDB_DSN` | 필수 | | QuestDB Postgres wire(8812) libpq URI. 예: `postgresql://admin:quest@questdb:8812/qdb` |
-| `MARKET_MCP_HOST` | | `0.0.0.0` | |
-| `MARKET_MCP_PORT` | | `8000` | MCP 엔드포인트는 `/mcp` (streamable HTTP) |
-| `MARKET_MCP_CANDLE_LIMIT` | | `200` | 호출마다 읽는 최신 봉 개수 |
-| `MARKET_MCP_LOG_LEVEL` | | `INFO` | |
+| `MARKET_ANALYZER_MCP_QUESTDB_DSN` | 필수 | | QuestDB Postgres wire(8812) libpq URI. 예: `postgresql://admin:quest@questdb:8812/qdb` |
+| `MARKET_ANALYZER_MCP_HOST` | | `0.0.0.0` | |
+| `MARKET_ANALYZER_MCP_PORT` | | `8000` | MCP 엔드포인트는 `/mcp` (streamable HTTP) |
+| `MARKET_ANALYZER_MCP_CANDLE_LIMIT` | | `200` | 호출마다 읽는 최신 봉 개수 |
+| `MARKET_ANALYZER_MCP_LOG_LEVEL` | | `INFO` | |
 
 인증이 없으므로 내부 네트워크에서만 노출하세요.

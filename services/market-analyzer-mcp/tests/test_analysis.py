@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from ktb_market_analyzer import Candles
 from ktb_market_analyzer.descriptions import DESCRIPTIONS
-from market_mcp.analysis import describe, normalize_symbol
+from market_analyzer_mcp.analysis import describe, normalize_symbol
 
 NEWEST = datetime(2026, 9, 25)
 

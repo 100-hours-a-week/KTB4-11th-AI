@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="MARKET_MCP_",
+        env_prefix="MARKET_ANALYZER_MCP_",
         extra="ignore",
     )
 

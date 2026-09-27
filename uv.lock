@@ -14,7 +14,7 @@ resolution-markers = [
 members = [
     "ktb-core",
     "ktb-market-analyzer",
-    "market-mcp",
+    "market-analyzer-mcp",
     "news-clusterer",
     "news-graph-builder",
     "news-preprocessor",
@@ -630,9 +630,9 @@ wheels = [
 ]
 
 [[package]]
-name = "market-mcp"
+name = "market-analyzer-mcp"
 version = "0.1.0"
-source = { editable = "services/market-mcp" }
+source = { editable = "services/market-analyzer-mcp" }
 dependencies = [
     { name = "ktb-core" },
     { name = "ktb-market-analyzer" },

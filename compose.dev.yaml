@@ -93,14 +93,14 @@ services:
         condition: service_healthy
     restart: "no"
 
-  market-mcp:
+  market-analyzer-mcp:
     profiles: ["servers"]
     build:
       context: .
-      dockerfile: docker/market-mcp.Dockerfile
+      dockerfile: docker/market-analyzer-mcp.Dockerfile
     environment:
-      - MARKET_MCP_QUESTDB_DSN=postgresql://admin:quest@questdb:8812/qdb
-      - MARKET_MCP_LOG_LEVEL=${MARKET_MCP_LOG_LEVEL:-INFO}
+      - MARKET_ANALYZER_MCP_QUESTDB_DSN=postgresql://admin:quest@questdb:8812/qdb
+      - MARKET_ANALYZER_MCP_LOG_LEVEL=${MARKET_ANALYZER_MCP_LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8010:8000"
     depends_on:

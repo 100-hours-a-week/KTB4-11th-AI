@@ -1,5 +1,5 @@
 [project]
-name = "market-mcp"
+name = "market-analyzer-mcp"
 version = "0.1.0"
 description = "MCP server reading QuestDB candles through market-analyzer"
 requires-python = ">=3.13,<3.15"
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-market-mcp = "market_mcp.__main__:main"
+market-analyzer-mcp = "market_analyzer_mcp.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }

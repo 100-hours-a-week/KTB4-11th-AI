@@ -7,14 +7,14 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 RUN uv venv "$VIRTUAL_ENV"
 
-COPY docker/requirements/market-mcp.txt ./requirements.txt
+COPY docker/requirements/market-analyzer-mcp.txt ./requirements.txt
 RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
 COPY packages/core packages/core
 COPY packages/market-analyzer packages/market-analyzer
-COPY services/market-mcp services/market-mcp
-RUN uv pip install --no-deps ./packages/core ./packages/market-analyzer ./services/market-mcp
+COPY services/market-analyzer-mcp services/market-analyzer-mcp
+RUN uv pip install --no-deps ./packages/core ./packages/market-analyzer ./services/market-analyzer-mcp
 
 FROM python:3.13-slim-bookworm AS runtime
 
@@ -26,4 +26,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 USER app
 EXPOSE 8000
-CMD ["market-mcp"]
+CMD ["market-analyzer-mcp"]
