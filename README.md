@@ -162,12 +162,7 @@ erDiagram
 | `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | | `0.2` | 키움 요청 사이 대기 시간(초) |
 | `NEWS_GRAPH_BUILDER_DART_API_KEY` | 필수 | | OpenDART API 키. `compose.dev.yaml`은 `.env`의 `OPENDART_API_KEY`에서 채움 |
 
-키움 키는 주문이 가능한 키이므로 모의투자 키나 전용 계정을 권장하고, 운영 태스크의 outbound IP를 키움에 등록해야 합니다. 키는 커밋하지 말고, 명령줄에 직접 입력하는 대신 파일에서 export 하세요.
-
 ### market-collector (`MARKET_COLLECTOR_`)
-
-`market-collector`는 한 번 실행되어 현재 KOSPI 200 구성 종목의 1분봉·일봉 누락분을
-QuestDB에 보관하고 종료합니다. 실행 전에 QuestDB SQL을 적용해야 합니다.
 
 | 변수 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
