@@ -4,7 +4,7 @@
 - `news-preprocessor`: 뉴스 수집과 임베딩
 - `news-clusterer`: 뉴스 이벤트 단위 클러스터링
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
-- `portfolio-builder`: 뉴스 데이터를 바탕으로 포트폴리오 생성
+- `portfolio-builder`: 뉴스 클러스터·그래프·테마·기술적 지표로 모델 포트폴리오 생성 (TypeScript, Pi 에이전트)
 
 ## 데이터베이스 (ERD)
 
@@ -159,9 +159,14 @@ erDiagram
 
 ### portfolio-builder (`PORTFOLIO_BUILDER_`)
 
-| 변수 | 필수 | 기본값 |
-|---|---|---|
-| `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | |
-| `PORTFOLIO_BUILDER_QUESTDB_DSN` | 필수 | |
-| `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | 필수 | |
-| `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` |
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | | 일반 `postgres://` 형식 (`+psycopg` 아님) |
+| `PORTFOLIO_BUILDER_MARKET_MCP_URL` | 필수 | | market-analyzer-mcp 주소 (Streamable HTTP) |
+| `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | | `openai-codex` 모델 id (예: `gpt-5.5`) |
+| `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` | |
+| `PORTFOLIO_BUILDER_OPENAI_ACCESS_TOKEN` / `_REFRESH_TOKEN` / `_TOKEN_EXPIRES_EPOCH` | | | 자격 증명 저장소가 비어 있을 때만 초기값으로 사용 |
+| `PORTFOLIO_BUILDER_CREDENTIALS_PATH` | | `/data/auth.json` | 영구 볼륨 경로. OpenAI가 리프레시 토큰을 갱신함 |
+| `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | | `7` | |
+| `PORTFOLIO_BUILDER_MAX_TURNS` | | `150` | |
+| `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` | |

@@ -21,6 +21,9 @@ KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
 
+cd services/portfolio-builder && bun install && bun run check && bun test   # the TypeScript member
+docker compose -f compose.dev.yaml up portfolio-builder                        # needs the env below
+
 # tests TRUNCATE tables: point them at a separate database, never at `news`
 docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run alembic upgrade head
@@ -71,9 +74,14 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI` | news-graph-builder `kiwoom` (swap in the paper-trading domain) | `https://api.kiwoom.com` |
 | `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | news-graph-builder `kiwoom` (seconds between calls) | `0.2` |
 | `NEWS_GRAPH_BUILDER_DART_API_KEY` | news-graph-builder `company`; compose fills it from `OPENDART_API_KEY` in `.env` | required |
-| `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder | required |
-| `PORTFOLIO_BUILDER_QUESTDB_DSN` | portfolio-builder | required |
-| `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | portfolio-builder | required |
+| `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder (plain `postgres://`, not `+psycopg`) | required |
+| `PORTFOLIO_BUILDER_MARKET_MCP_URL` | portfolio-builder (market-analyzer-mcp Streamable HTTP) | required |
+| `PORTFOLIO_BUILDER_LLM_MODEL` | portfolio-builder (`openai-codex` model id, e.g. `gpt-5.5`) | required |
+| `PORTFOLIO_BUILDER_THINKING_LEVEL` | portfolio-builder | `medium` |
+| `PORTFOLIO_BUILDER_OPENAI_ACCESS_TOKEN` / `_REFRESH_TOKEN` / `_TOKEN_EXPIRES_EPOCH` | portfolio-builder; seed the credential store only while it is empty | — |
+| `PORTFOLIO_BUILDER_CREDENTIALS_PATH` | portfolio-builder (persistent volume; OpenAI rotates refresh tokens) | `/data/auth.json` |
+| `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | portfolio-builder | `7` |
+| `PORTFOLIO_BUILDER_MAX_TURNS` | portfolio-builder | `150` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | portfolio-builder | `INFO` |
 
 Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
@@ -87,14 +95,14 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-preprocessor` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-clusterer` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
-| `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
+| `services/portfolio-builder` | service (TypeScript, Bun) | cron: runs once and exits | Postgres, market-analyzer-mcp (MCP) |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate only through datastores.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. There are no direct service-to-service calls.
+- **Services communicate only through datastores, with one exception:** portfolio-builder calls market-analyzer-mcp over MCP (Streamable HTTP) for technicals. news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all and writes `portfolios`, `portfolio_holdings`, `portfolio_exits` (design: `docs/superpowers/specs/2026-09-27-portfolio-builder-design.md`). There are no direct service-to-service calls.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB (market time-series) is read-only here.** Another team owns its schema and ingestion. Read it over the Postgres wire protocol (port 8812, plain psycopg). Never create or alter QuestDB tables, and don't build an ORM on top of it.
-- **Work queue:** SQS in production, Redis in development. portfolio-builder is its only consumer.
+- **Work queue:** SQS in production, Redis in development; no consumer yet (portfolio-builder runs by cron in the MVP).
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.
 - **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`). There is deliberately no shared base class in core.
@@ -103,6 +111,8 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 - **Docker:** there is one image per service (`docker/<svc>.Dockerfile`) and the build context is the repo root. Each Dockerfile installs third-party deps from `docker/requirements/<svc>.txt`, then installs first-party members from source with `--no-deps`. When a service gains a new workspace dependency, add a `COPY` line and put the dependency on the `uv pip install` line of that service's Dockerfile.
 - **In development, workspace dependencies are not isolated.** `uv sync --all-packages` puts everything in one venv, so an undeclared import still works locally. It only fails in the image build.
 - **news-graph-builder needs a Kiwoom app key and a DART key.** The Kiwoom key can place trades: prefer a paper-trading (모의투자) key via `NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI`, never commit it, and register the task's outbound IP with Kiwoom.
+- **portfolio-builder uses a personal ChatGPT subscription token (`openai-codex`).** Never commit it; the store file on the volume is mode 0600.
+- **portfolio-builder is not a uv member.** It is a Bun package excluded in `pyproject.toml`; its schema still comes from the Alembic migrations. Its company-name normalizer must match `news_graph_builder.common.normalize` — both are tested against `services/portfolio-builder/tests/fixtures/normalize_cases.json`.
 
 ## Conventions
 

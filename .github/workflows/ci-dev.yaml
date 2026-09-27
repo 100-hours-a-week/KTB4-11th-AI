@@ -72,6 +72,55 @@ jobs:
       - name: Run tests
         run: uv run pytest
 
+  portfolio-builder:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg18-trixie
+        env:
+          POSTGRES_USER: ktb
+          POSTGRES_PASSWORD: ktb
+          POSTGRES_DB: news
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U ktb -d news"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: true
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Apply database migrations
+        run: |
+          uv sync --all-packages --locked --group migrations
+          uv run alembic upgrade head
+
+      - name: Install
+        working-directory: services/portfolio-builder
+        run: bun install --frozen-lockfile
+
+      - name: Lint and type-check
+        working-directory: services/portfolio-builder
+        run: bun run check
+
+      - name: Test
+        working-directory: services/portfolio-builder
+        run: bun test
+
   dependency-audit:
     runs-on: ubuntu-latest
     steps:

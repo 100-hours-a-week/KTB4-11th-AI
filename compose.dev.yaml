@@ -93,6 +93,30 @@ services:
         condition: service_healthy
     restart: "no"
 
+  portfolio-builder:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/portfolio-builder.Dockerfile
+    environment:
+      - PORTFOLIO_BUILDER_POSTGRES_DSN=postgres://ktb:ktb@postgres:5432/news
+      - PORTFOLIO_BUILDER_MARKET_MCP_URL
+      - PORTFOLIO_BUILDER_LLM_MODEL
+      - PORTFOLIO_BUILDER_THINKING_LEVEL=${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
+      - PORTFOLIO_BUILDER_OPENAI_ACCESS_TOKEN
+      - PORTFOLIO_BUILDER_OPENAI_REFRESH_TOKEN
+      - PORTFOLIO_BUILDER_OPENAI_TOKEN_EXPIRES_EPOCH
+      - PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS=${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
+      - PORTFOLIO_BUILDER_MAX_TURNS=${PORTFOLIO_BUILDER_MAX_TURNS:-150}
+      - PORTFOLIO_BUILDER_LOG_LEVEL=${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+    volumes:
+      - portfolio-builder-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   postgres-data:
   questdb-data:
+  portfolio-builder-data:
