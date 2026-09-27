@@ -111,6 +111,8 @@ def test_service_tables_match_the_migrated_schema(
     command.upgrade(_alembic_config(), "head")
 
     def only_owned_tables(obj, name, type_, reflected, compare_to):
+        if type_ == "index" and name == "cluster_summaries_fts_idx":
+            return False
         return name in owned_tables if type_ == "table" else True
 
     with pg_engine.connect() as conn:
@@ -235,3 +237,81 @@ def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypat
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None
+
+
+def test_portfolio_rows_reference_companies_and_cascade_from_portfolios(
+    pg_dsn, pg_engine, monkeypatch
+):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO companies (corp_code, stock_code, corp_name)"
+                    " VALUES ('00126380', '005930', '삼성전자')"
+                )
+            )
+            portfolio_id = conn.execute(
+                sa.text(
+                    "INSERT INTO portfolios (cash_weight, commentary, model)"
+                    " VALUES (0.2, '총평', 'openai-codex/gpt-5.5') RETURNING id"
+                )
+            ).scalar_one()
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_holdings (portfolio_id, company_id, weight, reason)"
+                    " VALUES (:p, '00126380', 0.8, '편입 사유')"
+                ),
+                {"p": portfolio_id},
+            )
+            holding = conn.execute(
+                sa.text("SELECT cited_cluster_ids FROM portfolio_holdings")
+            ).scalar_one()
+        assert holding == []
+
+        with pytest.raises(sa.exc.IntegrityError), pg_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_exits (portfolio_id, company_id, reason)"
+                    " VALUES (:p, '99999999', '없는 회사')"
+                ),
+                {"p": portfolio_id},
+            )
+
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("DELETE FROM portfolios"))
+            remaining = conn.execute(
+                sa.text("SELECT count(*) FROM portfolio_holdings")
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE portfolios, companies CASCADE"))
+
+
+def test_cluster_summaries_have_a_full_text_index(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+    with pg_engine.connect() as conn:
+        definition = conn.execute(
+            sa.text("SELECT indexdef FROM pg_indexes WHERE indexname = 'cluster_summaries_fts_idx'")
+        ).scalar_one()
+    assert "to_tsvector('simple'" in definition
+
+
+def test_downgrade_to_0004_removes_the_portfolio_tables(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+
+    command.downgrade(config, "0004")
+    with pg_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT to_regclass('portfolios')")).scalar() is None
+        assert (
+            conn.execute(sa.text("SELECT to_regclass('cluster_summaries_fts_idx')")).scalar()
+            is None
+        )
+
+    command.upgrade(config, "head")
+    with pg_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT to_regclass('portfolios')")).scalar() is not None
