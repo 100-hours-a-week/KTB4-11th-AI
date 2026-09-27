@@ -95,6 +95,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
 | `services/market-collector` | service | single-run archive job for current KOSPI 200 OHLCV | `ktb-core` |
+| `services/market-analyzer-mcp` | service | long-running MCP server, streamable HTTP at `/mcp` (tool `analyze_technicals`) | `ktb-core`, `ktb-market-analyzer` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
