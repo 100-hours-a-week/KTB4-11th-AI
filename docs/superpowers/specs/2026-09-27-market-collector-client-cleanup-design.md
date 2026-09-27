@@ -7,8 +7,8 @@
 
 Simplify `market-collector` around QuestDB's official Python client for market-data reads
 and writes. The `market-reader` package and technical-indicator work in this service will
-be removed. The current Kiwoom implementation remains unchanged because pyheroapi does not
-support the pagination and lifecycle behavior this service needs.
+be removed. Kiwoom access moves to the official `kiwoom` runtime distributed by the
+`kwcli` package.
 
 This branch changes only `market-collector`, `market-reader`, and their directly owned
 QuestDB infrastructure and repository wiring. Other packages and services, including the
@@ -79,17 +79,30 @@ No replacement shared package or compatibility facade is introduced.
 
 ## Kiwoom access
 
-Keep `market-collector`'s current Kiwoom authentication, HTTP transport, REST pagination,
-retry, and WebSocket transport code. Do not add pyheroapi in this branch.
+Add the official PyPI distribution `kwcli`, which installs the `kiwoom` Python package from
+Kiwoom Securities' `Kiwoom-REST-API` repository. Do not copy the official runtime into this
+repository and do not add pyheroapi.
 
-The evaluated pyheroapi `develop` branch discards continuation response headers, does not
-pace successful requests, does not refresh a token during long-running backfills, and has
-incorrect request mappings for endpoints used by this service. Replacing the current client
-would therefore truncate multi-page data or require rebuilding the removed behavior in an
-adapter. Kiwoom client replacement can be reconsidered after upstream exposes the required
-behavior.
+Use `KiwoomAuth` with the official `StaticSecretProvider` and `MemoryTokenStore` so the
+service can preserve its existing `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` configuration without
+depending on interactive CLI setup, keyring, profiles, or token files. The official auth
+runtime owns token issue, expiry checks, refresh, and authentication recovery.
 
-No other service's Kiwoom implementation changes.
+Use the official `KiwoomClient` for HTTP requests. `fetch_page()` supplies one response and
+its continuation metadata for cursor-driven backfill. `iterate_pages()` handles complete
+chart, universe, and theme walks. Pass the configured request interval as
+`page_delay_seconds`; retain only a narrow service-level retry for Kiwoom rate-limit errors
+that the official client exposes but does not retry.
+
+Use `KiwoomWebSocketClient.iter_messages()` for live transport and authentication. The
+service remains responsible for subscription grouping, translating official response bodies
+into domain values, tick parsing and buffering, candle aggregation, scheduling, cursor
+persistence, and rejecting unexpectedly empty snapshot data.
+
+Delete the service's custom token store, HTTP transport, generic pager, and socket protocol
+implementation. Thin market-specific functions may remain to declare verified API IDs,
+paths, request bodies, response array names, and domain conversion. No other service's
+Kiwoom implementation changes.
 
 ## Configuration and dependencies
 
@@ -112,20 +125,20 @@ Tests cover:
 - official QuestDB-client row shapes and parameterized read queries without requiring a live
   database for unit tests;
 - all four timeframe values using one `bars` table;
-- existing Kiwoom client behavior at chart, universe, theme, and live boundaries;
+- official Kiwoom-client adaptation at chart, universe, theme, and live boundaries;
 - upstream empty/error behavior at snapshot boundaries; and
 - unchanged cursor, scheduling, candle parsing, and live aggregation behavior.
 
-Delete tests that exist only for technical indicators, the generated QuestDB schema, or
-`market-reader`. Retain the current Kiwoom transport tests. Run the affected tests, the full
-test suite, Ruff lint and formatting checks, dependency checks, and import-boundary checks.
-A live QuestDB or Kiwoom credential is not required for the default test suite.
+Delete tests that exist only for technical indicators, the removed custom Kiwoom transport,
+the generated QuestDB schema, or `market-reader`. Run the affected tests, the full test suite,
+Ruff lint and formatting checks, dependency checks, and import-boundary checks. A live
+QuestDB or Kiwoom credential is not required for the default test suite.
 
 ## Non-goals
 
 - Preserving or migrating existing QuestDB data.
 - Calculating technical indicators in `market-collector`.
 - Changing `ktb-market-analyzer` itself.
-- Replacing any Kiwoom client implementation.
+- Changing any Kiwoom client outside `market-collector`.
 - Adding a replacement abstraction for `market-reader`.
 - Running schema DDL automatically when `market-collector` starts.
