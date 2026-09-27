@@ -4,7 +4,7 @@
 **Status:** Draft for review
 **Issue:** #36
 **Depends on:** #30 (news-graph-builder: `cluster_summaries`, graph, themes). Technicals come
-from `market-analyzer-mcp`, a separate issue/PR that in turn depends on #32 (QuestDB `bars_*`).
+from `market-analyzer-mcp` (#37), which in turn depends on #32 (QuestDB `bars_*`).
 
 ## 1. Purpose and scope
 
@@ -19,7 +19,7 @@ relations and technical analysis. It must justify every stock that enters or lea
 
 ### Non-goals
 
-- `market-analyzer-mcp` itself (separate issue/PR). This spec fixes only the contract it serves.
+- `market-analyzer-mcp` itself (#37). This spec fixes only the contract it serves (§9).
 - Per-user portfolios, the rule engine, the work queue trigger.
 - Hard portfolio constraints: no maximum holdings, no maximum weight per stock.
 - Deployment mechanics (ECS task, schedule).
@@ -35,6 +35,8 @@ relations and technical analysis. It must justify every stock that enters or lea
 | Agent | `@earendil-works/pi-agent-core` `Agent` with custom `AgentTool`s | Pi chosen over LangGraph |
 | LLM | pi-ai `openai-codex` provider (ChatGPT subscription OAuth: access + refresh token) | Team decision; risk accepted (§8) |
 | Context | Code-assembled briefing + a few tools | Bounded, testable context; tools for drill-down only |
+| Grounding | The agent may use only the briefing and tool results | Decisions must be traceable to stored data |
+| Graph queries | Multi-hop traversal and path finding over `entities` / `relations` with recursive CTEs | Treat the graph as a graph without adding a graph database |
 | News search | Postgres full-text search, `simple` config, prefix terms | No new extension; Postgres has no Korean config |
 | Technicals | MCP tool `analyze_technicals(stock_code)` served by `market-analyzer-mcp` | TA-Lib and QuestDB stay on the Python side |
 | Weights | Relative; code normalizes holdings + cash to sum to 1 | The LLM should not do arithmetic |
@@ -109,7 +111,19 @@ CREATE INDEX cluster_summaries_fts_idx ON cluster_summaries
 5. Exit 0 on a saved portfolio; exit non-zero on `MAX_TURNS`, an LLM failure or an
    ingestion failure. Nothing is written unless `submit_portfolio` succeeded.
 
-### System prompt rules
+### System prompt
+
+**Goal.** The agent is the portfolio manager of one model portfolio of KOSPI stocks that
+every user of the service follows. Each run it reviews the previous portfolio against what
+has happened in the news since, and decides what to hold, at what relative weight, what to
+drop and how much to keep in cash — then submits the new portfolio with its reasons.
+
+**Grounding rule.** Every claim, reason and decision must rest only on the briefing and on
+tool results from this run. The agent must not use outside or remembered knowledge about
+companies, prices or events; if the data does not support a decision, it looks it up with a
+tool or does not make that decision.
+
+**Rules.**
 
 - Weights are relative and non-negative; the system normalizes them with cash to sum to 1.
 - Every stock not in the previous portfolio needs a `reason`.
@@ -150,11 +164,27 @@ escaped and turned into a prefix term (`삼성:*`) combined with `&`, matched ag
 Returns `cluster_id`, title, a summary excerpt and rank. Prefix terms exist because Korean
 particles attach to words: without them `삼성전자가` never matches `삼성전자`.
 
-### 5.4 `search_graph(name)`
+### 5.4 Graph tools
 
-Entities whose normalized `name` contains the normalized query (company entities also match
-through `company_aliases`), with every relation where the entity is source or target: the
-other entity, relation type, description and `cluster_id`. Capped at 50 relations.
+`entities` are nodes and `relations` are directed, typed edges, each carrying the
+`cluster_id` it came from. Both tools traverse edges in either direction with recursive
+CTEs (Postgres `CYCLE` clause, so no node repeats on a path). **Seed entities** for a name
+are those whose `name` contains the normalized query, plus the company entity whose
+`corp_code` the name resolves to through `company_aliases`.
+
+**`search_graph(name, depth = 2)`** — the neighbourhood of the seed entities up to `depth`
+hops (1–3). Returns the subgraph: nodes (id, name, type, `stock_code` for companies, hop
+distance) and edges (source, type, target, description, `cluster_id`), ordered by hop. No
+edge cap; the depth bound is the only limit, so the agent picks a smaller depth for hub
+entities.
+
+**`find_graph_paths(from_name, to_name, max_depth = 4)`** — every simple path of at most
+`max_depth` edges (1–6) between any seed of `from_name` and any seed of `to_name`, shortest
+first. Each path is the node sequence with the edge (type, direction, description,
+`cluster_id`) between each pair. Answers questions like "how does this event reach that
+company".
+
+Unmatched names return an error with up to 5 candidate entity names.
 
 ### 5.5 `submit_portfolio(...)`
 
@@ -212,7 +242,7 @@ src/
     briefing.ts  validate_portfolio.ts  normalize_weights.ts  save_portfolio.ts
   tools/
     analyze_technicals.ts  normalize_company_name.ts  get_news_cluster.ts
-    search_news_cluster.ts  search_graph.ts  submit_portfolio.ts
+    search_news_cluster.ts  search_graph.ts  find_graph_paths.ts  submit_portfolio.ts
 tests/
 ```
 
@@ -233,7 +263,7 @@ The Python stub is removed: `services/portfolio-builder` leaves the uv workspace
 | `LLM_MODEL` | required (an `openai-codex` model id) |
 | `OPENAI_ACCESS_TOKEN` | seeds the credential store when it is empty |
 | `OPENAI_REFRESH_TOKEN` | seeds the credential store when it is empty |
-| `OPENAI_TOKEN_EXPIRES` | seeds the credential store when it is empty (epoch ms) |
+| `OPENAI_TOKEN_EXPIRES_EPOCH` | seeds the credential store when it is empty (epoch ms) |
 | `CREDENTIALS_PATH` | `/data/auth.json` |
 | `NEWS_WINDOW_DAYS` | `7` |
 | `MAX_TURNS` | `150` |
@@ -283,7 +313,8 @@ redesign.
 - Unit: `normalize_weights`; every `validate_portfolio` rule, including first run (no
   previous portfolio); `normalize_company_name` against the shared case file.
 - Tools against a Postgres test database (`KTB_TEST_POSTGRES_DSN`, skipped when unset):
-  alias resolution and candidates, `search_news_cluster` prefix matching, `search_graph`,
+  alias resolution and candidates, `search_news_cluster` prefix matching, `search_graph`
+  depth bounds and cycle safety, `find_graph_paths` ordering on a small fixture graph,
   `get_news_cluster`, `save_portfolio` atomicity.
 - `analyze_technicals` against an in-process MCP server from `@modelcontextprotocol/sdk`.
 - End-to-end: the agent with a scripted stream function calls tools, submits an invalid
@@ -296,3 +327,7 @@ redesign.
   compound splitting.
 - One global model portfolio; no per-user state.
 - `analyze_technicals` quality depends entirely on `market-analyzer-mcp`.
+- Graph results are unbounded within the depth limit; a hub entity at depth 3 can return a
+  large subgraph.
+- The grounding rule is enforced by the prompt, not checked in code, apart from cited
+  `cluster_id`s having to exist.
