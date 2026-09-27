@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import UTC, datetime
 
 import pytest
@@ -13,7 +12,6 @@ from market_collector.live import (
     candle_row,
     connection_plan,
     drain,
-    login_message,
     parse_tick,
     register_message,
     stream,
@@ -246,91 +244,64 @@ def test_ticks_from_ignores_other_realtime_types():
     assert ticks_from(frame, DAY) == []
 
 
-class FakeSocket:
-    def __init__(self, replies, frames):
+class FakeWebSocketClient:
+    def __init__(self, replies, messages):
         self.replies = list(replies)
-        self.frames = list(frames)
+        self.messages = list(messages)
         self.sent = []
+        self.connected = []
+        self.closed = 0
 
-    async def send(self, message):
-        self.sent.append(message)
+    async def connect(self, *, api_url):
+        self.connected.append(api_url)
+
+    async def send(self, payload):
+        self.sent.append(payload)
 
     async def recv(self):
-        return json.dumps(self.replies.pop(0))
+        return self.replies.pop(0)
 
-    def __aiter__(self):
-        async def frames():
-            for frame in self.frames:
-                yield frame
+    def iter_messages(self):
+        async def messages():
+            for message in self.messages:
+                yield message
 
-        return frames()
+        return messages()
+
+    async def close(self):
+        self.closed += 1
 
 
 OK = {"return_code": 0}
 
 
-def _connect(socket):
-    async def connect(url):
-        return socket
-
-    return connect
-
-
 def test_stream_logs_in_registers_every_group_and_buffers_ticks():
     async def body():
-        frame = json.dumps(
-            {"trnm": "REAL", "data": [{"type": "0B", "item": "005930", "values": _values()}]}
-        )
-        socket = FakeSocket([OK, OK, OK], [frame])
+        frame = {
+            "trnm": "REAL",
+            "data": [{"type": "0B", "item": "005930", "values": _values()}],
+        }
+        client = FakeWebSocketClient([OK, OK], [frame])
         buffer = TickBuffer()
 
-        await stream("wss://x", "tok", [["005930"], ["000660"]], buffer, DAY, _connect(socket))
+        await stream(client, [["005930"], ["000660"]], buffer, DAY)
 
-        assert json.loads(socket.sent[0]) == json.loads(login_message("tok"))
-        assert json.loads(socket.sent[1]) == json.loads(register_message(1, ["005930"]))
-        assert json.loads(socket.sent[2]) == json.loads(register_message(2, ["000660"]))
+        assert client.connected == ["/api/dostk/websocket"]
+        assert client.sent == [register_message(1, ["005930"]), register_message(2, ["000660"])]
+        assert client.closed == 1
         assert len(buffer) == 1
-
-    asyncio.run(body())
-
-
-def test_stream_echoes_ping_unchanged():
-    async def body():
-
-        ping = json.dumps({"trnm": "PING", "nonce": "abc"})
-        socket = FakeSocket([OK, OK], [ping])
-
-        await stream("wss://x", "tok", [["005930"]], TickBuffer(), DAY, _connect(socket))
-
-        assert socket.sent[-1] == ping
-
-    asyncio.run(body())
-
-
-def test_stream_raises_when_login_is_refused():
-    async def body():
-        socket = FakeSocket([{"return_code": 3, "return_msg": "IP not registered"}], [])
-
-        with pytest.raises(RuntimeError, match="LOGIN refused"):
-            await stream("wss://x", "tok", [["005930"]], TickBuffer(), DAY, _connect(socket))
 
     asyncio.run(body())
 
 
 def test_stream_raises_when_a_group_registration_is_refused():
     async def body():
-
-        socket = FakeSocket([OK, {"return_code": 9, "return_msg": "too many items"}], [])
+        client = FakeWebSocketClient([{"return_code": 9, "return_msg": "too many items"}], [])
 
         with pytest.raises(RuntimeError, match="REG refused for group 1"):
-            await stream(
-                "wss://x",
-                "tok",
-                [[f"s{i}" for i in range(200)]],
-                TickBuffer(),
-                DAY,
-                _connect(socket),
-            )
+            await stream(client, [[f"s{i}" for i in range(200)]], TickBuffer(), DAY)
+
+        assert client.closed == 1
 
     asyncio.run(body())
 

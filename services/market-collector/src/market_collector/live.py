@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+
+from kiwoom import KiwoomWebSocketClient
 
 from market_collector.kiwoom.parse import KST, classify_session, parse_price, parse_volume
 from market_collector.store import CandleRow
@@ -14,7 +15,6 @@ __all__ = [
     "TICK_FIELDS",
     "Aggregator",
     "LiveCandle",
-    "Socket",
     "Tick",
     "TickBuffer",
     "candle_row",
@@ -239,10 +239,6 @@ def register_message(group_no: int, symbols: Sequence[str]) -> str:
     )
 
 
-def login_message(token: str) -> str:
-    return json.dumps({"trnm": "LOGIN", "token": token})
-
-
 def ticks_from(payload: Mapping[str, object], on_date: datetime) -> list[Tick]:
     data = payload.get("data")
     if not isinstance(data, list):
@@ -284,7 +280,6 @@ async def drain(
             last_flush[tick.symbol] = now
 
 
-PING = "PING"
 REAL = "REAL"
 RECONNECT_BACKOFF = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 
@@ -294,54 +289,43 @@ def backoff_for(attempt: int) -> float:
 
 
 async def stream(
-    url: str,
-    token: str,
+    client: KiwoomWebSocketClient,
     groups: Sequence[Sequence[str]],
     buffer: TickBuffer,
     on_date: datetime,
-    connect: Callable[[str], Awaitable["Socket"]],
 ) -> None:
-    """Log in, register groups, echo PING frames, and enqueue ticks."""
-    socket = await connect(url)
-    await socket.send(login_message(token))
-    reply = json.loads(await socket.recv())
-    if reply.get("return_code") != 0:
-        raise RuntimeError(f"LOGIN refused: {reply.get('return_code')} {reply.get('return_msg')}")
+    await client.connect(api_url="/api/dostk/websocket")
+    try:
+        for number, symbols in enumerate(groups, start=1):
+            await client.send(register_message(number, symbols))
+            answer = await client.recv()
+            if answer.get("return_code") != 0:
+                raise RuntimeError(
+                    f"REG refused for group {number} ({len(symbols)} symbols): "
+                    f"{answer.get('return_code')} {answer.get('return_msg')}"
+                )
+        log.info("registered %d groups on one connection", len(groups))
 
-    for number, symbols in enumerate(groups, start=1):
-        await socket.send(register_message(number, symbols))
-        answer = json.loads(await socket.recv())
-        if answer.get("return_code") != 0:
-            raise RuntimeError(
-                f"REG refused for group {number} ({len(symbols)} symbols): "
-                f"{answer.get('return_code')} {answer.get('return_msg')}"
-            )
-    log.info("registered %d groups on one connection", len(groups))
-
-    async for raw in socket:
-        message = json.loads(raw)
-        kind = message.get("trnm")
-        if kind == PING:
-            await socket.send(raw)
-        elif kind == REAL:
-            for tick in ticks_from(message, on_date):
-                buffer.put(tick)
+        async for message in client.iter_messages():
+            if isinstance(message, dict) and message.get("trnm") == REAL:
+                for tick in ticks_from(message, on_date):
+                    buffer.put(tick)
+    finally:
+        await client.close()
 
 
 async def stream_forever(
-    url: str,
-    token: str,
+    client_factory: Callable[[], KiwoomWebSocketClient],
     groups: Sequence[Sequence[str]],
     buffer: TickBuffer,
     on_date: datetime,
-    connect: Callable[[str], Awaitable["Socket"]],
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     attempt = 0
     while True:
         opened = datetime.now(UTC)
         try:
-            await stream(url, token, groups, buffer, on_date, connect)
+            await stream(client_factory(), groups, buffer, on_date)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -352,12 +336,3 @@ async def stream_forever(
         log.warning("reconnecting in %.0fs; the gap needs reconciliation", delay)
         await sleep(delay)
         attempt += 1
-
-
-type Frame = str | bytes
-
-
-class Socket(Protocol):
-    async def send(self, message: Frame) -> None: ...
-    async def recv(self) -> Frame: ...
-    def __aiter__(self) -> "AsyncIterator[Frame]": ...

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import questdb
+from kiwoom import KiwoomWebSocketClient
 from ktb_core.logging import setup_logging
 
 from market_collector.backfill import backfill_one, refresh_recent
@@ -15,7 +16,6 @@ from market_collector.kiwoom.parse import KST
 from market_collector.kiwoom.themes import ThemeClient
 from market_collector.live import (
     Aggregator,
-    Socket,
     TickBuffer,
     connection_plan,
     drain,
@@ -164,8 +164,6 @@ def run_universe(settings: Settings, now: datetime) -> int:
 
 
 def run_live(settings: Settings, now: datetime) -> None:
-    import websockets
-
     with questdb.connect(settings.questdb_conf) as db:
         symbols = sorted(Store(db).latest_members(settings.index_code))
     buffer = TickBuffer(settings.ws_queue_size)
@@ -180,20 +178,15 @@ def run_live(settings: Settings, now: datetime) -> None:
         sum(len(groups) for groups in plan),
     )
 
-    auth = build_auth(settings.kiwoom_accounts[0], settings.kiwoom_mode)
-    token = auth.access_token()
     on_date = session_date(now)
 
-    async def connect(url: str) -> Socket:
-        return await websockets.connect(url, ping_interval=None)
+    def websocket_client() -> KiwoomWebSocketClient:
+        return KiwoomWebSocketClient(build_auth(settings.kiwoom_accounts[0], settings.kiwoom_mode))
 
     async def go() -> None:
         with questdb.connect(settings.questdb_conf) as db:
             store = Store(db)
-            readers = [
-                stream_forever(settings.ws_url, token, groups, buffer, on_date, connect)
-                for groups in plan
-            ]
+            readers = [stream_forever(websocket_client, groups, buffer, on_date) for groups in plan]
             await asyncio.gather(
                 drain(
                     buffer,
