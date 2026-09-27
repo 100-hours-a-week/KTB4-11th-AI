@@ -1,7 +1,24 @@
 import math
 
 import numpy as np
-from ktb_market_analyzer import rsi
+import talib
+from ktb_market_analyzer.indicators import (
+    MacdResult,
+    StochasticResult,
+    macd,
+    roc,
+    rsi,
+    stochastic,
+    williams_r,
+)
+
+
+def _close(n: int = 50) -> np.ndarray:
+    return np.linspace(100.0, 120.0, n, dtype=np.float64)
+
+
+def _high_low(close: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    return close + 1.0, close - 1.0
 
 
 def test_rsi_matches_the_input_length():
@@ -66,3 +83,159 @@ def test_rsi_uses_wilder_smoothing_not_a_simple_average():
         simple[i] = 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
 
     assert not np.allclose(rsi(close)[14:], simple[14:], atol=1e-6)
+
+
+def test_macd_returns_arrays_matching_input_length():
+    close = _close()
+    result = macd(close)
+
+    assert isinstance(result, MacdResult)
+    assert result.macd.shape == close.shape
+    assert result.signal.shape == close.shape
+    assert result.histogram.shape == close.shape
+
+
+def test_macd_warmup_period_is_nan():
+    close = _close()
+    result = macd(close, fastperiod=12, slowperiod=26, signalperiod=9)
+
+    assert np.isnan(result.macd[:33]).all()
+    assert np.isnan(result.signal[:33]).all()
+    assert np.isnan(result.histogram[:33]).all()
+    assert math.isfinite(result.macd[33])
+    assert math.isfinite(result.signal[33])
+    assert math.isfinite(result.histogram[33])
+
+
+def test_macd_is_deterministic():
+    close = _close()
+
+    first = macd(close)
+    second = macd(close)
+
+    assert np.array_equal(first.macd, second.macd, equal_nan=True)
+    assert np.array_equal(first.signal, second.signal, equal_nan=True)
+    assert np.array_equal(first.histogram, second.histogram, equal_nan=True)
+
+
+def test_macd_signal_and_histogram_are_not_swapped():
+    close = (100 + np.cumsum(np.random.default_rng(1).normal(0, 1, 120))).astype(np.float64)
+
+    r = macd(close)
+
+    valid = ~np.isnan(r.signal)
+    assert np.allclose(r.histogram[valid], r.macd[valid] - r.signal[valid], atol=1e-9)
+    assert np.var(r.signal[valid]) > np.var(r.histogram[valid])
+
+
+def test_stochastic_returns_arrays_matching_input_length():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = stochastic(high, low, close)
+
+    assert isinstance(result, StochasticResult)
+    assert result.k.shape == close.shape
+    assert result.d.shape == close.shape
+
+
+def test_stochastic_warmup_period_is_nan():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = stochastic(high, low, close, fastk_period=14, slowk_period=3, slowd_period=3)
+
+    assert np.isnan(result.k[:17]).all()
+    assert np.isnan(result.d[:17]).all()
+    assert math.isfinite(result.k[17])
+    assert math.isfinite(result.d[17])
+
+
+def test_stochastic_is_bounded_after_warmup():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = stochastic(high, low, close)
+
+    assert np.nanmin(result.k) >= 0.0
+    assert np.nanmax(result.k) <= 100.0
+    assert np.nanmin(result.d) >= 0.0
+    assert np.nanmax(result.d) <= 100.0
+
+
+def test_stochastic_is_deterministic():
+    close = _close()
+    high, low = _high_low(close)
+
+    first = stochastic(high, low, close)
+    second = stochastic(high, low, close)
+
+    assert np.array_equal(first.k, second.k, equal_nan=True)
+    assert np.array_equal(first.d, second.d, equal_nan=True)
+
+
+def test_stochastic_d_is_the_smoothed_k():
+    close = (100 + np.cumsum(np.random.default_rng(2).normal(0, 1, 120))).astype(np.float64)
+    r = stochastic(close + 1.0, close - 1.0, close)
+    assert np.allclose(r.d[30:], talib.SMA(r.k, timeperiod=3)[30:], atol=1e-9)
+
+
+def test_roc_returns_array_matching_input_length():
+    close = _close()
+
+    assert roc(close).shape == close.shape
+
+
+def test_roc_warmup_period_is_nan():
+    close = _close()
+
+    result = roc(close, timeperiod=10)
+
+    assert np.isnan(result[:10]).all()
+    assert math.isfinite(result[10])
+
+
+def test_roc_is_deterministic():
+    close = _close()
+
+    first = roc(close)
+    second = roc(close)
+
+    assert np.array_equal(first, second, equal_nan=True)
+
+
+def test_williams_r_returns_array_matching_input_length():
+    close = _close()
+    high, low = _high_low(close)
+
+    assert williams_r(high, low, close).shape == close.shape
+
+
+def test_williams_r_warmup_period_is_nan():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = williams_r(high, low, close, timeperiod=14)
+
+    assert np.isnan(result[:13]).all()
+    assert math.isfinite(result[13])
+
+
+def test_williams_r_is_bounded_after_warmup():
+    close = _close()
+    high, low = _high_low(close)
+
+    result = williams_r(high, low, close)
+
+    assert np.nanmin(result) >= -100.0
+    assert np.nanmax(result) <= 0.0
+
+
+def test_williams_r_is_deterministic():
+    close = _close()
+    high, low = _high_low(close)
+
+    first = williams_r(high, low, close)
+    second = williams_r(high, low, close)
+
+    assert np.array_equal(first, second, equal_nan=True)
