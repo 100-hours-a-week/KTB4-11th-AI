@@ -35,7 +35,8 @@ relations and technical analysis. It must justify every stock that enters or lea
 | Agent | `@earendil-works/pi-agent-core` `Agent` with custom `AgentTool`s | Pi chosen over LangGraph |
 | LLM | pi-ai `openai-codex` provider (ChatGPT subscription OAuth: access + refresh token) | Team decision; risk accepted (§8) |
 | Context | Code-assembled briefing + a few tools | Bounded, testable context; tools for drill-down only |
-| Grounding | The agent may use only the briefing and tool results | Decisions must be traceable to stored data |
+| Grounding | Every reason must originate in the briefing or tool results; reasoning may draw on pre-trained knowledge | Stored reasons stay traceable to data without forbidding general understanding |
+| Company key | `company_id` = `companies.corp_code`, enforced by FK | Existence is verified when writing, not by a separate read |
 | Graph queries | Multi-hop traversal and path finding over `entities` / `relations` with recursive CTEs | Treat the graph as a graph without adding a graph database |
 | News search | Postgres full-text search, `simple` config, prefix terms | No new extension; Postgres has no Korean config |
 | Technicals | MCP tool `analyze_technicals(stock_code)` served by `market-analyzer-mcp` | TA-Lib and QuestDB stay on the Python side |
@@ -68,23 +69,26 @@ portfolios
 
 portfolio_holdings
   portfolio_id       bigint FK portfolios(id) ON DELETE CASCADE
-  stock_code         text not null
+  company_id         text not null FK companies(corp_code)
   weight             double precision not null
-  reason             text null       -- required when the stock is entering (§5.4)
+  reason             text null       -- required when the company is entering (§5.5)
   cited_cluster_ids  bigint[] not null default '{}'
-  PK (portfolio_id, stock_code)
+  PK (portfolio_id, company_id)
 
 portfolio_exits
   portfolio_id       bigint FK portfolios(id) ON DELETE CASCADE
-  stock_code         text not null
+  company_id         text not null FK companies(corp_code)
   reason             text not null
   cited_cluster_ids  bigint[] not null default '{}'
-  PK (portfolio_id, stock_code)
+  PK (portfolio_id, company_id)
 ```
 
 Index `portfolios_created_at_idx` on `portfolios(created_at)`.
 
-`stock_code` has no FK: `companies.stock_code` is not a key. Existence is checked in code.
+`company_id` is `companies.corp_code`, the table's primary key; the FK rejects an unknown
+company at insert. `cited_cluster_ids` cannot carry an FK (it is an array), so
+`save_portfolio` checks the cited ids against `clusters` inside the same write transaction
+(§5.5).
 
 Migration `0005` also adds a GIN index on `cluster_summaries` for full-text search:
 
@@ -103,7 +107,8 @@ CREATE INDEX cluster_summaries_fts_idx ON cluster_summaries
    - `cluster_summaries` of clusters whose `updated_at` falls within the last
      `NEWS_WINDOW_DAYS` days;
    - for each cluster, the companies it mentions
-     (`cluster_entities → entities.corp_code → companies`);
+     (`cluster_entities → entities.corp_code → companies`), each shown with its
+     `company_id` (`corp_code`), name and `stock_code`;
    - for each such company, its themes (`theme_companies → themes`), with `is_main`.
 3. Render the system prompt (rules) and the briefing (one user message).
 4. Run the agent with the tools in §5 until `submit_portfolio` succeeds (it returns
@@ -118,15 +123,17 @@ every user of the service follows. Each run it reviews the previous portfolio ag
 has happened in the news since, and decides what to hold, at what relative weight, what to
 drop and how much to keep in cash — then submits the new portfolio with its reasons.
 
-**Grounding rule.** Every claim, reason and decision must rest only on the briefing and on
-tool results from this run. The agent must not use outside or remembered knowledge about
-companies, prices or events; if the data does not support a decision, it looks it up with a
-tool or does not make that decision.
+**Grounding rule.** The portfolio must carry reasons, and every reason must originate in
+the briefing or in a tool result from this run — a news cluster (cited by `cluster_id`), a
+graph relation or a technical analysis. The agent may use its pre-trained knowledge while
+thinking (to interpret events, relate industries, decide what to look up), but a fact it
+knows only from memory cannot be the basis of a stored reason; it must first find that fact
+in the data with a tool.
 
 **Rules.**
 
 - Weights are relative and non-negative; the system normalizes them with cash to sum to 1.
-- Every stock not in the previous portfolio needs a `reason`.
+- Every company not in the previous portfolio needs a `reason`.
 - Every previous holding that is dropped needs an `exits` entry with a `reason`.
 - Cite the `cluster_id`s a decision relies on.
 - Write a `commentary` covering the portfolio as a whole and this run's decisions.
@@ -141,11 +148,13 @@ Each tool is one file exporting one `AgentTool` with a TypeBox schema. Tool erro
 
 1. Normalize `name` with `normalize_company_name` — a port of news-graph-builder's
    `common/normalize.py`: NFKC, strip `(주)`, `㈜`, `주식회사`, remove whitespace, lowercase.
-2. `company_aliases.alias = normalized → corp_code → companies.stock_code`.
+2. `company_aliases.alias = normalized → corp_code → companies.stock_code`. Accepting a
+   `company_id` directly is also allowed (`corp_code` match first).
 3. Unresolved: return an error listing up to 5 candidates from
    `companies.corp_name ILIKE '%' || name || '%'`.
 4. Resolved: call MCP `analyze_technicals(stock_code)` and return its text content to the
-   agent. The log records the resolved `stock_code`.
+   agent, headed by the resolved `company_id` and name. The log records the resolved
+   `company_id` and `stock_code`.
 
 Aliases are stored normalized by Python, so the two normalizers must agree: a shared case
 file (`services/portfolio-builder/tests/fixtures/normalize_cases.json`) is asserted by both
@@ -173,7 +182,7 @@ are those whose `name` contains the normalized query, plus the company entity wh
 `corp_code` the name resolves to through `company_aliases`.
 
 **`search_graph(name, depth = 2)`** — the neighbourhood of the seed entities up to `depth`
-hops (1–3). Returns the subgraph: nodes (id, name, type, `stock_code` for companies, hop
+hops (1–3). Returns the subgraph: nodes (id, name, type, `company_id` for companies, hop
 distance) and edges (source, type, target, description, `cluster_id`), ordered by hop. No
 edge cap; the depth bound is the only limit, so the agent picks a smaller depth for hub
 entities.
@@ -190,27 +199,37 @@ Unmatched names return an error with up to 5 candidate entity names.
 
 ```
 {
-  holdings:   [{ stock_code, weight, reason?, cited_cluster_ids }],
-  exits:      [{ stock_code, reason, cited_cluster_ids }],
+  holdings:   [{ company_id, weight, reason?, cited_cluster_ids }],
+  exits:      [{ company_id, reason, cited_cluster_ids }],
   cash_weight,
   commentary
 }
 ```
 
-`portfolio/validate_portfolio.ts` collects **every** error before answering:
+`portfolio/validate_portfolio.ts` is pure — it reads nothing from the database beyond the
+previous portfolio already loaded at ingestion — and collects **every** error before
+answering:
 
-- each `stock_code` exists in `companies`; no duplicates within holdings or exits; no stock
-  both held and exited;
+- no duplicate `company_id` within holdings or exits; no company both held and exited;
 - every weight and `cash_weight` is ≥ 0, and their total is > 0;
 - every holding absent from the previous portfolio has a non-empty `reason`;
 - every previous holding absent from `holdings` appears in `exits`; every exit was a
   previous holding; every exit `reason` is non-empty;
-- every cited cluster exists; `commentary` is non-empty.
+- `commentary` is non-empty.
 
 Valid → `portfolio/normalize_weights.ts` divides each weight and cash by their total
-(0.1, 0.1, cash 0.05 → 0.4, 0.4, 0.2) → `portfolio/save_portfolio.ts` inserts the three
-tables in one transaction → the tool returns the portfolio id with `terminate: true`.
-Invalid, or the write fails → the error list is the tool result and the agent continues.
+(0.1, 0.1, cash 0.05 → 0.4, 0.4, 0.2) → `portfolio/save_portfolio.ts` writes in one
+transaction, where existence is verified:
+
+1. insert `portfolios`, then `portfolio_holdings` and `portfolio_exits` — an unknown
+   `company_id` fails the FK;
+2. check every cited cluster id against `clusters` in the same transaction;
+3. commit.
+
+Any failure rolls back and is turned into agent-readable errors (the FK violation names
+the offending `company_id`; missing clusters are listed). Invalid or failed write → the
+error list is the tool result and the agent continues. Success → the tool returns the
+portfolio id with `terminate: true`.
 
 ## 6. Logging (`src/log.ts`)
 
@@ -224,7 +243,7 @@ JSON lines on stdout, one object per event, every line carrying `run_id`, `ts`, 
 | `prompt` | full system prompt and full briefing, once per run |
 | `llm_request` | per turn, from `onPayload`: model, temperature, reasoning effort, tool names, message count — not message bodies, which repeat the whole context every turn |
 | `llm_response` | per turn: assistant text, reasoning summary if returned, tool calls, stop reason, latency, usage `input`, `output`, `cache_read`, `cache_write`, cost |
-| `tool_call` | name, args, result text, duration, error flag; `analyze_technicals` adds the resolved `stock_code` |
+| `tool_call` | name, args, result text, duration, error flag; `analyze_technicals` adds the resolved `company_id` and `stock_code` |
 | `validation_failed` | the error list sent back to the agent |
 | `run_end` | outcome (`saved` / `max_turns` / `error`), portfolio id, turns, usage totals, elapsed |
 
@@ -315,7 +334,8 @@ redesign.
 - Tools against a Postgres test database (`KTB_TEST_POSTGRES_DSN`, skipped when unset):
   alias resolution and candidates, `search_news_cluster` prefix matching, `search_graph`
   depth bounds and cycle safety, `find_graph_paths` ordering on a small fixture graph,
-  `get_news_cluster`, `save_portfolio` atomicity.
+  `get_news_cluster`; `save_portfolio` atomicity, unknown `company_id` and unknown cited
+  cluster each rolling back with a readable error.
 - `analyze_technicals` against an in-process MCP server from `@modelcontextprotocol/sdk`.
 - End-to-end: the agent with a scripted stream function calls tools, submits an invalid
   portfolio, receives the errors, submits a valid one, and one version is saved; a second
@@ -330,4 +350,4 @@ redesign.
 - Graph results are unbounded within the depth limit; a hub entity at depth 3 can return a
   large subgraph.
 - The grounding rule is enforced by the prompt, not checked in code, apart from cited
-  `cluster_id`s having to exist.
+  `cluster_id`s having to exist at write time.
