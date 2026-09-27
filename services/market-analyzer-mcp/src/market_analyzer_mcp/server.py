@@ -1,21 +1,29 @@
-"""The MCP server and its one tool."""
+"""The MCP server, its one tool, and the ASGI app that serves them."""
 
 import logging
 from typing import Literal
 
 from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from market_analyzer_mcp.analysis import describe, normalize_symbol
 from market_analyzer_mcp.candles import TIMEFRAMES, read_candles
 from market_analyzer_mcp.settings import Settings
 
-__all__ = ["build_server"]
+__all__ = ["build_app", "build_server"]
 
 log = logging.getLogger(__name__)
 
 
 def build_server(settings: Settings) -> MCPServer:
-    mcp = MCPServer("market-analyzer-mcp", version="0.1.0")
+    mcp = MCPServer("market-analyzer-mcp")
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(request: Request) -> Response:
+        return JSONResponse({"status": "ok"})
 
     @mcp.tool()
     def analyze_technicals(
@@ -40,3 +48,14 @@ def build_server(settings: Settings) -> MCPServer:
         return describe(code, timeframe, candles, newest, sessions_mixed=not TIMEFRAMES[timeframe])
 
     return mcp
+
+
+def build_app(settings: Settings) -> Starlette:
+    # The SDK turns DNS-rebinding protection on when host is a loopback address, which
+    # would reject portfolio-builder calling market-analyzer-mcp:8000 by service name.
+    # Measured: a loopback bind answers such a request with 421 Invalid Host header.
+    # Pin it off; the server is never published outside the Docker network.
+    return build_server(settings).streamable_http_app(
+        host=settings.host,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )

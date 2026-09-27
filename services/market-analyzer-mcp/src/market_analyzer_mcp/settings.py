@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     questdb_dsn: str
 
-    host: str = "127.0.0.1"
-    port: int = 8010
+    host: str = "0.0.0.0"
+    port: int = Field(default=8000, gt=0, lt=65536)
 
     # RSI needs 15 candles and MACD 34 before either produces a value, so read well
     # past the warm-up rather than only as far back as the newest reading needs.

@@ -11,6 +11,8 @@ dependencies = [
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.9",
     "pydantic-settings>=2.7",
+    "starlette>=1.7",
+    "uvicorn>=0.54",
 ]
 
 [project.scripts]

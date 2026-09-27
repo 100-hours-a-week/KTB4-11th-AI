@@ -26,5 +26,5 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER app
-EXPOSE 8010
+EXPOSE 8000
 CMD ["market-analyzer-mcp"]

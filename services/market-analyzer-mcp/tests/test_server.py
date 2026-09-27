@@ -4,7 +4,7 @@ import asyncio
 
 import market_analyzer_mcp.server as server_module
 from ktb_market_analyzer import Candles
-from market_analyzer_mcp.server import build_server
+from market_analyzer_mcp.server import build_app, build_server
 from market_analyzer_mcp.settings import Settings
 from mcp import Client
 
@@ -125,3 +125,19 @@ def test_the_configured_candle_limit_reaches_the_reader(monkeypatch):
     call(build_server(settings(candle_limit=42)), {"stock_code": "005930"})
 
     assert seen["limit"] == 42
+
+
+def test_the_app_serves_mcp_and_health():
+    routes = {getattr(r, "path", None) for r in build_app(settings()).routes}
+
+    assert "/health" in routes
+    assert any(p and p.startswith("/mcp") for p in routes)
+
+
+def test_dns_rebinding_protection_is_off_so_a_service_name_host_is_accepted():
+    """Measured: with a loopback bind the SDK answers Host: market-analyzer-mcp with
+    421 Invalid Host header. portfolio-builder reaches this server by service name."""
+    from starlette.testclient import TestClient
+
+    with TestClient(build_app(settings()), base_url="http://market-analyzer-mcp:8000") as client:
+        assert client.get("/health").status_code == 200
