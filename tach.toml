@@ -2,6 +2,7 @@ source_roots = [
     "packages/core/src",
     "packages/market-analyzer/src",
     "packages/market-reader/src",
+    "services/market-analyzer-mcp/src",
     "services/market-collector/src",
     "services/news-preprocessor/src",
     "services/news-clusterer/src",
@@ -116,4 +117,8 @@ depends_on = ["ktb_core", "ktb_market_analyzer"]
 
 [[modules]]
 path = "market_collector"
+depends_on = ["ktb_core", "ktb_market_analyzer", "ktb_market_reader"]
+
+[[modules]]
+path = "market_analyzer_mcp"
 depends_on = ["ktb_core", "ktb_market_analyzer", "ktb_market_reader"]
