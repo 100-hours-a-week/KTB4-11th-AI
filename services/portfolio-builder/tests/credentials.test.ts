@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, stat } from "node:fs/promises";
+import { mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FileCredentialStore, seedCodexCredential } from "../src/credentials.ts";
@@ -43,6 +43,17 @@ test("never overwrites a stored, possibly rotated credential", async () => {
   expect((await store.read("openai-codex")) as { access: string }).toMatchObject({
     access: "rotated",
   });
+});
+
+test("a corrupted credential file never echoes its contents", async () => {
+  const path = await tempPath();
+  await writeFile(path, '{"access":eyJSECRET}');
+  const store = new FileCredentialStore(path);
+
+  await expect(store.read("openai-codex")).rejects.toThrow(
+    `credential store ${path} is not valid JSON`,
+  );
+  await expect(store.read("openai-codex")).rejects.not.toThrow(/eyJSECRET/);
 });
 
 test("an empty store without environment tokens is an error", async () => {

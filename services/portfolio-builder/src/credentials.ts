@@ -15,11 +15,17 @@ export class FileCredentialStore implements CredentialStore {
   constructor(private readonly path: string) {}
 
   private async load(): Promise<Record<string, Credential>> {
+    let text: string;
     try {
-      return JSON.parse(await readFile(this.path, "utf8"));
+      text = await readFile(this.path, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
       throw error;
+    }
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`credential store ${this.path} is not valid JSON`);
     }
   }
 
