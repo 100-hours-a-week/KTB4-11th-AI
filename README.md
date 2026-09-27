@@ -8,7 +8,7 @@
 
 ## 데이터베이스 (ERD)
 
-모든 서비스는 PostgreSQL `news` 데이터베이스를 통해서만 데이터를 주고받습니다. 데이터베이스 스키마는 `infrastructure/postgres/migrations/` 에서 관리합니다.
+모든 서비스는 PostgreSQL `news` 데이터베이스를 통해서만 데이터를 주고받습니다. 단, portfolio-builder는 기술적 지표 조회를 위해 market-analyzer-mcp를 MCP(Streamable HTTP)로 직접 호출하는 예외가 있습니다. 데이터베이스 스키마는 `infrastructure/postgres/migrations/` 에서 관리합니다.
 
 ```mermaid
 erDiagram
