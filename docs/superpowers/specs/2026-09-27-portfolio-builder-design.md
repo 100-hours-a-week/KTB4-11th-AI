@@ -184,8 +184,9 @@ are those whose `name` contains the normalized query, plus the company entity wh
 **`search_graph(name, depth = 2)`** — the neighbourhood of the seed entities up to `depth`
 hops (1–3). Returns the subgraph: nodes (id, name, type, `company_id` for companies, hop
 distance) and edges (source, type, target, description, `cluster_id`), ordered by hop. No
-edge cap; the depth bound is the only limit, so the agent picks a smaller depth for hub
-entities.
+edge cap; the depth bound limits the result, so the agent picks a smaller depth for hub
+entities. Both graph tools run under a 10 s `statement_timeout`; a timeout returns an error
+asking for a smaller depth or a more specific name, and never truncates a result.
 
 **`find_graph_paths(from_name, to_name, max_depth = 4)`** — every simple path of at most
 `max_depth` edges (1–6) between any seed of `from_name` and any seed of `to_name`, shortest
@@ -353,6 +354,6 @@ redesign.
 - One global model portfolio; no per-user state.
 - `analyze_technicals` quality depends entirely on `market-analyzer-mcp`.
 - Graph results are unbounded within the depth limit; a hub entity at depth 3 can return a
-  large subgraph.
+  large subgraph. The 10 s statement timeout turns a runaway query into a tool error.
 - The grounding rule is enforced by the prompt, not checked in code, apart from cited
   `cluster_id`s having to exist at write time.

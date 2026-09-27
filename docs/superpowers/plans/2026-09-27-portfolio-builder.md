@@ -82,10 +82,10 @@ deleted: services/portfolio-builder/{pyproject.toml,src/portfolio_builder/**,tes
   - `type Settings = { postgresDsn: string; marketMcpUrl: string; llmModel: string; thinkingLevel: ThinkingLevel; openaiAccessToken?: string; openaiRefreshToken?: string; openaiTokenExpiresEpoch?: number; credentialsPath: string; newsWindowDays: number; maxTurns: number; logLevel: LogLevel }`
   - `loadSettings(env?: Record<string, string | undefined>): Settings` — throws `Error` naming every missing/invalid variable.
 
-- [ ] **Step 1: Install Bun 1.4.2 if missing**
+- [ ] **Step 1: Check Bun 1.4.2 is installed**
 
 Run: `bun --version`
-If it is not `1.4.2`: `curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"` and reopen the shell.
+Expected: `1.4.2`. If Bun is missing, STOP and ask the user to install it: this host is the homelab trust root, so do not pipe an install script into a shell from a task.
 
 - [ ] **Step 2: Remove the Python stub from the workspace**
 
@@ -420,7 +420,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `infrastructure/postgres/migrations/versions/0005_create_portfolios.py`
-- Modify: `infrastructure/postgres/tests/test_migrations.py` (append tests)
+- Modify: `infrastructure/postgres/tests/test_migrations.py` (append tests; exclude the new index from the metadata comparison)
 
 **Interfaces:**
 - Produces tables `portfolios(id, created_at, cash_weight, commentary, model)`, `portfolio_holdings(portfolio_id, company_id, weight, reason, cited_cluster_ids)`, `portfolio_exits(portfolio_id, company_id, reason, cited_cluster_ids)`, index `portfolios_created_at_idx`, index `cluster_summaries_fts_idx`.
@@ -504,6 +504,15 @@ def test_downgrade_to_0004_removes_the_portfolio_tables(pg_dsn, pg_engine, monke
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT to_regclass('portfolios')")).scalar() is not None
+```
+
+Also change `only_owned_tables` in `test_service_tables_match_the_migrated_schema`: the new GIN index sits on graph-builder's `cluster_summaries` but is owned by portfolio-builder, so graph-builder's metadata must not be asked to declare it.
+
+```python
+    def only_owned_tables(obj, name, type_, reflected, compare_to):
+        if type_ == "index" and name == "cluster_summaries_fts_idx":
+            return False
+        return name in owned_tables if type_ == "table" else True
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1438,9 +1447,10 @@ describe.skipIf(!hasDb)("news tools", () => {
   });
 
   test("search_news_cluster matches a word with a particle attached", async () => {
-    const result = await searchNewsClusterTool(sql).execute("call-1", { query: "삼성전자" });
+    // Cluster 2 contains only "SK하이닉스가"; a non-prefix query would miss it.
+    const result = await searchNewsClusterTool(sql).execute("call-1", { query: "SK하이닉스" });
 
-    expect(result.details.map((r: { cluster_id: number }) => r.cluster_id)).toEqual([1]);
+    expect(result.details.map((r: { cluster_id: number }) => r.cluster_id)).toEqual([2]);
   });
 
   test("search_news_cluster rejects a query with no searchable terms", async () => {
@@ -1668,7 +1678,7 @@ export async function findSeedEntities(sql: SQL, name: string): Promise<number[]
   throw new Error(`no entity matches "${name}". Candidates: ${names.length ? names.join(", ") : "none"}`);
 }
 
-// ponytail: fixed 10 s cap, not a setting; a hub entity at high depth is the only slow case.
+// ponytail: fixed 10 s cap, not a setting (spec §5.4); a hub entity at high depth is the only slow case.
 export async function withGraphTimeout<T>(sql: SQL, run: (tx: SQL) => Promise<T>): Promise<T> {
   try {
     return await sql.begin(async (tx) => {
@@ -1676,7 +1686,7 @@ export async function withGraphTimeout<T>(sql: SQL, run: (tx: SQL) => Promise<T>
       return run(tx as unknown as SQL);
     });
   } catch (error) {
-    if (error instanceof SQL.PostgresError && error.code === "57014") {
+    if (error instanceof SQL.PostgresError && (error.errno ?? error.code) === "57014") {
       throw new Error("graph query timed out; use a smaller depth or a more specific name");
     }
     throw error;
