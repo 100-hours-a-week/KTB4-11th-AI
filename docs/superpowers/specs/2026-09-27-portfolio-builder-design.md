@@ -177,7 +177,7 @@ particles attach to words: without them `삼성전자가` never matches `삼성�
 
 `entities` are nodes and `relations` are directed, typed edges, each carrying the
 `cluster_id` it came from. Both tools traverse edges in either direction with recursive
-CTEs (Postgres `CYCLE` clause, so no node repeats on a path). **Seed entities** for a name
+CTEs; a path never repeats a node (each step checks the next node is not already on the path). **Seed entities** for a name
 are those whose `name` contains the normalized query, plus the company entity whose
 `corp_code` the name resolves to through `company_aliases`.
 
