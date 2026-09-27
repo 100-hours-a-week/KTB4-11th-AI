@@ -1,14 +1,14 @@
+from contextlib import nullcontext
 from datetime import UTC, datetime
 
+import pandas as pd
 import pytest
-from market_collector.indicators import INDICATOR_FIELDS
-from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 from market_collector.store import CandleRow, Store, _without_nones
 
 TS = datetime(2026, 9, 22, 6, 19, tzinfo=UTC)
 
 
-class FakeSink:
+class FakeSender:
     def __init__(self):
         self.rows = []
         self.flushes = 0
@@ -20,155 +20,141 @@ class FakeSink:
         self.flushes += 1
 
 
-def _candle(
-    *,
-    ts: datetime = TS,
-    symbol: str = "005930",
-    session: str = "regular",
-    open: float = 277750.0,
-    high: float = 278000.0,
-    low: float = 277500.0,
-    close: float = 277500.0,
-    volume: int = 38961,
-    trade_value: float | None = None,
-    indicators: dict[str, float | None] | None = None,
-    src: str = "rest",
-) -> CandleRow:
-    return CandleRow(
-        ts=ts,
-        symbol=symbol,
-        session=session,
-        open=open,
-        high=high,
-        low=low,
-        close=close,
-        volume=volume,
-        trade_value=trade_value,
-        indicators=dict.fromkeys(INDICATOR_FIELDS, 1.0) if indicators is None else indicators,
-        src=src,
-    )
+class FakeResult:
+    def __init__(self, frame):
+        self.frame = frame
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return None
+
+    def to_pandas(self):
+        return self.frame
 
 
-def test_candle_writes_split_symbols_from_columns():
-    sink = FakeSink()
+class FakeDatabase:
+    def __init__(self, frame=None):
+        self.output = FakeSender()
+        self.frame = pd.DataFrame() if frame is None else frame
+        self.queries = []
+        self.sender_calls = 0
 
-    written = Store(sink).write_candles("1m", [_candle()])
+    def sender(self):
+        self.sender_calls += 1
+        return nullcontext(self.output)
 
-    assert written == 1
-    table, symbols, columns, at = sink.rows[0]
-    assert table == "bars_1m"
-    assert symbols["symbol"] == "005930"
-    assert symbols["session"] == "regular"
-    assert symbols["src"] == "rest"
-    assert columns["open"] == 277750.0
-    assert columns["close"] == 277500.0
-    assert columns["volume"] == 38961
+    def query(self, sql, binds=None):
+        self.queries.append((sql, binds))
+        return FakeResult(self.frame)
+
+
+def _candle(**changes) -> CandleRow:
+    values = {
+        "ts": TS,
+        "symbol": "005930",
+        "session": "regular",
+        "open": 277750.0,
+        "high": 278000.0,
+        "low": 277500.0,
+        "close": 277500.0,
+        "volume": 38961,
+        "src": "rest",
+    }
+    values.update(changes)
+    return CandleRow(**values)
+
+
+@pytest.mark.parametrize("timeframe", ["1m", "1d"])
+def test_physical_timeframes_write_ohlcv_to_bars(timeframe):
+    db = FakeDatabase()
+    candle = _candle()
+
+    assert Store(db).write_candles(timeframe, [candle]) == 1
+
+    table, symbols, columns, at = db.output.rows[0]
+    assert table == "bars"
+    assert symbols == {"symbol": "005930", "session": "regular", "src": "rest"}
+    assert columns == {
+        "timeframe": timeframe,
+        "open": 277750.0,
+        "high": 278000.0,
+        "low": 277500.0,
+        "close": 277500.0,
+        "volume": 38961,
+    }
     assert at == TS
+    assert db.output.flushes == 1
 
 
-def test_none_valued_columns_are_omitted_so_questdb_stores_null():
-    sink = FakeSink()
-    indicators = dict.fromkeys(INDICATOR_FIELDS, None)
-    indicators["rsi"] = 55.5
+@pytest.mark.parametrize("timeframe", ["15m", "1h", "4h"])
+def test_derived_timeframes_are_rejected_before_opening_a_sender(timeframe):
+    db = FakeDatabase()
 
-    Store(sink).write_candles("1m", [_candle(indicators=indicators, trade_value=None)])
+    with pytest.raises(KeyError, match=timeframe):
+        Store(db).write_candles(timeframe, [_candle()])
 
-    _, _, columns, _ = sink.rows[0]
-    assert columns["rsi"] == 55.5
-    assert "macd" not in columns
-    assert "trade_value" not in columns
+    assert db.sender_calls == 0
 
 
-def test_extended_rows_carry_ohlcv_and_no_indicators():
-    sink = FakeSink()
-    row = _candle(
-        session="extended",
-        indicators=dict.fromkeys(INDICATOR_FIELDS, None),
+def test_latest_members_reads_the_latest_snapshot_with_bound_index_code():
+    db = FakeDatabase(pd.DataFrame({"symbol": ["005930", "000660"]}))
+
+    assert Store(db).latest_members("201") == frozenset({"005930", "000660"})
+
+    sql, binds = db.queries[0]
+    assert "universe_members" in sql
+    assert binds == ["201"]
+
+
+def test_read_regular_candles_returns_oldest_first():
+    later = TS.replace(minute=20)
+    frame = pd.DataFrame(
+        {"ts": [later, TS], "high": [2.0, 1.0], "low": [1.0, 0.0], "close": [1.5, 0.5]}
     )
+    db = FakeDatabase(frame)
 
-    Store(sink).write_candles("1m", [row])
+    candles = Store(db).read_regular_candles("1m", "005930", 2)
 
-    _, symbols, columns, _ = sink.rows[0]
-    assert symbols["session"] == "extended"
-    assert columns["close"] == 277500.0
-    assert not any(field in columns for field in INDICATOR_FIELDS)
-
-
-def test_an_unknown_timeframe_is_rejected_before_any_write():
-    sink = FakeSink()
-
-    with pytest.raises(KeyError, match="4h"):
-        Store(sink).write_candles("4h", [_candle()])
-
-    assert sink.rows == []
+    assert [candle.ts for candle in candles] == [TS, later]
+    assert db.queries[0][1] == ["005930", "1m", 2]
 
 
-def test_writes_are_flushed_once_per_batch():
-    sink = FakeSink()
-
-    Store(sink).write_candles("1m", [_candle(), _candle()])
-
-    assert len(sink.rows) == 2
-    assert sink.flushes == 1
-
-
-def test_theme_groups_are_written_with_date_tp_in_the_columns():
-    sink = FakeSink()
-    group = ThemeGroup(
-        code="103",
-        name="태양광_발전/설치/운영",
-        date_tp=10,
-        dt_prft_rt=297.10,
-        change_rate=-1.20,
-        stock_count=3,
-        rising_count=1,
-        falling_count=2,
-        main_stocks="에스에너지, 한화솔루션",
+def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundaries():
+    naive_ts = TS.replace(tzinfo=None)
+    frame = pd.DataFrame(
+        {
+            "symbol": ["005930", "005930", "000660"],
+            "timeframe": ["1m", "1d", "1m"],
+            "latest_ts": [
+                naive_ts,
+                naive_ts.replace(day=21),
+                naive_ts.replace(day=20),
+            ],
+        }
     )
+    db = FakeDatabase(frame)
 
-    Store(sink).write_theme_groups(TS, [group])
+    latest = Store(db).latest_bar_timestamps()
 
-    table, symbols, columns, at = sink.rows[0]
-    assert table == "theme_snapshot"
-    assert symbols == {"theme_code": "103", "theme_name": "태양광_발전/설치/운영"}
-    assert columns["date_tp"] == 10
-    assert columns["dt_prft_rt"] == 297.10
-    assert columns["stock_count"] == 3
-    assert columns["main_stocks"] == "에스에너지, 한화솔루션"
-    assert at == TS
-
-
-def test_theme_members_outside_the_universe_are_not_written():
-    sink = FakeSink()
-    members = [
-        ThemeMember(theme_code="557", symbol="005930", stock_name="삼성전자"),
-        ThemeMember(theme_code="557", symbol="033170", stock_name="시그네틱스"),
-    ]
-
-    written = Store(sink).write_theme_members(TS, members, frozenset({"005930"}))
-
-    assert written == 1
-    assert [row[1]["symbol"] for row in sink.rows] == ["005930"]
-    assert sink.rows[0][0] == "theme_members"
-
-    assert sink.rows[0][2] == {}
+    assert latest == {
+        ("005930", "1m"): TS,
+        ("005930", "1d"): TS.replace(day=21),
+        ("000660", "1m"): TS.replace(day=20),
+    }
+    assert all(timestamp.tzinfo is UTC for timestamp in latest.values())
+    sql, binds = db.queries[0]
+    assert "max(ts)" in sql
+    assert "GROUP BY symbol, timeframe" in sql
+    assert "timeframe IN ('1m', '1d')" in sql
+    assert binds is None
 
 
 def test_without_nones_keeps_falsy_but_non_none_values():
-
-    result = _without_nones({"a": 0.0, "b": False, "c": None, "d": 1, "e": ""})
-
-    assert result == {"a": 0.0, "b": False, "d": 1, "e": ""}
-
-
-def test_zero_valued_indicators_survive_the_write_not_just_none_ones():
-    sink = FakeSink()
-    indicators = dict.fromkeys(INDICATOR_FIELDS, None)
-    indicators["macd"] = 0.0
-    indicators["roc"] = 0.0
-
-    Store(sink).write_candles("1m", [_candle(indicators=indicators)])
-
-    _, _, columns, _ = sink.rows[0]
-    assert columns["macd"] == 0.0
-    assert columns["roc"] == 0.0
+    assert _without_nones({"a": 0.0, "b": False, "c": None, "d": 1, "e": ""}) == {
+        "a": 0.0,
+        "b": False,
+        "d": 1,
+        "e": "",
+    }

@@ -1,16 +1,13 @@
 import logging
 import re
-import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-from ktb_market_reader import EmptyUniverseError
+from kiwoom import KiwoomClient
 
-from market_collector.kiwoom.auth import TokenStore, Transport
-from market_collector.kiwoom.rest import Pager
-from market_collector.store import RowSink
+from market_collector.store import Store
 
 __all__ = [
     "IndexClient",
@@ -26,6 +23,10 @@ SECT_PATH = "/api/dostk/sect"
 MEMBERS_API_ID = "ka20002"
 MEMBERS_ARRAY = "inds_stkpc"
 UNIVERSE_MEMBERS_TABLE = "universe_members"
+
+
+class EmptyUniverseError(RuntimeError):
+    pass
 
 
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{6}$")
@@ -48,29 +49,33 @@ class IndexSource(Protocol):
 class IndexClient:
     def __init__(
         self,
-        tokens: TokenStore,
-        transport: Transport,
+        client: KiwoomClient,
         interval: float = 1.3,
-        sleep: Callable[[float], None] = time.sleep,
-        max_retries: int = 5,
-        backoff_base: float = 2.0,
     ) -> None:
-        self._pager = Pager(
-            tokens, transport, SECT_PATH, interval, sleep, max_retries, backoff_base
-        )
+        self._client = client
+        self._interval = interval
 
     def members(self, index_code: str) -> list[IndexMember]:
-        return self._pager.walk(
-            MEMBERS_API_ID,
-            MEMBERS_ARRAY,
-            {"mrkt_tp": "0", "inds_cd": index_code, "stex_tp": "1"},
-            lambda row: IndexMember(
-                index_code=index_code,
-                symbol=row["stk_cd"],
-                stock_name=row.get("stk_nm", ""),
-            ),
-            f"index members index_code={index_code}",
-        )
+        members = []
+        seen = set()
+        for response in self._client.iterate_pages(
+            api_id=MEMBERS_API_ID,
+            path=SECT_PATH,
+            body={"mrkt_tp": "0", "inds_cd": index_code, "stex_tp": "1"},
+            max_pages=0,
+            page_delay_seconds=self._interval,
+        ):
+            key = response.continuation.next_key
+            if response.continuation.has_next and key in seen:
+                raise RuntimeError(f"stalled paging index members: next_key={key!r}")
+            seen.add(key)
+            rows = response.body.get(MEMBERS_ARRAY, [])
+            if not isinstance(rows, list):
+                raise TypeError(f"{MEMBERS_ARRAY} is not a list: {type(rows)!r}")
+            members.extend(
+                IndexMember(index_code, row["stk_cd"], row.get("stk_nm", "")) for row in rows
+            )
+        return members
 
 
 def fetch_members(client: IndexSource, index_code: str) -> list[IndexMember]:
@@ -88,7 +93,7 @@ def _truncate_to_day(ts: datetime) -> datetime:
 
 
 def upsert_members(
-    sink: RowSink, ts: datetime, index_code: str, members: Sequence[IndexMember]
+    store: Store, ts: datetime, index_code: str, members: Sequence[IndexMember]
 ) -> int:
     if not members:
         raise EmptyUniverseError(
@@ -96,21 +101,12 @@ def upsert_members(
             "not writing an empty snapshot"
         )
     day = _truncate_to_day(ts)
-    written = 0
-    for member in members:
-        sink.row(
-            UNIVERSE_MEMBERS_TABLE,
-            symbols={
-                "index_code": member.index_code,
-                "index_name": INDEX_NAMES.get(member.index_code, member.index_code),
-                "symbol": member.symbol,
-                "stock_name": member.stock_name,
-                "src": MEMBERS_API_ID,
-            },
-            columns={},
-            at=day,
-        )
-        written += 1
-    sink.flush()
+    written = store.write_universe_members(
+        day,
+        index_code,
+        INDEX_NAMES.get(index_code, index_code),
+        MEMBERS_API_ID,
+        ((member.symbol, member.stock_name) for member in members),
+    )
     log.info("wrote %d universe_members rows for index_code=%s", written, index_code)
     return written

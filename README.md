@@ -5,10 +5,17 @@
 - `news-clusterer`: 뉴스 이벤트 단위 클러스터링
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스 데이터를 바탕으로 포트폴리오 생성
+- `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
 
 ## 데이터베이스 (ERD)
 
 모든 서비스는 PostgreSQL `news` 데이터베이스를 통해서만 데이터를 주고받습니다. 데이터베이스 스키마는 `infrastructure/postgres/migrations/` 에서 관리합니다.
+
+QuestDB는 서비스 시작 전에 별도 작업으로 초기화합니다.
+
+```bash
+KTB_QUESTDB_CONF='http::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
+```
 
 ```mermaid
 erDiagram
@@ -155,7 +162,15 @@ erDiagram
 | `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | | `0.2` | 키움 요청 사이 대기 시간(초) |
 | `NEWS_GRAPH_BUILDER_DART_API_KEY` | 필수 | | OpenDART API 키. `compose.dev.yaml`은 `.env`의 `OPENDART_API_KEY`에서 채움 |
 
-키움 키는 주문이 가능한 키이므로 모의투자 키나 전용 계정을 권장하고, 운영 태스크의 outbound IP를 키움에 등록해야 합니다. 키는 커밋하지 말고, 명령줄에 직접 입력하는 대신 파일에서 export 하세요.
+### market-collector (`MARKET_COLLECTOR_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `MARKET_COLLECTOR_QUESTDB_CONF` | 필수 | | QuestDB 공식 Python 클라이언트 연결 문자열 |
+| `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | 필수 | | `app_key`, `secret_key` 객체의 JSON 배열 |
+| `MARKET_COLLECTOR_KIWOOM_MODE` | | `real` | `real` 또는 `demo` |
+| `MARKET_COLLECTOR_INDEX_CODE` | | `201` | 수집 종목을 구성하는 지수 코드 |
+| `MARKET_COLLECTOR_REQUEST_INTERVAL` | | `1.3` | 키움 REST 요청 사이 대기 시간(초) |
 
 ### portfolio-builder (`PORTFOLIO_BUILDER_`)
 
