@@ -4,7 +4,7 @@ export type LogLevel = keyof typeof LEVELS;
 export type Log = (event: string, fields?: Record<string, unknown>, level?: LogLevel) => void;
 
 export function isLogLevel(value: string): value is LogLevel {
-  return value in LEVELS;
+  return Object.hasOwn(LEVELS, value);
 }
 
 export function createLog(

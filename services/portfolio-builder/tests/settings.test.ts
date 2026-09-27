@@ -61,6 +61,7 @@ test.each([
   ["PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS", "seven"],
   ["PORTFOLIO_BUILDER_OPENAI_TOKEN_EXPIRES_EPOCH", "soon"],
   ["PORTFOLIO_BUILDER_LOG_LEVEL", "LOUD"],
+  ["PORTFOLIO_BUILDER_LOG_LEVEL", "constructor"],
   ["PORTFOLIO_BUILDER_THINKING_LEVEL", "extreme"],
 ])("rejects an invalid %s", (name, value) => {
   expect(() => loadSettings({ ...REQUIRED, [name]: value })).toThrow(name);
