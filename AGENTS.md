@@ -88,12 +88,14 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-clusterer` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
+| `services/market-collector` | service | cron (`backfill`, `preopen`, `themes`, `universe`, `intraday`) plus a long-running `live` | `ktb-core`, `ktb-market-analyzer`, `ktb-market-reader` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
+| `packages/market-reader` (`ktb_market_reader`) | library | — | psycopg only |
 
 - **Services communicate only through datastores.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. There are no direct service-to-service calls.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
-- **QuestDB (market time-series) is read-only here.** Another team owns its schema and ingestion. Read it over the Postgres wire protocol (port 8812, plain psycopg). Never create or alter QuestDB tables, and don't build an ORM on top of it.
+- **QuestDB writes belong to `market-collector`; reads belong to `ktb-market-reader`.** The collector fetches from Kiwoom over REST and WebSocket and writes rows over ILP (port 9000). Everything that reads market data imports `ktb_market_reader`, which queries over the Postgres wire protocol (port 8812, plain psycopg) and never writes. Don't build an ORM on top of QuestDB. The schema is applied out of band by `infrastructure/questdb/apply.py`, so no service creates or alters a table at boot.
 - **Work queue:** SQS in production, Redis in development. portfolio-builder is its only consumer.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.

@@ -10,6 +10,9 @@ __all__ = [
     "indicators_for_latest",
 ]
 
+# The indicator columns this service writes. Adding a function to
+# ktb_market_analyzer does not add a column -- a field appears here only when it
+# is meant to be stored.
 INDICATOR_FIELDS: tuple[str, ...] = (
     "rsi",
     "macd",

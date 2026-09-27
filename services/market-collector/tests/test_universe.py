@@ -1,19 +1,17 @@
-import sys
 import types
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from ktb_market_reader import EmptyUniverseError
 from market_collector.kiwoom.auth import TokenStore
 from market_collector.kiwoom.rest import KiwoomRequestError
 from market_collector.settings import KiwoomAccount
 from market_collector.universe import (
     MEMBERS_API_ID,
     UNIVERSE_MEMBERS_TABLE,
-    EmptyUniverseError,
     IndexClient,
     IndexMember,
     fetch_members,
-    latest_members,
     upsert_members,
 )
 
@@ -202,21 +200,3 @@ def test_upsert_members_raises_rather_than_writing_an_empty_snapshot():
 
     assert sink.rows == []
     assert sink.flushes == 0
-
-
-def test_latest_members_returns_a_frozenset_of_symbols(monkeypatch):
-    seen: dict[str, object] = {}
-    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg([("005930",), ("0126Z0",)], seen))
-
-    result = latest_members("postgresql://localhost:8812/qdb", "201")
-
-    assert result == frozenset({"005930", "0126Z0"})
-    assert seen["params"] == ("201", "201")
-    assert UNIVERSE_MEMBERS_TABLE in str(seen["query"])
-
-
-def test_latest_members_raises_empty_universe_error_naming_the_subcommand(monkeypatch):
-    monkeypatch.setitem(sys.modules, "psycopg", _fake_psycopg([]))
-
-    with pytest.raises(EmptyUniverseError, match="universe"):
-        latest_members("postgresql://localhost:8812/qdb", "201")

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 from ktb_core.logging import setup_logging
+from ktb_market_reader import latest_members
 
 from market_collector.backfill import backfill_one, refresh_recent
 from market_collector.cursor import CursorStore
@@ -27,7 +28,7 @@ from market_collector.live import (
 from market_collector.settings import Settings
 from market_collector.store import Store, questdb_sink
 from market_collector.themes import snapshot
-from market_collector.universe import IndexClient, fetch_members, latest_members, upsert_members
+from market_collector.universe import IndexClient, fetch_members, upsert_members
 
 TIMEFRAMES = ("1m", "15m", "1h", "1d")
 

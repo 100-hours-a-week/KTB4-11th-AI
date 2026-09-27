@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 import pytest
+from ktb_market_reader import Candle
 from market_collector.indicators import INDICATOR_FIELDS
 from market_collector.live import (
     TICK_FIELDS,
@@ -22,15 +23,16 @@ from market_collector.live import (
     stream,
     ticks_from,
 )
-from market_collector.store import Candle
 
 DAY = datetime(2026, 9, 25, tzinfo=UTC)
 
 
 def _stored(ts, high, low, close) -> Candle:
-    """A candle as ``read_regular_candles`` returns it: prices, which is all the
-    window needs."""
-    return Candle(ts=ts, high=high, low=low, close=close)
+    """A candle as ``read_regular_candles`` returns it. The window uses the prices
+    only, so the stored indicator values are irrelevant here."""
+    return Candle(
+        ts=ts, high=high, low=low, close=close, indicators=dict.fromkeys(INDICATOR_FIELDS)
+    )
 
 
 def _values(time="090000", price="+70000", cum_volume="1000", cum_value="70000000"):
