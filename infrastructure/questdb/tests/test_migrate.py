@@ -125,3 +125,38 @@ def test_main_connects_and_applies_discovered_migrations(monkeypatch):
 
     assert seen == ["ws::addr=questdb:9000;"]
     assert db.executed == [(migrate.LEDGER_DDL, None)]
+
+
+def test_market_data_migration_defines_archive_schema():
+    migration_path = (
+        REPO_ROOT / "infrastructure" / "questdb" / "migrations" / "0001_market_data.sql"
+    )
+    sql = migration_path.read_text(encoding="utf-8")
+    bars = sql[: sql.index("CREATE VIEW")]
+
+    assert "timeframe VARCHAR" in bars
+    for column in ("open DOUBLE", "high DOUBLE", "low DOUBLE", "close DOUBLE", "volume LONG"):
+        assert column in bars
+    assert "trade_value" not in bars
+
+    for timeframe in ("1m", "1d"):
+        assert (
+            f"CREATE VIEW IF NOT EXISTS bars_{timeframe} AS "
+            f"(SELECT * FROM bars WHERE timeframe = '{timeframe}');"
+        ) in sql
+    for timeframe in ("15m", "1h"):
+        assert f"CREATE MATERIALIZED VIEW IF NOT EXISTS bars_{timeframe}" in sql
+        view = sql[sql.index(f"bars_{timeframe}") :]
+        view = view[: view.index(";") + 1]
+        assert "FROM bars" in view
+        assert "first(open)" in view
+        assert "max(high)" in view
+        assert "min(low)" in view
+        assert "last(close)" in view
+        assert "sum(volume)" in view
+        assert "WHERE timeframe = '1m'" in view
+        assert f"SAMPLE BY {timeframe}" in view
+
+    assert "CREATE TABLE IF NOT EXISTS universe_members" in sql
+    assert "theme_snapshot" not in sql
+    assert "theme_members" not in sql
