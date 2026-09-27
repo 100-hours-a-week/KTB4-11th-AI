@@ -157,8 +157,6 @@ erDiagram
 | `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | | `0.2` | 키움 요청 사이 대기 시간(초) |
 | `NEWS_GRAPH_BUILDER_DART_API_KEY` | 필수 | | OpenDART API 키. `compose.dev.yaml`은 `.env`의 `OPENDART_API_KEY`에서 채움 |
 
-키움 키는 주문이 가능한 키이므로 모의투자 키나 전용 계정을 권장하고, 운영 태스크의 outbound IP를 키움에 등록해야 합니다. 키는 커밋하지 말고, 명령줄에 직접 입력하는 대신 파일에서 export 하세요.
-
 ### portfolio-builder (`PORTFOLIO_BUILDER_`)
 
 | 변수 | 필수 | 기본값 |
@@ -175,8 +173,6 @@ erDiagram
 | `MARKET_ANALYZER_MCP_LOG_LEVEL` | | `INFO` |
 | `MARKET_ANALYZER_MCP_HOST` | | `0.0.0.0` |
 | `MARKET_ANALYZER_MCP_PORT` | | `8000` |
-
-`compose.dev.yaml` 은 이 서버의 포트를 호스트에 열지 않습니다. 같은 compose 네트워크에서 `http://market-analyzer-mcp:8000/mcp` 로 접근합니다.
 
 ### portfolio-rebalancer-http (`PORTFOLIO_REBALANCER_HTTP_`)
 
