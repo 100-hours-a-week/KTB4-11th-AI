@@ -43,7 +43,7 @@ def test_williams_r_bands_are_negative_and_not_mirrored_by_accident():
 
 
 def test_the_first_computable_value_is_judged_immediately():
-    # This family needs no earlier value, unlike the signed one.
+    # This family needs no earlier value, unlike the trend one.
     assert _series("rsi", [NAN, NAN, 75.0]) == [None, None, "OVERBOUGHT"]
 
 

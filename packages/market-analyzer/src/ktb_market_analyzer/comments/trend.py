@@ -12,7 +12,7 @@ ago. The MACD histogram swings around **its signal line**, so a sign change mean
 MACD crossed its own smoothed copy. Calling both ``CROSSOVER`` would hide which
 event happened.
 
-To add an indicator to this family, add one row to ``SIGNED`` naming the words its
+To add an indicator to this family, add one row to ``TREND`` naming the words its
 crossing and its magnitude trend should use. If it reuses an existing word set,
 its labels are already in ``MEANINGS``; if it needs new words, add them there too
 and the glossary test will tell you if you forget.
@@ -24,24 +24,24 @@ from dataclasses import dataclass
 import numpy as np
 import numpy.typing as npt
 
-__all__ = ["FIELDS", "MEANINGS", "SIGNED", "Signed", "comments"]
+__all__ = ["FIELDS", "MEANINGS", "TREND", "Trend", "comments"]
 
 
 @dataclass(frozen=True)
-class Signed:
+class Trend:
     cross: str
     growing: str
     shrinking: str
     steady: str = "STEADY"
 
 
-SIGNED: dict[str, Signed] = {
-    "macd": Signed(cross="ZERO_CROSS", growing="STRENGTHENING", shrinking="WEAKENING"),
-    "roc": Signed(cross="ZERO_CROSS", growing="STRENGTHENING", shrinking="WEAKENING"),
-    "macd_histogram": Signed(cross="CROSSOVER", growing="EXPANDING", shrinking="CONTRACTING"),
+TREND: dict[str, Trend] = {
+    "macd": Trend(cross="ZERO_CROSS", growing="STRENGTHENING", shrinking="WEAKENING"),
+    "roc": Trend(cross="ZERO_CROSS", growing="STRENGTHENING", shrinking="WEAKENING"),
+    "macd_histogram": Trend(cross="CROSSOVER", growing="EXPANDING", shrinking="CONTRACTING"),
 }
 
-FIELDS: frozenset[str] = frozenset(SIGNED)
+FIELDS: frozenset[str] = frozenset(TREND)
 
 MEANINGS: dict[str, str] = {
     "FLAT": "The value is exactly zero, on neither side of the line.",
@@ -87,7 +87,7 @@ MEANINGS: dict[str, str] = {
 
 
 def comments(field: str, values: npt.NDArray[np.float64]) -> list[str | None]:
-    rule = SIGNED[field]
+    rule = TREND[field]
     out: list[str | None] = []
     previous: float | None = None
 

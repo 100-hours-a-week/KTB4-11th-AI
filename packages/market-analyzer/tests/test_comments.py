@@ -1,7 +1,7 @@
 """The dispatcher and the invariants that span rule families.
 
 Each family's own rules are tested beside it, in test_comment_bands.py and
-test_comment_signed.py. What is left here is what no single family can check.
+test_comment_trend.py. What is left here is what no single family can check.
 """
 
 import itertools
@@ -14,7 +14,7 @@ from ktb_market_analyzer.comments import (
     COMMENTED_FIELDS,
     banded,
     comment_series,
-    signed,
+    trend,
 )
 
 
@@ -32,10 +32,10 @@ def test_an_unknown_field_raises_rather_than_returning_a_default():
 
 def test_the_dispatcher_routes_each_field_to_its_own_family():
     banded_result = comment_series("rsi", np.array([75.0]))
-    signed_result = comment_series("macd", np.array([1.0, 2.0]))
+    trend_result = comment_series("macd", np.array([1.0, 2.0]))
 
     assert banded_result == banded.comments("rsi", np.array([75.0]))
-    assert signed_result == signed.comments("macd", np.array([1.0, 2.0]))
+    assert trend_result == trend.comments("macd", np.array([1.0, 2.0]))
 
 
 def test_every_comment_is_aligned_with_its_input():
@@ -68,7 +68,7 @@ def test_no_two_families_define_the_same_label():
 
 def _every_emittable_label() -> set[str]:
     labels = set(banded.MEANINGS) | {"FLAT"}
-    for rule in signed.SIGNED.values():
+    for rule in trend.TREND.values():
         for side, suffix in itertools.product(
             ("BULLISH", "BEARISH"),
             (rule.cross, rule.growing, rule.shrinking, rule.steady),

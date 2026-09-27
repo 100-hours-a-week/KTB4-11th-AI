@@ -1,11 +1,11 @@
 import numpy as np
-from ktb_market_analyzer.comments import signed
+from ktb_market_analyzer.comments import trend
 
 NAN = float("nan")
 
 
 def _series(field, values):
-    return signed.comments(field, np.array(values, dtype=np.float64))
+    return trend.comments(field, np.array(values, dtype=np.float64))
 
 
 def test_the_first_computable_value_gets_no_verdict():
@@ -82,4 +82,4 @@ def test_a_nan_does_not_become_the_previous_value_for_trend_purposes():
 
 
 def test_fields_matches_the_rule_table():
-    assert signed.FIELDS == frozenset(signed.SIGNED)
+    assert trend.FIELDS == frozenset(trend.TREND)

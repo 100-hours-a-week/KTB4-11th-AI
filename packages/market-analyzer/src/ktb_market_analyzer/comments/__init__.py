@@ -14,7 +14,7 @@ whose rule shape it fits:
 
 * :mod:`banded` — the value lives in a fixed range and the verdict is which zone
   it occupies. RSI, both Stochastic lines, Williams %R.
-* :mod:`signed` — the value swings around a line, and the verdict covers which
+* :mod:`trend` — the value swings around a line, and the verdict covers which
   side, whether it changed sides, and which way it is travelling. The MACD line
   and Rate of Change against zero; the MACD histogram against its signal line.
 
@@ -32,11 +32,11 @@ caller expecting a verdict finds out instead of storing a wrong one.
 import numpy as np
 import numpy.typing as npt
 
-from ktb_market_analyzer.comments import banded, signed
+from ktb_market_analyzer.comments import banded, trend
 
 __all__ = ["COMMENTED_FIELDS", "COMMENT_MEANINGS", "comment_series"]
 
-_FAMILIES = (banded, signed)
+_FAMILIES = (banded, trend)
 
 
 def _merged_meanings() -> dict[str, str]:
