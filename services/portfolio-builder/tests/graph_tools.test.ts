@@ -1,6 +1,6 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { findGraphPathsTool } from "../src/tools/find_graph_paths.ts";
-import { findSeedEntities } from "../src/tools/graph_seeds.ts";
+import { findSeedEntities, withGraphTimeout } from "../src/tools/graph_seeds.ts";
 import { searchGraphTool } from "../src/tools/search_graph.ts";
 import { hasDb, seedFixture, testSql } from "./db.ts";
 
@@ -89,5 +89,33 @@ describe.skipIf(!hasDb)("graph tools", () => {
     });
 
     expect(result.details.paths).toEqual([]);
+  });
+
+  test("withGraphTimeout maps a Postgres statement timeout to a plain error", async () => {
+    await expect(
+      withGraphTimeout(sql, async (tx) => {
+        await tx`SET LOCAL statement_timeout = '10ms'`;
+        await tx`SELECT pg_sleep(1)`;
+      }),
+    ).rejects.toThrow("graph query timed out");
+  });
+});
+
+describe.skipIf(!hasDb)("find_graph_paths with a cycle in the graph", () => {
+  const sql = hasDb ? testSql() : (undefined as never);
+  beforeEach(async () => {
+    await seedFixture(sql);
+    await sql`INSERT INTO relations (id, cluster_id, source_entity_id, target_entity_id, type, description)
+      OVERRIDING SYSTEM VALUE VALUES (4, 1, 1, 4, 'related_to', '삼성전자와 HBM')`;
+  });
+
+  test("does not revisit a node already on the path", async () => {
+    const result = await findGraphPathsTool(sql).execute("c", {
+      from_name: "삼성전자",
+      to_name: "SK하이닉스",
+      max_depth: 4,
+    });
+
+    expect(result.details.paths.map((p: { length: number }) => p.length)).toEqual([2, 3]);
   });
 });
