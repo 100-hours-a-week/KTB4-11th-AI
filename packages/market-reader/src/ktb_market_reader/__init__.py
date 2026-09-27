@@ -1,5 +1,4 @@
 from ktb_market_reader.questdb import (
-    INDICATOR_FIELDS,
     TIMEFRAME_TABLES,
     Candle,
     EmptyThemeSnapshotError,
@@ -12,7 +11,6 @@ from ktb_market_reader.questdb import (
 )
 
 __all__ = [
-    "INDICATOR_FIELDS",
     "TIMEFRAME_TABLES",
     "Candle",
     "EmptyThemeSnapshotError",

@@ -11,19 +11,26 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from ktb_market_reader import INDICATOR_FIELDS, TIMEFRAME_TABLES
-
+from market_collector.indicators import INDICATOR_FIELDS
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 
 if TYPE_CHECKING:
     from questdb import Sender as QuestDbSender
 
 __all__ = [
+    "TIMEFRAME_TABLES",
     "CandleRow",
     "RowSink",
     "Store",
     "questdb_sink",
 ]
+
+TIMEFRAME_TABLES: dict[str, str] = {
+    "1m": "bars_1m",
+    "15m": "bars_15m",
+    "1h": "bars_1h",
+    "1d": "bars_1d",
+}
 
 THEME_SNAPSHOT_TABLE = "theme_snapshot"
 THEME_MEMBERS_TABLE = "theme_members"

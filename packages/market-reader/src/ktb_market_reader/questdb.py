@@ -9,7 +9,6 @@ from datetime import datetime
 from typing import LiteralString, cast
 
 __all__ = [
-    "INDICATOR_FIELDS",
     "TIMEFRAME_TABLES",
     "Candle",
     "EmptyThemeSnapshotError",
@@ -32,15 +31,22 @@ THEME_SNAPSHOT_TABLE = "theme_snapshot"
 THEME_MEMBERS_TABLE = "theme_members"
 UNIVERSE_MEMBERS_TABLE = "universe_members"
 
-INDICATOR_FIELDS: tuple[str, ...] = (
-    "rsi",
-    "macd",
-    "macd_signal",
-    "macd_histogram",
-    "stochastic_k",
-    "stochastic_d",
-    "roc",
-    "williams_r",
+# A candle table's own columns. Everything else it carries is a stored indicator,
+# which is how a read picks the indicators up without being told their names --
+# add a column to the table and it appears here with no change to this module.
+BASE_CANDLE_COLUMNS = frozenset(
+    {
+        "ts",
+        "symbol",
+        "session",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "trade_value",
+        "src",
+    }
 )
 
 
@@ -89,6 +95,9 @@ def read_regular_candles(
     oldest-first result, and must be positive. Ask for generous history: RSI
     needs 14 prior candles and MACD 33, so a narrow window returns rows whose
     indicator values are all null.
+
+    Which indicator columns come back is whatever the table holds -- this reads
+    the column names off the cursor rather than carrying a list of its own.
     """
     if timeframe not in TIMEFRAME_TABLES:
         raise KeyError(f"unknown timeframe: {timeframe}")
@@ -100,10 +109,9 @@ def read_regular_candles(
     table = TIMEFRAME_TABLES[timeframe]
     since_clause = " AND ts >= %s" if since is not None else ""
     order_clause = "ORDER BY ts DESC LIMIT %s" if limit is not None else "ORDER BY ts ASC"
-    columns = ", ".join(("ts", "high", "low", "close", *INDICATOR_FIELDS))
     query = cast(
         LiteralString,
-        f"SELECT {columns} FROM {table} "
+        f"SELECT * FROM {table} "
         f"WHERE symbol = %s AND session = 'regular'{since_clause} {order_clause}",
     )
     params: tuple[object, ...] = (symbol,)
@@ -114,13 +122,16 @@ def read_regular_candles(
 
     with psycopg.connect(dsn) as connection, connection.cursor() as cursor:
         cursor.execute(query, params)
+        names = [column.name for column in cursor.description or ()]
+        at = {name: position for position, name in enumerate(names)}
+        indicators = [name for name in names if name not in BASE_CANDLE_COLUMNS]
         rows = [
             Candle(
-                ts=row[0],
-                high=row[1],
-                low=row[2],
-                close=row[3],
-                indicators=dict(zip(INDICATOR_FIELDS, row[4:], strict=True)),
+                ts=row[at["ts"]],
+                high=row[at["high"]],
+                low=row[at["low"]],
+                close=row[at["close"]],
+                indicators={name: row[at[name]] for name in indicators},
             )
             for row in cursor.fetchall()
         ]
