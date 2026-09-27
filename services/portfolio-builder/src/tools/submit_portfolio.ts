@@ -41,17 +41,23 @@ export function submitPortfolioTool(deps: {
   model: string;
   log: Log;
 }): AgentTool<typeof Params> {
+  let savedId: number | null = null;
   return {
     name: "submit_portfolio",
     label: "Submit portfolio",
     description:
       "Submit the new model portfolio. Weights are relative; the system scales holdings and cash_weight to sum to 1. On errors, fix every one and submit again.",
     parameters: Params,
+    executionMode: "sequential",
     execute: async (_toolCallId, submission: Submission) => {
+      if (savedId !== null) {
+        throw new Error(`portfolio already saved as ${savedId}; the run is over`);
+      }
       const errors = validatePortfolio(submission, deps.previous);
       if (!errors.length) {
         try {
           const id = await savePortfolio(deps.sql, normalizeWeights(submission), deps.model);
+          savedId = id;
           return {
             content: [{ type: "text", text: `Saved portfolio ${id}.` }],
             details: { portfolio_id: id },

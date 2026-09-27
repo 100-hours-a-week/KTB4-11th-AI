@@ -94,6 +94,25 @@ describe.skipIf(!hasDb)("runAgent", () => {
     expect(count).toBe(0);
   });
 
+  test("two submit_portfolio calls in one message save only one portfolio", async () => {
+    const { run } = setup(
+      10,
+      fauxAssistantMessage(
+        [
+          fauxToolCall("submit_portfolio", valid, { id: "call-1" }),
+          fauxToolCall("submit_portfolio", valid, { id: "call-2" }),
+        ],
+        { stopReason: "toolUse" },
+      ),
+    );
+
+    const result = await run();
+
+    expect(result.outcome).toBe("saved");
+    const [{ count }] = await sql`SELECT count(*)::int AS count FROM portfolios`;
+    expect(count).toBe(1);
+  });
+
   test("an LLM error ends the run", async () => {
     const { run } = setup(
       10,
