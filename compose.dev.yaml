@@ -101,6 +101,16 @@ services:
       - MARKET_ANALYZER_MCP_LOG_LEVEL=${MARKET_ANALYZER_MCP_LOG_LEVEL:-INFO}
     restart: unless-stopped
 
+  portfolio-rebalancer-http:
+    build:
+      context: .
+      dockerfile: docker/portfolio-rebalancer-http.Dockerfile
+    environment:
+      - PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL=${PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   questdb-data:
