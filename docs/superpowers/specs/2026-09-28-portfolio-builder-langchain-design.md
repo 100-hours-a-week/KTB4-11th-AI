@@ -329,7 +329,7 @@ These change market-collector and news-graph-builder, and get their own spec:
 - Store an industry code per company in Postgres. This enables `industry_excess_return_5d`,
   computed as the equal-weight mean `return_5d` of KOSPI 200 constituents in the same industry.
 - Move the Kiwoom theme sync (`themes`, `theme_companies`) from news-graph-builder to
-  market-collector.
+  market-collector, writing Postgres (QuestDB theme collection is already removed).
 
 Until then, the two excess-return values are `null` with reason "benchmark data not collected".
 portfolio-builder's briefing reads `themes` / `theme_companies` whichever service writes them.
@@ -337,8 +337,8 @@ portfolio-builder's briefing reads `themes` / `theme_companies` whichever servic
 ## 11. Limits
 
 - `bars_15m` and `bars_1h` are materialised views over all 1m rows, extended session included, so
-  intraday evidence on those timeframes mixes sessions. That is for market-collector's owners to
-  fix; this service does not work around it.
+  intraday evidence on those timeframes mixes sessions. Tracked in #47; this service does not work
+  around it.
 - Cross-section percentiles cover KOSPI 200 only, the collected universe.
 - `momentum_12m_skip1m` and the 1-year percentiles are `null` until 273 regular daily bars exist
   for the symbol.
