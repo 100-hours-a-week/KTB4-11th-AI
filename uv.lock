@@ -583,7 +583,6 @@ name = "market-collector"
 version = "0.1.0"
 source = { editable = "services/market-collector" }
 dependencies = [
-    { name = "httpx" },
     { name = "ktb-core" },
     { name = "kwcli" },
     { name = "pydantic" },
@@ -593,7 +592,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = ">=0.28" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "kwcli" },
     { name = "pydantic", specifier = ">=2.9" },

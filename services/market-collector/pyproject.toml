@@ -7,7 +7,6 @@ dependencies = [
     "ktb-core",
     "pydantic>=2.9",
     "pydantic-settings>=2.7",
-    "httpx>=0.28",
     "kwcli",
     "questdb>=5.0",
 ]
