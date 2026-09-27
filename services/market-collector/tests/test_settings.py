@@ -2,13 +2,12 @@ import pytest
 from market_collector.settings import Settings
 from pydantic import ValidationError
 
-QDB = "postgresql://admin:quest@localhost:8812/qdb"
+QDB = "http::addr=localhost:9000;"
 ACCOUNTS = '[{"app_key":"k1","secret_key":"s1"},{"app_key":"k2","secret_key":"s2"}]'
 
 
 def _populate(monkeypatch):
-    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_DSN", QDB)
-    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_ILP_HOST", "localhost")
+    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_CONF", QDB)
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_ACCOUNTS", ACCOUNTS)
 
 
@@ -17,8 +16,7 @@ def test_loads_from_the_environment(monkeypatch):
 
     settings = Settings()
 
-    assert settings.questdb_dsn == QDB
-    assert settings.questdb_ilp_host == "localhost"
+    assert settings.questdb_conf == QDB
     assert [a.app_key for a in settings.kiwoom_accounts] == ["k1", "k2"]
 
 
@@ -29,7 +27,6 @@ def test_defaults_match_the_measured_safe_values(monkeypatch):
 
     assert settings.log_level == "INFO"
 
-    assert settings.questdb_ilp_port == 9000
     assert settings.request_interval == 1.3
     assert settings.theme_date_tps == [5, 20, 60]
     assert settings.index_code == "201"
@@ -73,28 +70,10 @@ def test_backfill_depths_rejects_an_unknown_timeframe(monkeypatch):
         Settings()
 
 
-def test_indicators_on_backfill_defaults_to_false(monkeypatch):
-    _populate(monkeypatch)
-
-    settings = Settings()
-
-    assert settings.indicators_on_backfill is False
-
-
-def test_indicators_on_backfill_can_be_enabled(monkeypatch):
-    _populate(monkeypatch)
-    monkeypatch.setenv("MARKET_COLLECTOR_INDICATORS_ON_BACKFILL", "true")
-
-    settings = Settings()
-
-    assert settings.indicators_on_backfill is True
-
-
 @pytest.mark.parametrize(
     "missing",
     [
-        "MARKET_COLLECTOR_QUESTDB_DSN",
-        "MARKET_COLLECTOR_QUESTDB_ILP_HOST",
+        "MARKET_COLLECTOR_QUESTDB_CONF",
         "MARKET_COLLECTOR_KIWOOM_ACCOUNTS",
     ],
 )

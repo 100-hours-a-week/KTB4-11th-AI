@@ -1,17 +1,9 @@
 import logging
-import math
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Protocol
 
-import numpy as np
-import numpy.typing as npt
-
 from market_collector.cursor import CursorStore
-from market_collector.indicators import (
-    INDICATOR_FIELDS,
-    indicator_series,
-)
 from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
 from market_collector.kiwoom.rest import Page
 from market_collector.store import CandleRow, Store
@@ -122,14 +114,7 @@ def collect(
     return sorted(collected.values(), key=lambda bar: bar.ts)
 
 
-Array = npt.NDArray[np.float64]
-
-
-def _clean(value: float) -> float | None:
-    return float(value) if math.isfinite(value) else None
-
-
-def _empty_row(bar: Bar, symbol: str, src: str) -> CandleRow:
+def _row(bar: Bar, symbol: str, src: str) -> CandleRow:
     return CandleRow(
         ts=bar.ts,
         symbol=symbol,
@@ -140,49 +125,12 @@ def _empty_row(bar: Bar, symbol: str, src: str) -> CandleRow:
         close=bar.close,
         volume=bar.volume,
         trade_value=bar.trade_value,
-        indicators=dict.fromkeys(INDICATOR_FIELDS),
         src=src,
     )
 
 
-def to_candle_rows(
-    bars: Sequence[Bar], symbol: str, src: str = "rest", with_indicators: bool = True
-) -> list[CandleRow]:
-    if not with_indicators or not bars:
-        return [_empty_row(bar, symbol, src) for bar in bars]
-
-    regular_positions = [i for i, bar in enumerate(bars) if bar.session == "regular"]
-    high: Array = np.array([bars[i].high for i in regular_positions], dtype=np.float64)
-    low: Array = np.array([bars[i].low for i in regular_positions], dtype=np.float64)
-    close: Array = np.array([bars[i].close for i in regular_positions], dtype=np.float64)
-
-    series = indicator_series(high, low, close)
-
-    indicators_by_index: dict[int, dict[str, float | None]] = {}
-    for position, original_index in enumerate(regular_positions):
-        indicators_by_index[original_index] = {
-            field: _clean(series[field][position]) for field in INDICATOR_FIELDS
-        }
-
-    rows = []
-    for i, bar in enumerate(bars):
-        indicators = indicators_by_index.get(i, dict.fromkeys(INDICATOR_FIELDS))
-        rows.append(
-            CandleRow(
-                ts=bar.ts,
-                symbol=symbol,
-                session=bar.session,
-                open=bar.open,
-                high=bar.high,
-                low=bar.low,
-                close=bar.close,
-                volume=bar.volume,
-                trade_value=bar.trade_value,
-                indicators=indicators,
-                src=src,
-            )
-        )
-    return rows
+def to_candle_rows(bars: Sequence[Bar], symbol: str, src: str = "rest") -> list[CandleRow]:
+    return [_row(bar, symbol, src) for bar in bars]
 
 
 def backfill_one(
@@ -193,30 +141,15 @@ def backfill_one(
     timeframe: str,
     base_dt: str,
     depth: int,
-    with_indicators: bool = False,
     max_pages: int | None = None,
 ) -> int:
-    """Collect and store one symbol/timeframe, writing before cursor advancement.
-
-    QuestDB upserts null omitted columns, so bare rows must be written before
-    indicator-enriched rows. Do not rerun bare backfill over enriched data.
-    """
+    """Collect and store one symbol/timeframe, writing before cursor advancement."""
     written = 0
 
     def write_page(bars: list[Bar]) -> None:
         nonlocal written
-        rows = to_candle_rows(bars, symbol, with_indicators=False)
+        rows = to_candle_rows(bars, symbol)
         written += store.write_candles(timeframe, rows)
-
-    on_complete = None
-    if with_indicators:
-
-        def write_enriched(bars: list[Bar]) -> None:
-            nonlocal written
-            rows = to_candle_rows(bars, symbol, with_indicators=True)
-            written = store.write_candles(timeframe, rows)
-
-        on_complete = write_enriched
 
     collect(
         client,
@@ -227,7 +160,6 @@ def backfill_one(
         depth,
         max_pages=max_pages,
         on_page=write_page,
-        on_complete=on_complete,
     )
     log.info("backfilled %d %s candles for %s", written, timeframe, symbol)
     return written

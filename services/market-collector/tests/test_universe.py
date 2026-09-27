@@ -1,14 +1,16 @@
 import types
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
-from ktb_market_reader import EmptyUniverseError
 from market_collector.kiwoom.auth import TokenStore
 from market_collector.kiwoom.rest import KiwoomRequestError
 from market_collector.settings import KiwoomAccount
+from market_collector.store import Store
 from market_collector.universe import (
     MEMBERS_API_ID,
     UNIVERSE_MEMBERS_TABLE,
+    EmptyUniverseError,
     IndexClient,
     IndexMember,
     fetch_members,
@@ -44,6 +46,9 @@ class FakeSink:
 
     def flush(self):
         self.flushes += 1
+
+    def sender(self):
+        return nullcontext(self)
 
 
 def _client(*responses):
@@ -156,7 +161,7 @@ def test_fetch_members_delegates_to_the_clients_members_method():
 def test_upsert_members_writes_one_row_per_member():
     sink = FakeSink()
 
-    written = upsert_members(sink, TS, "201", [_member("005930"), _member("000660")])
+    written = upsert_members(Store(sink), TS, "201", [_member("005930"), _member("000660")])
 
     assert written == 2
     assert {row[1]["symbol"] for row in sink.rows} == {"005930", "000660"}
@@ -167,7 +172,7 @@ def test_upsert_members_writes_one_row_per_member():
 def test_upsert_members_records_the_source_and_the_index_name():
     sink = FakeSink()
 
-    upsert_members(sink, TS, "201", [_member(index_code="201")])
+    upsert_members(Store(sink), TS, "201", [_member(index_code="201")])
 
     assert sink.rows[0][1]["src"] == "ka20002"
     assert sink.rows[0][1]["index_name"] == "KOSPI200"
@@ -177,8 +182,8 @@ def test_upsert_members_truncates_the_timestamp_to_the_day():
 
     sink = FakeSink()
 
-    upsert_members(sink, datetime(2026, 9, 25, 6, 0, tzinfo=UTC), "201", [_member()])
-    upsert_members(sink, datetime(2026, 9, 25, 23, 59, tzinfo=UTC), "201", [_member()])
+    upsert_members(Store(sink), datetime(2026, 9, 25, 6, 0, tzinfo=UTC), "201", [_member()])
+    upsert_members(Store(sink), datetime(2026, 9, 25, 23, 59, tzinfo=UTC), "201", [_member()])
 
     assert sink.rows[0][3] == sink.rows[1][3] == datetime(2026, 9, 25, tzinfo=UTC)
 
@@ -187,7 +192,7 @@ def test_upsert_members_truncates_a_non_utc_timestamp_after_converting():
     sink = FakeSink()
     kst = timezone(timedelta(hours=9))
 
-    upsert_members(sink, datetime(2026, 9, 26, 0, 30, tzinfo=kst), "201", [_member()])
+    upsert_members(Store(sink), datetime(2026, 9, 26, 0, 30, tzinfo=kst), "201", [_member()])
 
     assert sink.rows[0][3] == datetime(2026, 9, 25, tzinfo=UTC)
 
@@ -196,7 +201,7 @@ def test_upsert_members_raises_rather_than_writing_an_empty_snapshot():
     sink = FakeSink()
 
     with pytest.raises(EmptyUniverseError):
-        upsert_members(sink, TS, "201", [])
+        upsert_members(Store(sink), TS, "201", [])
 
     assert sink.rows == []
     assert sink.flushes == 0

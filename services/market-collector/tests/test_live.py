@@ -2,17 +2,13 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
-import numpy as np
 import pytest
-from ktb_market_reader import Candle
-from market_collector.indicators import INDICATOR_FIELDS
 from market_collector.live import (
     TICK_FIELDS,
     Aggregator,
     LiveCandle,
     Tick,
     TickBuffer,
-    Window,
     backoff_for,
     candle_row,
     connection_plan,
@@ -25,14 +21,6 @@ from market_collector.live import (
 )
 
 DAY = datetime(2026, 9, 25, tzinfo=UTC)
-
-
-def _stored(ts, high, low, close) -> Candle:
-    """A candle as ``read_regular_candles`` returns it. The window uses the prices
-    only, so the stored indicator values are irrelevant here."""
-    return Candle(
-        ts=ts, high=high, low=low, close=close, indicators=dict.fromkeys(INDICATOR_FIELDS)
-    )
 
 
 def _values(time="090000", price="+70000", cum_volume="1000", cum_value="70000000"):
@@ -175,62 +163,12 @@ def _candle(high=100.0, low=90.0, close=95.0, session="regular", symbol="005930"
     )
 
 
-def test_window_seeds_from_read_regular_candles_shape():
-    window = Window(size=3)
-    rows = [
-        _stored(datetime(2026, 9, 25, 0, i, tzinfo=UTC), 10.0 + i, 9.0 + i, 9.5 + i)
-        for i in range(5)
-    ]
-
-    window.seed("005930", rows)
-    high, low, close = window.series_with(_candle())
-
-    assert len(close) == 4
-    assert close[0] == pytest.approx(11.5)
-
-
-def test_window_evicts_the_oldest_beyond_its_size():
-    window = Window(size=2)
-    for value in (1.0, 2.0, 3.0):
-        window.append(_candle(high=value, low=value, close=value))
-
-    _, _, close = window.series_with(_candle(close=9.0))
-
-    assert list(close) == [2.0, 3.0, 9.0]
-
-
-def _seeded_window(n=400):
-    window = Window()
-    rng = np.random.default_rng(3)
-    price = 70000 + np.cumsum(rng.normal(0, 100, n))
-    window.seed(
-        "005930",
-        [_stored(datetime(2026, 9, 25, tzinfo=UTC), p + 50, p - 50, p) for p in price.tolist()],
-    )
-    return window
-
-
-def test_a_regular_session_candle_carries_indicator_values():
-    row = candle_row(_seeded_window(), _candle(session="regular"))
+def test_candle_row_carries_only_market_values():
+    row = candle_row(_candle(session="extended"))
 
     assert row.src == "ws"
-    assert set(row.indicators) == set(INDICATOR_FIELDS)
-    assert row.indicators["rsi"] is not None
-
-
-def test_an_extended_session_candle_carries_no_indicators():
-
-    row = candle_row(_seeded_window(), _candle(session="extended"))
-
-    assert row.indicators == {}
     assert row.session == "extended"
-
-
-def test_an_unwarmed_window_yields_none_rather_than_nan():
-
-    row = candle_row(Window(), _candle())
-
-    assert row.indicators["rsi"] is None
+    assert row.close == 95.0
 
 
 def test_the_buffer_drops_the_oldest_and_counts_it():
@@ -399,7 +337,7 @@ def test_stream_raises_when_a_group_registration_is_refused():
 
 def test_drain_writes_a_finalised_candle_immediately():
     async def body():
-        buffer, agg, window = TickBuffer(), Aggregator(), _seeded_window()
+        buffer, agg = TickBuffer(), Aggregator()
         written = []
         ticks = (
             _tick(0, 0, cum_volume=10),
@@ -411,7 +349,7 @@ def test_drain_writes_a_finalised_candle_immediately():
             buffer.put(tick)
 
         task = asyncio.create_task(
-            drain(buffer, agg, window, lambda rows: written.extend(rows) or len(rows))
+            drain(buffer, agg, lambda rows: written.extend(rows) or len(rows))
         )
         while len(buffer):
             await asyncio.sleep(0)
@@ -427,7 +365,7 @@ def test_drain_writes_a_finalised_candle_immediately():
 
 def test_drain_throttles_the_in_progress_candle():
     async def body():
-        buffer, agg, window = TickBuffer(), Aggregator(), _seeded_window()
+        buffer, agg = TickBuffer(), Aggregator()
         written = []
         buffer.put(_tick(0, 0, cum_volume=10))
         buffer.put(_tick(1, 0, cum_volume=10))
@@ -438,7 +376,6 @@ def test_drain_throttles_the_in_progress_candle():
             drain(
                 buffer,
                 agg,
-                window,
                 lambda rows: written.extend(rows) or len(rows),
                 flush_interval=60.0,
             )

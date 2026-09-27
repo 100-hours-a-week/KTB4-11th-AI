@@ -2,15 +2,11 @@ import asyncio
 import json
 import logging
 from collections import deque
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-import numpy as np
-from ktb_market_reader import Candle
-
-from market_collector.indicators import indicator_series
 from market_collector.kiwoom.parse import KST, classify_session, parse_price, parse_volume
 from market_collector.store import CandleRow
 
@@ -21,7 +17,6 @@ __all__ = [
     "Socket",
     "Tick",
     "TickBuffer",
-    "Window",
     "candle_row",
     "connection_plan",
     "drain",
@@ -176,35 +171,7 @@ class Aggregator:
         )
 
 
-class Window:
-    def __init__(self, size: int = 300) -> None:
-        self._size = size
-        self._rows: dict[str, deque[tuple[float, float, float]]] = {}
-
-    def seed(self, symbol: str, candles: Iterable[Candle]) -> None:
-        self._rows[symbol] = deque(((c.high, c.low, c.close) for c in candles), maxlen=self._size)
-
-    def append(self, candle: LiveCandle) -> None:
-        self._rows.setdefault(candle.symbol, deque(maxlen=self._size)).append(
-            (candle.high, candle.low, candle.close)
-        )
-
-    def series_with(self, candle: LiveCandle) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        rows = list(self._rows.get(candle.symbol, ())) + [(candle.high, candle.low, candle.close)]
-        array = np.array(rows, dtype=np.float64)
-        return array[:, 0], array[:, 1], array[:, 2]
-
-
-def candle_row(window: Window, candle: LiveCandle, src: str = "ws") -> CandleRow:
-    """Build a row, computing indicators only for regular-session candles."""
-    indicators: dict[str, float | None] = {}
-    if candle.session == "regular":
-        high, low, close = window.series_with(candle)
-        indicators = {
-            field: None if not np.isfinite(values[-1]) else float(values[-1])
-            for field, values in indicator_series(high, low, close).items()
-        }
-
+def candle_row(candle: LiveCandle, src: str = "ws") -> CandleRow:
     return CandleRow(
         ts=candle.ts,
         symbol=candle.symbol,
@@ -215,7 +182,6 @@ def candle_row(window: Window, candle: LiveCandle, src: str = "ws") -> CandleRow
         close=candle.close,
         volume=candle.volume,
         trade_value=candle.trade_value,
-        indicators=indicators,
         src=src,
     )
 
@@ -295,7 +261,6 @@ def ticks_from(payload: Mapping[str, object], on_date: datetime) -> list[Tick]:
 async def drain(
     buffer: TickBuffer,
     aggregator: Aggregator,
-    window: Window,
     write: Callable[[Sequence[CandleRow]], int],
     flush_interval: float = 1.0,
 ) -> None:
@@ -306,8 +271,7 @@ async def drain(
         tick = await buffer.get()
         finished = aggregator.add(tick)
         if finished is not None:
-            window.append(finished)
-            write([candle_row(window, finished)])
+            write([candle_row(finished)])
             last_flush.pop(tick.symbol, None)
             continue
 
@@ -316,21 +280,8 @@ async def drain(
             continue
         pending = aggregator.in_progress(tick.symbol)
         if pending is not None:
-            write([candle_row(window, pending)])
+            write([candle_row(pending)])
             last_flush[tick.symbol] = now
-
-
-def seed_window(window: Window, dsn: str, symbols: Iterable[str], size: int = 300) -> int:
-    from ktb_market_reader import read_regular_candles
-
-    seeded = 0
-    for symbol in symbols:
-        candles = read_regular_candles(dsn, "1m", symbol, limit=size)
-        if candles:
-            window.seed(symbol, candles)
-            seeded += 1
-    log.info("seeded %d symbol windows from QuestDB", seeded)
-    return seeded
 
 
 PING = "PING"

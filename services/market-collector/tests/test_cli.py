@@ -1,17 +1,16 @@
-from contextlib import contextmanager
+from contextlib import nullcontext
 from datetime import UTC, datetime
 
 import pytest
 from market_collector import __main__ as cli
 from market_collector.settings import Settings
 
-QDB = "postgresql://admin:quest@localhost:8812/qdb"
+QDB = "http::addr=localhost:9000;"
 ACCOUNTS = '[{"app_key":"k1","secret_key":"s1"},{"app_key":"k2","secret_key":"s2"}]'
 
 
 def _populate(monkeypatch):
-    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_DSN", QDB)
-    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_ILP_HOST", "localhost")
+    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_CONF", QDB)
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_ACCOUNTS", ACCOUNTS)
 
 
@@ -81,19 +80,13 @@ def test_backfill_accepts_a_page_bound(monkeypatch):
     assert seen["max_pages"] == 2
 
 
-def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
-    monkeypatch, tmp_path
-):
+def test_run_backfill_forwards_depths_into_backfill_one(monkeypatch, tmp_path):
 
     _populate(monkeypatch)
     monkeypatch.setenv("MARKET_COLLECTOR_CURSOR_PATH", str(tmp_path / "cursors.json"))
-    monkeypatch.setenv("MARKET_COLLECTOR_INDICATORS_ON_BACKFILL", "true")
     monkeypatch.setenv(
         "MARKET_COLLECTOR_BACKFILL_DEPTHS",
         '{"1m": 1111, "15m": 2222, "1h": 3333, "1d": 4444}',
-    )
-    monkeypatch.setattr(
-        cli, "latest_members", lambda dsn, index_code: frozenset({"005930", "000660"})
     )
 
     class FakeChartSource:
@@ -112,18 +105,23 @@ def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
 
     monkeypatch.setattr(cli, "_client", fake_client)
 
-    class FakeSink:
-        def row(self, table, *, symbols, columns, at):
-            raise AssertionError("run_backfill must never reach a real QuestDB sink")
+    class FakeResult:
+        def __enter__(self):
+            return self
 
-        def flush(self):
-            pass
+        def __exit__(self, *args):
+            return None
 
-    @contextmanager
-    def fake_questdb_sink(host, port):
-        yield FakeSink()
+        def to_pandas(self):
+            import pandas as pd
 
-    monkeypatch.setattr(cli, "questdb_sink", fake_questdb_sink)
+            return pd.DataFrame({"symbol": ["005930", "000660"]})
+
+    class FakeDatabase:
+        def query(self, *args):
+            return FakeResult()
+
+    monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(FakeDatabase()))
 
     calls = []
 
@@ -135,7 +133,6 @@ def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
         timeframe,
         base_dt,
         depth,
-        with_indicators=False,
         max_pages=None,
     ):
         calls.append(
@@ -144,7 +141,6 @@ def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
                 "timeframe": timeframe,
                 "base_dt": base_dt,
                 "depth": depth,
-                "with_indicators": with_indicators,
                 "max_pages": max_pages,
             }
         )
@@ -164,7 +160,6 @@ def test_run_backfill_forwards_depths_and_the_indicators_flag_into_backfill_one(
     }
     for (symbol, timeframe), call in seen.items():
         assert call["depth"] == settings.backfill_depths[timeframe], (symbol, timeframe)
-        assert call["with_indicators"] is True
         assert call["max_pages"] == 7
         assert call["base_dt"] == "20260922"
 
@@ -191,18 +186,7 @@ def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
 
     monkeypatch.setattr(cli, "fetch_members", fake_fetch_members)
 
-    class FakeSink:
-        def row(self, table, *, symbols, columns, at):
-            raise AssertionError("run_universe must never reach a real QuestDB sink")
-
-        def flush(self):
-            pass
-
-    @contextmanager
-    def fake_questdb_sink(host, port):
-        yield FakeSink()
-
-    monkeypatch.setattr(cli, "questdb_sink", fake_questdb_sink)
+    monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(object()))
 
     sync_calls = []
 

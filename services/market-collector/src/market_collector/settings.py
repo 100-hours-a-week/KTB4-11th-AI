@@ -21,10 +21,7 @@ class Settings(BaseSettings):
     )
 
     log_level: str = "INFO"
-    questdb_dsn: str
-    questdb_ilp_host: str
-
-    questdb_ilp_port: int = 9000
+    questdb_conf: str
     kiwoom_accounts: list[KiwoomAccount] = Field(min_length=1)
     request_interval: float = 1.3
     theme_date_tps: list[int] = [5, 20, 60]
@@ -32,14 +29,12 @@ class Settings(BaseSettings):
     index_code: str = "201"
     cursor_path: str = "var/market-collector/cursors.json"
     backfill_depths: dict[str, int] = Field(default_factory=_default_backfill_depths)
-    indicators_on_backfill: bool = False
 
     ws_url: str = "wss://api.kiwoom.com:10000/api/dostk/websocket"
     ws_symbols_per_group: int = Field(default=100, gt=0)
     ws_groups_per_connection: int = Field(default=2, gt=0)
     ws_queue_size: int = Field(default=100_000, gt=0)
     live_flush_interval: float = Field(default=1.0, gt=0)
-    live_window: int = Field(default=300, gt=0)
 
     intraday_timeframes: list[str] = ["15m", "1h"]
 

@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from datetime import UTC, datetime
 
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
@@ -50,6 +51,9 @@ class FakeSink:
 
     def flush(self):
         self.flushes += 1
+
+    def sender(self):
+        return nullcontext(self)
 
 
 def test_groups_are_collected_once_per_period():

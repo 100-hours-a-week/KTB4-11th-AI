@@ -5,8 +5,8 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
+import questdb
 from ktb_core.logging import setup_logging
-from ktb_market_reader import latest_members
 
 from market_collector.backfill import backfill_one, refresh_recent
 from market_collector.cursor import CursorStore
@@ -18,15 +18,13 @@ from market_collector.live import (
     Aggregator,
     Socket,
     TickBuffer,
-    Window,
     connection_plan,
     drain,
-    seed_window,
     session_date,
     stream_forever,
 )
 from market_collector.settings import Settings
-from market_collector.store import Store, questdb_sink
+from market_collector.store import Store
 from market_collector.themes import snapshot
 from market_collector.universe import IndexClient, fetch_members, upsert_members
 
@@ -65,7 +63,8 @@ def _client(settings: Settings, index: int) -> tuple[ChartClient, HttpxTransport
 
 
 def run_backfill(settings: Settings, today: datetime, max_pages: int | None = None) -> int:
-    symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
+    with questdb.connect(settings.questdb_conf) as db:
+        symbols = sorted(Store(db).latest_members(settings.index_code))
     base_dt = today.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
@@ -75,8 +74,8 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
         client, transport = _client(settings, index)
         try:
             written = 0
-            with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
-                store = Store(sink)
+            with questdb.connect(settings.questdb_conf) as db:
+                store = Store(db)
                 for symbol in bucket:
                     for timeframe in TIMEFRAMES:
                         written += backfill_one(
@@ -87,7 +86,6 @@ def run_backfill(settings: Settings, today: datetime, max_pages: int | None = No
                             timeframe,
                             base_dt,
                             settings.backfill_depths[timeframe],
-                            with_indicators=settings.indicators_on_backfill,
                             max_pages=max_pages,
                         )
             return written
@@ -114,7 +112,8 @@ def _refresh(
     timeframes: Sequence[str],
     label: str,
 ) -> int:
-    symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
+    with questdb.connect(settings.questdb_conf) as db:
+        symbols = sorted(Store(db).latest_members(settings.index_code))
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
@@ -122,8 +121,8 @@ def _refresh(
         client, transport = _client(settings, index)
         try:
             written = 0
-            with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
-                store = Store(sink)
+            with questdb.connect(settings.questdb_conf) as db:
+                store = Store(db)
                 for symbol in bucket:
                     for timeframe in timeframes:
                         written += refresh_recent(client, store, symbol, timeframe, base_dt, since)
@@ -162,9 +161,10 @@ def run_themes(settings: Settings, now: datetime) -> tuple[int, int]:
             transport,
             interval=settings.request_interval,
         )
-        universe = latest_members(settings.questdb_dsn, settings.index_code)
-        with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
-            return snapshot(client, Store(sink), universe, settings.theme_date_tps, now)
+        with questdb.connect(settings.questdb_conf) as db:
+            store = Store(db)
+            universe = store.latest_members(settings.index_code)
+            return snapshot(client, store, universe, settings.theme_date_tps, now)
     finally:
         transport.close()
 
@@ -178,8 +178,8 @@ def run_universe(settings: Settings, now: datetime) -> int:
             interval=settings.request_interval,
         )
         members = fetch_members(client, settings.index_code)
-        with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
-            return upsert_members(sink, now, settings.index_code, members)
+        with questdb.connect(settings.questdb_conf) as db:
+            return upsert_members(Store(db), now, settings.index_code, members)
     finally:
         transport.close()
 
@@ -187,9 +187,8 @@ def run_universe(settings: Settings, now: datetime) -> int:
 def run_live(settings: Settings, now: datetime) -> None:
     import websockets
 
-    symbols = sorted(latest_members(settings.questdb_dsn, settings.index_code))
-    window = Window(settings.live_window)
-    seed_window(window, settings.questdb_dsn, symbols, settings.live_window)
+    with questdb.connect(settings.questdb_conf) as db:
+        symbols = sorted(Store(db).latest_members(settings.index_code))
     buffer = TickBuffer(settings.ws_queue_size)
     aggregator = Aggregator()
     plan = connection_plan(
@@ -211,8 +210,8 @@ def run_live(settings: Settings, now: datetime) -> None:
         return await websockets.connect(url, ping_interval=None)
 
     async def go() -> None:
-        with questdb_sink(settings.questdb_ilp_host, settings.questdb_ilp_port) as sink:
-            store = Store(sink)
+        with questdb.connect(settings.questdb_conf) as db:
+            store = Store(db)
             readers = [
                 stream_forever(settings.ws_url, token, groups, buffer, on_date, connect)
                 for groups in plan
@@ -221,7 +220,6 @@ def run_live(settings: Settings, now: datetime) -> None:
                 drain(
                     buffer,
                     aggregator,
-                    window,
                     lambda rows: store.write_candles("1m", rows),
                     settings.live_flush_interval,
                 ),

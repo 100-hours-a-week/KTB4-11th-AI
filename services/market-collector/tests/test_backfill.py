@@ -1,18 +1,15 @@
-import math
-from datetime import UTC, datetime, timedelta
+from contextlib import nullcontext
+from datetime import datetime, timedelta
 
-import numpy as np
 import pytest
 from market_collector.backfill import (
     DEFAULT_DEPTHS,
     TIC_SCOPES,
     backfill_one,
     collect,
-    to_candle_rows,
 )
 from market_collector.cursor import CursorStore
-from market_collector.indicators import INDICATOR_FIELDS, indicator_series
-from market_collector.kiwoom.parse import KST, MinuteBar
+from market_collector.kiwoom.parse import KST
 from market_collector.kiwoom.rest import Page
 from market_collector.store import Store
 
@@ -61,6 +58,9 @@ class FakeSink:
 
     def flush(self):
         self.flushes += 1
+
+    def sender(self):
+        return nullcontext(self)
 
 
 def test_tic_scopes_maps_the_three_minute_timeframes_to_kiwoom_values():
@@ -325,7 +325,7 @@ def test_a_raising_on_complete_leaves_the_pair_unfinished(tmp_path):
     cursors = CursorStore(tmp_path / "c.json")
 
     def on_complete(bars):
-        raise RuntimeError("indicator write failed")
+        raise RuntimeError("QuestDB write failed")
 
     with pytest.raises(RuntimeError):
         collect(client, "005930", "1m", cursors, BASE_DT, depth=1000, on_complete=on_complete)
@@ -357,47 +357,7 @@ def test_on_complete_is_not_called_on_a_max_pages_stop(tmp_path):
     assert cursors.get("005930", "1m").done is False
 
 
-def test_indicators_are_computed_only_over_regular_session_rows():
-    rng = np.random.default_rng(3)
-    closes = 70000 + np.cumsum(rng.normal(0, 200, 40))
-    sessions = ["extended" if i % 5 == 0 else "regular" for i in range(40)]
-    base_ts = datetime(2026, 9, 1, tzinfo=UTC)
-    bars = [
-        MinuteBar(
-            ts=base_ts + timedelta(minutes=i),
-            session=session,
-            open=float(close),
-            high=float(close) + 50,
-            low=float(close) - 50,
-            close=float(close),
-            volume=1000,
-        )
-        for i, (close, session) in enumerate(zip(closes, sessions, strict=True))
-    ]
-
-    rows = to_candle_rows(bars, "005930", with_indicators=True)
-
-    regular_positions = [i for i, s in enumerate(sessions) if s == "regular"]
-    high = np.array([bars[i].high for i in regular_positions])
-    low = np.array([bars[i].low for i in regular_positions])
-    close = np.array([bars[i].close for i in regular_positions])
-    expected = indicator_series(high, low, close)
-
-    for position, i in enumerate(regular_positions):
-        for field in INDICATOR_FIELDS:
-            want = expected[field][position]
-            got = rows[i].indicators[field]
-            if math.isnan(want):
-                assert got is None, field
-            else:
-                assert got == pytest.approx(want), field
-
-    for i, session in enumerate(sessions):
-        if session == "extended":
-            assert rows[i].indicators == dict.fromkeys(INDICATOR_FIELDS)
-
-
-def test_backfill_without_indicators_stores_ohlcv_alone(tmp_path):
+def test_backfill_stores_ohlcv_alone(tmp_path):
     sink = FakeSink()
     pages = [Page([_minute_row(0, 277000)], None, False)]
 
@@ -409,15 +369,14 @@ def test_backfill_without_indicators_stores_ohlcv_alone(tmp_path):
         "1m",
         BASE_DT,
         depth=300,
-        with_indicators=False,
     )
 
     _, symbols, columns, _ = sink.rows[0]
     assert columns["close"] == 277000.0
-    assert not any(field in columns for field in INDICATOR_FIELDS)
+    assert set(columns) == {"timeframe", "open", "high", "low", "close", "volume"}
 
 
-def test_backfill_one_writes_to_the_timeframes_table_with_src_rest(tmp_path):
+def test_backfill_one_writes_to_bars_with_timeframe_and_src_rest(tmp_path):
     sink = FakeSink()
     pages = [Page([_minute_row(i, 277000 + i) for i in range(5)], None, False)]
 
@@ -433,8 +392,9 @@ def test_backfill_one_writes_to_the_timeframes_table_with_src_rest(tmp_path):
 
     assert written == 5
     assert len(sink.rows) == 5
-    table, symbols, _, _ = sink.rows[0]
-    assert table == "bars_1m"
+    table, symbols, columns, _ = sink.rows[0]
+    assert table == "bars"
+    assert columns["timeframe"] == "1m"
     assert symbols["symbol"] == "005930"
     assert symbols["src"] == "rest"
 
@@ -461,52 +421,6 @@ def test_a_max_pages_stop_still_writes_the_pages_that_were_fetched(tmp_path):
 
     assert written == 900
     assert len(sink.rows) == 900
-    assert cursors.get("005930", "1m").done is False
-
-
-class FailOnSecondWriteSink(FakeSink):
-    """Succeeds for the first ``write_candles`` call (the per-page bare-OHLCV
-    write ``on_page`` triggers) and raises on the first row of the second
-    (the enriched write ``on_complete`` triggers) — models a QuestDB failure
-    on the final write while an earlier, provisional write already landed.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self._completed_writes = 0
-
-    def row(self, table, *, symbols, columns, at):
-        if self._completed_writes >= 1:
-            raise RuntimeError("questdb rejected the enriched row")
-        super().row(table, symbols=symbols, columns=columns, at=at)
-
-    def flush(self):
-        super().flush()
-        self._completed_writes += 1
-
-
-def test_a_failed_final_write_leaves_the_already_written_ohlcv_in_place_and_the_pair_unfinished(
-    tmp_path,
-):
-
-    sink = FailOnSecondWriteSink()
-    pages = [Page([_minute_row(i, 277000 + i) for i in range(5)], None, False)]
-    cursors = CursorStore(tmp_path / "c.json")
-
-    with pytest.raises(RuntimeError):
-        backfill_one(
-            FakeClient(pages),
-            Store(sink),
-            cursors,
-            "005930",
-            "1m",
-            BASE_DT,
-            depth=10,
-            with_indicators=True,
-        )
-
-    assert len(sink.rows) == 5
-    assert all(row[2]["close"] for row in sink.rows)
     assert cursors.get("005930", "1m").done is False
 
 

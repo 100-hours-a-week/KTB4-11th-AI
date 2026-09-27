@@ -6,11 +6,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
-from ktb_market_reader import EmptyUniverseError
-
 from market_collector.kiwoom.auth import TokenStore, Transport
 from market_collector.kiwoom.rest import Pager
-from market_collector.store import RowSink
+from market_collector.store import Store
 
 __all__ = [
     "IndexClient",
@@ -26,6 +24,10 @@ SECT_PATH = "/api/dostk/sect"
 MEMBERS_API_ID = "ka20002"
 MEMBERS_ARRAY = "inds_stkpc"
 UNIVERSE_MEMBERS_TABLE = "universe_members"
+
+
+class EmptyUniverseError(RuntimeError):
+    pass
 
 
 _CODE_RE = re.compile(r"^[0-9A-Za-z]{6}$")
@@ -88,7 +90,7 @@ def _truncate_to_day(ts: datetime) -> datetime:
 
 
 def upsert_members(
-    sink: RowSink, ts: datetime, index_code: str, members: Sequence[IndexMember]
+    store: Store, ts: datetime, index_code: str, members: Sequence[IndexMember]
 ) -> int:
     if not members:
         raise EmptyUniverseError(
@@ -96,21 +98,12 @@ def upsert_members(
             "not writing an empty snapshot"
         )
     day = _truncate_to_day(ts)
-    written = 0
-    for member in members:
-        sink.row(
-            UNIVERSE_MEMBERS_TABLE,
-            symbols={
-                "index_code": member.index_code,
-                "index_name": INDEX_NAMES.get(member.index_code, member.index_code),
-                "symbol": member.symbol,
-                "stock_name": member.stock_name,
-                "src": MEMBERS_API_ID,
-            },
-            columns={},
-            at=day,
-        )
-        written += 1
-    sink.flush()
+    written = store.write_universe_members(
+        day,
+        index_code,
+        INDEX_NAMES.get(index_code, index_code),
+        MEMBERS_API_ID,
+        ((member.symbol, member.stock_name) for member in members),
+    )
     log.info("wrote %d universe_members rows for index_code=%s", written, index_code)
     return written

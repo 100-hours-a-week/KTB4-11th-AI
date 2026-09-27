@@ -1,7 +1,7 @@
+from contextlib import nullcontext
 from datetime import UTC, datetime
 
 from market_collector.backfill import refresh_recent
-from market_collector.indicators import INDICATOR_FIELDS
 from market_collector.kiwoom.rest import Page
 from market_collector.store import Store
 
@@ -44,6 +44,9 @@ class FakeSink:
     def flush(self):
         self.flushes += 1
 
+    def sender(self):
+        return nullcontext(self)
+
 
 def test_only_one_page_is_fetched():
     page = Page([_row(i, 277000 + i) for i in range(390)], "NK1", True)
@@ -77,23 +80,6 @@ def test_only_rows_at_or_after_since_are_written():
     assert written == len(sink.rows)
     assert written < 390
     assert all(row[3] >= datetime(2026, 9, 22, 5, 0, tzinfo=UTC) for row in sink.rows)
-
-
-def test_written_rows_have_a_warm_indicator_because_the_page_carries_history():
-    page = Page([_row(i, 277000 + i) for i in range(390)], None, False)
-    sink = FakeSink()
-
-    refresh_recent(
-        FakeClient(page),
-        Store(sink),
-        "005930",
-        "1m",
-        "20260922",
-        since=datetime(2026, 9, 22, 6, 0, tzinfo=UTC),
-    )
-
-    last = sink.rows[-1][2]
-    assert any(field in last for field in INDICATOR_FIELDS)
 
 
 def _row_on(date, minute_index, close):

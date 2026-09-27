@@ -3,13 +3,12 @@ import json
 import pytest
 from market_collector.__main__ import main
 
-QDB = "postgresql://admin:quest@localhost:8812/qdb"
+QDB = "http::addr=localhost:9000;"
 ACCOUNTS = '[{"app_key":"k1","secret_key":"s1"}]'
 
 
 def _populate(monkeypatch):
-    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_DSN", QDB)
-    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_ILP_HOST", "localhost")
+    monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_CONF", QDB)
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_ACCOUNTS", ACCOUNTS)
 
 
