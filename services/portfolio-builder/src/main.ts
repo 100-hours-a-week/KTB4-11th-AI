@@ -92,8 +92,7 @@ export async function main(): Promise<number> {
     );
     return 1;
   } finally {
-    await market.close();
-    await sql.close();
+    await Promise.allSettled([market.close(), sql.close()]);
   }
 }
 
