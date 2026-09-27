@@ -63,18 +63,20 @@ def test_archive_run_snapshots_members_before_reconciling_each_current_symbol(mo
     monkeypatch.setattr(cli, "IndexClient", lambda client, interval: client)
     monkeypatch.setattr(
         cli,
-        "reconcile",
+        "reconcile_candles",
         lambda client, store, symbol, timeframe, base_dt, latest: (
-            events.append(("reconcile", symbol, timeframe, base_dt, latest)) or 1
+            events.append(("reconcile_candles", symbol, timeframe, base_dt, latest)) or 1
         ),
     )
 
-    assert cli.run_archive(settings, NOW) == 4
+    assert cli.archive_ohlcv(settings, NOW) == 4
     snapshot_index = next(index for index, event in enumerate(events) if event[0] == "snapshot")
     checkpoint_index = next(
         index for index, event in enumerate(events) if event[0] == "checkpoints"
     )
-    reconcile_indices = [index for index, event in enumerate(events) if event[0] == "reconcile"]
+    reconcile_indices = [
+        index for index, event in enumerate(events) if event[0] == "reconcile_candles"
+    ]
     assert snapshot_index < checkpoint_index < min(reconcile_indices)
     assert events[snapshot_index] == (
         "snapshot",
@@ -84,16 +86,22 @@ def test_archive_run_snapshots_members_before_reconciling_each_current_symbol(mo
 
     for symbol in ("000660", "005930"):
         symbol_events = [
-            event for event in events if event[0] == "reconcile" and event[1] == symbol
+            event for event in events if event[0] == "reconcile_candles" and event[1] == symbol
         ]
         assert [event[2] for event in symbol_events] == ["1d", "1m"]
-    assert [event for event in events if event[0] == "reconcile" and event[1] == "000660"] == [
-        ("reconcile", "000660", "1d", "20260928", None),
-        ("reconcile", "000660", "1m", "20260928", None),
+    events_660 = [
+        event for event in events if event[0] == "reconcile_candles" and event[1] == "000660"
     ]
-    assert [event for event in events if event[0] == "reconcile" and event[1] == "005930"] == [
-        ("reconcile", "005930", "1d", "20260928", checkpoints[("005930", "1d")]),
-        ("reconcile", "005930", "1m", "20260928", checkpoints[("005930", "1m")]),
+    assert events_660 == [
+        ("reconcile_candles", "000660", "1d", "20260928", None),
+        ("reconcile_candles", "000660", "1m", "20260928", None),
+    ]
+    events_930 = [
+        event for event in events if event[0] == "reconcile_candles" and event[1] == "005930"
+    ]
+    assert events_930 == [
+        ("reconcile_candles", "005930", "1d", "20260928", checkpoints[("005930", "1d")]),
+        ("reconcile_candles", "005930", "1m", "20260928", checkpoints[("005930", "1m")]),
     ]
 
 
@@ -125,13 +133,13 @@ def test_archive_run_shards_stably_and_skips_removed_symbols(monkeypatch):
     monkeypatch.setattr(cli, "fetch_members", lambda client, index_code: members)
     monkeypatch.setattr(
         cli,
-        "reconcile",
+        "reconcile_candles",
         lambda client, store, symbol, timeframe, base_dt, latest: (
             calls.append((client, symbol, timeframe)) or 0
         ),
     )
 
-    cli.run_archive(settings, NOW)
+    cli.archive_ohlcv(settings, NOW)
 
     by_client = {}
     for client, symbol, timeframe in calls:
@@ -159,7 +167,9 @@ def test_archive_run_propagates_worker_exception(monkeypatch):
     monkeypatch.setattr(cli, "build_client", lambda account, mode: object())
     monkeypatch.setattr(cli, "IndexClient", lambda client, interval: client)
     monkeypatch.setattr(cli, "fetch_members", lambda client, index_code: members)
-    monkeypatch.setattr(cli, "reconcile", lambda *args: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(
+        cli, "reconcile_candles", lambda *args: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
-        cli.run_archive(settings, NOW)
+        cli.archive_ohlcv(settings, NOW)

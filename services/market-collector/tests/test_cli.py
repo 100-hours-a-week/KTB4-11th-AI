@@ -33,7 +33,7 @@ def test_main_runs_one_archive_without_subcommands(monkeypatch):
         "datetime",
         type("Clock", (), {"now": staticmethod(lambda zone: datetime(2026, 9, 28, tzinfo=UTC))}),
     )
-    monkeypatch.setattr(cli, "run_archive", lambda supplied, now: seen.append((supplied, now)))
+    monkeypatch.setattr(cli, "archive_ohlcv", lambda supplied, now: seen.append((supplied, now)))
 
     cli.main()
 

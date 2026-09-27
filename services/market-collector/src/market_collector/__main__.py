@@ -6,9 +6,9 @@ from datetime import UTC, datetime
 import questdb
 from ktb_core.logging import setup_logging
 
-from market_collector.backfill import reconcile
 from market_collector.kiwoom.official import ChartClient, build_client
 from market_collector.kiwoom.parse import KST
+from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
 from market_collector.store import Store
 from market_collector.universe import IndexClient, fetch_members, upsert_members
@@ -25,7 +25,7 @@ def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
     return [group for group in groups if group]
 
 
-def run_archive(settings: Settings, now: datetime) -> int:
+def archive_ohlcv(settings: Settings, now: datetime) -> int:
     index_client = IndexClient(
         build_client(settings.kiwoom_accounts[0], settings.kiwoom_mode),
         interval=settings.request_interval,
@@ -48,7 +48,7 @@ def run_archive(settings: Settings, now: datetime) -> int:
             written = 0
             for symbol in bucket:
                 for timeframe in ("1d", "1m"):
-                    written += reconcile(
+                    written += reconcile_candles(
                         client,
                         store,
                         symbol,
@@ -70,7 +70,7 @@ def run_archive(settings: Settings, now: datetime) -> int:
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level)
-    run_archive(settings, datetime.now(UTC))
+    archive_ohlcv(settings, datetime.now(UTC))
 
 
 if __name__ == "__main__":

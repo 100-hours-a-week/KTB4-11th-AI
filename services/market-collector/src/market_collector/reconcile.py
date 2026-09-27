@@ -7,7 +7,7 @@ from market_collector.kiwoom.official import Page
 from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
 from market_collector.store import CandleRow, Store
 
-__all__ = ["ChartSource", "reconcile", "to_candle_rows"]
+__all__ = ["ChartSource", "reconcile_candles", "to_candle_rows"]
 
 log = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def to_candle_rows(bars: Sequence[Bar], symbol: str, src: str = "rest") -> list[
     return [_row(bar, symbol, src) for bar in bars]
 
 
-def reconcile(
+def reconcile_candles(
     client: ChartSource,
     store: Store,
     symbol: str,

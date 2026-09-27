@@ -7,8 +7,7 @@ CREATE TABLE IF NOT EXISTS bars (
     high DOUBLE,
     low DOUBLE,
     close DOUBLE,
-    volume LONG,
-    src SYMBOL
+    volume LONG
 ) TIMESTAMP(ts) PARTITION BY DAY WAL DEDUP UPSERT KEYS(ts, symbol, timeframe);
 
 CREATE VIEW IF NOT EXISTS bars_1m AS (SELECT * FROM bars WHERE timeframe = '1m');
@@ -47,6 +46,5 @@ CREATE TABLE IF NOT EXISTS universe_members (
     index_code SYMBOL INDEX,
     index_name SYMBOL,
     symbol SYMBOL INDEX,
-    stock_name SYMBOL,
-    src SYMBOL
+    stock_name SYMBOL
 ) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(ts, index_code, symbol);

@@ -2,9 +2,9 @@ from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from market_collector.backfill import reconcile
 from market_collector.kiwoom.official import Page
 from market_collector.kiwoom.parse import KST
+from market_collector.reconcile import reconcile_candles
 from market_collector.store import Store
 
 BASE_DT = "20260922"
@@ -67,8 +67,8 @@ def test_reconcile_selects_daily_and_one_minute_endpoints():
     daily_client = FakeClient([Page([_daily_row(BASE_DT, 100)], None, False)])
     minute_client = FakeClient([Page([_minute_row(100)], None, False)])
 
-    reconcile(daily_client, Store(FakeSink()), "005930", "1d", BASE_DT, None)
-    reconcile(minute_client, Store(FakeSink()), "005930", "1m", BASE_DT, None)
+    reconcile_candles(daily_client, Store(FakeSink()), "005930", "1d", BASE_DT, None)
+    reconcile_candles(minute_client, Store(FakeSink()), "005930", "1m", BASE_DT, None)
 
     assert daily_client.daily_calls == [("005930", BASE_DT, None)]
     assert daily_client.minute_calls == []
@@ -83,7 +83,7 @@ def test_reconcile_without_checkpoint_exhausts_pages_and_writes_unique_rows_olde
     ]
     sink = FakeSink()
 
-    written = reconcile(FakeClient(pages), Store(sink), "005930", "1m", BASE_DT, None)
+    written = reconcile_candles(FakeClient(pages), Store(sink), "005930", "1m", BASE_DT, None)
 
     assert written == 3
     assert [row[3] for row in sink.rows] == sorted(row[3] for row in sink.rows)
@@ -100,7 +100,7 @@ def test_reconcile_with_checkpoint_filters_strictly_newer_and_stops_at_boundary_
     client = FakeClient(pages)
     sink = FakeSink()
 
-    written = reconcile(client, Store(sink), "005930", "1m", BASE_DT, latest)
+    written = reconcile_candles(client, Store(sink), "005930", "1m", BASE_DT, latest)
 
     assert written == 2
     assert [row[3] for row in sink.rows] == [
@@ -113,7 +113,7 @@ def test_reconcile_with_checkpoint_filters_strictly_newer_and_stops_at_boundary_
 def test_reconcile_terminal_empty_first_page_writes_zero_and_returns():
     sink = FakeSink()
 
-    written = reconcile(
+    written = reconcile_candles(
         FakeClient([Page([], None, False)]), Store(sink), "005930", "1m", BASE_DT, None
     )
 
@@ -130,7 +130,7 @@ def test_reconcile_rejects_repeated_continuation_with_symbol_and_timeframe_conte
     )
 
     with pytest.raises(RuntimeError, match=r"005930/1m.*NK1"):
-        reconcile(client, Store(FakeSink()), "005930", "1m", BASE_DT, None)
+        reconcile_candles(client, Store(FakeSink()), "005930", "1m", BASE_DT, None)
 
 
 def test_reconcile_propagates_write_failure_without_side_checkpoint():
@@ -145,7 +145,7 @@ def test_reconcile_propagates_write_failure_without_side_checkpoint():
     store = FailingStore()
 
     with pytest.raises(RuntimeError, match="QuestDB write failed"):
-        reconcile(
+        reconcile_candles(
             FakeClient([Page([_minute_row(101)], None, False)]),
             store,
             "005930",
