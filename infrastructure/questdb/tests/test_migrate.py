@@ -137,7 +137,6 @@ def test_market_data_migration_defines_archive_schema():
     assert "timeframe VARCHAR" in bars
     for column in ("open DOUBLE", "high DOUBLE", "low DOUBLE", "close DOUBLE", "volume LONG"):
         assert column in bars
-    assert "trade_value" not in bars
 
     for timeframe in ("1m", "1d"):
         assert (

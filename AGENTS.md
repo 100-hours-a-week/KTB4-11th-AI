@@ -79,6 +79,8 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_COLLECTOR_QUESTDB_CONF` | market-collector | required |
 | `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | market-collector | required |
 | `MARKET_COLLECTOR_KIWOOM_MODE` | market-collector | `real` |
+| `MARKET_COLLECTOR_INDEX_CODE` | market-collector | `201` |
+| `MARKET_COLLECTOR_REQUEST_INTERVAL` | market-collector | `1.3` |
 
 Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
 
@@ -92,7 +94,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-clusterer` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
-| `services/market-collector` | service | cron (`backfill`, `preopen`, `themes`, `universe`, `intraday`) plus a long-running `live` | `ktb-core` |
+| `services/market-collector` | service | single-run archive job for current KOSPI 200 OHLCV | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 

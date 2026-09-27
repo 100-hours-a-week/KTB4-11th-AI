@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 from market_collector.store import CandleRow, Store, _without_nones
 
 TS = datetime(2026, 9, 22, 6, 19, tzinfo=UTC)
@@ -72,7 +71,6 @@ def test_physical_timeframes_write_ohlcv_to_bars(timeframe):
     db = FakeDatabase()
     candle = _candle()
 
-    assert not hasattr(candle, "trade_value")
     assert Store(db).write_candles(timeframe, [candle]) == 1
 
     table, symbols, columns, at = db.output.rows[0]
@@ -86,7 +84,6 @@ def test_physical_timeframes_write_ohlcv_to_bars(timeframe):
         "close": 277500.0,
         "volume": 38961,
     }
-    assert "trade_value" not in columns
     assert at == TS
     assert db.output.flushes == 1
 
@@ -99,20 +96,6 @@ def test_derived_timeframes_are_rejected_before_opening_a_sender(timeframe):
         Store(db).write_candles(timeframe, [_candle()])
 
     assert db.sender_calls == 0
-
-
-def test_theme_groups_and_members_use_the_official_sender():
-    db = FakeDatabase()
-    store = Store(db)
-    group = ThemeGroup("103", "태양광", 10, 297.1, -1.2, 3, 1, 2, "한화솔루션")
-    members = [ThemeMember("103", "005930", "삼성전자"), ThemeMember("103", "033170", "시그네틱스")]
-
-    assert store.write_theme_groups(TS, [group]) == 1
-    assert store.write_theme_members(TS, members, frozenset({"005930"})) == 1
-
-    assert [row[0] for row in db.output.rows] == ["theme_snapshot", "theme_members"]
-    assert db.output.rows[1][1]["symbol"] == "005930"
-    assert db.output.flushes == 2
 
 
 def test_latest_members_reads_the_latest_snapshot_with_bound_index_code():

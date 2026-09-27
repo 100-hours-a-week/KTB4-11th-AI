@@ -3,8 +3,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
-
 __all__ = ["Candle", "CandleRow", "Store"]
 
 TIMEFRAMES = frozenset({"1m", "1d"})
@@ -83,52 +81,6 @@ class Store:
             (record["symbol"], record["timeframe"]): _as_utc(record["latest_ts"])
             for record in records
         }
-
-    def write_theme_groups(self, ts: datetime, groups: Iterable[ThemeGroup]) -> int:
-        written = 0
-        with self._db.sender() as sender:
-            for group in groups:
-                sender.row(
-                    "theme_snapshot",
-                    symbols={"theme_code": group.code, "theme_name": group.name},
-                    columns=_without_nones(
-                        {
-                            "date_tp": group.date_tp,
-                            "dt_prft_rt": group.dt_prft_rt,
-                            "change_rate": group.change_rate,
-                            "stock_count": group.stock_count,
-                            "rising_count": group.rising_count,
-                            "falling_count": group.falling_count,
-                            "main_stocks": group.main_stocks,
-                        }
-                    ),
-                    at=ts,
-                )
-                written += 1
-            sender.flush()
-        return written
-
-    def write_theme_members(
-        self, ts: datetime, members: Iterable[ThemeMember], universe: frozenset[str]
-    ) -> int:
-        written = 0
-        with self._db.sender() as sender:
-            for member in members:
-                if member.symbol not in universe:
-                    continue
-                sender.row(
-                    "theme_members",
-                    symbols={
-                        "theme_code": member.theme_code,
-                        "symbol": member.symbol,
-                        "stock_name": member.stock_name,
-                    },
-                    columns={},
-                    at=ts,
-                )
-                written += 1
-            sender.flush()
-        return written
 
     def write_universe_members(
         self,
