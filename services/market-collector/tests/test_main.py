@@ -19,7 +19,7 @@ def _settings(monkeypatch):
 
 def test_archive_run_snapshots_members_before_reconciling_each_current_symbol(monkeypatch):
     settings = _settings(monkeypatch)
-    calls = []
+    events = []
     members = [IndexMember("201", "000660", "SK"), IndexMember("201", "005930", "Samsung")]
     checkpoints = {
         ("005930", "1d"): datetime(2026, 9, 26, tzinfo=UTC),
@@ -31,11 +31,11 @@ def test_archive_run_snapshots_members_before_reconciling_each_current_symbol(mo
             self.db = db
 
         def write_universe_members(self, *args):
-            calls.append(("snapshot", args[1], [*args[4]]))
+            events.append(("snapshot", args[1], [*args[4]]))
             return 2
 
         def latest_bar_timestamps(self):
-            calls.append("checkpoints")
+            events.append(("checkpoints",))
             return self.db.checkpoints
 
     class DB:
@@ -53,39 +53,47 @@ def test_archive_run_snapshots_members_before_reconciling_each_current_symbol(mo
     monkeypatch.setattr(
         cli,
         "build_client",
-        lambda account, mode: calls.append(("client", account.app_key)) or object(),
+        lambda account, mode: events.append(("client", account.app_key)) or object(),
     )
     monkeypatch.setattr(
         cli,
         "fetch_members",
-        lambda client, index_code: calls.append(("fetch", index_code)) or members,
+        lambda client, index_code: events.append(("fetch", index_code)) or members,
     )
     monkeypatch.setattr(cli, "IndexClient", lambda client, interval: client)
-    reconciled = []
     monkeypatch.setattr(
         cli,
         "reconcile",
         lambda client, store, symbol, timeframe, base_dt, latest: (
-            reconciled.append((symbol, timeframe, base_dt, latest)) or 1
+            events.append(("reconcile", symbol, timeframe, base_dt, latest)) or 1
         ),
     )
 
     assert cli.run_archive(settings, NOW) == 4
-    assert calls[:3] == [
-        ("client", "k1"),
-        ("fetch", "201"),
-        ("snapshot", "201", [("000660", "SK"), ("005930", "Samsung")]),
+    snapshot_index = next(index for index, event in enumerate(events) if event[0] == "snapshot")
+    checkpoint_index = next(
+        index for index, event in enumerate(events) if event[0] == "checkpoints"
+    )
+    reconcile_indices = [index for index, event in enumerate(events) if event[0] == "reconcile"]
+    assert snapshot_index < checkpoint_index < min(reconcile_indices)
+    assert events[snapshot_index] == (
+        "snapshot",
+        "201",
+        [("000660", "SK"), ("005930", "Samsung")],
+    )
+
+    for symbol in ("000660", "005930"):
+        symbol_events = [
+            event for event in events if event[0] == "reconcile" and event[1] == symbol
+        ]
+        assert [event[2] for event in symbol_events] == ["1d", "1m"]
+    assert [event for event in events if event[0] == "reconcile" and event[1] == "000660"] == [
+        ("reconcile", "000660", "1d", "20260928", None),
+        ("reconcile", "000660", "1m", "20260928", None),
     ]
-    assert calls.index("checkpoints") > 0
-    assert [(symbol, timeframe) for symbol, timeframe, *_ in reconciled] == [
-        ("000660", "1d"),
-        ("000660", "1m"),
-        ("005930", "1d"),
-        ("005930", "1m"),
-    ]
-    assert reconciled[-2:] == [
-        ("005930", "1d", "20260928", checkpoints[("005930", "1d")]),
-        ("005930", "1m", "20260928", checkpoints[("005930", "1m")]),
+    assert [event for event in events if event[0] == "reconcile" and event[1] == "005930"] == [
+        ("reconcile", "005930", "1d", "20260928", checkpoints[("005930", "1d")]),
+        ("reconcile", "005930", "1m", "20260928", checkpoints[("005930", "1m")]),
     ]
 
 
