@@ -1,6 +1,6 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
@@ -33,6 +33,10 @@ class CandleRow:
 
 def _without_nones(columns: dict[str, object]) -> dict[str, object]:
     return {name: value for name, value in columns.items() if value is not None}
+
+
+def _as_utc(timestamp: datetime) -> datetime:
+    return timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp.astimezone(UTC)
 
 
 class Store:
@@ -75,7 +79,10 @@ class Store:
         GROUP BY symbol, timeframe"""
         with self._db.query(sql) as result:
             records = result.to_pandas().to_dict("records")
-        return {(record["symbol"], record["timeframe"]): record["latest_ts"] for record in records}
+        return {
+            (record["symbol"], record["timeframe"]): _as_utc(record["latest_ts"])
+            for record in records
+        }
 
     def write_theme_groups(self, ts: datetime, groups: Iterable[ThemeGroup]) -> int:
         written = 0

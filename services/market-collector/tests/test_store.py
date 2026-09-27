@@ -139,11 +139,16 @@ def test_read_regular_candles_returns_oldest_first():
 
 
 def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundaries():
+    naive_ts = TS.replace(tzinfo=None)
     frame = pd.DataFrame(
         {
             "symbol": ["005930", "005930", "000660"],
             "timeframe": ["1m", "1d", "1m"],
-            "latest_ts": [TS, TS.replace(day=21), TS.replace(day=20)],
+            "latest_ts": [
+                naive_ts,
+                naive_ts.replace(day=21),
+                naive_ts.replace(day=20),
+            ],
         }
     )
     db = FakeDatabase(frame)
@@ -155,6 +160,7 @@ def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundari
         ("005930", "1d"): TS.replace(day=21),
         ("000660", "1m"): TS.replace(day=20),
     }
+    assert all(timestamp.tzinfo is UTC for timestamp in latest.values())
     sql, binds = db.queries[0]
     assert "max(ts)" in sql
     assert "GROUP BY symbol, timeframe" in sql
