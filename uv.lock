@@ -14,7 +14,6 @@ resolution-markers = [
 members = [
     "ktb-core",
     "ktb-market-analyzer",
-    "ktb-market-reader",
     "market-collector",
     "news-clusterer",
     "news-graph-builder",
@@ -478,17 +477,6 @@ requires-dist = [
 ]
 
 [[package]]
-name = "ktb-market-reader"
-version = "0.1.0"
-source = { editable = "packages/market-reader" }
-dependencies = [
-    { name = "psycopg", extra = ["binary"] },
-]
-
-[package.metadata]
-requires-dist = [{ name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" }]
-
-[[package]]
 name = "kwcli"
 version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -601,7 +589,6 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "questdb" },
-    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -612,7 +599,6 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "questdb", specifier = ">=5.0" },
-    { name = "websockets", specifier = ">=15.0" },
 ]
 
 [[package]]

@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     cursor_path: str = "var/market-collector/cursors.json"
     backfill_depths: dict[str, int] = Field(default_factory=_default_backfill_depths)
 
-    ws_url: str = "wss://api.kiwoom.com:10000/api/dostk/websocket"
     ws_symbols_per_group: int = Field(default=100, gt=0)
     ws_groups_per_connection: int = Field(default=2, gt=0)
     ws_queue_size: int = Field(default=100_000, gt=0)

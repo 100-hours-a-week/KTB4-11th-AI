@@ -10,7 +10,6 @@ dependencies = [
     "httpx>=0.28",
     "kwcli",
     "questdb>=5.0",
-    "websockets>=15.0",
 ]
 
 [project.scripts]

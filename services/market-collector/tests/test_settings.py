@@ -41,6 +41,14 @@ def test_index_code_can_be_overridden(monkeypatch):
     assert settings.index_code == "150"
 
 
+def test_kiwoom_mode_is_validated(monkeypatch):
+    _populate(monkeypatch)
+    monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_MODE", "paper")
+
+    with pytest.raises(ValidationError, match="kiwoom_mode"):
+        Settings()
+
+
 def test_backfill_depths_default_to_the_backfill_modules_depths(monkeypatch):
     from market_collector.backfill import DEFAULT_DEPTHS
 

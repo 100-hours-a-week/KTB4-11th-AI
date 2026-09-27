@@ -96,12 +96,8 @@ def test_run_backfill_forwards_depths_into_backfill_one(monkeypatch, tmp_path):
         def daily_page(self, symbol, base_dt, next_key=None):
             raise AssertionError("run_backfill must never reach a real chart client")
 
-    class FakeTransport:
-        def close(self):
-            pass
-
     def fake_client(settings, index):
-        return FakeChartSource(), FakeTransport()
+        return FakeChartSource()
 
     monkeypatch.setattr(cli, "_client", fake_client)
 
@@ -171,12 +167,7 @@ def test_run_universe_wires_the_configured_index_code_through_fetch_and_sync(
     _populate(monkeypatch)
     monkeypatch.setenv("MARKET_COLLECTOR_INDEX_CODE", "201")
 
-    class FakeTransport:
-        def close(self):
-            pass
-
-    monkeypatch.setattr(cli, "HttpxTransport", lambda: FakeTransport())
-    monkeypatch.setattr(cli, "TokenStore", lambda account, transport: object())
+    monkeypatch.setattr(cli, "build_client", lambda account, mode: object())
 
     fetch_calls = []
 
