@@ -20,6 +20,7 @@ docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
+docker compose -f compose.dev.yaml up market-mcp           # MCP endpoint at http://localhost:8010/mcp
 
 # tests TRUNCATE tables: point them at a separate database, never at `news`
 docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test
@@ -75,6 +76,11 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_BUILDER_QUESTDB_DSN` | portfolio-builder | required |
 | `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | portfolio-builder | required |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | portfolio-builder | `INFO` |
+| `MARKET_MCP_QUESTDB_DSN` | market-mcp (libpq URI for port 8812, e.g. `postgresql://admin:quest@questdb:8812/qdb`) | required |
+| `MARKET_MCP_HOST` | market-mcp | `0.0.0.0` |
+| `MARKET_MCP_PORT` | market-mcp | `8000` |
+| `MARKET_MCP_CANDLE_LIMIT` | market-mcp (newest candles read per call) | `200` |
+| `MARKET_MCP_LOG_LEVEL` | market-mcp | `INFO` |
 
 Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
 
@@ -88,16 +94,17 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-clusterer` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
+| `services/market-mcp` | service | long-running MCP server (streamable HTTP at `/mcp`) | `ktb-core`, `ktb-market-analyzer` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate only through datastores.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. There are no direct service-to-service calls.
+- **Services communicate only through datastores.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. There are no direct service-to-service calls. market-mcp serves one MCP tool, `analyze_market(symbol, timeframe)`, which reads QuestDB `bars_<timeframe>` candles and returns market-analyzer's readings as text; it has no authentication, so keep it on the internal network.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB (market time-series) is read-only here.** Another team owns its schema and ingestion. Read it over the Postgres wire protocol (port 8812, plain psycopg). Never create or alter QuestDB tables, and don't build an ORM on top of it.
 - **Work queue:** SQS in production, Redis in development. portfolio-builder is its only consumer.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.
-- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`). There is deliberately no shared base class in core.
+- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`, `MARKET_MCP_`). There is deliberately no shared base class in core.
 - Every service's `main()` calls `ktb_core.logging.setup_logging()` first, which emits JSON logs on stdout.
 - **Postgres migrations** live in `infrastructure/postgres/migrations/`, with `alembic.ini` at the repo root. The DSN comes only from `KTB_POSTGRES_DSN`, and a test asserts that no `sqlalchemy.url` is committed. A dedicated job runs migrations. Services never run them at boot.
 - **Docker:** there is one image per service (`docker/<svc>.Dockerfile`) and the build context is the repo root. Each Dockerfile installs third-party deps from `docker/requirements/<svc>.txt`, then installs first-party members from source with `--no-deps`. When a service gains a new workspace dependency, add a `COPY` line and put the dependency on the `uv pip install` line of that service's Dockerfile.
