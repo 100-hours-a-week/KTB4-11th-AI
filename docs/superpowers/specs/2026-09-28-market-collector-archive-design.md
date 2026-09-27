@@ -41,8 +41,9 @@ Both materialized views group by symbol and time bucket and calculate:
 - high: `max(high)`;
 - low: `min(low)`;
 - close: `last(close)`;
-- volume: `sum(volume)`;
-- trade value: `sum(trade_value)`.
+- volume: `sum(volume)`.
+
+The physical table and derived materialized views contain OHLCV only; `trade_value` is removed.
 
 Both are built directly from `bars`; materialized views are not chained. KOSPI regular trading
 starts at 09:00 KST, equal to 00:00 UTC, so calendar-aligned 15-minute and hourly buckets align
