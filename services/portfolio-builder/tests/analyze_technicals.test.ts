@@ -3,8 +3,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { analyzeTechnicalsTool } from "../src/tools/analyze_technicals.ts";
+import { analyzeTechnicalsTool, connectMarketMcp } from "../src/tools/analyze_technicals.ts";
 import { hasDb, SAMSUNG, seedFixture, testSql } from "./db.ts";
+
+test("connectMarketMcp's close is a no-op when nothing ever connected", async () => {
+  await expect(connectMarketMcp("http://localhost:1/mcp").close()).resolves.toBeUndefined();
+});
 
 async function fakeMarketMcp() {
   const calls: unknown[] = [];

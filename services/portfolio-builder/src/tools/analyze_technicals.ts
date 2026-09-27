@@ -10,12 +10,17 @@ export type TechnicalsClient = Pick<Client, "callTool">;
 const Params = Type.Object({ name: Type.String({ description: "company name or company_id" }) });
 
 // Connect on first use so a run whose agent never asks for technicals does not need the server.
-export function connectMarketMcp(url: string): () => Promise<TechnicalsClient> {
+export function connectMarketMcp(url: string): {
+  get: () => Promise<TechnicalsClient>;
+  close: () => Promise<void>;
+} {
   let pending: Promise<TechnicalsClient> | undefined;
-  return () => {
+  let connected: Client | undefined;
+  const get = () => {
     pending ??= (async () => {
       const client = new Client({ name: "portfolio-builder", version: "0.1.0" });
       await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+      connected = client;
       return client;
     })().catch((error) => {
       pending = undefined;
@@ -23,6 +28,11 @@ export function connectMarketMcp(url: string): () => Promise<TechnicalsClient> {
     });
     return pending;
   };
+  // ponytail: nothing to close if get() was never called or never succeeded.
+  const close = async () => {
+    if (connected) await connected.close();
+  };
+  return { get, close };
 }
 
 export function analyzeTechnicalsTool(
