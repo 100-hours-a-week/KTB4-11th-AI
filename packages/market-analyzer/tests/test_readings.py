@@ -1,5 +1,3 @@
-"""The two calls a consumer makes, and the surface they are reached through."""
-
 import ktb_market_analyzer as ma
 import numpy as np
 import pytest
@@ -15,8 +13,6 @@ def _candles(n: int = 120) -> Candles:
 
 
 def test_the_public_surface_is_exactly_the_two_calls_and_their_types():
-    # Everything else moved behind them. A consumer needing whole series reaches
-    # into the submodules deliberately, not by accident through this surface.
     assert set(ma.__all__) == {"Candles", "Reading", "get_basic_market_data", "interpret"}
 
 
@@ -66,7 +62,6 @@ def test_a_field_with_no_verdict_rule_still_returns_its_value_and_description():
 
 
 def test_too_little_data_yields_a_value_of_none_rather_than_raising():
-    # TA-Lib cannot compute MACD from five candles; the description still applies.
     reading = interpret("macd", _candles(5))
 
     assert reading.value is None
@@ -86,13 +81,8 @@ def test_an_unknown_indicator_names_the_ones_that_exist():
     with pytest.raises(KeyError, match="cci"):
         interpret("cci", _candles())
 
-        # The message lists the known fields, so a caller can recover without
-        # reading the source.
-
 
 def test_the_catalogue_needs_no_argument_and_names_every_field():
-    # This is the discovery path: nothing else publishes a list of field names, so
-    # a caller starts here and picks what to interpret.
     catalogue = get_basic_market_data()
 
     for field in DESCRIPTIONS:
@@ -105,8 +95,6 @@ def test_the_catalogue_tells_the_caller_what_to_call_next():
 
 
 def test_the_catalogue_omits_the_verdict_vocabulary():
-    # Four fields share the same three labels, so listing them per field would pad
-    # the briefing; interpret() returns each verdict's meaning alongside it anyway.
     catalogue = get_basic_market_data()
 
     assert "OVERBOUGHT" not in catalogue

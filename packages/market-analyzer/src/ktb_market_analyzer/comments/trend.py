@@ -1,23 +1,3 @@
-"""Verdicts for indicators that swing around a line.
-
-The verdict is which side of the line the value is on, whether it changed sides
-on this bar, and whether it is moving away from the line or back toward it. That
-last part needs two points, so the first computable bar gets no verdict — the
-same answer as a value TA-Lib could not compute, for the same reason.
-
-Two kinds of line share this shape and are named apart on purpose. The MACD line
-and the Rate of Change swing around **zero**, so crossing it means the 12-period
-average crossed the 26-period one, or price regained the level it held n periods
-ago. The MACD histogram swings around **its signal line**, so a sign change means
-MACD crossed its own smoothed copy. Calling both ``CROSSOVER`` would hide which
-event happened.
-
-To add an indicator to this family, add one row to ``TREND`` naming the words its
-crossing and its magnitude trend should use. If it reuses an existing word set,
-its labels are already in ``MEANINGS``; if it needs new words, add them there too
-and the glossary test will tell you if you forget.
-"""
-
 import math
 from dataclasses import dataclass
 

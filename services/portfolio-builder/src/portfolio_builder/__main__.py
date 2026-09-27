@@ -1,5 +1,3 @@
-"""Entry point for the portfolio-builder."""
-
 import logging
 
 from ktb_core.logging import setup_logging

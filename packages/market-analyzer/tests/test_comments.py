@@ -1,9 +1,3 @@
-"""The dispatcher and the invariants that span rule families.
-
-Each family's own rules are tested beside it, in test_comment_bands.py and
-test_comment_trend.py. What is left here is what no single family can check.
-"""
-
 import itertools
 
 import numpy as np

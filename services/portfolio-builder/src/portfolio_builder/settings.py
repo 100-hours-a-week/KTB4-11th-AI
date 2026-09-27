@@ -1,5 +1,3 @@
-"""Configuration for the portfolio-builder."""
-
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

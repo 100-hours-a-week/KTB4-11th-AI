@@ -1,13 +1,3 @@
-"""Verdicts for indicators that live inside a fixed range.
-
-The value has known bounds and the verdict is which zone of that range it
-occupies. No earlier value is needed, so the first computable bar is judged
-immediately.
-
-To add an indicator to this family, add one row to ``BANDS``. Nothing else in
-this file changes, and no other file needs to know.
-"""
-
 import math
 from dataclasses import dataclass
 

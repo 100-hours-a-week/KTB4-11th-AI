@@ -1,24 +1,3 @@
-"""The two calls a consumer makes.
-
-A caller asking about an indicator wants four things at once: the number, the
-verdict on it, what that verdict means, and what the indicator measures in the
-first place. Assembling those from four separate imports pushed the work onto
-every caller — which field maps to which function, which registry holds which
-text — so this module does it in one call.
-
-:func:`interpret` needs price data and answers about a specific moment.
-:func:`get_basic_market_data` needs nothing at all and lists what can be asked
-about, which is where a caller gets the field names it passes to the other.
-
-Both are pure: no I/O and no configuration. The caller fetches the candles.
-
-Nothing is computed here that the rest of the package did not already compute.
-This is assembly over :mod:`indicators`, :mod:`comments` and
-:mod:`descriptions`, which is why a consumer needing whole series rather than one
-moment — a collector writing every candle to storage — still reaches into those
-directly.
-"""
-
 from collections.abc import Callable
 from typing import NamedTuple
 
@@ -39,8 +18,6 @@ Array = npt.NDArray[np.float64]
 
 
 class Candles(NamedTuple):
-    """The price series an indicator reads. Oldest first, one entry per candle."""
-
     high: Array
     low: Array
     close: Array
@@ -110,20 +87,6 @@ def interpret(field: str, candles: Candles) -> Reading:
 
 
 def get_basic_market_data() -> str:
-    """The catalogue: every indicator and what it measures, with no price data.
-
-    This is the briefing a caller starts from. It takes no argument on purpose —
-    its whole job is to show the set to choose from, and a parameter would mean
-    the caller had to already know what is in there.
-
-    It is therefore also the discovery path: :func:`interpret` takes a field name,
-    and this is where those names come from, so nothing else has to publish a list
-    of them.
-
-    The catalogue carries no verdict vocabulary. :func:`interpret` returns each
-    verdict's meaning alongside it, so a caller never has to have read the
-    vocabulary in advance.
-    """
     lines = [
         "Indicators available. Call interpret(field, candles) to read one.",
         *(f"- {name}: {DESCRIPTIONS[name]}" for name in sorted(_COMPUTE)),

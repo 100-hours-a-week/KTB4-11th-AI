@@ -1,9 +1,3 @@
-"""Pure TA-Lib feature extraction over OHLC price arrays.
-
-No I/O, no configuration, no first-party dependencies — every function here
-takes numpy arrays and returns numpy arrays (or a NamedTuple of them).
-"""
-
 from typing import NamedTuple
 
 import numpy as np

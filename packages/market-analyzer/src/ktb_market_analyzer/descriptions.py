@@ -1,10 +1,3 @@
-"""What each indicator output field measures.
-
-These say what is being counted, not what the number means. The verdict — whether
-72.4 on the RSI is high — belongs to ``comments.py``. Keeping the two apart means
-a reader is never handed a threshold and left to apply it.
-"""
-
 DESCRIPTIONS: dict[str, str] = {
     "rsi": (
         "Relative Strength Index, 0-100: compares the average size of recent gains "

@@ -1,5 +1,3 @@
-"""Structured JSON logging shared by every service."""
-
 import json
 import logging
 import sys
