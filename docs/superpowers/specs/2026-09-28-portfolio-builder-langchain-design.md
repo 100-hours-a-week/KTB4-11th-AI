@@ -21,7 +21,8 @@ justify every stock that enters or leaves.
 ### Behaviour kept from the TypeScript design
 
 Tables, validation rules, weight normalisation, the briefing, the grounding rule and system
-prompt, the six tools, the nudge when the model stops without submitting, the `MAX_TURNS` limit,
+prompt (except its tools line, which now describes `analyze_technicals(name, timeframe)` as
+returning technical evidence for the chosen timeframe), the six tools, the nudge when the model stops without submitting, the `MAX_TURNS` limit,
 the run outcomes (`saved` / `max_turns` / `error`) and the JSON log events.
 
 ### Non-goals
@@ -104,8 +105,8 @@ agent = create_agent(
         ModelCallLimitMiddleware(run_limit=s.max_turns, exit_behavior="error"),
     ],
 )
-final = await agent.ainvoke({"messages": [HumanMessage(briefing.text)]},
-                            {"recursion_limit": s.max_turns * 4})
+final = agent.invoke({"messages": [HumanMessage(briefing.text)]},
+                     {"recursion_limit": RECURSION_LIMIT})
 ```
 
 - **StopOnSave**: `before_model`, `can_jump_to=["end"]`. When `portfolio_id` is in state, jump to
@@ -119,9 +120,16 @@ final = await agent.ainvoke({"messages": [HumanMessage(briefing.text)]},
   propagates and the run ends as `error`.
 - **submit_portfolio**: validates, normalises and saves, then returns
   `Command(update={"portfolio_id": id, "messages": [ToolMessage(f"Saved portfolio {id}.", ...)]})`.
-  ToolNode runs one message's tool calls concurrently, so the tool holds an `asyncio.Lock` and a
-  `saved_id`; a second call gets "portfolio already saved as N; the run is over".
-- **recursion_limit** is `MAX_TURNS * 4` so the graph-step limit never fires before the turn limit.
+  ToolNode runs one message's tool calls concurrently in a thread pool, so the tool holds a
+  `threading.Lock` and a `saved_id`; a second call gets "portfolio already saved as N; the run is
+  over".
+- **Sync end to end.** `agent.invoke`, `wrap_model_call` / `wrap_tool_call`, the sync SQLAlchemy
+  engine and the sync `questdb` client, like every other service. No `asyncio` anywhere.
+- **recursion_limit.** Every middleware hook is its own graph node, so one turn is roughly 5–6
+  steps. `RECURSION_LIMIT` is derived from the node count of the built graph with headroom
+  (`steps_per_turn * MAX_TURNS * 2`), so `GraphRecursionError` can never fire before
+  `ModelCallLimitExceededError`. The implementation measures `steps_per_turn` from
+  `agent.get_graph()` and a test asserts the limit ends the run as `max_turns`, not `error`.
 
 ### Outcomes
 
@@ -144,9 +152,9 @@ fields match the TS service:
 | `run_start` | main | provider `openrouter`, model, reasoning_level, max_turns, news_window_days |
 | `ingestion` | main | previous_portfolio_id, previous_holdings/exits, cluster_ids, counts, briefing_chars |
 | `prompt` | main | system_prompt, briefing |
-| `llm_request` | RunLog `awrap_model_call` | turn, tool names, message_count |
-| `llm_response` | RunLog `awrap_model_call` | turn, model, finish_reason, text, reasoning, tool_calls, latency_ms, usage |
-| `tool_call` | RunLog `awrap_tool_call` | turn, name, args, result, is_error, duration_ms (WARNING on error) |
+| `llm_request` | RunLog `wrap_model_call` | turn, tool names, message_count |
+| `llm_response` | RunLog `wrap_model_call` | turn, model, finish_reason, text, reasoning, tool_calls, latency_ms, usage |
+| `tool_call` | RunLog `wrap_tool_call` | turn, name, args, result, is_error, duration_ms (WARNING on error) |
 | `validation_failed` | submit_portfolio | errors (WARNING) |
 | `run_end` | main | outcome, portfolio_id, turns, usage totals, error, elapsed_ms (ERROR unless saved) |
 
@@ -236,6 +244,9 @@ value. A `null` always comes with a `reason`.
 | `amihud_illiquidity_20d` | Mean over 20 bars of `abs(ROCP(close,1)) / (close × volume)` |
 | `amihud_percentile_1y` | `PERCENTRANK(amihud_illiquidity_20d, 252)` |
 
+A zero-volume bar (trading halt, a quiet minute) makes `relative_volume` and Amihud divide by
+zero; any non-finite result is `null` with reason "zero volume", never `inf` or `NaN`.
+
 Traded value is approximated as `close × volume` because `bars` stores OHLCV only.
 `turnover_20d` and `relative_turnover` are omitted: shares outstanding is not stored anywhere.
 
@@ -290,7 +301,8 @@ The stub's `QUESTDB_DSN` and `NEWS_CLUSTERER_URL` are removed.
   `normalize_weights`, settings (required, invalid, defaults), log redaction, `normalize` against
   the shared cases.
 - **Evidence:** synthetic arrays with known answers for every formula, including null-with-reason
-  when history is short and the `[t−1]` exclusion in the breakout and 52-week evidence.
+  when history is short, the `[t−1]` exclusion in the breakout and 52-week evidence, and a
+  zero-volume bar yielding `null` rather than `inf`/`NaN`.
 - **Technicals tool:** an injected market reader. Each timeframe maps to its view, `session` is
   filtered only for 1m/1d, the intraday subset has no daily-only keys, an unknown company raises
   `UnknownCompany`, and a symbol with no rows raises `NoMarketData`. No test writes QuestDB.
@@ -301,9 +313,11 @@ The stub's `QUESTDB_DSN` and `NEWS_CLUSTERER_URL` are removed.
 - **Agent end-to-end** with a scripted fake chat model (`GenericFakeChatModel` with `bind_tools`
   returning itself; verified against the installed version):
   1. An invalid submit gets its errors back, the corrected submit saves one row, outcome `saved`.
-  2. A model that never submits is nudged and ends as `max_turns` with nothing written.
+  2. A model that never submits is nudged and ends as `max_turns` (not `error`) with nothing
+     written, run with a small `MAX_TURNS` and the real `RECURSION_LIMIT`.
   3. A submit on exactly turn N with `run_limit=N` is `saved`.
-  4. Two `submit_portfolio` calls in one message write one row; the second gets "already saved".
+  4. Two `submit_portfolio` calls in one message, through the real ToolNode, write one row; the
+     second gets "already saved".
   5. An unexpected tool exception ends as `error`.
   6. The log contains `llm_request`, `llm_response`, `tool_call`, `validation_failed`, `run_end`.
 
@@ -326,8 +340,8 @@ portfolio-builder's briefing reads `themes` / `theme_companies` whichever servic
   intraday evidence on those timeframes mixes sessions. That is for market-collector's owners to
   fix; this service does not work around it.
 - Cross-section percentiles cover KOSPI 200 only, the collected universe.
-- Daily history is about 245 bars today, so `momentum_12m_skip1m` and the 1-year percentiles are
-  `null` until enough history exists.
+- `momentum_12m_skip1m` and the 1-year percentiles are `null` until 273 regular daily bars exist
+  for the symbol.
 - `simple` FTS has no Korean morphology.
 - The grounding rule is enforced by the prompt, apart from cited clusters having to exist.
 - `langchain.agents` middleware APIs are recent (1.x); pin the versions in `uv.lock`.
