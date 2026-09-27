@@ -76,7 +76,10 @@ export async function runAgent(options: {
       const saved = toolResults.find((r) => r.toolName === "submit_portfolio" && !r.isError);
       if (saved) portfolioId = Number((saved.details as { portfolio_id: number }).portfolio_id);
       if (portfolioId !== null || turns >= maxTurns) return { action: "end" };
-      if (message.stopReason === "stop" && toolResults.length === 0) {
+      if (
+        toolResults.length === 0 &&
+        (message.stopReason === "stop" || message.stopReason === "length")
+      ) {
         agent.followUp({ role: "user", content: NUDGE, timestamp: Date.now() });
       }
       return undefined;

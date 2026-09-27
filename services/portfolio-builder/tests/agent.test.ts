@@ -113,6 +113,20 @@ describe.skipIf(!hasDb)("runAgent", () => {
     expect(count).toBe(1);
   });
 
+  test("a length stop without tool calls is nudged instead of ending the run", async () => {
+    const { run } = setup(
+      10,
+      fauxAssistantMessage(fauxText("cut off mid-thought"), { stopReason: "length" }),
+      fauxAssistantMessage(fauxToolCall("submit_portfolio", valid), { stopReason: "toolUse" }),
+    );
+
+    const result = await run();
+
+    expect(result.outcome).toBe("saved");
+    const [{ count }] = await sql`SELECT count(*)::int AS count FROM portfolios`;
+    expect(count).toBe(1);
+  });
+
   test("an LLM error ends the run", async () => {
     const { run } = setup(
       10,
