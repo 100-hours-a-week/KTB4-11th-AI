@@ -5,10 +5,10 @@
 
 ## Purpose
 
-Simplify `market-collector` around the supported upstream clients. The service will use
-pyheroapi for Kiwoom access and QuestDB's official Python client for market-data reads and
-writes. The `market-reader` package and technical-indicator work in this service will be
-removed.
+Simplify `market-collector` around QuestDB's official Python client for market-data reads
+and writes. The `market-reader` package and technical-indicator work in this service will
+be removed. The current Kiwoom implementation remains unchanged because pyheroapi does not
+support the pagination and lifecycle behavior this service needs.
 
 This branch changes only `market-collector`, `market-reader`, and their directly owned
 QuestDB infrastructure and repository wiring. Other packages and services, including the
@@ -79,26 +79,17 @@ No replacement shared package or compatibility facade is introduced.
 
 ## Kiwoom access
 
-Add pyheroapi as the sole Kiwoom client dependency of `market-collector`. Remove the
-service's custom authentication, HTTP transport, REST pagination, retry, and WebSocket
-transport code when pyheroapi provides the corresponding behavior.
+Keep `market-collector`'s current Kiwoom authentication, HTTP transport, REST pagination,
+retry, and WebSocket transport code. Do not add pyheroapi in this branch.
 
-Project-owned code remains responsible for:
+The evaluated pyheroapi `develop` branch discards continuation response headers, does not
+pace successful requests, does not refresh a token during long-running backfills, and has
+incorrect request mappings for endpoints used by this service. Replacing the current client
+would therefore truncate multi-page data or require rebuilding the removed behavior in an
+adapter. Kiwoom client replacement can be reconsidered after upstream exposes the required
+behavior.
 
-- mapping pyheroapi responses into the service's candle, universe, and theme domain values;
-- scheduling and sharding work across configured Kiwoom accounts;
-- cursor persistence and requested history limits;
-- regular-versus-extended-session classification;
-- aggregating live ticks into one-minute OHLCV bars; and
-- treating unexpected empty or malformed upstream results as failures where silence would
-  corrupt a snapshot.
-
-pyheroapi may return safe empty values for some failures. Adapters at the domain boundary
-must distinguish legitimate empty results from unusable responses and fail commands that
-would otherwise overwrite or omit required market data.
-
-Only `market-collector` changes to pyheroapi in this branch. `news-graph-builder` is
-untouched.
+No other service's Kiwoom implementation changes.
 
 ## Configuration and dependencies
 
@@ -121,20 +112,20 @@ Tests cover:
 - official QuestDB-client row shapes and parameterized read queries without requiring a live
   database for unit tests;
 - all four timeframe values using one `bars` table;
-- pyheroapi response adaptation for charts, universe, themes, and live ticks;
+- existing Kiwoom client behavior at chart, universe, theme, and live boundaries;
 - upstream empty/error behavior at snapshot boundaries; and
 - unchanged cursor, scheduling, candle parsing, and live aggregation behavior.
 
-Delete tests that exist only for technical indicators, the removed custom Kiwoom transports,
-the generated QuestDB schema, or `market-reader`. Run the affected tests, the full test suite,
-Ruff lint and formatting checks, dependency checks, and import-boundary checks. A live
-QuestDB or Kiwoom credential is not required for the default test suite.
+Delete tests that exist only for technical indicators, the generated QuestDB schema, or
+`market-reader`. Retain the current Kiwoom transport tests. Run the affected tests, the full
+test suite, Ruff lint and formatting checks, dependency checks, and import-boundary checks.
+A live QuestDB or Kiwoom credential is not required for the default test suite.
 
 ## Non-goals
 
 - Preserving or migrating existing QuestDB data.
 - Calculating technical indicators in `market-collector`.
 - Changing `ktb-market-analyzer` itself.
-- Changing any `news-graph-builder` Kiwoom implementation.
+- Replacing any Kiwoom client implementation.
 - Adding a replacement abstraction for `market-reader`.
 - Running schema DDL automatically when `market-collector` starts.
