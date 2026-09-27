@@ -59,7 +59,7 @@ their defaults with no environment set.
 - **compose.dev.yaml:** two long-running services with `restart: unless-stopped` and no required env.
   - `market-analyzer-mcp` has **no `ports:`**. It is reachable only as
     `market-analyzer-mcp:8000` on the compose network.
-  - `portfolio-rebalancer-http` publishes `8001:8000`.
+  - `portfolio-rebalancer-http` publishes `8000:8000`.
 - **Docs:**
   - `AGENTS.md` and `README.md`: environment variable rows and architecture rows for both services.
   - `AGENTS.md`'s "services communicate only through datastores" rule now names the two HTTP
@@ -77,5 +77,5 @@ docker build -f docker/portfolio-rebalancer-http.Dockerfile .
 docker compose -f compose.dev.yaml up -d market-analyzer-mcp portfolio-rebalancer-http
 docker compose -f compose.dev.yaml exec market-analyzer-mcp \
   python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read())"
-curl localhost:8001/health
+curl localhost:8000/health
 ```
