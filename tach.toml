@@ -1,6 +1,7 @@
 source_roots = [
     "packages/core/src",
     "packages/market-analyzer/src",
+    "services/market-collector/src",
     "services/news-preprocessor/src",
     "services/news-clusterer/src",
     "services/news-graph-builder/src",
@@ -108,3 +109,7 @@ from = ["news_graph_builder.graph"]
 [[modules]]
 path = "portfolio_builder"
 depends_on = ["ktb_core", "ktb_market_analyzer"]
+
+[[modules]]
+path = "market_collector"
+depends_on = ["ktb_core"]
