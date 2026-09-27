@@ -1,29 +1,15 @@
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
 
-from market_collector.cursor import CursorStore
 from market_collector.kiwoom.official import Page
 from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
 from market_collector.store import CandleRow, Store
 
-__all__ = [
-    "DEFAULT_DEPTHS",
-    "TIC_SCOPES",
-    "backfill_one",
-    "collect",
-    "refresh_recent",
-    "to_candle_rows",
-]
+__all__ = ["ChartSource", "reconcile", "to_candle_rows"]
 
 log = logging.getLogger(__name__)
-
-
-TIC_SCOPES: dict[str, int] = {"1m": 1, "15m": 15, "1h": 60}
-
-
-DEFAULT_DEPTHS: dict[str, int] = {"1m": 8000, "15m": 300, "1h": 300, "1d": 300}
 
 Bar = MinuteBar | DailyBar
 
@@ -31,87 +17,6 @@ Bar = MinuteBar | DailyBar
 class ChartSource(Protocol):
     def minute_page(self, symbol: str, tic_scope: int, next_key: str | None = None) -> Page: ...
     def daily_page(self, symbol: str, base_dt: str, next_key: str | None = None) -> Page: ...
-
-
-def collect(
-    client: ChartSource,
-    symbol: str,
-    timeframe: str,
-    cursors: CursorStore,
-    base_dt: str,
-    depth: int,
-    max_pages: int | None = None,
-    on_page: Callable[[list[Bar]], None] | None = None,
-    on_complete: Callable[[list[Bar]], None] | None = None,
-) -> list[Bar]:
-    """Collect one symbol and timeframe backwards, returning oldest first.
-
-    Page callbacks run before cursor advancement. Bounded or stalled walks
-    remain unfinished so a later run can resume them.
-    """
-    cursor = cursors.get(symbol, timeframe)
-    if cursor.done:
-        return []
-
-    is_daily = timeframe == "1d"
-    parse = parse_daily_bar if is_daily else parse_minute_bar
-    raw_ts_field = "dt" if is_daily else "cntr_tm"
-
-    collected: dict[datetime, Bar] = {}
-    next_key = cursor.next_key
-    pages_fetched = 0
-
-    while True:
-        sent_key = next_key
-        page = (
-            client.daily_page(symbol, base_dt, sent_key)
-            if is_daily
-            else client.minute_page(symbol, TIC_SCOPES[timeframe], sent_key)
-        )
-        pages_fetched += 1
-
-        page_bars = [parse(row) for row in page.rows]
-        for bar in page_bars:
-            collected[bar.ts] = bar
-        if on_page is not None and page_bars:
-            on_page(page_bars)
-
-        oldest_raw = min((row[raw_ts_field] for row in page.rows), default=None)
-        next_key = page.next_key
-        cursors.advance(symbol, timeframe, next_key, oldest_raw)
-
-        first_page_empty = cursor.pages == 0 and pages_fetched == 1 and not page.rows
-        depth_reached = len(collected) >= depth
-        history_ended = (not page.has_more) and not first_page_empty
-        stalled = page.has_more and next_key == sent_key
-
-        if first_page_empty:
-            log.warning(
-                "empty first page for %s/%s; not marking done so a later run retries",
-                symbol,
-                timeframe,
-            )
-            break
-        if depth_reached or history_ended:
-            result = sorted(collected.values(), key=lambda bar: bar.ts)
-            if on_complete is not None:
-                on_complete(result)
-            cursors.finish(symbol, timeframe)
-            return result
-        if stalled:
-            log.warning(
-                "next_key did not advance for %s/%s (stuck at %r after %d pages); "
-                "stopping without marking done",
-                symbol,
-                timeframe,
-                next_key,
-                pages_fetched,
-            )
-            break
-        if max_pages is not None and pages_fetched >= max_pages:
-            break
-
-    return sorted(collected.values(), key=lambda bar: bar.ts)
 
 
 def _row(bar: Bar, symbol: str, src: str) -> CandleRow:
@@ -124,7 +29,6 @@ def _row(bar: Bar, symbol: str, src: str) -> CandleRow:
         low=bar.low,
         close=bar.close,
         volume=bar.volume,
-        trade_value=bar.trade_value,
         src=src,
     )
 
@@ -133,77 +37,52 @@ def to_candle_rows(bars: Sequence[Bar], symbol: str, src: str = "rest") -> list[
     return [_row(bar, symbol, src) for bar in bars]
 
 
-def backfill_one(
-    client: ChartSource,
-    store: Store,
-    cursors: CursorStore,
-    symbol: str,
-    timeframe: str,
-    base_dt: str,
-    depth: int,
-    max_pages: int | None = None,
-) -> int:
-    """Collect and store one symbol/timeframe, writing before cursor advancement."""
-    written = 0
-
-    def write_page(bars: list[Bar]) -> None:
-        nonlocal written
-        rows = to_candle_rows(bars, symbol)
-        written += store.write_candles(timeframe, rows)
-
-    collect(
-        client,
-        symbol,
-        timeframe,
-        cursors,
-        base_dt,
-        depth,
-        max_pages=max_pages,
-        on_page=write_page,
-    )
-    log.info("backfilled %d %s candles for %s", written, timeframe, symbol)
-    return written
-
-
-MAX_1M_REFRESH_PAGES = 3
-
-
-def refresh_recent(
+def reconcile(
     client: ChartSource,
     store: Store,
     symbol: str,
     timeframe: str,
     base_dt: str,
-    since: datetime,
+    latest: datetime | None,
 ) -> int:
-    is_daily = timeframe == "1d"
-    parse = parse_daily_bar if is_daily else parse_minute_bar
-    max_pages = MAX_1M_REFRESH_PAGES if timeframe == "1m" else 1
+    if timeframe == "1d":
+        parse = parse_daily_bar
+    elif timeframe == "1m":
+        parse = parse_minute_bar
+    else:
+        raise ValueError(f"unsupported reconciliation timeframe: {timeframe}")
 
     bars_by_ts: dict[datetime, Bar] = {}
-    sent_key: str | None = None
-    for _ in range(max_pages):
+    next_key: str | None = None
+    seen_keys: set[str] = set()
+
+    while True:
         page = (
-            client.daily_page(symbol, base_dt, sent_key)
-            if is_daily
-            else client.minute_page(symbol, TIC_SCOPES[timeframe], sent_key)
+            client.daily_page(symbol, base_dt, next_key)
+            if timeframe == "1d"
+            else client.minute_page(symbol, 1, next_key)
         )
-        for row in page.rows:
-            bar = parse(row)
-            bars_by_ts[bar.ts] = bar
+        page_bars = [parse(row) for row in page.rows]
+        bars_by_ts.update({bar.ts: bar for bar in page_bars})
 
-        oldest = min(bars_by_ts, default=None)
-        reached_since = oldest is not None and oldest <= since
-        stalled = page.has_more and page.next_key == sent_key
-        if reached_since or not page.has_more or stalled:
+        if not page.has_more:
             break
-        sent_key = page.next_key
 
-    bars = sorted(bars_by_ts.values(), key=lambda b: b.ts)
-    if not bars:
-        return 0
+        continuation = page.next_key
+        if continuation is None or continuation in seen_keys:
+            raise RuntimeError(f"stalled paging {symbol}/{timeframe}: next_key={continuation!r}")
+        seen_keys.add(continuation)
 
-    rows = [row for row in to_candle_rows(bars, symbol) if row.ts >= since]
-    if not rows:
-        return 0
-    return store.write_candles(timeframe, rows)
+        reached_boundary = latest is not None and any(bar.ts <= latest for bar in page_bars)
+        if reached_boundary:
+            break
+        next_key = continuation
+
+    bars = sorted(
+        (bar for bar in bars_by_ts.values() if latest is None or bar.ts > latest),
+        key=lambda bar: bar.ts,
+    )
+    rows = to_candle_rows(bars, symbol)
+    written = store.write_candles(timeframe, rows)
+    log.info("reconciled %d %s candles for %s", written, timeframe, symbol)
+    return written
