@@ -61,18 +61,19 @@ def _candle(**changes) -> CandleRow:
         "low": 277500.0,
         "close": 277500.0,
         "volume": 38961,
-        "trade_value": None,
         "src": "rest",
     }
     values.update(changes)
     return CandleRow(**values)
 
 
-@pytest.mark.parametrize("timeframe", ["1m", "15m", "1h", "1d"])
-def test_all_timeframes_write_to_bars_with_timeframe_as_varchar(timeframe):
+@pytest.mark.parametrize("timeframe", ["1m", "1d"])
+def test_physical_timeframes_write_ohlcv_to_bars(timeframe):
     db = FakeDatabase()
+    candle = _candle()
 
-    assert Store(db).write_candles(timeframe, [_candle()]) == 1
+    assert not hasattr(candle, "trade_value")
+    assert Store(db).write_candles(timeframe, [candle]) == 1
 
     table, symbols, columns, at = db.output.rows[0]
     assert table == "bars"
@@ -85,15 +86,17 @@ def test_all_timeframes_write_to_bars_with_timeframe_as_varchar(timeframe):
         "close": 277500.0,
         "volume": 38961,
     }
+    assert "trade_value" not in columns
     assert at == TS
     assert db.output.flushes == 1
 
 
-def test_an_unknown_timeframe_is_rejected_before_opening_a_sender():
+@pytest.mark.parametrize("timeframe", ["15m", "1h", "4h"])
+def test_derived_timeframes_are_rejected_before_opening_a_sender(timeframe):
     db = FakeDatabase()
 
-    with pytest.raises(KeyError, match="4h"):
-        Store(db).write_candles("4h", [_candle()])
+    with pytest.raises(KeyError, match=timeframe):
+        Store(db).write_candles(timeframe, [_candle()])
 
     assert db.sender_calls == 0
 
@@ -133,6 +136,30 @@ def test_read_regular_candles_returns_oldest_first():
 
     assert [candle.ts for candle in candles] == [TS, later]
     assert db.queries[0][1] == ["005930", "1m", 2]
+
+
+def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundaries():
+    frame = pd.DataFrame(
+        {
+            "symbol": ["005930", "005930", "000660"],
+            "timeframe": ["1m", "1d", "1m"],
+            "latest_ts": [TS, TS.replace(day=21), TS.replace(day=20)],
+        }
+    )
+    db = FakeDatabase(frame)
+
+    latest = Store(db).latest_bar_timestamps()
+
+    assert latest == {
+        ("005930", "1m"): TS,
+        ("005930", "1d"): TS.replace(day=21),
+        ("000660", "1m"): TS.replace(day=20),
+    }
+    sql, binds = db.queries[0]
+    assert "max(ts)" in sql
+    assert "GROUP BY symbol, timeframe" in sql
+    assert "timeframe IN ('1m', '1d')" in sql
+    assert binds is None
 
 
 def test_without_nones_keeps_falsy_but_non_none_values():

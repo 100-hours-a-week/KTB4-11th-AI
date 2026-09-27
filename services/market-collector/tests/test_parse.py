@@ -86,18 +86,18 @@ def test_minute_bar_maps_cur_prc_to_close():
     assert bar.volume == 38961
     assert bar.ts == datetime(2026, 9, 22, 6, 19, tzinfo=UTC)
     assert bar.session == "regular"
-    assert bar.trade_value is None
+    assert not hasattr(bar, "trade_value")
 
 
-def test_daily_bar_carries_trade_value():
+def test_daily_bar_maps_ohlcv_without_trade_value():
     bar = parse_daily_bar(DAILY_ROW)
 
     assert bar.close == 277500.0
     assert bar.open == 283000.0
     assert bar.volume == 15620240
-    assert bar.trade_value == 4366136.0
     assert bar.ts == datetime(2026, 9, 22, 0, 0, tzinfo=UTC)
     assert bar.session == "regular"
+    assert not hasattr(bar, "trade_value")
 
 
 def test_open_and_close_are_not_confused():

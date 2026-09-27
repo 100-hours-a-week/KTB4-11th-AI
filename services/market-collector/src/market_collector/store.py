@@ -7,7 +7,7 @@ from market_collector.kiwoom.themes import ThemeGroup, ThemeMember
 
 __all__ = ["Candle", "CandleRow", "Store"]
 
-TIMEFRAMES = frozenset({"1m", "15m", "1h", "1d"})
+TIMEFRAMES = frozenset({"1m", "1d"})
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,6 @@ class CandleRow:
     low: float
     close: float
     volume: int
-    trade_value: float | None
     src: str
 
 
@@ -62,7 +61,6 @@ class Store:
                             "low": candle.low,
                             "close": candle.close,
                             "volume": candle.volume,
-                            "trade_value": candle.trade_value,
                         }
                     ),
                     at=candle.ts,
@@ -70,6 +68,14 @@ class Store:
                 written += 1
             sender.flush()
         return written
+
+    def latest_bar_timestamps(self) -> dict[tuple[str, str], datetime]:
+        sql = """SELECT symbol, timeframe, max(ts) AS latest_ts FROM bars
+        WHERE timeframe IN ('1m', '1d')
+        GROUP BY symbol, timeframe"""
+        with self._db.query(sql) as result:
+            records = result.to_pandas().to_dict("records")
+        return {(record["symbol"], record["timeframe"]): record["latest_ts"] for record in records}
 
     def write_theme_groups(self, ts: datetime, groups: Iterable[ThemeGroup]) -> int:
         written = 0

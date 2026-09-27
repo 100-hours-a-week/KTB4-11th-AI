@@ -59,7 +59,6 @@ class MinuteBar:
     low: float
     close: float
     volume: int
-    trade_value: float | None = None
 
 
 @dataclass(frozen=True)
@@ -71,7 +70,6 @@ class DailyBar:
     low: float
     close: float
     volume: int
-    trade_value: float | None = None
 
 
 def parse_minute_bar(row: dict[str, str]) -> MinuteBar:
@@ -97,5 +95,4 @@ def parse_daily_bar(row: dict[str, str]) -> DailyBar:
         low=parse_price(row["low_pric"]),
         close=parse_price(row["cur_prc"]),
         volume=parse_volume(row["trde_qty"]),
-        trade_value=parse_price(row["trde_prica"]),
     )
