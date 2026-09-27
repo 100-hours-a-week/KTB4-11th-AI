@@ -92,7 +92,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
 | `services/market-collector` | service | cron (`backfill`, `preopen`, `themes`, `universe`, `intraday`) plus a long-running `live` | `ktb-core`, `ktb-market-analyzer`, `ktb-market-reader` |
-| `services/market-analyzer-mcp` | service | long-running MCP server over streamable HTTP at `/mcp` | `ktb-core`, `ktb-market-analyzer`, `ktb-market-reader` |
+| `services/market-analyzer-mcp` | service | long-running MCP server over streamable HTTP at `/mcp` (tool `analyze_technicals`) | `ktb-core`, `ktb-market-analyzer`, `ktb-market-reader` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 | `packages/market-reader` (`ktb_market_reader`) | library | — | psycopg only |

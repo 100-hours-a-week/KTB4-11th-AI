@@ -95,7 +95,7 @@ def test_the_server_exposes_exactly_one_tool_named_analyze_market():
     server = build_server(_settings())
     tools = asyncio.run(server.list_tools())
 
-    assert [t.name for t in tools] == ["analyze_market"]
+    assert [t.name for t in tools] == ["analyze_technicals"]
 
 
 def test_the_tool_rejects_an_unknown_timeframe_before_touching_the_database():
@@ -105,7 +105,9 @@ def test_the_tool_rejects_an_unknown_timeframe_before_touching_the_database():
     server = build_server(_settings())
 
     with pytest.raises(ToolError, match="unknown timeframe") as raised:
-        asyncio.run(server.call_tool("analyze_market", {"symbol": "005930", "timeframe": "4h"}))
+        asyncio.run(
+            server.call_tool("analyze_technicals", {"stock_code": "005930", "timeframe": "4h"})
+        )
     assert not isinstance(raised.value, UnexpectedToolError)
 
 
@@ -118,7 +120,7 @@ def test_the_tool_reports_an_empty_result_rather_than_returning_nothing(monkeypa
     server = build_server(_settings())
 
     with pytest.raises(ToolError, match="no 1d candles stored") as raised:
-        asyncio.run(server.call_tool("analyze_market", {"symbol": "005930"}))
+        asyncio.run(server.call_tool("analyze_technicals", {"stock_code": "005930"}))
     assert not isinstance(raised.value, UnexpectedToolError)
 
 
@@ -136,7 +138,9 @@ def test_the_tool_reads_the_configured_window(monkeypatch):
     monkeypatch.setattr(mod, "read_regular_candles", fake_read)
     server = build_server(_settings(window=42))
 
-    asyncio.run(server.call_tool("analyze_market", {"symbol": "005930", "timeframe": "15m"}))
+    asyncio.run(
+        server.call_tool("analyze_technicals", {"stock_code": "005930", "timeframe": "15m"})
+    )
 
     assert seen == {
         "dsn": "postgresql://localhost:8812/qdb",
@@ -160,7 +164,7 @@ def test_the_default_timeframe_is_daily(monkeypatch):
     monkeypatch.setattr(mod, "read_regular_candles", fake_read)
     server = build_server(_settings())
 
-    asyncio.run(server.call_tool("analyze_market", {"symbol": "005930"}))
+    asyncio.run(server.call_tool("analyze_technicals", {"stock_code": "005930"}))
 
     assert seen["timeframe"] == "1d"
 
@@ -178,7 +182,7 @@ def test_the_model_sees_why_a_call_failed(monkeypatch):
 
     async def call():
         async with Client(server) as client:
-            return await client.call_tool("analyze_market", {"symbol": "999999"})
+            return await client.call_tool("analyze_technicals", {"stock_code": "999999"})
 
     result = asyncio.run(call())
 
@@ -200,16 +204,44 @@ def test_a_successful_call_returns_the_reading_through_a_real_client(monkeypatch
         async with Client(server) as client:
             tools = await client.list_tools()
             result = await client.call_tool(
-                "analyze_market", {"symbol": "005930", "timeframe": "1d"}
+                "analyze_technicals", {"stock_code": "005930", "timeframe": "1d"}
             )
             return tools, result
 
     tools, result = asyncio.run(call())
 
-    assert [t.name for t in tools.tools] == ["analyze_market"]
-    assert sorted(tools.tools[0].input_schema["properties"]) == ["symbol", "timeframe"]
+    assert [t.name for t in tools.tools] == ["analyze_technicals"]
+    assert sorted(tools.tools[0].input_schema["properties"]) == ["stock_code", "timeframe"]
     assert not result.is_error
     text = "\n".join(block.text for block in result.content if block.type == "text")
     assert "005930 1d: 120 regular-session candles" in text
     for field in DESCRIPTIONS:
         assert f"- {field}:" in text
+
+
+def test_the_call_portfolio_builder_actually_makes_works(monkeypatch):
+    """PR #42 sends the tool name analyze_technicals with a single stock_code
+    argument and no timeframe. Pin that exact shape so a rename here breaks a test
+    rather than the other service."""
+    import asyncio
+
+    import market_analyzer_mcp.__main__ as mod
+    from mcp import Client
+
+    seen: dict[str, object] = {}
+
+    def fake_read(dsn, timeframe, symbol, *, limit=None, since=None):
+        seen.update(timeframe=timeframe, symbol=symbol)
+        return _candles(120)
+
+    monkeypatch.setattr(mod, "read_regular_candles", fake_read)
+    server = build_server(_settings())
+
+    async def call():
+        async with Client(server) as client:
+            return await client.call_tool("analyze_technicals", {"stock_code": "005930"})
+
+    result = asyncio.run(call())
+
+    assert not result.is_error
+    assert seen == {"timeframe": "1d", "symbol": "005930"}

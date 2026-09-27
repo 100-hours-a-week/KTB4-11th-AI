@@ -1,4 +1,4 @@
-"""MCP server over streamable HTTP at /mcp, exposing one tool: analyze_market."""
+"""MCP server over streamable HTTP at /mcp, exposing one tool: analyze_technicals."""
 
 import logging
 
@@ -52,16 +52,17 @@ def build_server(settings: Settings) -> MCPServer:
         version="0.1.0",
         instructions=(
             "Technical indicators and their verdicts for one listed symbol, computed "
-            "from QuestDB candles. Call analyze_market with a six-character stock code."
+            "from QuestDB candles. Call analyze_technicals with a six-character stock code."
         ),
     )
 
     @server.tool()
-    def analyze_market(symbol: str, timeframe: str = "1d") -> str:
-        """Technical indicators and their verdicts for one symbol.
+    def analyze_technicals(stock_code: str, timeframe: str = "1d") -> str:
+        """Technical indicators and their verdicts for one listed company.
 
-        ``symbol`` is the six-character stock code (for example ``005930``).
-        ``timeframe`` is one of ``1m``, ``15m``, ``1h`` or ``1d``.
+        ``stock_code`` is the six-character stock code (for example ``005930``).
+        ``timeframe`` is one of ``1m``, ``15m``, ``1h`` or ``1d``, and defaults to
+        daily -- portfolio-builder calls this with ``stock_code`` alone.
         """
         # ToolError, not ValueError: the SDK puts a ToolError's message in the
         # result for the model to read, and hides anything else behind a generic
@@ -72,16 +73,16 @@ def build_server(settings: Settings) -> MCPServer:
             )
 
         candles = read_regular_candles(
-            settings.questdb_dsn, timeframe, symbol, limit=settings.window
+            settings.questdb_dsn, timeframe, stock_code, limit=settings.window
         )
         if not candles:
             raise ToolError(
-                f"no {timeframe} candles stored for {symbol!r}; "
+                f"no {timeframe} candles stored for {stock_code!r}; "
                 "the collector may not have reached this symbol yet"
             )
 
-        log.info("analyze_market %s %s over %d candles", symbol, timeframe, len(candles))
-        return analyze(candles, symbol, timeframe)
+        log.info("analyze_technicals %s %s over %d candles", stock_code, timeframe, len(candles))
+        return analyze(candles, stock_code, timeframe)
 
     return server
 
