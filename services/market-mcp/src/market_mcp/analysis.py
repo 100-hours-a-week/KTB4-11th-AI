@@ -14,8 +14,7 @@ TIMEFRAME_TABLES: dict[str, str] = {
     "1d": "bars_1d",
 }
 
-# Stored codes are six alphanumeric characters (0126Z0 is real). Callers also write
-# Kiwoom's A-prefixed form or a Yahoo-style .KS/.KQ suffix, so both are dropped.
+# Six alphanumeric characters like "0126Z0" with .KS/.KQ suffix
 _SYMBOL = re.compile(r"A?([0-9A-Z]{6})(?:\.K[SQ])?")
 
 
