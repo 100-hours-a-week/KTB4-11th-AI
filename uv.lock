@@ -664,6 +664,7 @@ dependencies = [
     { name = "mcp" },
     { name = "pydantic-settings" },
     { name = "starlette" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -672,6 +673,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.2" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "starlette", specifier = ">=1.7" },
+    { name = "uvicorn", specifier = ">=0.54" },
 ]
 
 [[package]]

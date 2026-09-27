@@ -10,7 +10,7 @@
 
 ## 데이터베이스 (ERD)
 
-서비스들은 주로 PostgreSQL `news` 데이터베이스를 통해 데이터를 주고받습니다. 예외는 portfolio-builder → market-analyzer-mcp (MCP), portfolio-builder → portfolio-rebalancer-http → Backend 두 HTTP 호출입니다. 데이터베이스 스키마는 `infrastructure/postgres/migrations/` 에서 관리합니다.
+서비스들은 주로 PostgreSQL `news` 데이터베이스를 통해 데이터를 주고받습니다. 예외는 portfolio-builder → market-analyzer-mcp (MCP), portfolio-builder → portfolio-rebalancer-http → Backend 두 가지 HTTP 호출입니다. 데이터베이스 스키마는 `infrastructure/postgres/migrations/` 에서 관리합니다.
 
 ```mermaid
 erDiagram

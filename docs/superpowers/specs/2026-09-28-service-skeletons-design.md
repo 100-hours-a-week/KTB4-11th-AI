@@ -25,7 +25,7 @@ the feature PRs only fill in their own service directory.
 | Settings | Only what the skeleton uses: `log_level`, `host`, `port`; nothing required | Only truly required values have no default. Feature PRs add DSNs and keys when they read them |
 | MCP server | `mcp>=2.2` `MCPServer`, streamable HTTP at `/mcp`, built by `build_server()` | Same shape as closed PR #39, so its tool drops straight in |
 | MCP health | `@mcp.custom_route("/health", methods=["GET"])` → `{"status": "ok"}` | SDK-native, served by the same app |
-| DNS-rebinding protection | Off: `TransportSecuritySettings(enable_dns_rebinding_protection=False)` | The default only accepts `Host: localhost`, which rejects `market-analyzer-mcp:8000` from portfolio-builder. The server is never published outside the Docker network (§4) |
+| DNS-rebinding protection | Off: `TransportSecuritySettings(enable_dns_rebinding_protection=False)` | The SDK turns protection on for a loopback host, which rejects `market-analyzer-mcp:8000` from portfolio-builder; pinning it off keeps that working. The server is never published outside the Docker network (§4) |
 | Rebalancer | FastAPI `app` in `app.py`, `GET /health` → `{"status": "ok"}`, run by `uvicorn` | Keeps routes out of `__main__.py` |
 | Workspace deps | `ktb-core` only | market-analyzer joins when the MCP tool uses it; keeps deptry clean |
 
@@ -39,13 +39,13 @@ and workspace sources, `src/<pkg>/{__init__,__main__,settings}.py`, `tests/`. `m
 |---|---|---|
 | Package | `market_analyzer_mcp` | `portfolio_rebalancer_http` |
 | Env prefix | `MARKET_ANALYZER_MCP_` | `PORTFOLIO_REBALANCER_HTTP_` |
-| Third-party deps | `mcp`, `pydantic-settings` | `fastapi`, `uvicorn`, `pydantic-settings` |
+| Third-party deps | `mcp`, `pydantic-settings`, `starlette`, `uvicorn` | `fastapi`, `uvicorn`, `pydantic-settings` |
 | Settings (defaults) | `log_level=INFO`, `host=0.0.0.0`, `port=8000` | same |
-| Serve | `build_server().run(transport="streamable-http", host, port, transport_security=…)` | `uvicorn.run(app, host=…, port=…)` |
+| Serve | `uvicorn.run(build_app(host), host, port, log_config=None)` | `uvicorn.run(app, host, port, log_config=None)` |
 
 Tests per service: `GET /health` returns 200 `{"status": "ok"}` through Starlette/FastAPI
-`TestClient` (for the MCP server, on `build_server().streamable_http_app()`), and settings load
-their defaults with no environment set.
+`TestClient` (for the MCP server, on `build_app(host)`), and settings load
+their defaults with no environment set. market-analyzer-mcp also POSTs an MCP initialize to `/mcp` with `Host: market-analyzer-mcp:8000` on a loopback-host app and expects 200.
 
 ## 4. Wiring
 
