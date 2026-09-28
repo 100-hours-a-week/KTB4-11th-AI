@@ -21,6 +21,7 @@ docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
+docker compose -f compose.dev.yaml up -d market-analyzer-mcp portfolio-rebalancer-http   # MCP is reachable only inside the compose network
 
 # tests TRUNCATE tables: point them at a separate database, never at `news`
 docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test
@@ -81,6 +82,12 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_COLLECTOR_KIWOOM_MODE` | market-collector | `real` |
 | `MARKET_COLLECTOR_INDEX_CODE` | market-collector | `201` |
 | `MARKET_COLLECTOR_REQUEST_INTERVAL` | market-collector | `1.3` |
+| `MARKET_ANALYZER_MCP_LOG_LEVEL` | market-analyzer-mcp | `INFO` |
+| `MARKET_ANALYZER_MCP_HOST` | market-analyzer-mcp | `0.0.0.0` |
+| `MARKET_ANALYZER_MCP_PORT` | market-analyzer-mcp | `8000` |
+| `PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL` | portfolio-rebalancer-http | `INFO` |
+| `PORTFOLIO_REBALANCER_HTTP_HOST` | portfolio-rebalancer-http | `0.0.0.0` |
+| `PORTFOLIO_REBALANCER_HTTP_PORT` | portfolio-rebalancer-http | `8000` |
 
 Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
 
@@ -95,16 +102,18 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
 | `services/market-collector` | service | single-run archive job for current KOSPI 200 OHLCV | `ktb-core` |
+| `services/market-analyzer-mcp` | service | HTTP server: MCP streamable HTTP at `/mcp`, `GET /health` | `ktb-core` |
+| `services/portfolio-rebalancer-http` | service | HTTP server: FastAPI, `GET /health` | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate only through datastores.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. There are no direct service-to-service calls.
+- **Services communicate through datastores, except for two HTTP edges.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. The only direct calls are portfolio-builder → market-analyzer-mcp (MCP over HTTP) and portfolio-builder → portfolio-rebalancer-http → Backend (design: `docs/superpowers/specs/2026-09-28-service-skeletons-design.md`). market-analyzer-mcp is never published outside the Docker network, so its DNS-rebinding protection is off.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot.
 - **Work queue:** SQS in production, Redis in development. portfolio-builder is its only consumer.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.
-- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`). There is deliberately no shared base class in core.
+- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `MARKET_ANALYZER_MCP_`, `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`, `PORTFOLIO_REBALANCER_HTTP_`). There is deliberately no shared base class in core.
 - Every service's `main()` calls `ktb_core.logging.setup_logging()` first, which emits JSON logs on stdout.
 - **Postgres migrations** live in `infrastructure/postgres/migrations/`, with `alembic.ini` at the repo root. The DSN comes only from `KTB_POSTGRES_DSN`, and a test asserts that no `sqlalchemy.url` is committed. A dedicated job runs migrations. Services never run them at boot.
 - **Docker:** there is one image per service (`docker/<svc>.Dockerfile`) and the build context is the repo root. Each Dockerfile installs third-party deps from `docker/requirements/<svc>.txt`, then installs first-party members from source with `--no-deps`. When a service gains a new workspace dependency, add a `COPY` line and put the dependency on the `uv pip install` line of that service's Dockerfile.

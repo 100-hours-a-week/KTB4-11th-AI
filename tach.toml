@@ -6,6 +6,8 @@ source_roots = [
     "services/news-clusterer/src",
     "services/news-graph-builder/src",
     "services/portfolio-builder/src",
+    "services/market-analyzer-mcp/src",
+    "services/portfolio-rebalancer-http/src",
 ]
 root_module = "forbid"
 
@@ -111,5 +113,13 @@ path = "portfolio_builder"
 depends_on = ["ktb_core", "ktb_market_analyzer"]
 
 [[modules]]
+path = "market_analyzer_mcp"
+depends_on = ["ktb_core"]
+
+[[modules]]
 path = "market_collector"
+depends_on = ["ktb_core"]
+
+[[modules]]
+path = "portfolio_rebalancer_http"
 depends_on = ["ktb_core"]
