@@ -98,7 +98,6 @@ jobs:
           - news-graph-builder
           - portfolio-builder
           - market-collector
-          - market-analyzer-mcp
           - portfolio-rebalancer-http
     steps:
       - uses: actions/checkout@v7
