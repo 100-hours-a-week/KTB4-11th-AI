@@ -5,9 +5,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-__all__ = ["Price", "latest_prices"]
+import questdb
+
+__all__ = ["Price", "connect", "latest_prices"]
 
 TIMEFRAMES = frozenset({"1m", "1d"})
+
+
+def connect(questdb_conf: str) -> Any:
+    """Open the QuestDB handle this module reads through, as backend.py does for HTTP."""
+    return questdb.connect(questdb_conf)
 
 
 @dataclass(frozen=True)

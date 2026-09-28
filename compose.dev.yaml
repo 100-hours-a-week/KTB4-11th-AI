@@ -107,8 +107,15 @@ services:
       dockerfile: docker/portfolio-rebalancer-http.Dockerfile
     environment:
       - PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL=${PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL:-INFO}
+      - PORTFOLIO_REBALANCER_HTTP_QUESTDB_CONF=ws::addr=questdb:9000;
+      - PORTFOLIO_REBALANCER_HTTP_BACKEND_URL
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

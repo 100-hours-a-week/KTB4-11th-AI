@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from portfolio_rebalancer_http.prices import latest_prices
+from portfolio_rebalancer_http.prices import connect, latest_prices
 
 TS = datetime(2026, 9, 28, 6, 19, tzinfo=UTC)
 
@@ -129,3 +129,12 @@ def test_an_unknown_timeframe_is_refused():
     """The collector writes only these two, so anything else would silently read empty."""
     with pytest.raises(KeyError, match="15m"):
         latest_prices(FakeDatabase(), ["005930"], timeframe="15m")
+
+
+def test_connect_is_refused_without_a_websocket_conf_string():
+    """The official client reads over QWP/WebSocket, so an http:: string is not usable
+    here even though the collector's migration runner takes one."""
+    import questdb
+
+    with pytest.raises(questdb.QuestDBError, match="ws::"):
+        connect("http::addr=localhost:9000;")

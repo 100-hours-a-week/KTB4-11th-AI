@@ -141,6 +141,7 @@ pydantic==2.13.5 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
     # via
     #   fastapi
+    #   portfolio-rebalancer-http
     #   pydantic-settings
 pydantic-core==2.46.5 \
     --hash=sha256:03b9666e41e35d8909852ba191a0607520f81b74eaf12ccf8737005dbb313821 \
