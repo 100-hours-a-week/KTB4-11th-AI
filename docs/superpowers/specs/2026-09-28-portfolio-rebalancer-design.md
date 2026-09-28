@@ -1,7 +1,7 @@
 # portfolio-rebalancer-http — Design
 
 **Date:** 2026-09-28
-**Status:** Draft — the reserve-list decision needs the team's agreement before implementation
+**Status:** Draft — the open items in §8 are with the team
 **Issue:** #43
 **Depends on:** #46 (service skeleton, merged), #42 (model portfolio and its tables)
 
@@ -78,84 +78,46 @@ position still has to be priced from QuestDB.
 
 ## 3. The affordability rule
 
-### The list
+### No ranking, no reserve
 
-The model portfolio is a ranked list. The first `MAIN_SIZE` companies carry weights and are
-the portfolio; everything after them is a **reserve that carries no weight at all**. A reserve
-company has a rank and nothing else until a main company turns out to be unbuyable, and only
-then does it receive weight.
+The model portfolio is companies and their weights, plus a `cash_weight`. There is no rank
+and no reserve list. A company that cannot be bought is simply dropped, and **its weight is
+distributed equally over the companies that remain** — equal, not in proportion, so a single
+expensive name is not absorbed by whichever holding happened to be largest.
 
-That is the point of the reserve carrying no weight: portfolio-builder is not asked to
-value a company it does not intend to hold. It ranks candidates, weights the ones it holds,
-and the rest exist only as an ordered answer to "what next".
+If nothing at all can be bought, the money goes to cash.
 
-When a main company cannot be bought it is dropped and the next reserve company takes its
-place. Drop ranks 1 and 2, and ranks `MAIN_SIZE + 1` and `MAIN_SIZE + 2` come in. A company
-entering from the reserve is given weight by renormalising: the set is re-weighted over
-whatever the surviving main companies were worth relative to each other, and the newcomer
-takes an equal share of what the dropped company left behind.
+### cash_weight is both a target and a destination
 
-If the reserve runs out and companies are still unaffordable, they are dropped and their
-weight is redistributed over what remains — the portfolio simply gets smaller.
+`cash_weight` is set by portfolio-builder and does two jobs:
 
-### The floor is a number, not a rule
+- it is **reserved up front**, so the money available for stocks is `capital × (1 − cash_weight)`
+- whatever the residual pass still cannot spend is **added to it**
 
-`MAIN_SIZE` defaults to **10** and is one constant. Changing the portfolio from ten companies
-to twenty is that number and nothing else: the loop, the weighting and the reserve handling
-are written in terms of it. The same holds on the portfolio-builder side, where it becomes
-the `minItems` the submission schema enforces.
-
-Ten is a floor rather than an exact count because the alternative fails badly. An exact
-`minItems: 30` makes the tool call itself fail in a week when the news supports only
-twenty-two convictions, and the model then pads the list to satisfy the schema — which is
-precisely what the grounding rule ("every stored reason must originate in the data") exists to
-prevent. A floor lets the reserve be short, or empty, and §3 already handles an exhausted
-reserve.
+So the cash actually held is at least `cash_weight` and usually a little more. A report should
+say which part is which, because "we chose to hold 10% cash" and "3% would not buy anything"
+are different facts about the same account.
 
 ### The loop
 
-Budgets depend on which companies are in the set, and changing the set changes every budget.
-So the decision is iterative:
+Budgets depend on which companies are in the set, and dropping one changes every budget. So
+the decision is iterative:
 
 ```
-selected = candidates[:MAIN_SIZE]          # these carry weights
-reserve  = candidates[MAIN_SIZE:]          # these carry none, only rank
+investable = capital * (1 - cash_weight)
+selected   = every company in the model portfolio
 
 loop:
-    renormalise weights over `selected`    # a weightless newcomer takes the
-                                           # share the dropped company vacated
-    budget_i = capital_available * weight_i
-    shares_i = floor(budget_i / price_i)
-    unaffordable = { i : shares_i == 0 }
-    if unaffordable is empty:
+    budget_i = investable * weight_i / Σ weights
+    if every company can afford one share:
         break
-    for each unaffordable company:
-        remove it from `selected`
-        if `reserve` is not empty:
-            take the front of `reserve`, give it the vacated weight, add to `selected`
+    drop the companies that cannot
+    share their weight equally over those that remain
 ```
 
-A company arriving from the reserve has no weight of its own, so it inherits the weight of
-the company it replaces. Renormalising afterwards is what keeps the set summing to one.
-
-Two properties make this terminate and behave sensibly:
-
-- **Removing a company only helps the others.** Renormalising over a smaller set raises every
-  remaining weight, so a company that was affordable stays affordable.
-- **Adding a reserve company can hurt.** It lowers everyone else's weight, which is exactly
-  why the loop has to run again rather than substituting once.
-- The reserve is finite and a dropped company never returns, so the loop ends.
-
-### When a company cannot be bought, its weight is shared out equally
-
-A company whose whole budget cannot cover one share is dropped, and **its weight is
-distributed equally over the companies that remain** — not in proportion to what they already
-hold. Equal keeps a single expensive name from being absorbed by whichever holding happened
-to be largest.
-
-If a reserve company is available it is called up in that company's place, taking the vacated
-weight (§3). The equal split applies to whatever weight is left over after the reserve is
-exhausted.
+Removing a company only helps the others: an equal share of the freed weight raises every
+remaining budget, so a company that was affordable stays affordable. The set only shrinks, so
+the loop ends.
 
 ### The residual pass — two phases
 
@@ -172,7 +134,7 @@ The residual is spent one share at a time, in two phases:
    companies in descending weight order, buying one share each time round.
 
 Both phases stop when the cash cannot cover any held company's share price. What is left then
-stays as cash.
+stays as cash and joins `cash_weight`.
 
 Phase two is not a corner case. Over 20,000 randomly generated portfolios (2–12 companies,
 prices 1,000–500,000, capital 100,000–100,000,000) it fired in **6,336** of them, 32%. It
@@ -196,16 +158,15 @@ in cash. Equal division is right for a *weight* being given up (above) and wrong
 
 ### Worked example
 
-Capital 10,000,000, `MAIN_SIZE` 10. Suppose the main ten renormalise so SK하이닉스 sits at 5%.
+Capital 10,000,000 with `cash_weight` 0, so 10,000,000 investable over ten companies.
 
-| | rank | weight | budget | price | shares | result |
-|---|---|---|---|---|---|---|
-| SK하이닉스 | 3 | 5% | 500,000 | 1,800,000 | 0 | unaffordable — dropped |
-| (reserve) | 11 | — | — | — | — | enters, takes the vacated 5% |
-| 삼성전자 | 1 | 8% | 800,000 | 78,000 | 10 | 780,000 spent, 20,000 residual |
+| | weight | budget | price | shares | result |
+|---|---|---|---|---|---|
+| SK하이닉스 | 5% | 500,000 | 1,800,000 | 0 | unaffordable — dropped |
+| 삼성전자 | 8% | 800,000 | 78,000 | 10 | 780,000 spent, 20,000 left |
 
-The reserve company had no weight until this moment. It has one now because SK하이닉스 left
-one behind.
+SK하이닉스's 5% is split equally over the nine that remain, giving each about 0.56 points
+more, and the loop runs again with the larger budgets.
 
 ## 4. The two flows
 
@@ -244,7 +205,52 @@ flowchart TD
 The affordability loop applies to the buy side only. A sell is always possible, so a target
 weight that is unreachable by buying does not block the sells that fund it.
 
-## 5. The interface
+## 5. Orders are a ladder, not a market order
+
+An order is never sent at market first. It starts as a limit order away from the previous
+close and steps toward the market until it fills.
+
+| step | buy | sell |
+|---|---|---|
+| 1 | close × 0.95 | close × 1.05 |
+| 2 | close × 0.97 | close × 1.03 |
+| 3 | close × 0.99 | close × 1.01 |
+| 4 | market | market |
+
+One step per poll, so one per hour. portfolio-builder judges weekly before the open, so the
+first order goes in at the open and the ladder finishes well inside the same session:
+
+```
+09:00  ±5%
+10:00  ±3%
+11:00  ±1%
+12:00  market      — 3.5 hours before the 15:30 close
+```
+
+### Which step an order is on is read from its price
+
+Nothing needs to remember the step. The ratios are fixed and the previous close is the same
+all day, so the step falls out of the price already on the order:
+
+```
+close 78,000 →  buy 74,100 / sell 81,900   step 1
+                buy 75,660 / sell 80,340   step 2
+                buy 77,220 / sell 78,780   step 3
+```
+
+This works because the whole ladder lives inside one session. It would not survive a ladder
+that crossed midnight, since the reference close would move underneath it.
+
+### Stepping down amends the order
+
+Moving from one step to the next is a **single amend** carrying the order id and the new
+price — not a cancel followed by a new order. There is no window between the two in which the
+original could fill and be bought twice.
+
+A partial fill needs no special handling: the amend carries whatever quantity is still
+outstanding, which is what `pending_orders` reports.
+
+## 6. The interface
 
 ```
 POST /rebalance
@@ -254,7 +260,7 @@ GET  /health
 
 `POST /rebalance` is **idempotent on `portfolio_id`**: buying and selling cannot be undone,
 and portfolio-builder may retry. A second call for a portfolio already processed returns the
-stored result and sends nothing to the Backend. That needs a table — see §7.
+stored result and sends nothing to the Backend. That needs a table — see §8.
 
 Response shape, per company:
 
@@ -268,7 +274,7 @@ Response shape, per company:
      "shares": 10, "price": 78000, "weight": 0.08, "reason": "..."},
     {"company_id": "00164779", "stock_code": "000660", "action": "skip",
      "shares": 0, "price": 1800000, "weight": 0.05,
-     "note": "one share costs more than the budget; replaced by rank 21"}
+     "note": "one share costs more than the budget; its weight was shared out equally"}
   ],
   "replaced": [{"dropped": "000660", "added": "247540"}]
 }
@@ -284,7 +290,7 @@ portfolio-builder stored on that holding (`portfolio_holdings.reason`) or on the
 (`portfolio_exits.reason`). The model portfolio is grounded by construction, and the order
 that acts on it carries that grounding with it.
 
-## 6. The price, and how stale it is
+## 7. The price, and how stale it is
 
 The only price available is the newest close in QuestDB's `bars_1m`:
 
@@ -310,36 +316,27 @@ Two ways to live with it, neither free:
 
 Doing both is cheap and I would do both.
 
-## 7. What has to be decided before this is built
+## 8. What is still open
 
-1. **The ranked list with a weightless reserve.** Today portfolio-builder produces no fixed
-   count and `portfolio_holdings` has no `rank` column — weight descending is the only
-   ordering, and every holding carries weight. Three changes to #42 follow:
-   - the prompt asks for a ranked list with at least `MAIN_SIZE` weighted holdings and a
-     reserve after them,
-   - `submit_portfolio` takes `rank` per company and allows `weight` to be absent for reserve
-     entries, with `minItems: MAIN_SIZE`,
-   - `portfolio_holdings` gains `rank` (and `weight` becomes nullable, or reserve entries move
-     to their own table).
+1. **Tick size.** `close × 0.95` is rarely a price the exchange accepts — KRX quotes in bands
+   whose tick widens as the price rises. Does the Backend round a limit price to the nearest
+   valid tick, or does this service have to? If it is ours, the band table has to live
+   somewhere and be kept current.
+2. **A market order that still does not fill.** Step 4 is meant to guarantee a fill, but a
+   limit-up or limit-down day, or a halted stock, can defeat it. Is that left alone until the
+   next weekly judgement, or retried?
+3. **Does the ladder apply to sells the same way?** The table above assumes it does — a sell
+   starts 5% above the close and walks down. Worth confirming, because a sell that has to
+   fund a buy is on a tighter leash than a buy.
+4. **Idempotency.** The poll returns the same account every hour, so something has to say
+   "this account has already been ordered against for this portfolio". A table keyed on
+   `(portfolio_id, account_id)` does it, and it is also where a report of what was ordered
+   and why would live. That is migration `0006`.
+5. **Where the poll's result is kept.** In memory is simpler but loses everything on restart;
+   in PostgreSQL survives and gives the ladder a history to look back on.
+6. **The QuestDB and Backend edges in issue #43's diagram**, per §2.
 
-   **Rank cannot be inferred from weight**: a reserve company has no weight, and even among
-   the main companies the model may rank a company above one it weights more heavily.
-   **This is the one that needs the team's agreement.**
-2. ~~Where the user's holdings and cash come from.~~ **Settled: an hourly poll of
-   `GET /users?state=active`** (§2). What remains open is whether `PRH` keeps the last poll in
-   PostgreSQL or holds it in memory. In memory is simpler but loses everything on restart and
-   makes the idempotency record (§7.4) the only history.
-3. ~~The Backend endpoint.~~ **Settled: orders carry `account_id`, the order, and the
-   reason** (§5). The URL itself still has to be configured.
-4. **A table for idempotency.** `rebalance_requests(portfolio_id, user_id, capital, payload,
-   created_at, sent_at, status)` with a unique key. That is migration `0006`.
-5. ~~Whether `cash_weight` is a floor.~~ **Settled: the model portfolio has no cash weight.**
-   It is stocks and their weights, nothing else. Cash exists only as what the residual pass
-   could not spend. #42 currently stores `portfolios.cash_weight` and takes it as a
-   `submit_portfolio` argument, so that column and argument come out.
-6. **The QuestDB edge in #43's diagram**, per §2.
-
-## 8. Code sketch
+## 9. Code sketch
 
 Two modules beside #46's skeleton, so the affordability rule stays testable without a
 database and the app keeps its routes out of `__main__.py`.
@@ -351,97 +348,57 @@ database and the app keeps its routes out of `__main__.py`.
 class Candidate:
     company_id: str
     stock_code: str
-    rank: int
-    weight: float | None   # None for a reserve entry until it is called up
-
-
-@dataclass(frozen=True)
-class Allocation:
-    company_id: str
-    stock_code: str
-    shares: int
-    price: float
     weight: float
 
 
-MAIN_SIZE = 10  # the portfolio's size; the reserve is whatever follows it
-
-
 def allocate(
-    candidates: Sequence[Candidate],   # rank order; reserve entries have weight None
-    prices: Mapping[str, float],       # stock_code -> price
+    candidates: Sequence[Candidate],
+    prices: Mapping[str, float],
     capital: float,
-    main_size: int = MAIN_SIZE,
+    cash_weight: float,
     margin: float = 0.0,
-) -> tuple[list[Allocation], list[tuple[str, str]], float]:
-    """Whole-share allocations, the replacements made, and the residual cash.
+) -> tuple[list[Allocation], float]:
+    """Whole-share allocations and the cash left over.
 
-    Drops a candidate whose budget cannot cover one share, pulls the next reserve
-    candidate in its place, and repeats -- adding a candidate lowers every other
-    budget, so one pass is not enough.
+    A company whose budget cannot cover one share is dropped and its weight is shared
+    **equally** over the rest, not in proportion. Removing a company only raises the
+    remaining budgets, so the loop only ever shrinks the set and ends.
+
+    The cash returned is `capital * cash_weight` plus whatever the residual pass could
+    not spend.
     """
-    selected = list(candidates[:main_size])
-    reserve = deque(candidates[main_size:])
-    replaced: list[tuple[str, str]] = []
-
-    while True:
-        total = sum(c.weight for c in selected)
-        budgets = {c.company_id: capital * c.weight / total for c in selected}
-        unaffordable = [
-            c for c in selected
-            if prices[c.stock_code] * (1 + margin) > budgets[c.company_id]
-        ]
-        if not unaffordable:
-            break
-        for dropped in unaffordable:
-            selected.remove(dropped)
-            if reserve:
-                added = reserve.popleft()
-                selected.append(added)
-                replaced.append((dropped.stock_code, added.stock_code))
-
-    allocations = [
-        Allocation(
-            company_id=c.company_id,
-            stock_code=c.stock_code,
-            shares=int(budgets[c.company_id] // prices[c.stock_code]),
-            price=prices[c.stock_code],
-            weight=c.weight / total,
-        )
-        for c in selected
-    ]
-    spent = sum(a.shares * a.price for a in allocations)
-    return allocations, replaced, capital - spent
 
 
 def spend_residual(
     shares: dict[str, int],
     prices: Mapping[str, float],
-    ideal: Mapping[str, float],   # capital * weight, per company
+    ideal: Mapping[str, float],   # investable * weight, per company
     residual: float,
 ) -> tuple[dict[str, int], float]:
     """Spend what flooring left over, one share at a time, in two phases.
 
     Phase one buys for whichever company is furthest below its ideal amount. Once no
     company is below it, phase two cycles the companies in descending weight order,
-    one share each time round. Both stop when the cash covers no share price, and
-    what is left is cash.
+    one share each time round. Both stop when the cash covers no share price.
     """
-    ring = cycle(sorted(ideal, key=lambda s: -ideal[s]))
-    while True:
-        affordable = [s for s in shares if prices[s] <= residual]
-        if not affordable:
-            break
-        short = [s for s in affordable if shares[s] * prices[s] < ideal[s]]
-        if short:
-            pick = max(short, key=lambda s: ideal[s] - shares[s] * prices[s])
-        else:
-            pick = next((c for c in islice(ring, len(shares)) if prices[c] <= residual), None)
-            if pick is None:
-                break
-        shares[pick] += 1
-        residual -= prices[pick]
-    return shares, residual
+```
+
+`ladder.py` — pure, no I/O:
+
+```python
+STEPS: tuple[float, ...] = (0.05, 0.03, 0.01)   # then market
+
+
+def limit_price(close: float, step: int, side: Literal["buy", "sell"]) -> float | None:
+    """The limit for a step, or None at the market step."""
+
+
+def step_of(close: float, order_price: float, side: Literal["buy", "sell"]) -> int:
+    """Which step a pending order is on, read back from its price.
+
+    Nothing stores the step: the ratios are fixed and the previous close holds still
+    for the session, so the price says which rung it is on.
+    """
 ```
 
 `prices.py` — the QuestDB read, the only module that touches a database:
@@ -451,24 +408,19 @@ def latest_prices(dsn: str, stock_codes: Sequence[str]) -> dict[str, tuple[float
     """The newest close per symbol, with the timestamp so a caller can judge its age."""
 ```
 
-Tests worth having, because each pins a property the loop has to hold:
+Tests worth having, because each pins a property the rules have to hold:
 
-- a portfolio every name of which is affordable allocates exactly `MAIN_SIZE` and replaces
-  nothing
-- one unaffordable name pulls in exactly rank `MAIN_SIZE + 1`
-- two unaffordable names pull in ranks `MAIN_SIZE + 1` and `MAIN_SIZE + 2`
-- a company called up from the reserve ends with the weight the dropped company vacated
-- changing `MAIN_SIZE` from 10 to 20 changes the size of the result and nothing else about
-  the behaviour
-- a replacement that is itself unaffordable pulls the next one, and the loop still ends
-- an exhausted reserve drops the name and redistributes over the remainder
+- a portfolio every name of which is affordable allocates all of them and drops none
+- an unaffordable name is dropped and its weight is split **equally**, not proportionally
+- dropping one name never makes another unaffordable
+- every name unaffordable puts the whole amount in cash
+- `cash_weight` is held back before any budget is computed, and the residual is added to it
 - residual cash never goes negative, and after the residual pass it is below the cheapest
   held share price
-- **phase one runs before phase two**: a company below its ideal amount always takes the share
-  ahead of the weight cycle
-- **phase two is reached**: a portfolio whose gaps all close while cash remains cycles the
-  weights rather than stopping. It is not dead code — 32% of 20,000 random portfolios reach it
-- a dropped company's weight is split **equally**, not proportionally, over what remains
+- **phase one runs before phase two**: a company below its ideal amount takes the share ahead
+  of the weight cycle
+- **phase two is reached** — it is not dead code; 32% of 20,000 random portfolios reach it
 - distributing the *residual* equally leaves it unspent when the per-company slice is under a
-  share price — the case that rules equal division out for cash
-- a margin of zero and a positive margin differ only where the budget is within the margin
+  share price, which is why equal division is used for weight and not for cash
+- `step_of(close, limit_price(close, n, side), side) == n` for every step and both sides
+- a ladder step amends the outstanding quantity, not the original quantity, after a partial fill
