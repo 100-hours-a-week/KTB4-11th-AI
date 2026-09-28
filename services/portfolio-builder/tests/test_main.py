@@ -26,8 +26,8 @@ def env(monkeypatch):
     monkeypatch.setattr(entry, "load_briefing", lambda engine, days: BRIEFING)
 
 
-def _events(capsys):
-    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+def _events(out):
+    return [json.loads(line) for line in out.splitlines()]
 
 
 def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
@@ -43,7 +43,8 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
         entry.main()
 
     assert exit_.value.code == 0
-    events = _events(capsys)
+    out = capsys.readouterr().out
+    events = _events(out)
     assert [e["message"] for e in events] == ["run_start", "ingestion", "prompt", "run_end"]
     assert events[-1]["outcome"] == "saved"
     assert events[-1]["portfolio_id"] == 7
@@ -57,7 +58,7 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
         "submit_portfolio",
     }
     assert captured["max_turns"] == 150
-    assert "sk-or-v1-secret" not in capsys.readouterr().out
+    assert "sk-or-v1-secret" not in out
 
 
 def test_max_turns_exits_one(env, monkeypatch, capsys):
@@ -67,7 +68,7 @@ def test_max_turns_exits_one(env, monkeypatch, capsys):
         entry.main()
 
     assert exit_.value.code == 1
-    assert _events(capsys)[-1]["level"] == "ERROR"
+    assert _events(capsys.readouterr().out)[-1]["level"] == "ERROR"
 
 
 def test_a_failure_before_the_agent_exits_one_with_run_end(env, monkeypatch, capsys):
@@ -80,7 +81,7 @@ def test_a_failure_before_the_agent_exits_one_with_run_end(env, monkeypatch, cap
         entry.main()
 
     assert exit_.value.code == 1
-    last = _events(capsys)[-1]
+    last = _events(capsys.readouterr().out)[-1]
     assert last["message"] == "run_end"
     assert last["outcome"] == "error"
     assert "postgres unreachable" in last["error"]
