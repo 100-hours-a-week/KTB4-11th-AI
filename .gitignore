@@ -5,6 +5,9 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .ty_cache/
+.env
+.env.*
+!.env.prod.example
 
 # Created by https://www.toptal.com/developers/gitignore/api/macos,linux,windows,python,visualstudiocode,pycharm
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,linux,windows,python,visualstudiocode,pycharm

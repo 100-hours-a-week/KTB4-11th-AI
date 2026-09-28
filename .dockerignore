@@ -8,5 +8,6 @@ __pycache__/
 .ty_cache/
 docs/
 .github/
+.env*
 compose.dev.yaml
 .superpowers/
