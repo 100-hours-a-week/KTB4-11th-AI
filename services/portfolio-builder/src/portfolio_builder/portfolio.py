@@ -1,3 +1,4 @@
+import math
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -38,8 +39,8 @@ def validate_portfolio(submission: Submission, previous: frozenset[str]) -> list
     held: set[str] = set()
     for holding in submission.holdings:
         company = holding.company_id
-        if not holding.weight >= 0:
-            errors.append(f"holdings: {company} weight must be >= 0")
+        if not (math.isfinite(holding.weight) and holding.weight >= 0):
+            errors.append(f"holdings: {company} weight must be a finite number >= 0")
         if company not in previous and not (holding.reason or "").strip():
             errors.append(f"holdings: {company} is entering the portfolio and needs a reason")
         if company in held:
@@ -64,10 +65,12 @@ def validate_portfolio(submission: Submission, previous: frozenset[str]) -> list
                 f"exits: {company} was held and is dropped, so it needs an exit with a reason"
             )
 
-    if not submission.cash_weight >= 0:
-        errors.append("cash_weight must be >= 0")
+    if not (math.isfinite(submission.cash_weight) and submission.cash_weight >= 0):
+        errors.append("cash_weight must be a finite number >= 0")
     total = sum(h.weight for h in submission.holdings) + submission.cash_weight
-    if not total > 0:
+    if not math.isfinite(total):
+        errors.append("weights and cash_weight must add up to a finite number")
+    elif not total > 0:
         errors.append("weights and cash_weight sum to 0 or less; at least one must be positive")
     if not submission.commentary.strip():
         errors.append("commentary must not be empty")

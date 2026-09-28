@@ -3,6 +3,7 @@ import json
 import pytest
 import sqlalchemy as sa
 from portfolio_builder.errors import GraphTimeout, ToolError
+from portfolio_builder.tools import graph
 from portfolio_builder.tools.graph import find_seed_entities, graph_tools, graph_transaction
 
 
@@ -40,6 +41,7 @@ def test_search_graph_returns_edges_between_reached_nodes(engine):
         ("삼성전자", "supplies", "엔비디아", 1, 0),
         ("HBM", "used_by", "엔비디아", 1, 1),
     ]
+    assert result["truncated"] is False
 
 
 def test_find_graph_paths_walks_both_directions_without_revisiting(engine):
@@ -58,6 +60,7 @@ def test_find_graph_paths_walks_both_directions_without_revisiting(engine):
         ("엔비디아", "HBM", "used_by", "backward", 1),
         ("HBM", "SK하이닉스", "produces", "backward", 2),
     ]
+    assert result["truncated"] is False
 
 
 def test_find_graph_paths_respects_max_depth(engine):
@@ -93,3 +96,32 @@ def test_graph_transaction_maps_a_statement_timeout(engine):
     with pytest.raises(GraphTimeout, match="timed out"), graph_transaction(engine) as conn:
         conn.execute(sa.text("SET LOCAL statement_timeout = '10ms'"))
         conn.execute(sa.text("SELECT pg_sleep(1)"))
+
+
+def test_search_graph_caps_nodes_and_flags_truncation(engine, monkeypatch):
+    monkeypatch.setattr(graph, "NODE_LIMIT", 2)
+    result = json.loads(_tools(engine)["search_graph"].invoke({"name": "삼성전자", "depth": 3}))
+
+    assert [n["id"] for n in result["nodes"]] == [1, 2]
+    assert result["truncated"] is True
+
+
+def test_find_graph_paths_caps_paths_shortest_first(engine, monkeypatch):
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO relations"
+                " (id, cluster_id, source_entity_id, target_entity_id, type, description)"
+                " OVERRIDING SYSTEM VALUE VALUES (4, 1, 1, 4, 'related_to', '삼성전자와 HBM')"
+            )
+        )
+    monkeypatch.setattr(graph, "PATH_LIMIT", 1)
+
+    result = json.loads(
+        _tools(engine)["find_graph_paths"].invoke(
+            {"from_name": "삼성전자", "to_name": "SK하이닉스", "max_depth": 4}
+        )
+    )
+
+    assert [p["length"] for p in result["paths"]] == [2]
+    assert result["truncated"] is True

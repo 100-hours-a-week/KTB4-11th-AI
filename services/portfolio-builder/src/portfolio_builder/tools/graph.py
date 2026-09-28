@@ -12,6 +12,9 @@ from portfolio_builder.errors import GraphTimeout, ToolError
 from portfolio_builder.tools import to_json
 
 QUERY_CANCELED = "57014"
+PATH_LIMIT = 20
+NODE_LIMIT = 100
+EDGE_LIMIT = 200
 
 
 def _like(text: str) -> str:
@@ -74,8 +77,18 @@ def graph_tools(engine: sa.Engine) -> list[BaseTool]:
         ),
     )
     def search_graph(
-        name: str,
-        depth: Annotated[int, Field(ge=1, le=3)] = 2,
+        name: Annotated[
+            str,
+            Field(description="entity name: a company, product, person, event, ..."),
+        ],
+        depth: Annotated[
+            int,
+            Field(
+                ge=1,
+                le=3,
+                description="relations to follow outward, 1-3",
+            ),
+        ] = 2,
     ) -> str:
         with graph_transaction(engine) as conn:
             seeds = find_seed_entities(conn, name)
@@ -98,10 +111,13 @@ def graph_tools(engine: sa.Engine) -> list[BaseTool]:
                         " FROM walk w JOIN entities e ON e.id = w.entity_id"
                         " GROUP BY w.entity_id, e.raw_name, e.type, e.corp_code"
                         " ORDER BY hop, id"
+                        " LIMIT :limit"
                     ),
-                    {"seeds": seeds, "depth": depth},
+                    {"seeds": seeds, "depth": depth, "limit": NODE_LIMIT + 1},
                 ).mappings()
             ]
+            truncated = len(nodes) > NODE_LIMIT
+            nodes = nodes[:NODE_LIMIT]
             hops = {n["id"]: n["hop"] for n in nodes}
             rows = conn.execute(
                 sa.text(
@@ -131,20 +147,25 @@ def graph_tools(engine: sa.Engine) -> list[BaseTool]:
                 ),
                 key=lambda e: (e["hop"], e["id"]),
             )
-        return to_json({"nodes": nodes, "edges": edges})
+            truncated = truncated or len(edges) > EDGE_LIMIT
+            edges = edges[:EDGE_LIMIT]
+        return to_json({"nodes": nodes, "edges": edges, "truncated": truncated})
 
     @tool(
         "find_graph_paths",
         description=(
-            "Every simple path of at most max_depth relations between two entities in the"
-            " knowledge graph, following relations in either direction, shortest first. Use it"
-            " to see how an event or company reaches another company."
+            "The shortest simple paths (up to 20) of at most max_depth relations between two"
+            " entities in the knowledge graph, following relations in either direction, shortest"
+            " first. Use it to see how an event or company reaches another company."
         ),
     )
     def find_graph_paths(
-        from_name: str,
-        to_name: str,
-        max_depth: Annotated[int, Field(ge=1, le=6)] = 4,
+        from_name: Annotated[str, Field(description="entity name to start from")],
+        to_name: Annotated[str, Field(description="entity name to reach")],
+        max_depth: Annotated[
+            int,
+            Field(ge=1, le=6, description="longest path in relations, 1-6"),
+        ] = 4,
     ) -> str:
         with graph_transaction(engine) as conn:
             sources = find_seed_entities(conn, from_name)
@@ -172,9 +193,17 @@ def graph_tools(engine: sa.Engine) -> list[BaseTool]:
                     " WHERE node = ANY(CAST(:targets AS bigint[]))"
                     " AND cardinality(relation_ids) > 0"
                     " ORDER BY cardinality(relation_ids), nodes"
+                    " LIMIT :limit"
                 ),
-                {"sources": sources, "targets": targets, "max_depth": max_depth},
+                {
+                    "sources": sources,
+                    "targets": targets,
+                    "max_depth": max_depth,
+                    "limit": PATH_LIMIT + 1,
+                },
             ).all()
+            truncated = len(paths) > PATH_LIMIT
+            paths = paths[:PATH_LIMIT]
             node_ids = sorted({n for p in paths for n in p.nodes})
             relation_ids = sorted({r for p in paths for r in p.relation_ids})
             names = dict(
@@ -213,7 +242,8 @@ def graph_tools(engine: sa.Engine) -> list[BaseTool]:
                         ],
                     }
                     for p in paths
-                ]
+                ],
+                "truncated": truncated,
             }
         )
 

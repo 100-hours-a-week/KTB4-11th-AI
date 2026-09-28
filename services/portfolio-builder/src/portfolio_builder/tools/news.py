@@ -9,7 +9,7 @@ from pydantic import Field
 from portfolio_builder.errors import ToolError
 from portfolio_builder.tools import to_json
 
-_TSQUERY_OPERATORS = re.compile(r"[&|!():*<>'\\]")
+_TSQUERY_OPERATORS = re.compile(r"[&|!():*<>'\\\x00]")
 
 
 def to_prefix_query(query: str) -> str:

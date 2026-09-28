@@ -58,3 +58,10 @@ def test_rejects_invalid_values(monkeypatch, name, value):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_rejects_an_empty_api_key(monkeypatch):
+    _populate(monkeypatch, PORTFOLIO_BUILDER_OPENROUTER_API_KEY="")
+
+    with pytest.raises(ValidationError):
+        Settings()

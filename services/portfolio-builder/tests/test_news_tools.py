@@ -9,6 +9,7 @@ def test_builds_a_prefix_tsquery_and_drops_operators():
     assert to_prefix_query(" 삼성 HBM ") == "삼성:* & HBM:*"
     assert to_prefix_query("a&b | !c:*") == "ab:* & c:*"
     assert to_prefix_query("&&") == ""
+    assert to_prefix_query("a\x00b") == "ab:*"
 
 
 def _tools(engine):

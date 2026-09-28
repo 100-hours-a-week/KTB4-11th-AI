@@ -33,7 +33,7 @@ class RunResult:
     outcome: Literal["saved", "max_turns", "error"]
     portfolio_id: int | None
     turns: int
-    usage: dict[str, float]
+    usage: dict[str, float | None]
     error: str | None = None
 
 
@@ -83,12 +83,14 @@ class RunLog(AgentMiddleware):
         super().__init__()
         self.log = log
         self.turns = 0
-        self.usage: dict[str, float] = {
+        self.portfolio_id: int | None = None
+        self.usage: dict[str, float | None] = {
             "input": 0,
             "output": 0,
             "cache_read": 0,
             "reasoning": 0,
-            "cost": 0.0,
+            "total": 0,
+            "cost": None,
         }
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
@@ -113,10 +115,10 @@ class RunLog(AgentMiddleware):
             "total": usage.get("total_tokens", 0),
         }
         cost = message.response_metadata.get("cost")
-        for key in ("input", "output", "cache_read", "reasoning"):
+        for key in ("input", "output", "cache_read", "reasoning", "total"):
             self.usage[key] += turn_usage[key]
         if cost is not None:
-            self.usage["cost"] += cost
+            self.usage["cost"] = (self.usage["cost"] or 0.0) + cost
             turn_usage["cost"] = cost
         self.log(
             "llm_response",
@@ -149,6 +151,9 @@ class RunLog(AgentMiddleware):
                 duration_ms=round((time.perf_counter() - started) * 1000),
             )
             raise
+        update = getattr(result, "update", None) or {}
+        if update.get("portfolio_id") is not None:
+            self.portfolio_id = update["portfolio_id"]
         messages = _tool_messages(result)
         is_error = any(m.status == "error" for m in messages)
         self.log(
@@ -201,9 +206,12 @@ def run_agent(
     except ModelCallLimitExceededError:
         return RunResult("max_turns", None, run_log.turns, run_log.usage)
     except Exception as error:
-        return RunResult(
-            "error", None, run_log.turns, run_log.usage, f"{type(error).__name__}: {error}"
-        )
+        message = f"{type(error).__name__}: {error}"
+        # submit_portfolio may have committed while a sibling tool call in the same message
+        # crashed; reporting error would make a retrying scheduler write a second portfolio.
+        if run_log.portfolio_id is not None:
+            return RunResult("saved", run_log.portfolio_id, run_log.turns, run_log.usage, message)
+        return RunResult("error", None, run_log.turns, run_log.usage, message)
     portfolio_id = final.get("portfolio_id")
     if portfolio_id is None:
         return RunResult(

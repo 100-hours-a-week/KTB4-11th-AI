@@ -54,7 +54,7 @@ def test_reports_every_problem_at_once_in_order():
     )
 
     assert validate_portfolio(submission, frozenset({"B"})) == [
-        "holdings: A weight must be >= 0",
+        "holdings: A weight must be a finite number >= 0",
         "holdings: A is entering the portfolio and needs a reason",
         "holdings: A appears more than once",
         "holdings: C is entering the portfolio and needs a reason",
@@ -63,7 +63,7 @@ def test_reports_every_problem_at_once_in_order():
         "exits: Z was not in the previous portfolio",
         "exits: Z needs a reason",
         "exits: B was held and is dropped, so it needs an exit with a reason",
-        "cash_weight must be >= 0",
+        "cash_weight must be a finite number >= 0",
         "weights and cash_weight sum to 0 or less; at least one must be positive",
         "commentary must not be empty",
     ]
@@ -153,3 +153,36 @@ def test_save_rolls_back_an_unknown_cited_cluster(engine):
 
     assert rejected.value.errors == ["cited_cluster_ids not found: 404"]
     assert _count(engine) == 0
+
+
+@pytest.mark.parametrize("weight", [float("inf"), float("nan")])
+def test_rejects_a_non_finite_weight(weight):
+    submission = BASE.model_copy(
+        update={
+            "holdings": [
+                Holding(
+                    company_id="A",
+                    weight=weight,
+                    reason="r",
+                    cited_cluster_ids=[],
+                )
+            ]
+        }
+    )
+    assert "holdings: A weight must be a finite number >= 0" in validate_portfolio(
+        submission, frozenset()
+    )
+
+
+def test_rejects_weights_whose_sum_overflows():
+    submission = BASE.model_copy(
+        update={
+            "holdings": [
+                Holding(company_id="A", weight=1e308, reason="r", cited_cluster_ids=[]),
+                Holding(company_id="B", weight=1e308, reason="r", cited_cluster_ids=[]),
+            ]
+        }
+    )
+    assert validate_portfolio(submission, frozenset()) == [
+        "weights and cash_weight must add up to a finite number"
+    ]

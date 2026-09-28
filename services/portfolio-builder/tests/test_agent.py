@@ -1,5 +1,6 @@
 import itertools
 import logging
+import time
 
 import sqlalchemy as sa
 from langchain.tools import tool
@@ -153,6 +154,38 @@ def test_an_unexpected_tool_exception_ends_the_run_as_error(engine):
     assert "database is down" in result.error
     assert _count(engine) == 0
     assert any(e == "tool_call" and f["is_error"] for e, _, f in log.events)
+
+
+@tool("explode_later", description="fails after a moment")
+def explode_later() -> str:
+    time.sleep(0.5)
+    raise RuntimeError("questdb is down")
+
+
+def test_a_saved_portfolio_stays_saved_when_a_sibling_tool_crashes(engine):
+    result, _ = _run(
+        engine,
+        [reply("", ("submit_portfolio", VALID), ("explode_later", {}))],
+        extra_tools=[explode_later],
+    )
+
+    assert result.outcome == "saved"
+    assert result.portfolio_id is not None
+    assert "questdb is down" in result.error
+    assert _count(engine) == 1
+
+
+def test_usage_totals_accumulate_and_cost_stays_unknown_until_reported(engine):
+    first = reply("thinking")
+    first.usage_metadata = {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
+    second = reply("", ("submit_portfolio", VALID))
+    second.usage_metadata = {"input_tokens": 4, "output_tokens": 1, "total_tokens": 5}
+
+    result, _ = _run(engine, [first, second])
+
+    assert result.usage["input"] == 7
+    assert result.usage["total"] == 10
+    assert result.usage["cost"] is None
 
 
 def test_the_nudge_text():
