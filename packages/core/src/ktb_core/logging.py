@@ -21,10 +21,15 @@ def redact(line: str) -> str:
 
 
 class JsonFormatter(logging.Formatter):
+    def __init__(self, service: str) -> None:
+        super().__init__()
+        self.service = service
+
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
+            "service": self.service,
             "logger": record.name,
             "message": record.getMessage(),
         }
@@ -36,9 +41,9 @@ class JsonFormatter(logging.Formatter):
         return redact(json.dumps(payload, ensure_ascii=False, default=str))
 
 
-def setup_logging(level: str = "INFO") -> None:
+def setup_logging(level: str = "INFO", *, service: str) -> None:
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
+    handler.setFormatter(JsonFormatter(service))
 
     root = logging.getLogger()
     root.handlers.clear()

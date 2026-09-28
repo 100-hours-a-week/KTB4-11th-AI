@@ -6,7 +6,7 @@ from portfolio_builder.log import make_log
 
 
 def test_log_emits_event_with_run_id_and_fields(capsys):
-    setup_logging("DEBUG")
+    setup_logging("DEBUG", service="svc")
     log = make_log("run-1")
 
     log("tool_call", logging.WARNING, name="search_graph", is_error=True)

@@ -19,7 +19,7 @@ from portfolio_builder.tools.technicals import technicals_tool
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, service="portfolio-builder")
     log = make_log(str(uuid.uuid4()))
     started = time.perf_counter()
 

@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, service="news-preprocessor")
     logger.info("news-preprocessor started")
     engine = sa.create_engine(settings.postgres_dsn)
     client = httpx.Client(headers={"User-Agent": settings.user_agent}, follow_redirects=True)
