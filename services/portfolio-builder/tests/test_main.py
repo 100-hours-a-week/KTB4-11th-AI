@@ -19,4 +19,9 @@ def test_main_runs_to_completion(monkeypatch, capsys):
 def test_market_analyzer_is_importable():
     import ktb_market_analyzer
 
-    assert hasattr(ktb_market_analyzer, "rsi")
+    # This proves the workspace edge is real and TA-Lib resolved, which is why it
+    # lives here rather than in market-analyzer's own tests. It checks `interpret`
+    # rather than `rsi` because the package's top level now exposes only its two
+    # entry points; the indicator functions moved behind them into
+    # ktb_market_analyzer.indicators. Reaching either one still imports talib.
+    assert hasattr(ktb_market_analyzer, "interpret")

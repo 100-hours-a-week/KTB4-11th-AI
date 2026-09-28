@@ -1,0 +1,2 @@
+class EmptyBodyError(Exception):
+    pass

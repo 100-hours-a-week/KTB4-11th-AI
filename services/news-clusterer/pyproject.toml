@@ -1,13 +1,15 @@
 [project]
 name = "news-clusterer"
 version = "0.1.0"
-description = "News clustering HTTP service"
+description = "Cron-triggered news clustering"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
     "pydantic-settings>=2.7",
-    "fastapi>=0.118",
-    "uvicorn[standard]>=0.38",
+    "sqlalchemy>=2.0.54",
+    "psycopg[binary]>=3.3.6",
+    "pgvector>=0.5.0",
+    "numpy>=2.5",
 ]
 
 [project.scripts]

@@ -1,8 +1,6 @@
-"""FastAPI application for the news clusterer."""
-
 from fastapi import FastAPI
 
-app = FastAPI(title="news-clusterer")
+app = FastAPI(title="portfolio-rebalancer-http")
 
 
 @app.get("/health")

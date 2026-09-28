@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>한국경제 | 경제</title>
+    <link>https://www.hankyung.com/economy</link>
+    <item>
+      <title><![CDATA[기준금리 동결…"연내 인하 가능성"]]></title>
+      <link>https://www.hankyung.com/article/202609220001i</link>
+      <author>김테스트</author>
+      <pubDate>Tue, 22 Sep 2026 15:01:06 +0900</pubDate>
+    </item>
+    <item>
+      <title>환율 1300원대 안착</title>
+      <link> https://www.hankyung.com/article/202609220002i </link>
+      <author>이테스트</author>
+      <pubDate>Tue, 22 Sep 2026 14:30:00 +0900</pubDate>
+    </item>
+    <item>
+      <title>발행 시각이 없는 기사</title>
+      <link>https://www.hankyung.com/article/202609220003i</link>
+      <author>박테스트</author>
+    </item>
+  </channel>
+</rss>

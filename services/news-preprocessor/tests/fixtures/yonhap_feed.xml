@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:media="http://search.yahoo.com/mrss/">
+  <channel>
+    <title><![CDATA[연합뉴스 경제 최신기사]]></title>
+    <link>https://www.yna.co.kr/economy/all</link>
+    <item>
+      <title><![CDATA["세무서 납세자보호위 年1건 미만 개최…제도 개선해야"(종합)]]></title>
+      <link>https://www.yna.co.kr/view/AKR20260924000100001</link>
+      <guid isPermaLink="true">https://www.yna.co.kr/view/AKR20260924000100001</guid>
+      <pubDate>Thu, 24 Sep 2026 14:15:25 +0900</pubDate>
+      <dc:creator>박테스트</dc:creator>
+      <description><![CDATA[요약문은 저장하지 않는다]]></description>
+      <media:content url="https://img.yna.co.kr/test.jpg" type="image/jpeg"></media:content>
+    </item>
+    <item>
+      <title><![CDATA[[연합뉴스 이 시각 헤드라인] - 15:00]]></title>
+      <link>https://www.yna.co.kr/view/AKR20260924000400011</link>
+      <guid isPermaLink="true">https://www.yna.co.kr/view/AKR20260924000400011</guid>
+      <pubDate>Thu, 24 Sep 2026 15:00:00 +0900</pubDate>
+      <dc:creator>성테스트</dc:creator>
+      <description><![CDATA[[연합뉴스 이 시각 헤드라인] - 15:00]]></description>
+    </item>
+    <item>
+      <title><![CDATA[서울 아파트값 85주째 상승]]></title>
+      <link>https://www.yna.co.kr/view/AKR20260924000200003</link>
+      <guid isPermaLink="true">https://www.yna.co.kr/view/AKR20260924000200003</guid>
+      <pubDate>Thu, 24 Sep 2026 09:05:00 +0900</pubDate>
+      <dc:creator>임테스트</dc:creator>
+      <description><![CDATA[요약]]></description>
+    </item>
+    <item>
+      <title><![CDATA[발행 시각이 깨진 기사]]></title>
+      <link>https://www.yna.co.kr/view/AKR20260924000300003</link>
+      <pubDate>어제 오후</pubDate>
+    </item>
+  </channel>
+</rss>
