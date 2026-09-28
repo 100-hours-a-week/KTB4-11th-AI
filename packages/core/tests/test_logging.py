@@ -97,3 +97,14 @@ def test_redacts_secrets_anywhere_in_the_line(capsys):
     assert "[redacted-key]" in payload["error"]
     assert '\\"access_token\\":\\"[redacted]\\"' in line
     assert payload["token"] == "[redacted-jwt]"
+
+
+def test_redaction_never_breaks_the_json_line(capsys):
+    setup_logging("INFO")
+    logging.getLogger("svc").error(
+        "failed", extra={"fields": {"error": 'body truncated: {"access_token":', "next": "keep"}}
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["next"] == "keep"

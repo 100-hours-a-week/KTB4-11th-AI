@@ -7,15 +7,15 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-# Matches both plain and backslash-escaped quotes, since a token response is often embedded in
-# an error message string that json.dumps escapes a second time.
-_TOKEN_FIELD = re.compile(r'(\\?)"(access|refresh|id)_token(\\?)"\s*:\s*(\\?)"[^"\\]*(\\?)"')
+# Matches both plain and backslash-escaped quotes consistently using backreferences.
+# The \1 ensures that if the opening quote is escaped, all quotes in the pattern are escaped.
+_TOKEN_FIELD = re.compile(r'(\\?)"(access|refresh|id)_token\1"\s*:\s*\1"[^"\\]*\1"')
 _JWT = re.compile(r"eyJ[\w-]+\.[\w-]+\.[\w-]+")
 _OPENROUTER_KEY = re.compile(r"sk-or-[\w-]+")
 
 
 def redact(line: str) -> str:
-    line = _TOKEN_FIELD.sub(r'\1"\2_token\3":\4"[redacted]\5"', line)
+    line = _TOKEN_FIELD.sub(r'\1"\2_token\1":\1"[redacted]\1"', line)
     line = _JWT.sub("[redacted-jwt]", line)
     return _OPENROUTER_KEY.sub("[redacted-key]", line)
 
