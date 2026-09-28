@@ -52,12 +52,37 @@ way — see §7.
 
 ### The list
 
-The model portfolio carries **30 companies**, ranked. The top 20 are the portfolio; ranks
-21–30 are a reserve. When a top-20 company cannot be bought, the next reserve company takes
-its place: drop ranks 1 and 2 and ranks 21 and 22 come in.
+The model portfolio is a ranked list. The first `MAIN_SIZE` companies carry weights and are
+the portfolio; everything after them is a **reserve that carries no weight at all**. A reserve
+company has a rank and nothing else until a main company turns out to be unbuyable, and only
+then does it receive weight.
+
+That is the point of the reserve carrying no weight: portfolio-builder is not asked to
+value a company it does not intend to hold. It ranks candidates, weights the ones it holds,
+and the rest exist only as an ordered answer to "what next".
+
+When a main company cannot be bought it is dropped and the next reserve company takes its
+place. Drop ranks 1 and 2, and ranks `MAIN_SIZE + 1` and `MAIN_SIZE + 2` come in. A company
+entering from the reserve is given weight by renormalising: the set is re-weighted over
+whatever the surviving main companies were worth relative to each other, and the newcomer
+takes an equal share of what the dropped company left behind.
 
 If the reserve runs out and companies are still unaffordable, they are dropped and their
-weight is redistributed over what remains.
+weight is redistributed over what remains — the portfolio simply gets smaller.
+
+### The floor is a number, not a rule
+
+`MAIN_SIZE` defaults to **10** and is one constant. Changing the portfolio from ten companies
+to twenty is that number and nothing else: the loop, the weighting and the reserve handling
+are written in terms of it. The same holds on the portfolio-builder side, where it becomes
+the `minItems` the submission schema enforces.
+
+Ten is a floor rather than an exact count because the alternative fails badly. An exact
+`minItems: 30` makes the tool call itself fail in a week when the news supports only
+twenty-two convictions, and the model then pads the list to satisfy the schema — which is
+precisely what the grounding rule ("every stored reason must originate in the data") exists to
+prevent. A floor lets the reserve be short, or empty, and §3 already handles an exhausted
+reserve.
 
 ### The loop
 
@@ -65,19 +90,25 @@ Budgets depend on which companies are in the set, and changing the set changes e
 So the decision is iterative:
 
 ```
-selected  = top 20 by rank
-reserve   = ranks 21..30 in rank order
+selected = candidates[:MAIN_SIZE]          # these carry weights
+reserve  = candidates[MAIN_SIZE:]          # these carry none, only rank
 
 loop:
-    renormalise weights over `selected`
+    renormalise weights over `selected`    # a weightless newcomer takes the
+                                           # share the dropped company vacated
     budget_i = capital_available * weight_i
     shares_i = floor(budget_i / price_i)
     unaffordable = { i : shares_i == 0 }
     if unaffordable is empty:
         break
-    remove unaffordable from `selected`
-    pull that many names off the front of `reserve` into `selected`
+    for each unaffordable company:
+        remove it from `selected`
+        if `reserve` is not empty:
+            take the front of `reserve`, give it the vacated weight, add to `selected`
 ```
+
+A company arriving from the reserve has no weight of its own, so it inherits the weight of
+the company it replaces. Renormalising afterwards is what keeps the set summing to one.
 
 Two properties make this terminate and behave sensibly:
 
@@ -117,12 +148,16 @@ the result closer to the intended weights than buying by rank would.
 
 ### Worked example
 
-Capital 10,000,000. Suppose the top 20 renormalise so SK하이닉스 sits at 5%.
+Capital 10,000,000, `MAIN_SIZE` 10. Suppose the main ten renormalise so SK하이닉스 sits at 5%.
 
-| | weight | budget | price | shares | result |
-|---|---|---|---|---|---|
-| SK하이닉스 | 5% | 500,000 | 1,800,000 | 0 | unaffordable — dropped, rank 21 enters |
-| 삼성전자 | 8% | 800,000 | 78,000 | 10 | 780,000 spent, 20,000 residual |
+| | rank | weight | budget | price | shares | result |
+|---|---|---|---|---|---|---|
+| SK하이닉스 | 3 | 5% | 500,000 | 1,800,000 | 0 | unaffordable — dropped |
+| (reserve) | 11 | — | — | — | — | enters, takes the vacated 5% |
+| 삼성전자 | 1 | 8% | 800,000 | 78,000 | 10 | 780,000 spent, 20,000 residual |
+
+The reserve company had no weight until this moment. It has one now because SK하이닉스 left
+one behind.
 
 ## 4. The two flows
 
@@ -222,10 +257,19 @@ Doing both is cheap and I would do both.
 
 ## 7. What has to be decided before this is built
 
-1. **30 companies in the model portfolio.** Today portfolio-builder produces no fixed count
-   and `portfolio_holdings` has no `rank` column — weight descending is the only ordering.
-   Both the count and an explicit rank (or a main/reserve flag) are changes to #42's prompt
-   and schema. **This is the one that needs the team's agreement.**
+1. **The ranked list with a weightless reserve.** Today portfolio-builder produces no fixed
+   count and `portfolio_holdings` has no `rank` column — weight descending is the only
+   ordering, and every holding carries weight. Three changes to #42 follow:
+   - the prompt asks for a ranked list with at least `MAIN_SIZE` weighted holdings and a
+     reserve after them,
+   - `submit_portfolio` takes `rank` per company and allows `weight` to be absent for reserve
+     entries, with `minItems: MAIN_SIZE`,
+   - `portfolio_holdings` gains `rank` (and `weight` becomes nullable, or reserve entries move
+     to their own table).
+
+   **Rank cannot be inferred from weight**: a reserve company has no weight, and even among
+   the main companies the model may rank a company above one it weights more heavily.
+   **This is the one that needs the team's agreement.**
 2. **Where the user's holdings and cash come from.** The initial purchase only needs capital.
    A later rebalance needs what the user currently holds. Issue #43 draws `PG <--> PRH`, but
    user accounts are presumably the Backend's. Either the request carries the holdings, or
@@ -251,7 +295,7 @@ class Candidate:
     company_id: str
     stock_code: str
     rank: int
-    weight: float
+    weight: float | None   # None for a reserve entry until it is called up
 
 
 @dataclass(frozen=True)
@@ -263,11 +307,14 @@ class Allocation:
     weight: float
 
 
+MAIN_SIZE = 10  # the portfolio's size; the reserve is whatever follows it
+
+
 def allocate(
-    candidates: Sequence[Candidate],   # all 30, rank order
+    candidates: Sequence[Candidate],   # rank order; reserve entries have weight None
     prices: Mapping[str, float],       # stock_code -> price
     capital: float,
-    main_size: int = 20,
+    main_size: int = MAIN_SIZE,
     margin: float = 0.0,
 ) -> tuple[list[Allocation], list[tuple[str, str]], float]:
     """Whole-share allocations, the replacements made, and the residual cash.
@@ -330,9 +377,13 @@ def latest_prices(dsn: str, stock_codes: Sequence[str]) -> dict[str, tuple[float
 
 Tests worth having, because each pins a property the loop has to hold:
 
-- a portfolio every name of which is affordable allocates all 20 and replaces nothing
-- one unaffordable name pulls in exactly rank 21
-- two unaffordable names pull in ranks 21 and 22
+- a portfolio every name of which is affordable allocates exactly `MAIN_SIZE` and replaces
+  nothing
+- one unaffordable name pulls in exactly rank `MAIN_SIZE + 1`
+- two unaffordable names pull in ranks `MAIN_SIZE + 1` and `MAIN_SIZE + 2`
+- a company called up from the reserve ends with the weight the dropped company vacated
+- changing `MAIN_SIZE` from 10 to 20 changes the size of the result and nothing else about
+  the behaviour
 - a replacement that is itself unaffordable pulls the next one, and the loop still ends
 - an exhausted reserve drops the name and redistributes over the remainder
 - residual cash never goes negative
