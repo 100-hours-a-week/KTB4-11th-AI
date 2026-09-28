@@ -127,6 +127,15 @@ def test_zero_volume_is_unavailable_never_infinite():
     assert all(np.isfinite(v) for v in evidence.values.values())
 
 
+def test_an_old_zero_volume_bar_does_not_hide_current_liquidity():
+    volume = np.full(300, 1000.0)
+    volume[100] = 0
+    evidence = compute_evidence("1d", bars(np.arange(1, 301), volume=volume))
+
+    assert "amihud_illiquidity_20d" in evidence.values
+    assert evidence.unavailable["amihud_percentile_1y"] == "zero volume"
+
+
 def test_percentiles_stay_in_range_and_benchmarks_are_not_collected():
     rng = np.random.default_rng(0)
     close = 100 * np.cumprod(1 + rng.normal(0, 0.01, 300))

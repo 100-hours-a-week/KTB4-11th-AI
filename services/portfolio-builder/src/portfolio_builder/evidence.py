@@ -71,7 +71,12 @@ def _amihud(bars: Bars) -> Array:
     # bars stores OHLCV only, so traded value is approximated as close * volume.
     with np.errstate(divide="ignore", invalid="ignore"):
         illiquidity = np.abs(talib.ROCP(bars.close, timeperiod=1)) / (bars.close * bars.volume)
-    return talib.SMA(illiquidity, timeperiod=20)
+    # A windowed mean, not TA-Lib's running-sum SMA: one old zero-volume bar must not poison
+    # every later window.
+    means = np.full(illiquidity.size, np.nan)
+    if illiquidity.size >= 20:
+        means[19:] = np.lib.stride_tricks.sliding_window_view(illiquidity, 20).mean(axis=1)
+    return means
 
 
 def compute_evidence(
