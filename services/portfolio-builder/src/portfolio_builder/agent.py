@@ -51,9 +51,22 @@ class Nudge(AgentMiddleware):
     @hook_config(can_jump_to=["model"])
     def after_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
         last = state["messages"][-1]
-        if isinstance(last, AIMessage) and not last.tool_calls:
-            return {"messages": [HumanMessage(NUDGE)], "jump_to": "model"}
-        return None
+        if not isinstance(last, AIMessage):
+            return None
+        # A truncated or malformed call lands in invalid_tool_calls; the provider rejects the next
+        # request unless every tool-call id in the history has a tool result.
+        answers = [
+            ToolMessage(
+                call.get("error") or "malformed tool call; send it again",
+                tool_call_id=call["id"],
+                status="error",
+            )
+            for call in last.invalid_tool_calls
+            if call.get("id")
+        ]
+        if last.tool_calls:
+            return {"messages": answers} if answers else None
+        return {"messages": [*answers, HumanMessage(NUDGE)], "jump_to": "model"}
 
 
 def _tool_messages(result: Any) -> list[ToolMessage]:

@@ -107,6 +107,27 @@ def test_a_submission_on_the_last_allowed_turn_is_saved(engine):
     assert result.turns == 3
 
 
+def test_a_truncated_tool_call_is_answered_before_the_nudge(engine):
+    truncated = AIMessage(
+        "",
+        id=f"ai-{next(_ids)}",
+        invalid_tool_calls=[
+            {
+                "name": "submit_portfolio",
+                "args": '{"holdings": [',
+                "id": "call-truncated",
+                "error": "Unterminated string",
+                "type": "invalid_tool_call",
+            }
+        ],
+    )
+    result, log = _run(engine, [truncated, reply("", ("submit_portfolio", VALID))])
+
+    assert result.outcome == "saved"
+    requests = [f for e, _, f in log.events if e == "llm_request"]
+    assert requests[1]["message_count"] == 4  # briefing, truncated reply, its error answer, nudge
+
+
 def test_two_submissions_in_one_message_write_one_portfolio(engine):
     result, log = _run(
         engine,
