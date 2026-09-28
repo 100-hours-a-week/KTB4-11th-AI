@@ -205,10 +205,10 @@ flowchart TD
 The affordability loop applies to the buy side only. A sell is always possible, so a target
 weight that is unreachable by buying does not block the sells that fund it.
 
-## 5. Orders are a narrowing pair, not a market order
+## 5. Orders are a narrowing pair, and a market order only at the end
 
-An order is never sent at market. Each one goes out as **two reservations around a reference
-price**, both for the full quantity:
+An order is not sent at market first. Each one goes out as **two reservations around a
+reference price**, both for the full quantity:
 
 ```
 reference 78,000, step 5%    →  74,100  and  81,900
@@ -218,25 +218,45 @@ Both carry 100 shares if 100 shares are wanted. Whichever fills, fills; **the Ba
 the other one.** Placing the low side alone risks never filling at all, and the high side is
 what makes the fill happen — the pair is there so that neither outcome is left to chance.
 
-### The band narrows until it fills
+### The band narrows for three days, then takes the market
 
 | step | band |
 |---|---|
 | 1 | reference ± 5% |
 | 2 | reference ± 3% |
 | 3 | reference ± 1% |
+| 4 | market |
 
-A step that has not filled is replaced by the next one, which sits closer to the reference on
-both sides. The band only ever narrows, so the price has less and less room to sit outside it.
-That is also why a limit-up or limit-down day is not a problem: the pair converges on the
-reference long before it reaches either bound.
+A step that has not filled is replaced by the next one, sitting closer to the reference on
+both sides, and the fourth is a market order that fills outright.
+
+The market rung is what guarantees the fill. Narrowing on its own does not: a ± 1% band is
+*harder* to reach than ± 5%, so a price that has walked away from the reference is less likely
+to come back inside the narrow band than the wide one. The pair chases a better price for three
+days and then stops chasing.
+
+A limit-up or limit-down day is not a problem either, for the same reason — the market rung
+does not depend on the price sitting anywhere in particular.
 
 **The reference is fixed when the first pair is placed** — the previous session's close — and
 every later step is measured from that same number, not from whatever the close has become
 since. A ladder that spans several days therefore keeps one reference throughout.
 
-Steps advance on a **daily** cadence. The poll runs hourly, so most polls see a pair that is
-still outstanding and do nothing.
+Steps advance **once per trading day**, so a rebalance finishes inside the week that started
+it:
+
+```
+Mon  ± 5%
+Tue  ± 3%
+Wed  ± 1%
+Thu  market   — filled
+Fri  spare
+```
+
+The poll runs hourly, so most polls see a pair that is still outstanding and do nothing.
+
+One public holiday still leaves the ladder finishing on Friday. **Two would push the market
+rung into the following week**, where the next judgement is already waiting — see §8.
 
 ### The step is read back from the pair
 
@@ -331,19 +351,15 @@ Doing both is cheap and I would do both.
 
 ## 8. What is still open
 
-1. **The step cadence.** Daily is the working answer but not settled. It decides how long a
-   rebalance takes to complete: three days of narrowing before the band is at 1%.
-2. **What happens if the 1% band still does not fill.** The band narrows rather than ending in
-   a market order, so there is no final rung that guarantees a fill. Does the pair sit at 1%
-   until it fills, or does something else take over?
-3. **A ladder still running when the next weekly judgement lands.** portfolio-builder produces
-   a new portfolio every week. If a pair from last week's rebalance is still outstanding, is it
-   cancelled and replaced, or left to finish?
+1. **A ladder still running when the next weekly judgement lands.** Four daily steps finish on
+   Thursday, and one public holiday still leaves Friday spare. **Two holidays in the week push
+   the market rung past the next judgement.** Is the outstanding pair cancelled and replaced by
+   the new portfolio's order, or left to finish first?
 
-Settled, and recorded above: the pair and its cancellation (§5), tick rounding at the Backend
-(§6), sells before buys (§5), the hourly poll and what has to be subtracted from it (§2), the
-reference held fixed and recovered from the pair rather than stored (§5), and `cash_weight`
-serving as both a reserve and a destination (§3).
+Settled, and recorded above: the pair and its cancellation (§5), the four steps and their daily
+cadence (§5), tick rounding at the Backend (§6), sells before buys (§5), the hourly poll and
+what has to be subtracted from it (§2), the reference held fixed and recovered from the pair
+rather than stored (§5), and `cash_weight` serving as both a reserve and a destination (§3).
 
 ### Idempotency needs less than it first appeared
 
@@ -408,11 +424,11 @@ def spend_residual(
 `ladder.py` — pure, no I/O:
 
 ```python
-STEPS: tuple[float, ...] = (0.05, 0.03, 0.01)
+STEPS: tuple[float, ...] = (0.05, 0.03, 0.01)   # then a market order
 
 
 def pair(reference: float, step: int) -> tuple[float, float]:
-    """The two reservation prices for a step: (low, high), both full quantity."""
+    """The two reservation prices for a step, or None at the market step."""
     ratio = STEPS[step]
     return reference * (1 - ratio), reference * (1 + ratio)
 
