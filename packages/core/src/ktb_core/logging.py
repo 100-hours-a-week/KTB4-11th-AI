@@ -2,21 +2,38 @@
 
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
+from typing import Any
+
+# Matches both plain and backslash-escaped quotes, since a token response is often embedded in
+# an error message string that json.dumps escapes a second time.
+_TOKEN_FIELD = re.compile(r'(\\?)"(access|refresh|id)_token(\\?)"\s*:\s*(\\?)"[^"\\]*(\\?)"')
+_JWT = re.compile(r"eyJ[\w-]+\.[\w-]+\.[\w-]+")
+_OPENROUTER_KEY = re.compile(r"sk-or-[\w-]+")
+
+
+def redact(line: str) -> str:
+    line = _TOKEN_FIELD.sub(r'\1"\2_token\3":\4"[redacted]\5"', line)
+    line = _JWT.sub("[redacted-jwt]", line)
+    return _OPENROUTER_KEY.sub("[redacted-key]", line)
 
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        payload: dict[str, str] = {
+        payload: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(record.created, UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
+        fields = getattr(record, "fields", None)
+        if isinstance(fields, dict):
+            payload.update(fields)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False)
+        return redact(json.dumps(payload, ensure_ascii=False, default=str))
 
 
 def setup_logging(level: str = "INFO") -> None:

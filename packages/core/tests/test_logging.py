@@ -50,3 +50,50 @@ def test_records_exception_text(capsys):
     payload = json.loads(capsys.readouterr().out.strip())
 
     assert "ValueError: boom" in payload["exception"]
+
+
+def test_merges_structured_fields(capsys):
+    setup_logging("INFO")
+    logging.getLogger("svc").info("run_end", extra={"fields": {"outcome": "saved", "turns": 3}})
+
+    payload = json.loads(capsys.readouterr().out.strip())
+
+    assert payload["message"] == "run_end"
+    assert payload["outcome"] == "saved"
+    assert payload["turns"] == 3
+
+
+def test_serialises_values_json_cannot(capsys):
+    from datetime import UTC, datetime
+
+    setup_logging("INFO")
+    moment = datetime(2026, 9, 28, tzinfo=UTC)
+    logging.getLogger("svc").info("x", extra={"fields": {"at": moment}})
+
+    payload = json.loads(capsys.readouterr().out.strip())
+
+    assert payload["at"] == str(moment)
+
+
+def test_redacts_secrets_anywhere_in_the_line(capsys):
+    setup_logging("INFO")
+    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl"
+    logging.getLogger("svc").error(
+        "failed",
+        extra={
+            "fields": {
+                "error": 'Bearer sk-or-v1-0123abcDEF rejected; body {"access_token": "abc"}',
+                "token": jwt,
+            }
+        },
+    )
+
+    line = capsys.readouterr().out
+    payload = json.loads(line)
+
+    assert "sk-or-v1-0123abcDEF" not in line
+    assert 'abc\\"' not in line
+    assert jwt not in line
+    assert "[redacted-key]" in payload["error"]
+    assert '\\"access_token\\":\\"[redacted]\\"' in line
+    assert payload["token"] == "[redacted-jwt]"
