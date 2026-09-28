@@ -5,8 +5,9 @@ import sqlalchemy as sa
 from ktb_core.logging import bind_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
 
-from portfolio_builder.agent import run_agent
-from portfolio_builder.briefing import SYSTEM_PROMPT, load_briefing
+from portfolio_builder.agent.run import run_agent
+from portfolio_builder.briefing.load import load_briefing
+from portfolio_builder.briefing.prompt import SYSTEM_PROMPT
 from portfolio_builder.market import QuestDBMarket
 from portfolio_builder.settings import Settings
 from portfolio_builder.stopwatch import Stopwatch

@@ -1,4 +1,5 @@
-from portfolio_builder.briefing import SYSTEM_PROMPT, load_briefing
+from portfolio_builder.briefing.load import load_briefing
+from portfolio_builder.briefing.prompt import SYSTEM_PROMPT
 from portfolio_builder.portfolio import Holding, Submission, save_portfolio
 
 SAMSUNG, HYNIX = "00126380", "00164779"

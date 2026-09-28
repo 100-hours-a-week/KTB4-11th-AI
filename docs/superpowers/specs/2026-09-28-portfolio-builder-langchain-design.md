@@ -67,11 +67,14 @@ services/portfolio-builder/
     __main__.py           main(): settings → log → engines → briefing → run_agent → exit code
     settings.py           PORTFOLIO_BUILDER_ prefix
     database.py           sa.Table mirrors of the tables above, like_contains
-    briefing.py           SYSTEM_PROMPT and load_briefing
-    agent.py              create_agent, the middleware (§4), run_agent → RunResult
+    briefing/             prompt.py (SYSTEM_PROMPT), previous.py, news.py, text.py (render),
+                          load.py (Briefing, load_briefing)
+    agent/                run.py (run_agent → RunResult), state.py, stop_on_save.py, nudge.py,
+                          run_log.py, usage.py
     portfolio.py          validate, normalize_weights, save (one transaction, SaveError)
     company.py            resolve_company: corp_code or alias → Company
-    evidence.py           OHLCV arrays → evidence dict (pure, TA-Lib + numpy)
+    evidence/             pure TA-Lib + numpy: bars.py, collector.py, price.py, risk.py,
+                          activity.py, cross_section.py; compute.py (compute_evidence)
     market.py             QuestDB reads: candles(symbol, timeframe), universe closes
     stopwatch.py          Stopwatch for latency and run time
     tools/

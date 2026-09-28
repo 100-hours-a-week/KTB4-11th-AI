@@ -1,0 +1,34 @@
+from typing import NamedTuple
+
+import numpy as np
+
+Value = float | bool
+
+
+class Evidence(NamedTuple):
+    values: dict[str, Value]
+    unavailable: dict[str, str]
+
+
+class Collector:
+    def __init__(self, bars: int, *, daily: bool) -> None:
+        self.bars = bars
+        self.daily = daily
+        self.unit = "d" if daily else ""
+        self.values: dict[str, Value] = {}
+        self.unavailable: dict[str, str] = {}
+
+    def has(self, name: str, needed: int) -> bool:
+        if self.bars >= needed:
+            return True
+        self.unavailable[name] = f"needs {needed} bars, have {self.bars}"
+        return False
+
+    def put(self, name: str, value: float | None, reason: str = "not computable") -> None:
+        if value is None or not np.isfinite(value):
+            self.unavailable[name] = reason
+        else:
+            self.values[name] = float(value)
+
+    def evidence(self) -> Evidence:
+        return Evidence(self.values, self.unavailable)

@@ -8,7 +8,8 @@ from pydantic import BaseModel, Field
 
 from portfolio_builder.company import resolve_company
 from portfolio_builder.errors import NoMarketData
-from portfolio_builder.evidence import Array, compute_evidence
+from portfolio_builder.evidence.bars import Array
+from portfolio_builder.evidence.compute import compute_evidence
 from portfolio_builder.tools.binding import bind
 from portfolio_builder.tools.result import json_result
 
