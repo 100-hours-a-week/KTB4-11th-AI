@@ -171,13 +171,46 @@ services:
   market-collector:
     <<: *app
     profiles: ["jobs"]
-    command: ["market-collector"]
+    # 애플리케이션은 단발 작업이므로 운영 시간 동안 같은 컨테이너에서 반복 실행합니다.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        stop() {
+          if [ -n "$${child:-}" ]; then
+            kill -TERM "$$child" 2>/dev/null || true
+            wait "$$child" 2>/dev/null || true
+          fi
+          exit 0
+        }
+
+        trap stop TERM INT
+
+        while true; do
+          market-collector &
+          child=$$!
+          wait "$$child"
+          status=$$?
+          child=
+
+          if [ "$$status" -ne 0 ]; then
+            exit "$$status"
+          fi
+
+          sleep "$${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}" &
+          child=$$!
+          wait "$$child"
+          child=
+        done
     mem_limit: 768m
+    restart: on-failure
+    stop_grace_period: 2m
     environment:
       MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
       MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
       MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
       MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
+      MARKET_COLLECTOR_POLL_INTERVAL_SECONDS: ${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}
     depends_on:
       questdb:
         condition: service_healthy
