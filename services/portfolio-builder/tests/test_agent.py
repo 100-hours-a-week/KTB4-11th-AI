@@ -6,7 +6,7 @@ import sqlalchemy as sa
 from langchain.tools import tool
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
-from portfolio_builder.agent.nudge import NUDGE
+from portfolio_builder.agent.hooks.nudge import NUDGE
 from portfolio_builder.agent.run import run_agent
 from portfolio_builder.tools.submit import submit_tool
 

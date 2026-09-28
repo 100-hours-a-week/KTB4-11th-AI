@@ -9,10 +9,10 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
-from portfolio_builder.agent.nudge import Nudge
-from portfolio_builder.agent.run_log import RunLog
+from portfolio_builder.agent.hooks.nudge import Nudge
+from portfolio_builder.agent.hooks.run_log import RunLog
+from portfolio_builder.agent.hooks.stop_on_save import StopOnSave
 from portfolio_builder.agent.state import PortfolioState
-from portfolio_builder.agent.stop_on_save import StopOnSave
 from portfolio_builder.errors import ToolError
 
 

@@ -69,8 +69,8 @@ services/portfolio-builder/
     database.py           sa.Table mirrors of the tables above, like_contains
     briefing/             prompt.py (SYSTEM_PROMPT), previous.py, news.py, text.py (render),
                           load.py (Briefing, load_briefing)
-    agent/                run.py (run_agent → RunResult), state.py, stop_on_save.py, nudge.py,
-                          run_log.py, usage.py
+    agent/                run.py (run_agent → RunResult), state.py; hooks/ (middleware):
+                          stop_on_save.py, nudge.py, run_log.py, usage.py
     portfolio.py          validate, normalize_weights, save (one transaction, SaveError)
     company.py            resolve_company: corp_code or alias → Company
     evidence/             pure TA-Lib + numpy: bars.py, collector.py, price.py, risk.py,

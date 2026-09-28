@@ -5,7 +5,7 @@ from ktb_core.logging import BoundLogger
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 
-from portfolio_builder.agent.usage import add_usage, empty_usage, message_usage
+from portfolio_builder.agent.hooks.usage import add_usage, empty_usage, message_usage
 from portfolio_builder.stopwatch import Stopwatch
 
 
