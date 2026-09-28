@@ -102,10 +102,12 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer news-graph-builder portfolio-builder market-collector; do
+          for pkg in news-preprocessor news-clusterer news-graph-builder portfolio-builder market-collector market-analyzer-mcp portfolio-rebalancer-http; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done
+          uv export --all-packages --no-dev --group migrations --no-emit-workspace \
+            --format requirements-txt -o docker/requirements/app.txt > /dev/null
           git diff --exit-code -- docker/requirements/
 
   build-images:
@@ -119,6 +121,8 @@ jobs:
           - news-graph-builder
           - portfolio-builder
           - market-collector
+          - market-analyzer-mcp
+          - portfolio-rebalancer-http
 
     steps:
       - uses: actions/checkout@v7
@@ -134,6 +138,25 @@ jobs:
           push: false
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  build-app-image:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build application image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/app.Dockerfile
+          platforms: linux/amd64
+          push: false
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
 
   python-314-compatibility:
     runs-on: ubuntu-latest
