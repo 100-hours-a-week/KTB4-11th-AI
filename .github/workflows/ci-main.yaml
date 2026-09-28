@@ -114,8 +114,6 @@ jobs:
           file: docker/app.Dockerfile
           platforms: linux/amd64
           push: true
-          tags: |
-            ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.sha }}
-            ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:latest
+          tags: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.sha }}
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
