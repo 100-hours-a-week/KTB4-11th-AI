@@ -14,7 +14,6 @@ class Company(NamedTuple):
 
 
 def resolve_company(engine: sa.Engine, name: str) -> Company:
-    """A company by its corp_code, else by a normalised alias; UnknownCompany lists candidates."""
     with engine.connect() as conn:
         company = conn.execute(
             sa.text(

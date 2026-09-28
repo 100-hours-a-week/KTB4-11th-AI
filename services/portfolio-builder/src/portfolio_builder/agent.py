@@ -77,8 +77,6 @@ def _tool_messages(result: Any) -> list[ToolMessage]:
 
 
 class RunLog(AgentMiddleware):
-    """Logs every model and tool call, and keeps the turn and usage totals for run_end."""
-
     def __init__(self, log: BoundLogger) -> None:
         super().__init__()
         self.log = log
@@ -168,7 +166,6 @@ class RunLog(AgentMiddleware):
 
 
 def _recoverable(error: Exception, request: Any) -> str | None:
-    # Only failures the model can fix go back to it; anything else ends the run as an error.
     return str(error) if isinstance(error, ToolError) else None
 
 

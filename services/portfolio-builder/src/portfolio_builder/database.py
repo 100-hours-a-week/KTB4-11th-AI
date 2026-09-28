@@ -1,8 +1,6 @@
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-# Mirrors infrastructure/postgres/migrations for the tables this service writes; the migrations
-# own the schema. Reads use plain SQL.
 metadata = sa.MetaData()
 
 companies = sa.Table(
@@ -68,6 +66,5 @@ portfolio_exits = sa.Table(
 
 
 def like_contains(text: str) -> str:
-    """A LIKE/ILIKE pattern matching `text` anywhere, with its wildcards escaped."""
     escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{escaped}%"

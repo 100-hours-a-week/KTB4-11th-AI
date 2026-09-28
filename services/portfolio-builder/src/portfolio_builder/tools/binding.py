@@ -4,9 +4,6 @@ from typing import Any
 
 
 def bind[T](func: Callable[..., T], /, **dependencies: Any) -> Callable[..., T]:
-    """`func` with its dependencies bound as keywords.
-
-    ToolNode reads the tool function's type hints to find injected arguments, and a bare
-    `partial` has none, so the wrapped function's metadata is copied onto it.
-    """
+    # ToolNode reads the tool function's type hints to find injected arguments; a bare partial
+    # has none, so the wrapped function's metadata is copied onto it.
     return update_wrapper(partial(func, **dependencies), func)

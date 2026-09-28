@@ -38,7 +38,6 @@ def test_get_news_cluster_rejects_an_unknown_id(engine):
 
 
 def test_search_matches_a_word_with_a_particle_attached(engine):
-    # Cluster 2 contains only "SK하이닉스가"; a non-prefix query would miss it.
     result = json.loads(_tools(engine)["search_news_cluster"].invoke({"query": "SK하이닉스"}))
 
     assert [r["cluster_id"] for r in result] == [2]

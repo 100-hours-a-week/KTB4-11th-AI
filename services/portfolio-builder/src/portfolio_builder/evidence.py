@@ -14,7 +14,7 @@ MONTH = 21
 
 
 class Bars(NamedTuple):
-    """Oldest first, one entry per bar."""
+    """Oldest first."""
 
     high: Array
     low: Array
@@ -130,7 +130,6 @@ def compute_evidence(
     if c.has("momentum_12m_skip1m", YEAR + 1):
         c.put("momentum_12m_skip1m", momentum_12m_skip1m(close))
 
-    # A 20-bar volatility needs 21 closes, then it is ranked against the previous 252 values.
     if c.has("volatility_percentile_1y", 21 + YEAR):
         c.put("volatility_percentile_1y", _newest(talib.PERCENTRANK(volatility, timeperiod=YEAR)))
 

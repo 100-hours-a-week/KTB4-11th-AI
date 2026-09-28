@@ -7,8 +7,6 @@ from portfolio_builder.tools.graph.database import graph_transaction
 from portfolio_builder.tools.graph.entities import find_seed_entities
 from portfolio_builder.tools.result import json_result
 
-# A hub entity can reach thousands of nodes inside the time limit; one oversized tool result
-# would overflow the model's context, so results are capped and flagged.
 NODE_LIMIT = 100
 EDGE_LIMIT = 200
 

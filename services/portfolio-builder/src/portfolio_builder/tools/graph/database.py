@@ -10,7 +10,6 @@ QUERY_CANCELED = "57014"
 
 @contextmanager
 def graph_transaction(engine: sa.Engine) -> Iterator[sa.Connection]:
-    # ponytail: fixed 10 s cap, not a setting; a hub entity at high depth is the only slow case.
     try:
         with engine.begin() as conn:
             conn.execute(sa.text("SET LOCAL statement_timeout = '10s'"))

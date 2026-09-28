@@ -75,8 +75,7 @@ def submit_tool(
     engine: sa.Engine, previous: frozenset[str], model: str, log: BoundLogger
 ) -> BaseTool:
     return StructuredTool.from_function(
-        # ToolNode runs one message's tool calls on parallel threads; the lock and the saved id,
-        # shared by every call of this run's tool, keep a run to one portfolio row.
+        # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.
         bind(
             submit_portfolio,
             engine=engine,

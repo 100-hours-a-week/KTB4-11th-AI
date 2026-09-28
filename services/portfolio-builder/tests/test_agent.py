@@ -94,7 +94,7 @@ def test_a_model_that_never_submits_is_nudged_and_ends_at_the_turn_limit(engine)
     assert result.portfolio_id is None
     assert _count(engine) == 0
     requests = [f for e, _, f in log.events if e == "llm_request"]
-    assert requests[1]["message_count"] == 3  # briefing, reply, nudge
+    assert requests[1]["message_count"] == 3
 
 
 def test_a_submission_on_the_last_allowed_turn_is_saved(engine):
@@ -126,7 +126,7 @@ def test_a_truncated_tool_call_is_answered_before_the_nudge(engine):
 
     assert result.outcome == "saved"
     requests = [f for e, _, f in log.events if e == "llm_request"]
-    assert requests[1]["message_count"] == 4  # briefing, truncated reply, its error answer, nudge
+    assert requests[1]["message_count"] == 4
 
 
 def test_two_submissions_in_one_message_write_one_portfolio(engine):

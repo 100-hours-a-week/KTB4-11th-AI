@@ -7,7 +7,6 @@ from portfolio_builder.tools.graph.database import graph_transaction
 from portfolio_builder.tools.graph.entities import find_seed_entities
 from portfolio_builder.tools.result import json_result
 
-# Paths between two hub entities grow combinatorially; only the shortest ones are returned.
 PATH_LIMIT = 20
 
 

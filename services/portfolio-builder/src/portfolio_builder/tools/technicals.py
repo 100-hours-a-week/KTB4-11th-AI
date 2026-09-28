@@ -56,7 +56,6 @@ def analyze_technicals(
 
 def technicals_tool(engine: sa.Engine, market: Any) -> BaseTool:
     return StructuredTool.from_function(
-        # The KOSPI 200 universe is read once per run, on the first daily call.
         bind(
             analyze_technicals,
             engine=engine,

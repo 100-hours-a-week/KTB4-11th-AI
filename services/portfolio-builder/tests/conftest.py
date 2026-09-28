@@ -52,7 +52,6 @@ def _truncate(engine: sa.Engine) -> None:
 
 @pytest.fixture
 def engine(pg_engine):
-    # The code under test commits, so empty the tables instead of rolling back.
     _truncate(pg_engine)
     with pg_engine.begin() as conn:
         for statement in SEED:

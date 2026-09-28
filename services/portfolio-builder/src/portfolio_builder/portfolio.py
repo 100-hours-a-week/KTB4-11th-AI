@@ -114,7 +114,6 @@ def save_portfolio(engine: sa.Engine, submission: Submission, model: str) -> int
                     sa.insert(portfolio_exits),
                     [{"portfolio_id": portfolio_id, **e.model_dump()} for e in submission.exits],
                 )
-            # An array column cannot carry a foreign key, so citations are checked here instead.
             found = set(
                 conn.execute(
                     sa.text("SELECT id FROM clusters WHERE id = ANY(CAST(:ids AS bigint[]))"),
