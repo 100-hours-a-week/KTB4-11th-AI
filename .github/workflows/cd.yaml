@@ -24,9 +24,11 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     # SSH와 SCP 명령을 실행할 GitHub 호스팅 Linux runner입니다.
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # Repository Variable과 CI가 방금 push한 커밋 SHA로 ECR 이미지 주소를 만듭니다.
       APP_IMAGE: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.event.workflow_run.head_sha }}
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
       DEPLOY_HOST: ${{ secrets.EC2_HOST }}
       DEPLOY_USER: ${{ secrets.EC2_USER }}
 
@@ -35,7 +37,23 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      # 대기 중 main이 갱신됐으면 과거 이미지를 뒤늦게 배포하지 않습니다.
+      - name: Check deployment freshness
+        id: freshness
+        run: |
+          set -euo pipefail
+          current_main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          test -n "$current_main_sha" || { echo "Unable to resolve refs/heads/main" >&2; exit 1; }
+
+          if [[ "$DEPLOY_SHA" == "$current_main_sha" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale deployment: target=$DEPLOY_SHA current=$current_main_sha"
+          fi
+
       - name: Configure SSH
+        if: steps.freshness.outputs.deploy == 'true'
         env:
           SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.EC2_SSH_KNOWN_HOSTS }}
@@ -48,6 +66,7 @@ jobs:
 
       # Compose 파일과 배포할 이미지 SHA를 EC2에 전송합니다.
       - name: Upload deployment files
+        if: steps.freshness.outputs.deploy == 'true'
         run: |
           set -euo pipefail
 
@@ -63,16 +82,64 @@ jobs:
           # 임시 이름으로 전송해 불완전한 파일을 배포 과정에서 읽지 않게 합니다.
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"
           scp "$image_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.image.env.next"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            'chmod 600 ~/ai/.image.env.next && mv ~/ai/compose.prod.yaml.next ~/ai/compose.prod.yaml'
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 ~/ai/.image.env.next'
 
       # EC2에서 이미지 갱신, DB 마이그레이션, 상시 서비스 교체를 수행합니다.
       - name: Deploy
+        if: steps.freshness.outputs.deploy == 'true'
         # CI가 검증한 커밋 SHA 이미지로 EC2에서 배포를 수행합니다.
         run: |
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
           cd ~/ai
           test -f .env || { echo "~/ai/.env must exist" >&2; exit 1; }
+
+          rollback() {
+            local status=$?
+            local rollback_status
+            trap - ERR
+            set +e
+
+            echo "::error::Deployment failed; attempting application rollback"
+            if [[ "$deployment_started" != "true" ]]; then
+              echo "::notice::Deployment stopped before the current release was changed"
+            elif [[ -f compose.prod.yaml.rollback && -f .image.env.rollback ]]; then
+              cp -p compose.prod.yaml.rollback compose.prod.yaml
+              cp -p .image.env.rollback .image.env
+
+              docker compose --env-file .env --env-file .image.env \
+                -f compose.prod.yaml up -d --wait \
+                market-analyzer-mcp portfolio-rebalancer-http
+              rollback_status=$?
+
+              if [[ "$rollback_status" -eq 0 ]]; then
+                echo "::notice::Application rollback completed"
+              else
+                echo "::error::Application rollback failed with status $rollback_status"
+              fi
+            else
+              echo "::error::No previous successful deployment is available for rollback"
+            fi
+
+            rm -f compose.prod.yaml.next .image.env.next
+            exit "$status"
+          }
+
+          deployment_started=false
+          set -Eeuo pipefail
+          trap rollback ERR
+
+          # 운영 파일을 건드리기 전에 새 Compose와 환경 변수 조합부터 검증합니다.
+          docker compose --env-file .env --env-file .image.env.next \
+            -f compose.prod.yaml.next config --quiet
+
+          # 직전 성공 배포 파일은 새 배포 실패 시 복구할 수 있도록 보관합니다.
+          if [[ -f compose.prod.yaml && -f .image.env ]]; then
+            cp -p compose.prod.yaml compose.prod.yaml.rollback
+            cp -p .image.env .image.env.rollback
+          fi
+
+          deployment_started=true
+          mv compose.prod.yaml.next compose.prod.yaml
 
           compose() {
             docker compose --env-file .env --env-file .image.env.next -f compose.prod.yaml "$@"
@@ -88,4 +155,5 @@ jobs:
 
           # 모든 단계가 성공한 SHA만 이후 systemd 배치 작업에서도 사용합니다.
           mv .image.env.next .image.env
+          trap - ERR
           REMOTE
