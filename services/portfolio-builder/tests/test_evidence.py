@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from portfolio_builder.evidence import Bars, compute_evidence
-from portfolio_builder.evidence.cross_section import cross_section_percentile
+from portfolio_builder.evidence.families.cross_section import cross_section_percentile
 
 DAILY_KEYS = {
     "return_5d", "return_20d", "return_60d", "ma_gap_20_60", "distance_to_prev_20d_high",
