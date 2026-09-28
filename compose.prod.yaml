@@ -1,0 +1,203 @@
+name: ktb4-ai
+
+x-app: &app
+  image: ${APP_IMAGE:?APP_IMAGE must be set}
+  init: true
+  restart: "no"
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+x-postgres-environment: &postgres-environment
+  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/news
+  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18-trixie
+    environment:
+      POSTGRES_USER: ktb
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: news
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=50"]
+    shm_size: 128m
+    mem_limit: 900m
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ktb -d news"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  questdb:
+    image: questdb/questdb:10.0.1
+    mem_limit: 1200m
+    restart: unless-stopped
+    volumes:
+      - questdb-data:/var/lib/questdb
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9003/status || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  postgres-migrate:
+    <<: *app
+    profiles: ["tools"]
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  questdb-migrate:
+    <<: *app
+    profiles: ["tools"]
+    command: ["python", "infrastructure/questdb/migrate.py"]
+    environment:
+      KTB_QUESTDB_CONF: ws::addr=questdb:9000;
+    depends_on:
+      questdb:
+        condition: service_healthy
+
+  market-analyzer-mcp:
+    <<: *app
+    command: ["market-analyzer-mcp"]
+    mem_limit: 384m
+    restart: unless-stopped
+    environment:
+      MARKET_ANALYZER_MCP_LOG_LEVEL: ${MARKET_ANALYZER_MCP_LOG_LEVEL:-INFO}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  portfolio-rebalancer-http:
+    <<: *app
+    command: ["portfolio-rebalancer-http"]
+    mem_limit: 384m
+    restart: unless-stopped
+    environment:
+      PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL: ${PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL:-INFO}
+    ports:
+      - "${PUBLIC_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  news-preprocessor:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["news-preprocessor"]
+    mem_limit: 1200m
+    environment:
+      <<: *postgres-environment
+      NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT: ${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
+      NEWS_PREPROCESSOR_LOG_LEVEL: ${NEWS_PREPROCESSOR_LOG_LEVEL:-INFO}
+      KTB_EMBEDDING_BASE_URI: ${KTB_EMBEDDING_BASE_URI:-}
+      KTB_EMBEDDING_MODEL: ${KTB_EMBEDDING_MODEL:-mlx-community/Qwen3-Embedding-4B-4bit-DWQ}
+      KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
+      KTB_EMBEDDING_MAX_TOKENS: ${KTB_EMBEDDING_MAX_TOKENS:-16384}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  news-clusterer:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["news-clusterer"]
+    mem_limit: 1400m
+    environment:
+      <<: *postgres-environment
+      NEWS_CLUSTERER_EPS: ${NEWS_CLUSTERER_EPS:-0.2}
+      NEWS_CLUSTERER_MIN_SAMPLES: ${NEWS_CLUSTERER_MIN_SAMPLES:-3}
+      NEWS_CLUSTERER_LOG_LEVEL: ${NEWS_CLUSTERER_LOG_LEVEL:-INFO}
+      KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  news-graph-builder:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["news-graph-builder"]
+    mem_limit: 1200m
+    environment:
+      <<: *postgres-environment
+      NEWS_GRAPH_BUILDER_LLM_BASE_URI: ${NEWS_GRAPH_BUILDER_LLM_BASE_URI:-}
+      NEWS_GRAPH_BUILDER_LLM_MODEL: ${NEWS_GRAPH_BUILDER_LLM_MODEL:-}
+      NEWS_GRAPH_BUILDER_LLM_API_KEY: ${NEWS_GRAPH_BUILDER_LLM_API_KEY:-}
+      NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY: ${NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY:-}
+      NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY: ${NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY:-}
+      NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI: ${NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI:-https://api.kiwoom.com}
+      NEWS_GRAPH_BUILDER_DART_API_KEY: ${NEWS_GRAPH_BUILDER_DART_API_KEY:-}
+      NEWS_GRAPH_BUILDER_LOG_LEVEL: ${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  market-collector:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["market-collector"]
+    mem_limit: 768m
+    environment:
+      MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
+      MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
+      MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
+      MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
+    depends_on:
+      questdb:
+        condition: service_healthy
+
+  portfolio-builder:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["portfolio-builder"]
+    mem_limit: 768m
+    environment:
+      <<: *postgres-environment
+      PORTFOLIO_BUILDER_QUESTDB_DSN: postgresql://admin:quest@questdb:8812/qdb
+      PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL: http://news-clusterer:8000
+      PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  questdb-data:
