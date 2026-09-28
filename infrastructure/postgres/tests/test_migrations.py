@@ -100,6 +100,7 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
                 "theme_companies",
             },
         ),
+        ("portfolio_builder.database", {"portfolios", "portfolio_holdings", "portfolio_exits"}),
     ],
 )
 def test_service_tables_match_the_migrated_schema(

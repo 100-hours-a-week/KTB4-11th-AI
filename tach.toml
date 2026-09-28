@@ -100,7 +100,7 @@ from = ["news_graph_builder.graph"]
 
 [[modules]]
 path = "portfolio_builder"
-depends_on = ["ktb_core", "ktb_market_analyzer"]
+depends_on = ["ktb_core"]
 
 [[modules]]
 path = "market_collector"

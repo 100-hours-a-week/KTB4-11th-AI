@@ -1,12 +1,22 @@
 [project]
 name = "portfolio-builder"
 version = "0.1.0"
-description = "Queue-driven portfolio construction"
+description = "Cron-triggered model portfolio agent"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
-    "ktb-market-analyzer",
+    "langchain>=1.4.2",
+    "langchain-openrouter>=0.2.9",
+    "langgraph>=1.2.12",
+    "langchain-core>=1.6.5",
+    "numpy>=2.3",
+    "pandas>=2.2",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.9",
     "pydantic-settings>=2.7",
+    "questdb>=5.0",
+    "sqlalchemy>=2.0.54",
+    "ta-lib>=0.8.1",
 ]
 
 [project.scripts]
@@ -14,7 +24,10 @@ portfolio-builder = "portfolio_builder.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }
-ktb-market-analyzer = { workspace = true }
+
+[tool.deptry.per_rule_ignores]
+# questdb's QueryResult.to_pandas() needs pandas installed; nothing imports it by name.
+DEP002 = ["pandas"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]
