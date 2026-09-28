@@ -9,7 +9,7 @@ from portfolio_builder.briefing import Briefing
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_BUILDER_QUESTDB_CONF": "ws::addr=localhost:9000;",
-    "PORTFOLIO_BUILDER_OPENROUTER_API_KEY": "test-openrouter-key-not-redacted",
+    "PORTFOLIO_BUILDER_OPENROUTER_API_KEY": "test-openrouter-key",
     "PORTFOLIO_BUILDER_LLM_MODEL": "openai/gpt-5.5",
 }
 BRIEFING = Briefing(None, frozenset(), 0, 0, [1], 1, 1, "brief")
@@ -58,7 +58,7 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
         "submit_portfolio",
     }
     assert captured["max_turns"] == 150
-    assert "test-openrouter-key-not-redacted" not in out
+    assert "test-openrouter-key" not in out
 
 
 def test_max_turns_exits_one(env, monkeypatch, capsys):

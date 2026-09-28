@@ -161,9 +161,8 @@ fields match the TS service:
 `usage` comes from `usage_metadata`: input, output, cache_read, reasoning, total. `cost` is logged
 only if `ChatOpenRouter` exposes OpenRouter's cost in `response_metadata`; it is never estimated.
 
-`ktb_core.logging` gains a redaction step for OpenRouter keys (`sk-or-…`), `*_token` JSON fields
-and JWT-shaped strings, so an LLM error that echoes a header cannot leak it. The key is a
-`SecretStr` in settings.
+The key is a `SecretStr` in settings and is never passed to a log call. The logger does not scan
+for secrets; that belongs to GitHub secret scanning and Git hooks.
 
 ## 5. Tools (ported)
 
@@ -298,7 +297,7 @@ The stub's `QUESTDB_DSN` and `NEWS_CLUSTERER_URL` are removed.
 ## 9. Testing
 
 - **Pure:** `validate` (every rule, including a first run with no previous portfolio),
-  `normalize_weights`, settings (required, invalid, defaults), log redaction, `normalize` against
+  `normalize_weights`, settings (required, invalid, defaults), `normalize` against
   the shared cases.
 - **Evidence:** synthetic arrays with known answers for every formula, including null-with-reason
   when history is short, the `[t−1]` exclusion in the breakout and 52-week evidence, and a

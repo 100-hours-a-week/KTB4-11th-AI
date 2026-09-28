@@ -74,38 +74,3 @@ def test_serialises_values_json_cannot(capsys):
     payload = json.loads(capsys.readouterr().out.strip())
 
     assert payload["at"] == str(moment)
-
-
-def test_redacts_secrets_anywhere_in_the_line(capsys):
-    setup_logging("INFO", service="svc")
-    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl"
-    logging.getLogger("svc").error(
-        "failed",
-        extra={
-            "fields": {
-                "error": 'Bearer sk-or-v1-0123abcDEF rejected; body {"access_token": "abc"}',
-                "token": jwt,
-            }
-        },
-    )
-
-    line = capsys.readouterr().out
-    payload = json.loads(line)
-
-    assert "sk-or-v1-0123abcDEF" not in line
-    assert 'abc\\"' not in line
-    assert jwt not in line
-    assert "[redacted-key]" in payload["error"]
-    assert '\\"access_token\\":\\"[redacted]\\"' in line
-    assert payload["token"] == "[redacted-jwt]"
-
-
-def test_redaction_never_breaks_the_json_line(capsys):
-    setup_logging("INFO", service="svc")
-    logging.getLogger("svc").error(
-        "failed", extra={"fields": {"error": 'body truncated: {"access_token":', "next": "keep"}}
-    )
-
-    payload = json.loads(capsys.readouterr().out)
-
-    assert payload["next"] == "keep"
