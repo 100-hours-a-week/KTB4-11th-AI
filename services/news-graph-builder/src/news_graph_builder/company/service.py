@@ -1,8 +1,8 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 
-from news_graph_builder.common import normalize
 from news_graph_builder.company.dto import DartCompany
 from news_graph_builder.company.repository import (
     find_plain_entities_matching_aliases,
