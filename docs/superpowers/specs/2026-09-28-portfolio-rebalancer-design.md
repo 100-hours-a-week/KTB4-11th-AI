@@ -205,50 +205,60 @@ flowchart TD
 The affordability loop applies to the buy side only. A sell is always possible, so a target
 weight that is unreachable by buying does not block the sells that fund it.
 
-## 5. Orders are a ladder, not a market order
+## 5. Orders are a narrowing pair, not a market order
 
-An order is never sent at market first. It starts as a limit order away from the previous
-close and steps toward the market until it fills.
-
-| step | buy | sell |
-|---|---|---|
-| 1 | close × 0.95 | close × 1.05 |
-| 2 | close × 0.97 | close × 1.03 |
-| 3 | close × 0.99 | close × 1.01 |
-| 4 | market | market |
-
-One step per poll, so one per hour. portfolio-builder judges weekly before the open, so the
-first order goes in at the open and the ladder finishes well inside the same session:
+An order is never sent at market. Each one goes out as **two reservations around a reference
+price**, both for the full quantity:
 
 ```
-09:00  ±5%
-10:00  ±3%
-11:00  ±1%
-12:00  market      — 3.5 hours before the 15:30 close
+reference 78,000, step 5%    →  74,100  and  81,900
 ```
 
-### Which step an order is on is read from its price
+Both carry 100 shares if 100 shares are wanted. Whichever fills, fills; **the Backend cancels
+the other one.** Placing the low side alone risks never filling at all, and the high side is
+what makes the fill happen — the pair is there so that neither outcome is left to chance.
 
-Nothing needs to remember the step. The ratios are fixed and the previous close is the same
-all day, so the step falls out of the price already on the order:
+### The band narrows until it fills
+
+| step | band |
+|---|---|
+| 1 | reference ± 5% |
+| 2 | reference ± 3% |
+| 3 | reference ± 1% |
+
+A step that has not filled is replaced by the next one, which sits closer to the reference on
+both sides. The band only ever narrows, so the price has less and less room to sit outside it.
+That is also why a limit-up or limit-down day is not a problem: the pair converges on the
+reference long before it reaches either bound.
+
+**The reference is fixed when the first pair is placed** — the previous session's close — and
+every later step is measured from that same number, not from whatever the close has become
+since. A ladder that spans several days therefore keeps one reference throughout.
+
+Steps advance on a **daily** cadence. The poll runs hourly, so most polls see a pair that is
+still outstanding and do nothing.
+
+### The step is read back from the pair
+
+Nothing has to be stored, and the Backend does not have to carry the reference on the order.
+Two prices determine both unknowns:
 
 ```
-close 78,000 →  buy 74,100 / sell 81,900   step 1
-                buy 75,660 / sell 80,340   step 2
-                buy 77,220 / sell 78,780   step 3
+reference = (low + high) / 2
+ratio     = (high − low) / (high + low)
 ```
 
-This works because the whole ladder lives inside one session. It would not survive a ladder
-that crossed midnight, since the reference close would move underneath it.
+Measured across six reference prices and all three steps, with the Backend's tick rounding
+applied first: the reference comes back exactly in all eighteen, and the ratio within 0.05
+percentage points — 2.949% for a 3% step at the worst. The steps are two points apart, so
+nothing is ambiguous.
 
-### Stepping down amends the order
+Two pending orders for the same company and side are one pair.
 
-Moving from one step to the next is a **single amend** carrying the order id and the new
-price — not a cancel followed by a new order. There is no window between the two in which the
-original could fill and be bought twice.
+### Sells go first
 
-A partial fill needs no special handling: the amend carries whatever quantity is still
-outstanding, which is what `pending_orders` reports.
+A rebalance sells before it buys. The proceeds of the sells are part of the cash the buys
+spend, so a buy placed before its funding sell has filled is a buy that may not be payable.
 
 ## 6. The interface
 
@@ -282,6 +292,9 @@ Response shape, per company:
 
 `stock_code` travels with `company_id` because `company_id` is DART's `corp_code`, which no
 exchange accepts as an order identifier.
+
+Each order becomes two reservations at the Backend. The prices are sent unrounded; **the
+Backend rounds them to a valid KRX tick.**
 
 ### Orders go back to the Backend with their reason
 
@@ -318,23 +331,32 @@ Doing both is cheap and I would do both.
 
 ## 8. What is still open
 
-1. **Tick size.** `close × 0.95` is rarely a price the exchange accepts — KRX quotes in bands
-   whose tick widens as the price rises. Does the Backend round a limit price to the nearest
-   valid tick, or does this service have to? If it is ours, the band table has to live
-   somewhere and be kept current.
-2. **A market order that still does not fill.** Step 4 is meant to guarantee a fill, but a
-   limit-up or limit-down day, or a halted stock, can defeat it. Is that left alone until the
-   next weekly judgement, or retried?
-3. **Does the ladder apply to sells the same way?** The table above assumes it does — a sell
-   starts 5% above the close and walks down. Worth confirming, because a sell that has to
-   fund a buy is on a tighter leash than a buy.
-4. **Idempotency.** The poll returns the same account every hour, so something has to say
-   "this account has already been ordered against for this portfolio". A table keyed on
-   `(portfolio_id, account_id)` does it, and it is also where a report of what was ordered
-   and why would live. That is migration `0006`.
-5. **Where the poll's result is kept.** In memory is simpler but loses everything on restart;
-   in PostgreSQL survives and gives the ladder a history to look back on.
-6. **The QuestDB and Backend edges in issue #43's diagram**, per §2.
+1. **The step cadence.** Daily is the working answer but not settled. It decides how long a
+   rebalance takes to complete: three days of narrowing before the band is at 1%.
+2. **What happens if the 1% band still does not fill.** The band narrows rather than ending in
+   a market order, so there is no final rung that guarantees a fill. Does the pair sit at 1%
+   until it fills, or does something else take over?
+3. **A ladder still running when the next weekly judgement lands.** portfolio-builder produces
+   a new portfolio every week. If a pair from last week's rebalance is still outstanding, is it
+   cancelled and replaced, or left to finish?
+
+Settled, and recorded above: the pair and its cancellation (§5), tick rounding at the Backend
+(§6), sells before buys (§5), the hourly poll and what has to be subtracted from it (§2), the
+reference held fixed and recovered from the pair rather than stored (§5), and `cash_weight`
+serving as both a reserve and a destination (§3).
+
+### Idempotency needs less than it first appeared
+
+The poll returns **only orders that are still pending**, so a filled order leaves
+`pending_orders` and shows up in `stocks[]` instead. The next poll computes the target against
+the new holdings, finds no gap, and places nothing. Seeing the same account every hour is
+therefore not, by itself, a source of duplicate orders.
+
+One window remains. Between placing a pair and the poll that first reports it, this service
+has no record that it acted. A restart in that window, or a Backend that lags a poll behind,
+would see the old holdings and place the pair again. Storing the poll result in PostgreSQL —
+which is where it is going anyway — closes it: write what was ordered at the moment it is
+ordered, not only what the poll reports back.
 
 ## 9. Code sketch
 
@@ -386,19 +408,28 @@ def spend_residual(
 `ladder.py` — pure, no I/O:
 
 ```python
-STEPS: tuple[float, ...] = (0.05, 0.03, 0.01)   # then market
+STEPS: tuple[float, ...] = (0.05, 0.03, 0.01)
 
 
-def limit_price(close: float, step: int, side: Literal["buy", "sell"]) -> float | None:
-    """The limit for a step, or None at the market step."""
+def pair(reference: float, step: int) -> tuple[float, float]:
+    """The two reservation prices for a step: (low, high), both full quantity."""
+    ratio = STEPS[step]
+    return reference * (1 - ratio), reference * (1 + ratio)
 
 
-def step_of(close: float, order_price: float, side: Literal["buy", "sell"]) -> int:
-    """Which step a pending order is on, read back from its price.
+def read_pair(low: float, high: float) -> tuple[float, int]:
+    """Recover the reference and the step from an outstanding pair.
 
-    Nothing stores the step: the ratios are fixed and the previous close holds still
-    for the session, so the price says which rung it is on.
+    Nothing stores either one. Two prices fix both:
+        reference = (low + high) / 2
+        ratio     = (high - low) / (high + low)
+    Verified against the Backend's tick rounding: the reference is exact and the
+    ratio lands within 0.05 points of its step, which are two points apart.
     """
+    reference = (low + high) / 2
+    ratio = (high - low) / (high + low)
+    step = min(range(len(STEPS)), key=lambda i: abs(STEPS[i] - ratio))
+    return reference, step
 ```
 
 `prices.py` — the QuestDB read, the only module that touches a database:
@@ -422,5 +453,9 @@ Tests worth having, because each pins a property the rules have to hold:
 - **phase two is reached** — it is not dead code; 32% of 20,000 random portfolios reach it
 - distributing the *residual* equally leaves it unspent when the per-company slice is under a
   share price, which is why equal division is used for weight and not for cash
-- `step_of(close, limit_price(close, n, side), side) == n` for every step and both sides
-- a ladder step amends the outstanding quantity, not the original quantity, after a partial fill
+- `read_pair(*pair(reference, n)) == (reference, n)` for every step, and still holds after the
+  Backend's tick rounding is applied to both prices
+- two steps never round into each other: the recovered ratio is always nearer its own step
+  than either neighbour
+- a pair is recognised from two pending orders on the same company and side, and a lone
+  pending order is not mistaken for one
