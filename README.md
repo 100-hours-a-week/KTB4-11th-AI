@@ -14,7 +14,7 @@
 QuestDB는 서비스 시작 전에 별도 작업으로 초기화합니다.
 
 ```bash
-KTB_QUESTDB_CONF='http::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
+KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 ```
 
 ```mermaid
@@ -177,7 +177,7 @@ erDiagram
 | 변수 | 필수 | 기본값 |
 |---|---|---|
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | |
-| `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | 예: `http::addr=localhost:9000;` |
+| `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | 예: `ws::addr=localhost:9000;` |
 | `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | 필수 | |
 | `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | OpenRouter 모델 ID |
 | `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` |

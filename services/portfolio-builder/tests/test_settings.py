@@ -4,7 +4,7 @@ from pydantic import ValidationError
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
-    "PORTFOLIO_BUILDER_QUESTDB_CONF": "http::addr=localhost:9000;",
+    "PORTFOLIO_BUILDER_QUESTDB_CONF": "ws::addr=localhost:9000;",
     "PORTFOLIO_BUILDER_OPENROUTER_API_KEY": "sk-or-v1-test",
     "PORTFOLIO_BUILDER_LLM_MODEL": "openai/gpt-5.5",
 }
@@ -21,7 +21,7 @@ def test_loads_required_values_and_defaults(monkeypatch):
     settings = Settings()
 
     assert settings.postgres_dsn == REQUIRED["PORTFOLIO_BUILDER_POSTGRES_DSN"]
-    assert settings.questdb_conf == "http::addr=localhost:9000;"
+    assert settings.questdb_conf == "ws::addr=localhost:9000;"
     assert settings.openrouter_api_key.get_secret_value() == "sk-or-v1-test"
     assert settings.llm_model == "openai/gpt-5.5"
     assert settings.thinking_level == "medium"

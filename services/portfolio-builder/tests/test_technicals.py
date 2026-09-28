@@ -142,7 +142,7 @@ def test_bars_reads_the_timeframe_view_newest_first_and_reverses(
     db = FakeDB([rows])
     monkeypatch.setattr(market_module.questdb, "connect", lambda conf: db)
 
-    bars, as_of = QuestDBMarket("http::addr=x:9000;").bars("005930", timeframe)
+    bars, as_of = QuestDBMarket("ws::addr=x:9000;").bars("005930", timeframe)
 
     sql, binds = db.queries[0]
     assert f"FROM {view} " in sql

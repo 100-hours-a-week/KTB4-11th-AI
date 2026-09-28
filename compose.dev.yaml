@@ -100,7 +100,7 @@ services:
       dockerfile: docker/portfolio-builder.Dockerfile
     environment:
       - PORTFOLIO_BUILDER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/ktb
-      - PORTFOLIO_BUILDER_QUESTDB_CONF=http::addr=questdb:9000;
+      - PORTFOLIO_BUILDER_QUESTDB_CONF=ws::addr=questdb:9000;
       - PORTFOLIO_BUILDER_OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - PORTFOLIO_BUILDER_LLM_MODEL
       - PORTFOLIO_BUILDER_THINKING_LEVEL=${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}

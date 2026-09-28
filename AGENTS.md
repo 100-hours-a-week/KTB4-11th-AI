@@ -15,7 +15,7 @@ uv run pytest services/news-clusterer       # one member
 uv run pytest packages/market-analyzer/tests/test_indicators.py::test_rsi_matches_the_input_length
 uv run news-clusterer                       # run a service by its console script
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb uv run alembic upgrade head
-KTB_QUESTDB_CONF='http::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
+KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 
 docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f flag is required)
 # once, on a volume created before the rename:
@@ -76,7 +76,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | news-graph-builder `kiwoom` (seconds between calls) | `0.2` |
 | `NEWS_GRAPH_BUILDER_DART_API_KEY` | news-graph-builder `company`; compose fills it from `OPENDART_API_KEY` in `.env` | required |
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder | required |
-| `PORTFOLIO_BUILDER_QUESTDB_CONF` | portfolio-builder (official client config, e.g. `http::addr=localhost:9000;`) | required |
+| `PORTFOLIO_BUILDER_QUESTDB_CONF` | portfolio-builder (official client config, e.g. `ws::addr=localhost:9000;`) | required |
 | `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | portfolio-builder | required |
 | `PORTFOLIO_BUILDER_LLM_MODEL` | portfolio-builder (OpenRouter model id) | required |
 | `PORTFOLIO_BUILDER_THINKING_LEVEL` | portfolio-builder (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`) | `medium` |

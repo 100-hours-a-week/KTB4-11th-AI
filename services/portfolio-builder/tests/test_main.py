@@ -8,7 +8,7 @@ from portfolio_builder.briefing import Briefing
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
-    "PORTFOLIO_BUILDER_QUESTDB_CONF": "http::addr=localhost:9000;",
+    "PORTFOLIO_BUILDER_QUESTDB_CONF": "ws::addr=localhost:9000;",
     "PORTFOLIO_BUILDER_OPENROUTER_API_KEY": "test-openrouter-key-not-redacted",
     "PORTFOLIO_BUILDER_LLM_MODEL": "openai/gpt-5.5",
 }

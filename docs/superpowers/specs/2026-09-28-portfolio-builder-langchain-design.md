@@ -265,7 +265,7 @@ RSI, MACD/PPO, STOCH/WILLR, ADX, OBV/AD/ADOSC and candlestick patterns are exclu
 | Variable | Default |
 |---|---|
 | `POSTGRES_DSN` (`postgresql+psycopg://`) | required |
-| `QUESTDB_CONF` (e.g. `http::addr=questdb:9000;`) | required |
+| `QUESTDB_CONF` (e.g. `ws::addr=questdb:9000;`) | required |
 | `OPENROUTER_API_KEY` | required |
 | `LLM_MODEL` (OpenRouter model id) | required |
 | `THINKING_LEVEL` (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`) | `medium` |
