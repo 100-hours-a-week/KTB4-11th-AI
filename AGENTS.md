@@ -14,18 +14,21 @@ uv run pytest                               # all tests (packages/, services/, i
 uv run pytest services/news-clusterer       # one member
 uv run pytest packages/market-analyzer/tests/test_indicators.py::test_rsi_matches_the_input_length
 uv run news-clusterer                       # run a service by its console script
-KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news uv run alembic upgrade head
+KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb uv run alembic upgrade head
 KTB_QUESTDB_CONF='http::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 
 docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f flag is required)
+# once, on a volume created before the rename:
+docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
+
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
 
-# tests TRUNCATE tables: point them at a separate database, never at `news`
-docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test
-KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run alembic upgrade head
-KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest
+# tests TRUNCATE tables: point them at a separate database, never at `ktb`
+docker compose -f compose.dev.yaml exec postgres createdb -U ktb ktb_test
+KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run alembic upgrade head
+KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest
 ```
 
 pytest runs with `--import-mode=importlib`, so test files with the same name (e.g. `test_settings.py`) can exist in several members without `__init__.py`.
@@ -45,7 +48,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | Variable | Used by | Default |
 |---|---|---|
 | `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
-| `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `news_test`, never `news` | — |
+| `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `ktb_test`, never `ktb` | — |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
 | `KTB_EMBEDDING_MODEL` | news-preprocessor | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` |
 | `KTB_EMBEDDING_DIMENSIONS` | news-preprocessor, news-clusterer; must equal the `vector(2000)` column | `2000` |

@@ -2,7 +2,7 @@ import pytest
 from portfolio_builder.settings import Settings
 from pydantic import ValidationError
 
-PG = "postgresql://ktb:ktb@localhost:5432/news"
+PG = "postgresql://ktb:ktb@localhost:5432/ktb_test"
 QDB = "postgresql://admin:quest@localhost:8812/qdb"
 CLUSTERER = "http://localhost:8000"
 

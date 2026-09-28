@@ -4,7 +4,7 @@ from portfolio_builder.__main__ import main
 
 
 def test_main_runs_to_completion(monkeypatch, capsys):
-    monkeypatch.setenv("PORTFOLIO_BUILDER_POSTGRES_DSN", "postgresql://ktb:ktb@localhost:5432/news")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_POSTGRES_DSN", "postgresql://ktb:ktb@localhost:5432/ktb_test")
     monkeypatch.setenv(
         "PORTFOLIO_BUILDER_QUESTDB_DSN", "postgresql://admin:quest@localhost:8812/qdb"
     )

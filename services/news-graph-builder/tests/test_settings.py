@@ -2,7 +2,7 @@ import pytest
 from news_graph_builder.settings import Settings
 from pydantic import ValidationError
 
-DSN = "postgresql+psycopg://ktb:FAKE-PASSWORD@localhost:5432/news"
+DSN = "postgresql+psycopg://ktb:FAKE-PASSWORD@localhost:5432/ktb_test"
 
 
 def test_defaults(monkeypatch):
