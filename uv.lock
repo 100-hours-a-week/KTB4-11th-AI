@@ -1106,6 +1106,7 @@ version = "0.1.0"
 source = { editable = "services/portfolio-rebalancer-http" }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "ktb-core" },
     { name = "pydantic-settings" },
     { name = "questdb", extra = ["dataframe"] },
@@ -1115,6 +1116,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "questdb", extras = ["dataframe"], specifier = ">=5.0" },
