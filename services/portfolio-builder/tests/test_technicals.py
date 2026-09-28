@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from portfolio_builder import market as market_module
 from portfolio_builder.errors import NoMarketData, UnknownCompany
-from portfolio_builder.evidence.bars import Bars
+from portfolio_builder.evidence import Bars
 from portfolio_builder.market import QuestDBMarket
 from portfolio_builder.tools.technicals import technicals_tool
 

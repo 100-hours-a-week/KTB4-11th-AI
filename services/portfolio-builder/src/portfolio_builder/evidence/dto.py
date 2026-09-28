@@ -4,9 +4,7 @@ import numpy as np
 import numpy.typing as npt
 
 Array = npt.NDArray[np.float64]
-
-YEAR = 252
-MONTH = 21
+Value = float | bool
 
 
 class Bars(NamedTuple):
@@ -18,7 +16,6 @@ class Bars(NamedTuple):
     volume: Array
 
 
-def newest(series: Array) -> float | None:
-    if series.size == 0 or not np.isfinite(series[-1]):
-        return None
-    return float(series[-1])
+class Evidence(NamedTuple):
+    values: dict[str, Value]
+    unavailable: dict[str, str]

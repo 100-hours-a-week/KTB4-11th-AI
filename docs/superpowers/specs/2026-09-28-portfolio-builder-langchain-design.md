@@ -73,8 +73,9 @@ services/portfolio-builder/
                           stop_on_save.py, nudge.py, run_log.py, usage.py
     portfolio.py          validate, normalize_weights, save (one transaction, SaveError)
     company.py            resolve_company: corp_code or alias → Company
-    evidence/             pure TA-Lib + numpy: bars.py, collector.py, price.py, risk.py,
-                          activity.py, cross_section.py; compute.py (compute_evidence)
+    evidence/             pure TA-Lib + numpy: dto.py (Bars, Evidence), common.py (Collector),
+                          price.py, risk.py, activity.py, cross_section.py (evidence families),
+                          service.py (compute_evidence); __init__ exports the public API
     market.py             QuestDB reads: candles(symbol, timeframe), universe closes
     stopwatch.py          Stopwatch for latency and run time
     tools/

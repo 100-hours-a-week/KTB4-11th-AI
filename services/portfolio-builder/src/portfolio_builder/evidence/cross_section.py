@@ -2,8 +2,8 @@ from collections.abc import Mapping
 
 import numpy as np
 
-from portfolio_builder.evidence.bars import Array
-from portfolio_builder.evidence.collector import Collector
+from portfolio_builder.evidence.common import Collector
+from portfolio_builder.evidence.dto import Array
 from portfolio_builder.evidence.price import momentum_12m_skip1m, return_n
 
 

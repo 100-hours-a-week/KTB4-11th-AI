@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
-from portfolio_builder.evidence.bars import Bars
-from portfolio_builder.evidence.compute import compute_evidence
+from portfolio_builder.evidence import Bars, compute_evidence
 from portfolio_builder.evidence.cross_section import cross_section_percentile
 
 DAILY_KEYS = {

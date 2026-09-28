@@ -1,13 +1,15 @@
-from typing import NamedTuple
-
 import numpy as np
 
-Value = float | bool
+from portfolio_builder.evidence.dto import Array, Evidence, Value
+
+YEAR = 252
+MONTH = 21
 
 
-class Evidence(NamedTuple):
-    values: dict[str, Value]
-    unavailable: dict[str, str]
+def newest(series: Array) -> float | None:
+    if series.size == 0 or not np.isfinite(series[-1]):
+        return None
+    return float(series[-1])
 
 
 class Collector:

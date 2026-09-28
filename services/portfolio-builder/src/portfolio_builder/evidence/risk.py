@@ -1,7 +1,7 @@
 import talib
 
-from portfolio_builder.evidence.bars import YEAR, Bars, newest
-from portfolio_builder.evidence.collector import Collector
+from portfolio_builder.evidence.common import YEAR, Collector, newest
+from portfolio_builder.evidence.dto import Bars
 
 
 def add_risk_evidence(c: Collector, bars: Bars) -> None:

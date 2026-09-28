@@ -1,8 +1,8 @@
 import numpy as np
 import talib
 
-from portfolio_builder.evidence.bars import YEAR, Array, Bars, newest
-from portfolio_builder.evidence.collector import Collector
+from portfolio_builder.evidence.common import YEAR, Collector, newest
+from portfolio_builder.evidence.dto import Array, Bars
 
 
 def amihud_illiquidity(bars: Bars) -> Array:

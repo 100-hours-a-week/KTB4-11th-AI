@@ -1,7 +1,7 @@
 import talib
 
-from portfolio_builder.evidence.bars import MONTH, YEAR, Array, Bars, newest
-from portfolio_builder.evidence.collector import Collector
+from portfolio_builder.evidence.common import MONTH, YEAR, Collector, newest
+from portfolio_builder.evidence.dto import Array, Bars
 
 
 def return_n(close: Array, n: int) -> float | None:
