@@ -6,8 +6,48 @@
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스 데이터를 바탕으로 포트폴리오 생성
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
-- `market-analyzer-mcp`: 시장 분석 도구를 제공하는 MCP 서버 (Docker 네트워크 내부 전용)
 - `portfolio-rebalancer-http`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 HTTP 서버
+
+```mermaid
+flowchart LR
+    subgraph EXT["External"]
+        NEWS["뉴스"]
+        KIWOOM["Kiwoom"]
+        OPENROUTER["OpenRouter"]
+    end
+
+    subgraph AI["KTB4-11th-AI"]
+        NP["news-preprocessor"]
+        NC["news-clusterer"]
+        NGB["news-graph-builder"]
+        MC["market-collector"]
+        PB["portfolio-builder"]
+        PRH["portfolio-rebalancer-http"]
+
+        PG[("PostgreSQL")]
+        QDB[("QuestDB")]
+    end
+
+    subgraph BACKEND["KTB4-11th-BE"]
+        BE["Backend"]
+    end
+
+    NEWS --> NP
+    NP <--> PG
+    NC <--> PG
+    NGB <--> PG
+
+    KIWOOM --> MC
+    MC <--> QDB
+
+    PG <-->|model portfolio| PB
+    QDB <--> PB
+    OPENROUTER <--> PB
+
+    PG <-->|model portfolio| PRH
+    PRH -->|buy sell requests| BE
+	BE -->|register user portfolio| PRH
+```
 
 ## 데이터베이스 (ERD)
 
