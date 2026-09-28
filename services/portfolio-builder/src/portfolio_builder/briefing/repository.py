@@ -1,23 +1,44 @@
 from collections import defaultdict
-from dataclasses import dataclass
 from typing import Any
 
 import sqlalchemy as sa
 
-
-@dataclass(frozen=True)
-class RecentNews:
-    clusters: list[Any]
-    companies: dict[str, dict[str, Any]]
-    themes_by_company: dict[str, list[str]]
-    theme_count: int
-
-    @property
-    def cluster_ids(self) -> list[int]:
-        return [c["cluster_id"] for c in self.clusters]
+from portfolio_builder.briefing.dto import PreviousPortfolio, RecentNews
 
 
-def load_recent_news(conn: sa.Connection, window_days: int) -> RecentNews:
+def find_previous_portfolio(conn: sa.Connection) -> PreviousPortfolio | None:
+    portfolio = (
+        conn.execute(
+            sa.text(
+                "SELECT id, created_at, cash_weight, commentary FROM portfolios"
+                " ORDER BY created_at DESC, id DESC LIMIT 1"
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if portfolio is None:
+        return None
+    holdings = conn.execute(
+        sa.text(
+            "SELECT c.corp_code, c.corp_name, c.stock_code, h.weight, h.reason"
+            " FROM portfolio_holdings h JOIN companies c ON c.corp_code = h.company_id"
+            " WHERE h.portfolio_id = :id ORDER BY h.weight DESC"
+        ),
+        {"id": portfolio["id"]},
+    ).mappings()
+    exits = conn.execute(
+        sa.text(
+            "SELECT c.corp_code, c.corp_name, c.stock_code, e.reason"
+            " FROM portfolio_exits e JOIN companies c ON c.corp_code = e.company_id"
+            " WHERE e.portfolio_id = :id"
+        ),
+        {"id": portfolio["id"]},
+    ).mappings()
+    return PreviousPortfolio(portfolio, list(holdings), list(exits))
+
+
+def find_recent_news(conn: sa.Connection, window_days: int) -> RecentNews:
     clusters = list(
         conn.execute(
             sa.text(

@@ -67,9 +67,9 @@ services/portfolio-builder/
     __main__.py           main(): settings → log → engines → briefing → run_agent → exit code
     settings.py           PORTFOLIO_BUILDER_ prefix
     database.py           sa.Table mirrors of the tables above, like_contains
-    briefing/             prompt.py (SYSTEM_PROMPT), previous.py, news.py, text.py (render),
-                          load.py (Briefing, load_briefing)
-    agent/                run.py (run_agent → RunResult), state.py; hooks/ (middleware):
+    briefing/             dto.py (PreviousPortfolio, RecentNews, Briefing), repository.py (SQL),
+                          service.py (load_briefing renders the text); __init__ exports both
+    agent/                run.py (run_agent → RunResult), state.py, system_prompt.py; hooks/:
                           stop_on_save.py, nudge.py, run_log.py, usage.py
     portfolio.py          validate, normalize_weights, save (one transaction, SaveError)
     company.py            resolve_company: corp_code or alias → Company

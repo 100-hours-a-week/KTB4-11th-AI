@@ -4,7 +4,7 @@ import pytest
 import talib
 from portfolio_builder import __main__ as entry
 from portfolio_builder.agent.run import RunResult
-from portfolio_builder.briefing.load import Briefing
+from portfolio_builder.briefing import Briefing
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",

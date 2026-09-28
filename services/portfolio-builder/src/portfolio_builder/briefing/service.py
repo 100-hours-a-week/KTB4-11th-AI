@@ -1,7 +1,9 @@
 from typing import Any
 
-from portfolio_builder.briefing.news import RecentNews
-from portfolio_builder.briefing.previous import PreviousPortfolio
+import sqlalchemy as sa
+
+from portfolio_builder.briefing.dto import Briefing, PreviousPortfolio, RecentNews
+from portfolio_builder.briefing.repository import find_previous_portfolio, find_recent_news
 
 
 def _label(company: Any) -> str:
@@ -54,5 +56,18 @@ def _news_lines(news: RecentNews, window_days: int) -> list[str]:
     return lines
 
 
-def render_briefing(previous: PreviousPortfolio | None, news: RecentNews, window_days: int) -> str:
-    return "\n".join(_previous_lines(previous) + _news_lines(news, window_days))
+def load_briefing(engine: sa.Engine, news_window_days: int) -> Briefing:
+    with engine.connect() as conn:
+        previous = find_previous_portfolio(conn)
+        news = find_recent_news(conn, news_window_days)
+    holdings = previous.holdings if previous is not None else []
+    return Briefing(
+        previous_portfolio_id=previous.portfolio["id"] if previous is not None else None,
+        previous_company_ids=frozenset(h["corp_code"] for h in holdings),
+        previous_holdings=len(holdings),
+        previous_exits=len(previous.exits) if previous is not None else 0,
+        cluster_ids=news.cluster_ids,
+        company_count=len(news.companies),
+        theme_count=news.theme_count,
+        text="\n".join(_previous_lines(previous) + _news_lines(news, news_window_days)),
+    )
