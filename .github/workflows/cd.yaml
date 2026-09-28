@@ -148,8 +148,8 @@ jobs:
           compose config --quiet
           compose pull
           compose up -d --wait postgres questdb
-          compose run --rm postgres-migrate
-          compose run --rm questdb-migrate
+          compose run --rm -T postgres-migrate </dev/null
+          compose run --rm -T questdb-migrate </dev/null
           compose up -d --wait \
             market-analyzer-mcp portfolio-rebalancer-http
 
