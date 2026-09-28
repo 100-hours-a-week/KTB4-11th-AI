@@ -1,31 +1,26 @@
 import logging
-import time
 import uuid
 
 import sqlalchemy as sa
-from ktb_core.logging import setup_logging
+from ktb_core.logging import bind_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
 
 from portfolio_builder.agent import run_agent
 from portfolio_builder.briefing import SYSTEM_PROMPT, load_briefing
-from portfolio_builder.log import make_log
 from portfolio_builder.market import QuestDBMarket
 from portfolio_builder.settings import Settings
-from portfolio_builder.tools.graph import graph_tools
-from portfolio_builder.tools.news import news_tools
+from portfolio_builder.stopwatch import Stopwatch
+from portfolio_builder.tools.graph.tools import graph_tools
+from portfolio_builder.tools.news.tools import news_tools
 from portfolio_builder.tools.submit import submit_tool
 from portfolio_builder.tools.technicals import technicals_tool
 
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level, service="portfolio-builder")
-    log = make_log(str(uuid.uuid4()))
-    started = time.perf_counter()
-
-    def elapsed_ms() -> int:
-        return round((time.perf_counter() - started) * 1000)
-
+    setup_logging(settings.log_level, service_name="portfolio-builder")
+    log = bind_logger(logging.getLogger("portfolio_builder"), run_id=str(uuid.uuid4()))
+    stopwatch = Stopwatch.start()
     engine = sa.create_engine(settings.postgres_dsn)
     try:
         log(
@@ -79,7 +74,7 @@ def main() -> None:
             logging.ERROR,
             outcome="error",
             error=f"{type(error).__name__}: {error}",
-            elapsed_ms=elapsed_ms(),
+            elapsed_ms=stopwatch.elapsed_ms,
         )
         raise SystemExit(1) from error
     finally:
@@ -94,7 +89,7 @@ def main() -> None:
         turns=result.turns,
         usage=result.usage,
         error=result.error,
-        elapsed_ms=elapsed_ms(),
+        elapsed_ms=stopwatch.elapsed_ms,
     )
     raise SystemExit(0 if saved else 1)
 

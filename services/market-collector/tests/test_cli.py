@@ -28,7 +28,7 @@ def test_main_runs_one_archive_without_subcommands(monkeypatch):
     settings = SimpleNamespace(log_level="INFO")
     monkeypatch.setattr(cli, "Settings", lambda: settings)
     monkeypatch.setattr(
-        cli, "setup_logging", lambda level, service: seen.append(("logging", level))
+        cli, "setup_logging", lambda level, service_name: seen.append(("logging", level))
     )
     monkeypatch.setattr(
         cli,

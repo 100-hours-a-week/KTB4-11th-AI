@@ -66,24 +66,31 @@ services/portfolio-builder/
   src/portfolio_builder/
     __main__.py           main(): settings → log → engines → briefing → run_agent → exit code
     settings.py           PORTFOLIO_BUILDER_ prefix
-    database.py           Postgres engine and sa.Table mirrors of the tables above
+    database.py           sa.Table mirrors of the tables above, like_contains
     briefing.py           SYSTEM_PROMPT and load_briefing
     agent.py              create_agent, the middleware (§4), run_agent → RunResult
     portfolio.py          validate, normalize_weights, save (one transaction, SaveError)
+    company.py            resolve_company: corp_code or alias → Company
     evidence.py           OHLCV arrays → evidence dict (pure, TA-Lib + numpy)
     market.py             QuestDB reads: candles(symbol, timeframe), universe closes
+    stopwatch.py          Stopwatch for latency and run time
     tools/
-      news.py             get_news_cluster, search_news_cluster
-      graph.py            search_graph, find_graph_paths
-      technicals.py       analyze_technicals
-      submit.py           submit_portfolio
+      binding.py          bind(func, **deps): a partial that keeps func's type hints
+      result.py           json_result
+      news/               get_cluster.py, search.py; tools.py → news_tools(engine)
+      graph/              database.py (timed transaction), entities.py, search.py, paths.py;
+                          tools.py → graph_tools(engine)
+      technicals.py       analyze_technicals, technicals_tool(engine, market)
+      submit.py           submit_portfolio, submit_tool(engine, previous, model, log)
   tests/
 infrastructure/postgres/migrations/versions/0005_create_portfolios.py   ported from the TS branch
 packages/core/src/ktb_core/normalize.py                                  moved
+packages/core/src/ktb_core/logging.py     service_name on every line; bind_logger
 ```
 
-Tools are closures over their dependencies (engine, market reader, previous holdings, log), so
-tests build them without globals.
+One tool per file: a module-level function takes its dependencies (engine, market reader,
+previous holdings, log, lock) as keyword arguments, and a factory binds them with `bind` into a
+`StructuredTool`, so tests build tools without globals and nothing is nested.
 
 ## 4. Agent loop
 

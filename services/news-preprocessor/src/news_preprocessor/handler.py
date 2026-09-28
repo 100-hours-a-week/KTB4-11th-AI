@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, dict[str, Any]]:
     settings = Settings()
-    setup_logging(settings.log_level, service="news-preprocessor")
+    setup_logging(settings.log_level, service_name="news-preprocessor")
     logger.info("news-preprocessor started")
     engine = sa.create_engine(settings.postgres_dsn)
     client = httpx.Client(headers={"User-Agent": settings.user_agent}, follow_redirects=True)

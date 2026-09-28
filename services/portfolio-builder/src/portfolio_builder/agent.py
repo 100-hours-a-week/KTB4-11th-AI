@@ -1,8 +1,8 @@
 import logging
-import time
 from dataclasses import dataclass
 from typing import Any, Literal, NotRequired
 
+from ktb_core.logging import BoundLogger
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
@@ -16,7 +16,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from portfolio_builder.errors import ToolError
-from portfolio_builder.log import Log
+from portfolio_builder.stopwatch import Stopwatch
 
 NUDGE = (
     "You stopped without a saved portfolio. Keep investigating with the tools if you need to,"
@@ -79,7 +79,7 @@ def _tool_messages(result: Any) -> list[ToolMessage]:
 class RunLog(AgentMiddleware):
     """Logs every model and tool call, and keeps the turn and usage totals for run_end."""
 
-    def __init__(self, log: Log) -> None:
+    def __init__(self, log: BoundLogger) -> None:
         super().__init__()
         self.log = log
         self.turns = 0
@@ -101,7 +101,7 @@ class RunLog(AgentMiddleware):
             tools=[getattr(t, "name", None) for t in request.tools],
             message_count=len(request.messages),
         )
-        started = time.perf_counter()
+        stopwatch = Stopwatch.start()
         response = handler(request)
         message = next((m for m in reversed(response.result) if isinstance(m, AIMessage)), None)
         if message is None:
@@ -130,14 +130,14 @@ class RunLog(AgentMiddleware):
                 b.get("reasoning", "") for b in message.content_blocks if b["type"] == "reasoning"
             ),
             tool_calls=[{"name": c["name"], "arguments": c["args"]} for c in message.tool_calls],
-            latency_ms=round((time.perf_counter() - started) * 1000),
+            latency_ms=stopwatch.elapsed_ms,
             usage=turn_usage,
         )
         return response
 
     def wrap_tool_call(self, request: Any, handler: Any) -> Any:
         call = request.tool_call
-        started = time.perf_counter()
+        stopwatch = Stopwatch.start()
         fields = {"turn": self.turns, "name": call["name"], "args": call["args"]}
         try:
             result = handler(request)
@@ -148,7 +148,7 @@ class RunLog(AgentMiddleware):
                 **fields,
                 result=f"{type(error).__name__}: {error}",
                 is_error=True,
-                duration_ms=round((time.perf_counter() - started) * 1000),
+                duration_ms=stopwatch.elapsed_ms,
             )
             raise
         update = getattr(result, "update", None) or {}
@@ -162,7 +162,7 @@ class RunLog(AgentMiddleware):
             **fields,
             result="\n".join(m.text for m in messages),
             is_error=is_error,
-            duration_ms=round((time.perf_counter() - started) * 1000),
+            duration_ms=stopwatch.elapsed_ms,
         )
         return result
 
@@ -179,7 +179,7 @@ def run_agent(
     system_prompt: str,
     briefing: str,
     max_turns: int,
-    log: Log,
+    log: BoundLogger,
 ) -> RunResult:
     run_log = RunLog(log)
     agent = create_agent(

@@ -2,7 +2,8 @@ import json
 
 import pytest
 from portfolio_builder.errors import ToolError
-from portfolio_builder.tools.news import news_tools, to_prefix_query
+from portfolio_builder.tools.news.search import to_prefix_query
+from portfolio_builder.tools.news.tools import news_tools
 
 
 def test_builds_a_prefix_tsquery_and_drops_operators():

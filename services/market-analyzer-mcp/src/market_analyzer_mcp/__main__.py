@@ -9,7 +9,7 @@ from market_analyzer_mcp.settings import Settings
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level, service="market-analyzer-mcp")
+    setup_logging(settings.log_level, service_name="market-analyzer-mcp")
     logging.getLogger(__name__).info("market-analyzer-mcp started")
     # log_config=None keeps uvicorn from replacing the JSON handlers setup_logging installed.
     uvicorn.run(build_app(settings.host), host=settings.host, port=settings.port, log_config=None)

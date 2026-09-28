@@ -29,7 +29,7 @@ def env(monkeypatch, pg_dsn):
     }.items():
         monkeypatch.setenv(f"NEWS_GRAPH_BUILDER_{name}", value)
     # setup_logging replaces the root handlers, which would detach caplog.
-    monkeypatch.setattr(entry, "setup_logging", lambda level, service: None)
+    monkeypatch.setattr(entry, "setup_logging", lambda level, service_name: None)
 
 
 @pytest.fixture

@@ -9,7 +9,7 @@ from portfolio_rebalancer_http.settings import Settings
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level, service="portfolio-rebalancer-http")
+    setup_logging(settings.log_level, service_name="portfolio-rebalancer-http")
     logging.getLogger(__name__).info("portfolio-rebalancer-http started")
     # log_config=None keeps uvicorn from replacing the JSON handlers setup_logging installed.
     uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)

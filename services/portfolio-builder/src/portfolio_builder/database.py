@@ -65,3 +65,9 @@ portfolio_exits = sa.Table(
         server_default=sa.text("'{}'"),
     ),
 )
+
+
+def like_contains(text: str) -> str:
+    """A LIKE/ILIKE pattern matching `text` anywhere, with its wildcards escaped."""
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"

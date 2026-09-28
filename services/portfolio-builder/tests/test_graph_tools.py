@@ -3,8 +3,10 @@ import json
 import pytest
 import sqlalchemy as sa
 from portfolio_builder.errors import GraphTimeout, ToolError
-from portfolio_builder.tools import graph
-from portfolio_builder.tools.graph import find_seed_entities, graph_tools, graph_transaction
+from portfolio_builder.tools.graph import paths, search
+from portfolio_builder.tools.graph.database import graph_transaction
+from portfolio_builder.tools.graph.entities import find_seed_entities
+from portfolio_builder.tools.graph.tools import graph_tools
 
 
 def _tools(engine):
@@ -99,7 +101,7 @@ def test_graph_transaction_maps_a_statement_timeout(engine):
 
 
 def test_search_graph_caps_nodes_and_flags_truncation(engine, monkeypatch):
-    monkeypatch.setattr(graph, "NODE_LIMIT", 2)
+    monkeypatch.setattr(search, "NODE_LIMIT", 2)
     result = json.loads(_tools(engine)["search_graph"].invoke({"name": "삼성전자", "depth": 3}))
 
     assert [n["id"] for n in result["nodes"]] == [1, 2]
@@ -115,7 +117,7 @@ def test_find_graph_paths_caps_paths_shortest_first(engine, monkeypatch):
                 " OVERRIDING SYSTEM VALUE VALUES (4, 1, 1, 4, 'related_to', '삼성전자와 HBM')"
             )
         )
-    monkeypatch.setattr(graph, "PATH_LIMIT", 1)
+    monkeypatch.setattr(paths, "PATH_LIMIT", 1)
 
     result = json.loads(
         _tools(engine)["find_graph_paths"].invoke(

@@ -69,7 +69,7 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level, service="market-collector")
+    setup_logging(settings.log_level, service_name="market-collector")
     archive_ohlcv(settings, datetime.now(UTC))
 
 
