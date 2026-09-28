@@ -1,7 +1,7 @@
 import talib
 
-from portfolio_builder.evidence.common import MONTH, YEAR, Collector, newest
-from portfolio_builder.evidence.dto import Array, Bars
+from portfolio_builder.measurement.common import MONTH, YEAR, Collector, newest
+from portfolio_builder.measurement.dto import Array, Bars
 
 
 def return_n(close: Array, n: int) -> float | None:
@@ -14,28 +14,31 @@ def momentum_12m_skip1m(close: Array) -> float | None:
     return float(close[-1 - MONTH] / close[-1 - YEAR] - 1)
 
 
-def add_price_evidence(c: Collector, bars: Bars) -> None:
+def measure_price(c: Collector, bars: Bars) -> None:
     close = bars.close
     for n in (5, 20, 60):
-        name = f"return_{n}{c.unit}"
-        if c.has(name, n + 1):
-            c.put(name, return_n(close, n))
+        if c.has(f"return_{n}", n + 1):
+            c.put(f"return_{n}", return_n(close, n))
 
-    if c.has("ma_gap_20_60", 60):
+    if c.has("price_vs_sma20", 20):
+        sma20 = newest(talib.SMA(close, timeperiod=20))
+        c.put("price_vs_sma20", close[-1] / sma20 - 1 if sma20 else None)
+
+    if c.has("sma20_vs_sma60", 60):
         sma20 = newest(talib.SMA(close, timeperiod=20))
         sma60 = newest(talib.SMA(close, timeperiod=60))
-        c.put("ma_gap_20_60", sma20 / sma60 - 1 if sma20 and sma60 else None)
+        c.put("sma20_vs_sma60", sma20 / sma60 - 1 if sma20 and sma60 else None)
 
-    distance = f"distance_to_prev_20{c.unit}_high"
-    breakout = f"breakout_20{c.unit}"
-    enough = [c.has(distance, 21), c.has(breakout, 21)]
+    enough = [c.has("distance_to_previous_20_high", 21), c.has("above_previous_20_high", 21)]
     if all(enough):
         previous_high = newest(talib.MAX(bars.high[:-1], timeperiod=20))
-        c.put(distance, close[-1] / previous_high - 1 if previous_high else None)
+        c.put(
+            "distance_to_previous_20_high", close[-1] / previous_high - 1 if previous_high else None
+        )
         if previous_high:
-            c.values[breakout] = bool(close[-1] > previous_high)
+            c.values["above_previous_20_high"] = bool(close[-1] > previous_high)
         else:
-            c.unavailable[breakout] = "not computable"
+            c.unavailable["above_previous_20_high"] = "not computable"
 
     if not c.daily:
         return

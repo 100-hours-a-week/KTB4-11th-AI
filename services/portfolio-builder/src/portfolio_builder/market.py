@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import questdb
 
-from portfolio_builder.evidence import Array, Bars
+from portfolio_builder.measurement import Array, Bars
 
 VIEWS = {"1m": "bars_1m", "15m": "bars_15m", "1h": "bars_1h", "1d": "bars_1d"}
 # bars_15m and bars_1h are materialized views without a session column (see issue #47).

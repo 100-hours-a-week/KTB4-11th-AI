@@ -15,24 +15,24 @@ Every user receives the same model portfolio.
 
 The agent starts from a code-assembled briefing (previous portfolio, recent news clusters, the
 KOSPI companies they mention, those companies' themes) and drills down with tools: news clusters,
-the knowledge graph, and technical evidence computed from QuestDB OHLCV with TA-Lib. It must
+the knowledge graph, and technical signals computed from QuestDB OHLCV with TA-Lib. It must
 justify every stock that enters or leaves.
 
 ### Behaviour kept from the TypeScript design
 
 Tables, validation rules, weight normalisation, the briefing, the grounding rule and system
 prompt (except its tools line, which now describes `analyze_technicals(name, timeframe)` as
-returning technical evidence for the chosen timeframe), the six tools, the nudge when the model stops without submitting, the `MAX_TURNS` limit,
+returning technical signals for the chosen timeframe), the six tools, the nudge when the model stops without submitting, the `MAX_TURNS` limit,
 the run outcomes (`saved` / `max_turns` / `error`) and the JSON log events.
 
 ### Non-goals
 
 - The work queue. `portfolio-rebalancer-http` consumes it, after the MVP. portfolio-builder is a
   cron job.
-- market-analyzer-mcp. portfolio-builder computes technical evidence itself.
+- market-analyzer-mcp. portfolio-builder computes technical signals itself.
 - `ktb-market-analyzer`. portfolio-builder no longer depends on it and calls TA-Lib directly.
 - Collecting KOSPI index bars, industry codes, or moving the theme sync into market-collector.
-  That is a separate spec (§10); this service returns `null` for evidence that needs it.
+  That is a separate spec (§10); this service reports the measurements that need it as unavailable.
 - Per-user portfolios, hard portfolio constraints, deployment mechanics.
 
 ## 2. Decisions
@@ -47,7 +47,7 @@ the run outcomes (`saved` / `max_turns` / `error`) and the JSON log events.
 | Stop on save | `submit_portfolio` writes `portfolio_id` into agent state; a `before_model` hook jumps to `end` | Typed state, no parsing of message text |
 | Postgres | SQLAlchemy Core + psycopg, `sa.Table` mirrors, like the news services | Existing pattern |
 | QuestDB | Official `questdb` client, `questdb.connect(conf)` → `db.query(sql, params)` | AGENTS.md rule; same as market-collector |
-| Technicals | TA-Lib primitives over OHLCV into a fixed evidence set (§6) | Economically interpretable evidence instead of oscillator verdicts |
+| Technicals | Measurement → interpretation → LLM reasoning (§6) | Code decides each signal by a fixed rule; the LLM weighs the signals |
 | Timeframe | Chosen by the agent per call (`1m`, `15m`, `1h`, `1d`); never fixed in code | The agent decides the horizon it is reasoning about |
 | Company-name normaliser | Moves from `news_graph_builder.common` to `ktb_core.normalize` | Two Python callers now exist |
 
@@ -73,9 +73,11 @@ services/portfolio-builder/
                           stop_on_save.py, nudge.py, run_log.py, usage.py
     portfolio.py          validate, normalize_weights, save (one transaction, SaveError)
     company.py            resolve_company: corp_code or alias → Company
-    evidence/             pure TA-Lib + numpy: dto.py (Bars, Evidence), common.py (Collector),
-                          families/ (price.py, risk.py, activity.py, cross_section.py),
-                          service.py (compute_evidence); __init__ exports the public API
+    measurement/          layer 1, OHLCV → numbers (pure TA-Lib + numpy): dto.py (Bars,
+                          Measurements), common.py (Collector), price.py, cross_section.py,
+                          activity.py; __init__ exports measure()
+    interpretation/       layer 2, numbers → states: dto.py (Signal, Signals), price.py,
+                          cross_section.py, activity.py; __init__ exports interpret()
     market.py             QuestDB reads: candles(symbol, timeframe), universe closes
     stopwatch.py          Stopwatch for latency and run time
     tools/
@@ -220,55 +222,64 @@ ORDER BY ts DESC LIMIT $2
 
 - Rows are reversed to oldest-first numpy float64 arrays.
 - `LIMIT` is 300 for every timeframe. The longest need is 273 daily bars: a 20-bar volatility
-  (21 closes) ranked against the previous 252 values. Evidence that lacks history is `null` with
+  (21 closes) ranked against the previous 252 values. A measurement that lacks history is unavailable with
   the number of bars it needs.
 - The symbol is the company's `stock_code`. No rows means `NoMarketData`: the company is not in
   the KOSPI 200 archive, or nothing has been collected.
 - Cross-section inputs are the daily closes of the latest `universe_members` snapshot, read once
   per run and cached in the tool's closure.
 
-### Evidence (`evidence.py`, pure)
+### Three layers
 
-The output is JSON: company, timeframe, `as_of` (newest `ts`), `bars` (count), and each evidence
-value. A `null` always comes with a `reason`.
+```
+OHLCV → measurement/ (numbers) → interpretation/ (states) → the agent (reasoning)
+```
 
-**Daily (`1d`): the full set**
+Code decides each signal on its own; the LLM weighs signals against each other and the news.
+The tool returns JSON: company, timeframe, `as_of` (newest `ts`), `bars` (count), `signals`
+(`{state, evidence}` per signal, evidence rounded) and `unavailable` (signal or measurement →
+reason). States describe what the rule measured, never what happens next.
 
-| Evidence | Calculation |
-|---|---|
-| `return_5d` | `ROCP(close, 5)` |
-| `return_20d` | `ROCP(close, 20)` |
-| `return_60d` | `ROCP(close, 60)` |
-| `market_excess_return_5d` | `return_5d − market_return_5d`. `null` until KOSPI index bars exist (§10) |
-| `industry_excess_return_5d` | `return_5d − industry_return_5d`. `null` until industry codes exist (§10) |
-| `return_5d_cross_section_percentile` | Percentile of `return_5d` among the latest KOSPI 200 snapshot |
-| `momentum_12m_skip1m` | `close[t−21] / close[t−252] − 1` |
-| `momentum_cross_section_percentile` | Percentile of `momentum_12m_skip1m` among KOSPI 200 |
-| `ma_gap_20_60` | `SMA(close,20) / SMA(close,60) − 1` |
-| `distance_to_prev_20d_high` | `close / MAX(high, 20)[t−1] − 1` (previous 20 bars, excluding today) |
-| `breakout_20d` | `close > MAX(high, 20)[t−1]` |
-| `price_to_52w_high` | `close / MAX(close, 252)[t−1]` |
-| `realized_volatility_20d` | `STDDEV(ROCP(close,1), 20)` |
-| `volatility_percentile_1y` | `PERCENTRANK(realized_volatility_20d, 252)` |
-| `relative_volume_20d` | `volume / SMA(volume, 20)` |
-| `amihud_illiquidity_20d` | Mean over 20 bars of `abs(ROCP(close,1)) / (close × volume)` |
-| `amihud_percentile_1y` | `PERCENTRANK(amihud_illiquidity_20d, 252)` |
+### Measurements (`measurement/`)
 
-A zero-volume bar (trading halt, a quiet minute) makes `relative_volume` and Amihud divide by
-zero; any non-finite result is `null` with reason "zero volume", never `inf` or `NaN`.
+Windows count bars of the chosen timeframe; names are the same on every timeframe.
 
-Traded value is approximated as `close × volume` because `bars` stores OHLCV only.
-`turnover_20d` and `relative_turnover` are omitted: shares outstanding is not stored anywhere.
+| Measurement | Calculation | Timeframes |
+|---|---|---|
+| `return_5`, `return_20`, `return_60` | `ROCP(close, n)` | all |
+| `price_vs_sma20` | `close / SMA(close, 20) − 1` | all |
+| `sma20_vs_sma60` | `SMA(close, 20) / SMA(close, 60) − 1` | all |
+| `distance_to_previous_20_high`, `above_previous_20_high` | against `MAX(high, 20)[t−1]` (today excluded) | all |
+| `realized_volatility_20` | `STDDEV(ROCP(close, 1), 20)`: σ per bar | all |
+| `relative_volume_20` | `volume / SMA(volume, 20)` | all |
+| `price_to_52w_high` | `close / MAX(close, 252)[t−1]` | 1d |
+| `momentum_12m_skip1m` | `close[t−21] / close[t−252] − 1` | 1d |
+| `volatility_percentile_1y` | `PERCENTRANK(realized_volatility_20, 252)` | 1d |
+| `amihud_illiquidity_20`, `amihud_percentile_1y` | windowed mean of `abs(ROCP(close,1)) / (close × volume)`, then `PERCENTRANK(·, 252)` | 1d |
+| `return_5_percentile`, `momentum_percentile` | rank within the latest KOSPI 200 snapshot | 1d |
+| `market_excess_return_5`, `industry_excess_return_5` | unavailable until benchmark data exists (§10) | 1d |
 
-**Intraday (`1m`, `15m`, `1h`): the scale-free subset, windows in bars**
+A zero-volume bar makes relative volume and Amihud unavailable ("zero volume"), never `inf`/`NaN`.
+Traded value is approximated as `close × volume`; turnover is omitted (no shares outstanding).
 
-`return_5`, `return_20`, `return_60`, `ma_gap_20_60`, `distance_to_prev_20_high`, `breakout_20`,
-`realized_volatility_20`, `relative_volume_20`, all computed as the daily formulas above over bars
-of the chosen timeframe. Cross-section, momentum, 52-week, 1-year percentile and Amihud evidence is
-daily only.
+### Signals (`interpretation/`)
 
-RSI, MACD/PPO, STOCH/WILLR, ADX, OBV/AD/ADOSC and candlestick patterns are excluded. `TRANGE` and
-`NATR` stay optional and are not in the first version.
+σ is the stock's own `realized_volatility_20`, so the same rule works on every timeframe.
+Thresholds are named constants in the module that uses them.
+
+| Signal | States | Rule |
+|---|---|---|
+| `trend` | `established_uptrend` · `established_downtrend` · `mixed` · `sideways` | `sideways` when `|sma20_vs_sma60|` < 1σ; otherwise both `price_vs_sma20` and `sma20_vs_sma60` up / both down / mixed |
+| `short_term_move` | `sharp_rally` · `rally` · `flat` · `selloff` · `sharp_selloff` | `return_5 / (σ√5)`: ≥2, ≥1, (−1, 1), ≤−1, ≤−2 |
+| `breakout` | `above_previous_high` · `near_previous_high` · `below_previous_high` | above the previous 20-bar high, or within 1σ of it |
+| `year_range` (1d) | `near_52w_high` · `mid_range` · `far_below_52w_high` | `price_to_52w_high` ≥ 0.95 / < 0.70 |
+| `relative_strength` (1d) | `top_quintile` · `middle` · `bottom_quintile` | `momentum_percentile` ≥ 80 / ≤ 20 |
+| `short_term_rank` (1d) | `top_decile` · `middle` · `bottom_decile` | `return_5_percentile` ≥ 90 / ≤ 10 |
+| `volatility` | `high_for_the_stock` · `normal` · `low_for_the_stock`; intraday `no_reference` | `volatility_percentile_1y` ≥ 80 / ≤ 20 |
+| `volume` | `surge` · `elevated` · `normal` · `quiet` | `relative_volume_20` ≥ 2 / ≥ 1.3 / ≤ 0.7 |
+| `liquidity` (1d) | `less_liquid_than_usual` · `normal` · `more_liquid_than_usual` | `amihud_percentile_1y` ≥ 80 / ≤ 20 |
+
+RSI, MACD/PPO, STOCH/WILLR, ADX, OBV/AD/ADOSC and candlestick patterns are excluded.
 
 ## 7. Settings (`PORTFOLIO_BUILDER_`)
 
@@ -310,9 +321,11 @@ The stub's `QUESTDB_DSN` and `NEWS_CLUSTERER_URL` are removed.
 - **Pure:** `validate` (every rule, including a first run with no previous portfolio),
   `normalize_weights`, settings (required, invalid, defaults), `normalize` against
   the shared cases.
-- **Evidence:** synthetic arrays with known answers for every formula, including null-with-reason
-  when history is short, the `[t−1]` exclusion in the breakout and 52-week evidence, and a
-  zero-volume bar yielding `null` rather than `inf`/`NaN`.
+- **Measurement:** synthetic arrays with known answers for every formula, including
+  unavailable-with-reason when history is short, the `[t−1]` exclusion in the breakout and
+  52-week measurements, and a zero-volume bar never yielding `inf`/`NaN`.
+- **Interpretation:** every state of every rule and its threshold boundaries, from hand-built
+  `Measurements`; daily vs intraday signal sets end to end.
 - **Technicals tool:** an injected market reader. Each timeframe maps to its view, `session` is
   filtered only for 1m/1d, the intraday subset has no daily-only keys, an unknown company raises
   `UnknownCompany`, and a symbol with no rows raises `NoMarketData`. No test writes QuestDB.
@@ -347,7 +360,7 @@ portfolio-builder's briefing reads `themes` / `theme_companies` whichever servic
 ## 11. Limits
 
 - `bars_15m` and `bars_1h` are materialised views over all 1m rows, extended session included, so
-  intraday evidence on those timeframes mixes sessions. Tracked in #47; this service does not work
+  intraday signals on those timeframes mix sessions. Tracked in #47; this service does not work
   around it.
 - Cross-section percentiles cover KOSPI 200 only, the collected universe.
 - `momentum_12m_skip1m` and the 1-year percentiles are `null` until 273 regular daily bars exist

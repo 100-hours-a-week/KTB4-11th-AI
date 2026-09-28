@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 from portfolio_builder import market as market_module
 from portfolio_builder.errors import NoMarketData, UnknownCompany
-from portfolio_builder.evidence import Bars
 from portfolio_builder.market import QuestDBMarket
+from portfolio_builder.measurement import Bars
 from portfolio_builder.tools.technicals import technicals_tool
 
 AS_OF = datetime(2026, 9, 28, 6, 30, tzinfo=UTC)
@@ -46,8 +46,9 @@ def test_daily_evidence_for_a_company_found_by_name(engine):
     assert result["timeframe"] == "1d"
     assert result["bars"] == 300
     assert result["as_of"] == AS_OF.isoformat()
-    assert "return_5d" in result["evidence"]
-    assert result["unavailable"]["market_excess_return_5d"] == "benchmark data not collected"
+    assert result["signals"]["trend"]["state"] == "established_uptrend"
+    assert result["signals"]["trend"]["evidence"]["price_vs_sma20_pct"] > 0
+    assert result["unavailable"]["market_excess_return_5"] == "benchmark data not collected"
 
 
 def test_intraday_evidence_skips_the_universe(engine):
@@ -58,8 +59,9 @@ def test_intraday_evidence_skips_the_universe(engine):
 
     assert market.calls == [("000660", "15m")]
     assert market.universe_calls == 0
-    assert "return_5" in result["evidence"]
-    assert "momentum_12m_skip1m" not in result["evidence"]
+    assert "short_term_move" in result["signals"]
+    assert "relative_strength" not in result["signals"]
+    assert result["unavailable"]["relative_strength"].endswith("measured on daily bars only")
 
 
 def test_the_universe_is_read_once_per_run(engine):

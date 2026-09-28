@@ -1,6 +1,6 @@
 import numpy as np
 
-from portfolio_builder.evidence.dto import Array, Evidence, Value
+from portfolio_builder.measurement.dto import Array, Measurements, Value
 
 YEAR = 252
 MONTH = 21
@@ -16,7 +16,6 @@ class Collector:
     def __init__(self, bars: int, *, daily: bool) -> None:
         self.bars = bars
         self.daily = daily
-        self.unit = "d" if daily else ""
         self.values: dict[str, Value] = {}
         self.unavailable: dict[str, str] = {}
 
@@ -32,5 +31,5 @@ class Collector:
         else:
             self.values[name] = float(value)
 
-    def evidence(self) -> Evidence:
-        return Evidence(self.values, self.unavailable)
+    def measurements(self) -> Measurements:
+        return Measurements(self.values, self.unavailable)
