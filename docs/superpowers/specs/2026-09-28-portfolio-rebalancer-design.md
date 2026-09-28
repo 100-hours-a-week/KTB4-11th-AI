@@ -3,7 +3,7 @@
 **Date:** 2026-09-28
 **Status:** Draft — the reserve-list decision needs the team's agreement before implementation
 **Issue:** #43
-**Depends on:** #46 (service skeleton), #42 (model portfolio and its tables)
+**Depends on:** #46 (service skeleton, merged), #42 (model portfolio and its tables)
 
 ## 1. What it is for
 
@@ -36,17 +36,45 @@ actually hold.
 flowchart LR
   PB[portfolio-builder] -->|model portfolio| PRH[portfolio-rebalancer-http]
   PG[(PostgreSQL)] <--> PRH
-  QDB[(QuestDB)] --> PRH
-  PRH -->|buy sell requests| BE[Backend]
+  QDB[(QuestDB)] -->|현재가| PRH
+  BE[Backend] -->|GET /users?state=active\n1시간 폴링| PRH
+  PRH -->|accountId · 주문 · 근거| BE
 ```
 
-`PRH` reads QuestDB directly for prices rather than asking `market-analyzer-mcp`. Services
-in this repository communicate through datastores; the two HTTP edges `AGENTS.md` allows are
-the exceptions the architecture already chose, not a licence to add a third.
+`PRH` reads QuestDB directly for prices. There is no MCP server to ask — it was removed
+(#50) — and in any case services in this repository communicate through datastores; the HTTP
+edges `AGENTS.md` allows are exceptions the architecture chose deliberately, not a licence to
+add more.
 
-**This adds a QuestDB edge that issue #43's diagram does not draw.** The diagram connects
-`PRH` to PostgreSQL only. The diagram needs updating, or the price has to arrive some other
-way — see §7.
+**Two of those edges are not in issue #43's diagram**, which connects `PRH` to PostgreSQL
+only: the QuestDB read for prices, and the hourly poll of the Backend for user accounts. The
+diagram needs both.
+
+### User accounts arrive by polling, once an hour
+
+`PRH` polls `GET /users?state=active` every hour. Each active user carries an account:
+
+| field | use |
+|---|---|
+| `account_id` | identifies the account an order is placed against |
+| `is_ai_managed` | only an AI-managed account is rebalanced |
+| `is_active` | an inactive account is skipped |
+| `cash_balance` | the cash available to spend |
+| `stocks[]` — `stock_id`, `amount`, `total_price` | what is held: quantity, and the principal put into it |
+| `pending_orders[]` | orders already placed and not yet filled |
+
+**`pending_orders` has to be subtracted before anything is decided.** The poll is hourly, so
+between two polls an order may fill, partly fill, or sit. An order already placed for a
+company must not be placed again, and cash already committed to a pending buy is not cash this
+service may spend. So the starting position is:
+
+```
+available cash = cash_balance − Σ(pending buys: price × amount)
+held quantity  = stocks[].amount + Σ(pending buys for it) − Σ(pending sells for it)
+```
+
+A holding's `total_price` is the principal invested, not a current value, so the current
+position still has to be priced from QuestDB.
 
 ## 3. The affordability rule
 
@@ -118,33 +146,53 @@ Two properties make this terminate and behave sensibly:
   why the loop has to run again rather than substituting once.
 - The reserve is finite and a dropped company never returns, so the loop ends.
 
-### The residual pass — flooring alone wastes a lot of capital
+### When a company cannot be bought, its weight is shared out equally
 
-After the loop, the residual is `capital_available - Σ(shares_i × price_i)`. Each company's
-own leftover is less than one of its shares, **but the sum of twenty such leftovers buys many
-shares.** Measured, capital 10,000,000 over 20 equal weights:
+A company whose whole budget cannot cover one share is dropped, and **its weight is
+distributed equally over the companies that remain** — not in proportion to what they already
+hold. Equal keeps a single expensive name from being absorbed by whichever holding happened
+to be largest.
 
-| prices | residual after flooring |
-|---|---|
-| all 137,000 | 1,780,000 — **17.8%** |
-| all 300,000 | 4,000,000 — **40.0%** |
-| random 50,000–400,000 | 2,039,000 — **20.4%** |
+If a reserve company is available it is called up in that company's place, taking the vacated
+weight (§3). The equal split applies to whatever weight is left over after the reserve is
+exhausted.
 
-Leaving that in cash is not a rounding error, it is a different portfolio from the one
-portfolio-builder decided on. So a second pass spends it: while the residual covers any held
-company's share price, buy one more share of whichever company is **furthest below its target
-weight**, and repeat.
+### The residual pass — two phases
 
-Measured with the same inputs, that pass brings the residual down to where it genuinely
-cannot buy anything:
+Flooring each budget to whole shares leaves cash, and that cash is worth spending: measured
+over ten weights on 10,000,000, flooring alone leaves 8–13% idle, which is a different
+portfolio from the one portfolio-builder decided on.
 
-| prices | before | after | extra shares |
-|---|---|---|---|
-| all 137,000 | 1,780,000 (17.8%) | 136,000 (1.4%) | 12 |
-| random 50,000–400,000 | 2,279,000 (22.8%) | 5,000 (0.1%) | 8 |
+The residual is spent one share at a time, in two phases:
 
-It terminates because the residual strictly decreases, and picking the largest shortfall keeps
-the result closer to the intended weights than buying by rank would.
+1. **Fill the shortfalls.** Buy one share of whichever company is furthest below its target
+   *amount* (`capital × weight`), and repeat. Companies that were dropped as unaffordable take
+   no part.
+2. **Then go round the weights.** Once no company is below its target amount, cycle the
+   companies in descending weight order, buying one share each time round.
+
+Both phases stop when the cash cannot cover any held company's share price. What is left then
+stays as cash.
+
+Phase two is not a corner case. Over 20,000 randomly generated portfolios (2–12 companies,
+prices 1,000–500,000, capital 100,000–100,000,000) it fired in **6,336** of them, 32%. It
+happens when prices vary enough that closing a gap overshoots it: every target ends up
+satisfied while cash is still on the table.
+
+Measured on one such portfolio — five companies at weights 0.40/0.25/0.20/0.10/0.05, prices
+73,000 / 412,000 / 155,000 / 28,500 / 9,000, capital 42,590,000:
+
+| | after flooring | phase 1 | phase 2 | final |
+|---|---|---|---|---|
+| cash | 540,500 | 4 shares bought | 2 shares bought | **0** |
+
+Final weights land at 0.401 / 0.252 / 0.197 / 0.100 / 0.051 against targets of
+0.40 / 0.25 / 0.20 / 0.10 / 0.05.
+
+**Distributing the residual equally does not work**, which is worth recording because it is the
+obvious thing to try. Ten companies with 1,300,000 left over gives each 130,000; at a 300,000
+share price nobody can buy anything, the loop stalls immediately, and 13% of the capital sits
+in cash. Equal division is right for a *weight* being given up (above) and wrong for cash.
 
 ### Worked example
 
@@ -229,6 +277,13 @@ Response shape, per company:
 `stock_code` travels with `company_id` because `company_id` is DART's `corp_code`, which no
 exchange accepts as an order identifier.
 
+### Orders go back to the Backend with their reason
+
+An order carries the `account_id` it belongs to, what to do, and **why** — the reason
+portfolio-builder stored on that holding (`portfolio_holdings.reason`) or on the exit
+(`portfolio_exits.reason`). The model portfolio is grounded by construction, and the order
+that acts on it carries that grounding with it.
+
 ## 6. The price, and how stale it is
 
 The only price available is the newest close in QuestDB's `bars_1m`:
@@ -270,16 +325,18 @@ Doing both is cheap and I would do both.
    **Rank cannot be inferred from weight**: a reserve company has no weight, and even among
    the main companies the model may rank a company above one it weights more heavily.
    **This is the one that needs the team's agreement.**
-2. **Where the user's holdings and cash come from.** The initial purchase only needs capital.
-   A later rebalance needs what the user currently holds. Issue #43 draws `PG <--> PRH`, but
-   user accounts are presumably the Backend's. Either the request carries the holdings, or
-   this service stores per-user state.
-3. **The Backend endpoint.** If it is not settled, the send step goes behind a setting and
-   this service is finished up to "computed and recorded".
+2. ~~Where the user's holdings and cash come from.~~ **Settled: an hourly poll of
+   `GET /users?state=active`** (§2). What remains open is whether `PRH` keeps the last poll in
+   PostgreSQL or holds it in memory. In memory is simpler but loses everything on restart and
+   makes the idempotency record (§7.4) the only history.
+3. ~~The Backend endpoint.~~ **Settled: orders carry `account_id`, the order, and the
+   reason** (§5). The URL itself still has to be configured.
 4. **A table for idempotency.** `rebalance_requests(portfolio_id, user_id, capital, payload,
    created_at, sent_at, status)` with a unique key. That is migration `0006`.
-5. **Whether `cash_weight` is a floor.** The model portfolio carries a cash weight. Is it a
-   target to respect, or does residual cash simply land there?
+5. ~~Whether `cash_weight` is a floor.~~ **Settled: the model portfolio has no cash weight.**
+   It is stocks and their weights, nothing else. Cash exists only as what the residual pass
+   could not spend. #42 currently stores `portfolios.cash_weight` and takes it as a
+   `submit_portfolio` argument, so that column and argument come out.
 6. **The QuestDB edge in #43's diagram**, per §2.
 
 ## 8. Code sketch
@@ -358,14 +415,33 @@ def allocate(
 
 
 def spend_residual(
-    allocations: Sequence[Allocation], residual: float
-) -> tuple[list[Allocation], float]:
-    """Spend what flooring left over, one share at a time.
+    shares: dict[str, int],
+    prices: Mapping[str, float],
+    ideal: Mapping[str, float],   # capital * weight, per company
+    residual: float,
+) -> tuple[dict[str, int], float]:
+    """Spend what flooring left over, one share at a time, in two phases.
 
-    Each company's own leftover is under one share, but twenty of them together buy
-    several. Each share goes to whichever company is furthest below its target weight,
-    which keeps the result closer to the intended portfolio than buying by rank.
+    Phase one buys for whichever company is furthest below its ideal amount. Once no
+    company is below it, phase two cycles the companies in descending weight order,
+    one share each time round. Both stop when the cash covers no share price, and
+    what is left is cash.
     """
+    ring = cycle(sorted(ideal, key=lambda s: -ideal[s]))
+    while True:
+        affordable = [s for s in shares if prices[s] <= residual]
+        if not affordable:
+            break
+        short = [s for s in affordable if shares[s] * prices[s] < ideal[s]]
+        if short:
+            pick = max(short, key=lambda s: ideal[s] - shares[s] * prices[s])
+        else:
+            pick = next((c for c in islice(ring, len(shares)) if prices[c] <= residual), None)
+            if pick is None:
+                break
+        shares[pick] += 1
+        residual -= prices[pick]
+    return shares, residual
 ```
 
 `prices.py` — the QuestDB read, the only module that touches a database:
@@ -386,9 +462,13 @@ Tests worth having, because each pins a property the loop has to hold:
   the behaviour
 - a replacement that is itself unaffordable pulls the next one, and the loop still ends
 - an exhausted reserve drops the name and redistributes over the remainder
-- residual cash never goes negative
-- **after the residual pass**, the residual is below the cheapest held share price — without
-  that pass it is not, which is how the 17.8% case above was found
-- the residual pass never pushes a company above its target weight when a company below it
-  could have taken the share instead
+- residual cash never goes negative, and after the residual pass it is below the cheapest
+  held share price
+- **phase one runs before phase two**: a company below its ideal amount always takes the share
+  ahead of the weight cycle
+- **phase two is reached**: a portfolio whose gaps all close while cash remains cycles the
+  weights rather than stopping. It is not dead code — 32% of 20,000 random portfolios reach it
+- a dropped company's weight is split **equally**, not proportionally, over what remains
+- distributing the *residual* equally leaves it unspent when the per-company slice is under a
+  share price — the case that rules equal division out for cash
 - a margin of zero and a positive margin differ only where the budget is within the margin
