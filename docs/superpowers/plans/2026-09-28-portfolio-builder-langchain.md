@@ -19,10 +19,11 @@
 - Comments only for a non-obvious *why*. No docstrings that restate names. No thin wrappers with one caller.
 - Postgres tests need a migrated test database. Once per machine:
   `docker compose -f compose.dev.yaml up -d postgres`,
-  `docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test` (ignore "already exists"),
-  `KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run alembic upgrade head`.
-  Then run tests with `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test`. Never point tests at `news`.
+  `docker compose -f compose.dev.yaml exec postgres createdb -U ktb ktb_test` (ignore "already exists"),
+  `KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run alembic upgrade head`.
+  Then run tests with `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test`. Never point tests at `ktb`.
 - Never write to QuestDB. No test touches a real QuestDB.
+- Never open, read, print or `cat` the repo-root `.env`; it holds real keys. Compose reads it for `${…}` interpolation.
 - Environment prefix `PORTFOLIO_BUILDER_`. The API key is a `SecretStr` and must never be logged.
 - Commit messages use `feat` / `fix` / `refactor` / `chore` / `docs` / `test` prefixes and end with a blank line then `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Shell note: in zsh, never pass an unquoted `===` as an argument.
@@ -40,6 +41,7 @@
 ## File map
 
 ```
+compose.dev.yaml, .github/workflows/*, AGENTS.md, README.md             Task 0 (database rename)
 infrastructure/postgres/migrations/versions/0005_create_portfolios.py   Task 1 (cherry-pick)
 infrastructure/postgres/tests/test_migrations.py                        Task 1, Task 4
 packages/core/src/ktb_core/normalize.py                                 Task 2 (moved)
@@ -68,6 +70,70 @@ docs/superpowers/specs/2026-09-27-portfolio-builder-design.md                Tas
 
 ---
 
+### Task 0: Rename the Postgres database `news` → `ktb`
+
+The database now holds themes, industries and portfolios, not only news. The role stays `ktb`/`ktb`.
+
+**Files:**
+- Modify: `compose.dev.yaml`, `.github/workflows/ci-dev.yaml`, `.github/workflows/ci-main.yaml`, `AGENTS.md`, `README.md`
+
+**Interfaces:**
+- Produces: development DSN `postgresql+psycopg://ktb:ktb@localhost:5432/ktb`, test DSN `postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test`. Every later task uses these.
+
+- [ ] **Step 1: Rewrite every reference**
+
+```bash
+sed -i -e 's#POSTGRES_DB: news$#POSTGRES_DB: ktb#' -e 's#-d news"#-d ktb"#' \
+  -e 's#5432/news_test#5432/ktb_test#g' -e 's#5432/news$#5432/ktb#' -e 's#5432/news\([^_a-z]\)#5432/ktb\1#g' \
+  -e 's#createdb -U ktb news_test#createdb -U ktb ktb_test#' \
+  compose.dev.yaml .github/workflows/ci-dev.yaml .github/workflows/ci-main.yaml AGENTS.md README.md
+```
+Then edit by hand:
+- `AGENTS.md`, the `KTB_TEST_POSTGRES_DSN` row: ``point it at `news_test`, never `news` `` → ``point it at `ktb_test`, never `ktb` ``.
+- `AGENTS.md`, the comment above the test commands: `never at \`news\`` → `never at \`ktb\``.
+- `README.md`, the `KTB_TEST_POSTGRES_DSN` row: `` `news`가 아닌 `news_test`를 `` → `` `ktb`가 아닌 `ktb_test`를 ``.
+- `AGENTS.md` Commands block: after the `docker compose -f compose.dev.yaml up -d` line add
+```bash
+# once, on a volume created before the rename:
+docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
+```
+
+- [ ] **Step 2: Verify nothing still points at `news`**
+
+```bash
+git grep -n -E "5432/news|POSTGRES_DB: news|-d news\"|news_test|never (at )?.news.|아닌 .news_test" -- . ':!docs' ':!uv.lock'
+```
+Expected: no output. (`news-preprocessor`, `news_clusterer` and other service names are fine and are not matched.)
+
+- [ ] **Step 3: Rename the local databases** (the dev volume already exists)
+
+```bash
+docker compose -f compose.dev.yaml exec -T postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
+docker compose -f compose.dev.yaml exec -T postgres psql -U ktb -d postgres -c "ALTER DATABASE news_test RENAME TO ktb_test"
+docker compose -f compose.dev.yaml up -d postgres
+docker compose -f compose.dev.yaml ps postgres
+```
+Expected: two `ALTER DATABASE`; postgres reports `healthy` with the new `pg_isready -d ktb` healthcheck. If a rename fails with "being accessed by other users", stop and report.
+
+- [ ] **Step 4: Confirm the migrated state survived and tests run against `ktb_test`**
+
+```bash
+KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb uv run alembic current
+KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest -q
+```
+Expected: `alembic current` prints `0004 (head)`; tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add compose.dev.yaml .github/workflows AGENTS.md README.md
+git commit -m "chore: rename the Postgres database from news to ktb
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 1: Carry over migration 0005
 
 **Files:**
@@ -87,14 +153,14 @@ Expected: a clean cherry-pick creating `0005_create_portfolios.py` and adding fo
 - [ ] **Step 2: Apply migrations to the test database**
 
 ```bash
-KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run alembic upgrade head
+KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run alembic upgrade head
 ```
 Expected: `Running upgrade 0004 -> 0005`.
 
 - [ ] **Step 3: Run the migration tests**
 
 ```bash
-KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest infrastructure/postgres -q
+KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest infrastructure/postgres -q
 ```
 Expected: all pass (including `test_portfolio_rows_reference_companies_and_cascade_from_portfolios`, `test_cluster_summaries_have_a_full_text_index`, `test_downgrade_to_0004_removes_the_portfolio_tables`).
 
@@ -451,7 +517,7 @@ from portfolio_builder.settings import Settings
 from pydantic import ValidationError
 
 REQUIRED = {
-    "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/news",
+    "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_BUILDER_QUESTDB_CONF": "http::addr=localhost:9000;",
     "PORTFOLIO_BUILDER_OPENROUTER_API_KEY": "sk-or-v1-test",
     "PORTFOLIO_BUILDER_LLM_MODEL": "openai/gpt-5.5",
@@ -709,7 +775,7 @@ The cherry-picked `only_owned_tables` already skips `cluster_summaries_fts_idx`.
 
 ```bash
 uv run pytest services/portfolio-builder -q
-KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest infrastructure/postgres -q
+KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest infrastructure/postgres -q
 uv run tach check
 ```
 Expected: all pass.
@@ -974,7 +1040,7 @@ def test_save_rolls_back_an_unknown_cited_cluster(engine):
 
 - [ ] **Step 3: Run to see them fail**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_portfolio.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_portfolio.py -q`
 Expected: FAIL with `ModuleNotFoundError: No module named 'portfolio_builder.portfolio'`.
 
 - [ ] **Step 4: Implement** — `services/portfolio-builder/src/portfolio_builder/portfolio.py`:
@@ -1117,7 +1183,7 @@ def save_portfolio(engine: sa.Engine, submission: Submission, model: str) -> int
 
 - [ ] **Step 5: Run the tests**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder -q`
 Expected: all pass.
 
 - [ ] **Step 6: Commit**
@@ -1200,7 +1266,7 @@ def test_search_rejects_a_query_with_no_searchable_terms(engine):
 
 - [ ] **Step 2: Run to see them fail**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_news_tools.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_news_tools.py -q`
 Expected: FAIL with `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement**
@@ -1331,7 +1397,7 @@ def news_tools(engine: sa.Engine) -> list[BaseTool]:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_news_tools.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_news_tools.py -q`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -1461,7 +1527,7 @@ def test_graph_transaction_maps_a_statement_timeout(engine):
 
 - [ ] **Step 2: Run to see them fail**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_graph_tools.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_graph_tools.py -q`
 Expected: FAIL with `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement** — `services/portfolio-builder/src/portfolio_builder/tools/graph.py`:
@@ -1694,7 +1760,7 @@ def graph_tools(engine: sa.Engine) -> list[BaseTool]:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_graph_tools.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_graph_tools.py -q`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -2266,7 +2332,7 @@ def test_universe_closes_groups_the_latest_snapshot_by_symbol(monkeypatch):
 
 - [ ] **Step 2: Run to see them fail**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_technicals.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_technicals.py -q`
 Expected: FAIL with `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement**
@@ -2439,7 +2505,7 @@ def technicals_tool(engine: sa.Engine, market: Any) -> BaseTool:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_technicals.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_technicals.py -q`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -2571,7 +2637,7 @@ def test_concurrent_submits_write_one_portfolio(engine):
 
 - [ ] **Step 2: Run to see them fail**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_submit.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_submit.py -q`
 Expected: FAIL with `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement** — `services/portfolio-builder/src/portfolio_builder/tools/submit.py`:
@@ -2651,7 +2717,7 @@ def submit_tool(engine: sa.Engine, previous: frozenset[str], model: str, log: Lo
 
 - [ ] **Step 4: Run the tests**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_submit.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_submit.py -q`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -2736,7 +2802,7 @@ def test_the_most_recently_created_portfolio_is_the_previous_one(engine):
 
 - [ ] **Step 2: Run to see them fail**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_briefing.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_briefing.py -q`
 Expected: FAIL with `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement** — `services/portfolio-builder/src/portfolio_builder/briefing.py`:
@@ -2913,7 +2979,7 @@ def load_briefing(engine: sa.Engine, news_window_days: int) -> Briefing:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_briefing.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_briefing.py -q`
 Expected: all pass.
 
 - [ ] **Step 5: Commit**
@@ -3086,7 +3152,7 @@ def test_the_nudge_text():
 
 - [ ] **Step 2: Run to see them fail**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_agent.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_agent.py -q`
 Expected: FAIL with `ModuleNotFoundError`.
 
 - [ ] **Step 3: Implement** — `services/portfolio-builder/src/portfolio_builder/agent.py`:
@@ -3295,7 +3361,7 @@ def run_agent(
 
 - [ ] **Step 4: Run the tests**
 
-Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest services/portfolio-builder/tests/test_agent.py -q`
+Run: `KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest services/portfolio-builder/tests/test_agent.py -q`
 Expected: all pass. If `test_an_unexpected_tool_exception_ends_the_run_as_error` fails because ToolNode itself converts the `RuntimeError` into an error `ToolMessage` (so the run continues), stop and report the observed behaviour instead of changing the assertion.
 
 - [ ] **Step 5: Commit**
@@ -3334,7 +3400,7 @@ from portfolio_builder.agent import RunResult
 from portfolio_builder.briefing import Briefing
 
 REQUIRED = {
-    "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/news",
+    "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_BUILDER_QUESTDB_CONF": "http::addr=localhost:9000;",
     "PORTFOLIO_BUILDER_OPENROUTER_API_KEY": "sk-or-v1-secret",
     "PORTFOLIO_BUILDER_LLM_MODEL": "openai/gpt-5.5",
@@ -3529,7 +3595,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run the whole suite and every CI gate**
 
 ```bash
-KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest -q
+KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest -q
 uv run ruff check . && uv run ruff format --check .
 uv run tach check
 uv run tach check-external -e packages/market-analyzer,services
@@ -3569,9 +3635,9 @@ Expected: builds; prints `ok`.
       context: .
       dockerfile: docker/portfolio-builder.Dockerfile
     environment:
-      - PORTFOLIO_BUILDER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
+      - PORTFOLIO_BUILDER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/ktb
       - PORTFOLIO_BUILDER_QUESTDB_CONF=http::addr=questdb:9000;
-      - PORTFOLIO_BUILDER_OPENROUTER_API_KEY
+      - PORTFOLIO_BUILDER_OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - PORTFOLIO_BUILDER_LLM_MODEL
       - PORTFOLIO_BUILDER_THINKING_LEVEL=${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
       - PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS=${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
@@ -3590,7 +3656,7 @@ Validate: `docker compose -f compose.dev.yaml config --quiet` exits 0.
 
 1. In the Commands block, after the `news-graph-builder` compose line, add:
 ```bash
-docker compose -f compose.dev.yaml up portfolio-builder     # needs PORTFOLIO_BUILDER_OPENROUTER_API_KEY and _LLM_MODEL
+PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from OPENROUTER_API_KEY in .env
 ```
 2. In the environment table, replace the four `PORTFOLIO_BUILDER_*` rows with:
 ```markdown
@@ -3645,7 +3711,7 @@ Then insert these lines directly under its first heading line:
 
 ```bash
 uv run ruff check --fix . && uv run ruff format .
-KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest -q
+KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest -q
 git add -A services/portfolio-builder docker compose.dev.yaml AGENTS.md README.md docs/superpowers/specs/2026-09-27-portfolio-builder-design.md
 git commit -m "feat: portfolio-builder entry point, image, compose job and docs
 
