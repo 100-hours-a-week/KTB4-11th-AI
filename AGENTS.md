@@ -20,7 +20,6 @@ KTB_QUESTDB_CONF='http::addr=localhost:9000;' uv run python infrastructure/quest
 docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f flag is required)
 # once, on a volume created before the rename:
 docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
-
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
