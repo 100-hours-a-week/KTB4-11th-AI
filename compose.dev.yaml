@@ -93,6 +93,27 @@ services:
         condition: service_healthy
     restart: "no"
 
+  portfolio-builder:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/portfolio-builder.Dockerfile
+    environment:
+      - PORTFOLIO_BUILDER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/ktb
+      - PORTFOLIO_BUILDER_QUESTDB_CONF=http::addr=questdb:9000;
+      - PORTFOLIO_BUILDER_OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - PORTFOLIO_BUILDER_LLM_MODEL
+      - PORTFOLIO_BUILDER_THINKING_LEVEL=${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
+      - PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS=${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
+      - PORTFOLIO_BUILDER_MAX_TURNS=${PORTFOLIO_BUILDER_MAX_TURNS:-150}
+      - PORTFOLIO_BUILDER_LOG_LEVEL=${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   postgres-data:
   questdb-data:

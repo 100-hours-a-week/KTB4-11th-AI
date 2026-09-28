@@ -4,7 +4,7 @@
 - `news-preprocessor`: 뉴스 수집과 임베딩
 - `news-clusterer`: 뉴스 이벤트 단위 클러스터링
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
-- `portfolio-builder`: 뉴스 데이터를 바탕으로 포트폴리오 생성
+- `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
 
 ## 데이터베이스 (ERD)
@@ -177,6 +177,10 @@ erDiagram
 | 변수 | 필수 | 기본값 |
 |---|---|---|
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | |
-| `PORTFOLIO_BUILDER_QUESTDB_DSN` | 필수 | |
-| `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | 필수 | |
+| `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | 예: `http::addr=localhost:9000;` |
+| `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | 필수 | |
+| `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | OpenRouter 모델 ID |
+| `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` |
+| `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | | `7` |
+| `PORTFOLIO_BUILDER_MAX_TURNS` | | `150` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` |

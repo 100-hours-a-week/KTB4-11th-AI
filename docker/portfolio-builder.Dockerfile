@@ -12,9 +12,8 @@ RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
 COPY packages/core packages/core
-COPY packages/market-analyzer packages/market-analyzer
 COPY services/portfolio-builder services/portfolio-builder
-RUN uv pip install --no-deps ./packages/core ./packages/market-analyzer ./services/portfolio-builder
+RUN uv pip install --no-deps ./packages/core ./services/portfolio-builder
 
 FROM python:3.13-slim-bookworm AS runtime
 

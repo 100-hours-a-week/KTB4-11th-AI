@@ -27,7 +27,8 @@ ktb-core = { workspace = true }
 
 [tool.deptry.per_rule_ignores]
 # questdb's QueryResult.to_pandas() needs pandas installed; nothing imports it by name.
-DEP002 = ["pandas"]
+# psycopg is the SQLAlchemy driver for PostgreSQL connections.
+DEP002 = ["pandas", "psycopg"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]
