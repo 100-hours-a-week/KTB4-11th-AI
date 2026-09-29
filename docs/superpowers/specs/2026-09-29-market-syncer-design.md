@@ -49,7 +49,8 @@ FKs and unique indexes, then rename tables and columns. `downgrade` reverses it.
 4. **Index:** fetch KOSPI 200 constituents (Kiwoom index code `201`, a constant) and replace the
    `KOSPI200` rows in `corporation_indices` in one transaction. Constituents missing from `corporations` are skipped
    and counted.
-5. **Themes:** unchanged logic, keyed by `stock_code`. Full replace in one transaction.
+5. **Themes:** same parsing and `is_main` logic, keyed by `stock_code`, keeping every member that is
+   in `corporations` (no KOSPI 200 filter). Full replace in one transaction.
 6. Each step is its own transaction. A failed step is logged and makes the run exit 1. The
    empty-result guards stay: an empty fetch never replaces a populated table. If a sync failed and
    `corporations` is empty, exit 1 immediately.
@@ -135,12 +136,11 @@ enable the others.
 - `infrastructure/postgres/tests/test_migrations.py`: upgrade from `0004` with existing `entities`
   rows keeps their company link, and downgrade restores it.
 
-## Open points
+## Decisions
 
-1. **Corporation scope.** Kept as "KOSPI stocks that join to a DART record", so ETFs and the like stay out
-   of entity resolution. Say so if you want every Kiwoom KOSPI row, with a nullable `corp_code`.
-2. **Theme membership scope.** Themes used to keep only KOSPI 200 members. This design keeps every member that
-   is in `corporations`, and consumers filter through `corporation_indices`. Say so if you want the old filter.
-3. **`mrkt_tp` for KOSPI 200.** Kiwoom's spec says `mrkt_tp=2` is KOSPI 200; `news-graph-builder` sends `2`, while
-   `market-collector`'s `ka20002` call sent `0` with the same `inds_cd=201`. market-syncer uses `2`. This should be
-   checked against a real response once, since `market-collector` has been trading on the `0` result.
+1. `corporations` holds KOSPI stocks that join to a DART record. ETFs and the like stay out.
+2. Themes keep every member that is in `corporations`. KOSPI 200 is a mark in `corporation_indices`,
+   not a filter on themes, so `sync_themes` no longer takes `kospi200_codes` and the "no theme
+   member is a KOSPI 200 company" guard becomes "no theme member is a KOSPI corporation".
+3. KOSPI 200 is fetched with `ka20002`, `mrkt_tp=2`, `inds_cd=201`. `market-collector` used to send
+   `mrkt_tp=0`; its symbols now come from `corporation_indices`, so it follows the syncer.
