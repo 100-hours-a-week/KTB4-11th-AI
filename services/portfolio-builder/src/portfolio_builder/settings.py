@@ -1,15 +1,17 @@
-"""Configuration for the portfolio-builder."""
+from typing import Literal
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_prefix="PORTFOLIO_BUILDER_",
-        extra="ignore",
-    )
+    model_config = SettingsConfigDict(env_prefix="PORTFOLIO_BUILDER_", extra="ignore")
 
-    log_level: str = "INFO"
     postgres_dsn: str
-    questdb_dsn: str
-    news_clusterer_url: str
+    questdb_conf: str
+    openrouter_api_key: SecretStr = Field(min_length=1)
+    llm_model: str
+    thinking_level: Literal["none", "minimal", "low", "medium", "high", "xhigh"] = "medium"
+    news_window_days: int = Field(default=7, gt=0)
+    max_turns: int = Field(default=150, gt=0)
+    log_level: str = "INFO"

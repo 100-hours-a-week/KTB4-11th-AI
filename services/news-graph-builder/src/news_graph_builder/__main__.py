@@ -31,7 +31,7 @@ RUN_LOCK = int.from_bytes(b"ngrb")
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, service_name="news-graph-builder")
     logging.getLogger("urllib3").setLevel(logging.INFO)
     logger.info("news-graph-builder started")
     sync_failed = False
