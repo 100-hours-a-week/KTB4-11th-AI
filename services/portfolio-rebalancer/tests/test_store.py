@@ -251,14 +251,14 @@ def test_the_newest_portfolio_wins(conn):
     assert portfolio.cash_weight == 0.2
 
 
-def test_a_holding_carries_the_stock_code_joined_in_from_companies(conn, portfolio_id):
+def test_a_holding_carries_the_stock_code_joined_in_from_corporations(conn, portfolio_id):
     """company_id is DART's corp_code, which no exchange accepts as an order identifier."""
     from portfolio_rebalancer.request.store import latest_portfolio
 
     conn.execute(
         sa.text(
-            "INSERT INTO companies (corp_code, stock_code, corp_name)"
-            " VALUES ('00126380', '005930', '삼성전자')"
+            "INSERT INTO corporations (stock_code, corp_code, name)"
+            " VALUES ('005930', '00126380', '삼성전자')"
         )
     )
     conn.execute(
@@ -281,8 +281,8 @@ def test_a_holding_with_no_reason_upstream_carries_none(conn, portfolio_id):
 
     conn.execute(
         sa.text(
-            "INSERT INTO companies (corp_code, stock_code, corp_name)"
-            " VALUES ('00126380', '005930', '삼성전자')"
+            "INSERT INTO corporations (stock_code, corp_code, name)"
+            " VALUES ('005930', '00126380', '삼성전자')"
         )
     )
     conn.execute(
@@ -301,8 +301,8 @@ def test_an_exit_carries_its_reason(conn, portfolio_id):
 
     conn.execute(
         sa.text(
-            "INSERT INTO companies (corp_code, stock_code, corp_name)"
-            " VALUES ('00164779', '000660', 'SK하이닉스')"
+            "INSERT INTO corporations (stock_code, corp_code, name)"
+            " VALUES ('000660', '00164779', 'SK하이닉스')"
         )
     )
     conn.execute(

@@ -356,7 +356,8 @@ call sites already pass a single account's orders.
 An order carries what to do and why — the reason portfolio-builder stored on that holding
 (`portfolio_holdings.reason`) or on the exit (`portfolio_exits.reason`). `stock_code` travels
 with `company_id` because `company_id` is DART's `corp_code`, which no exchange accepts as an
-order identifier; the stock code is joined in from `companies`.
+order identifier; the stock code is joined in from `corporations` (#69 renamed `companies` and
+re-keyed it by `stock_code`, keeping `corp_code` unique).
 
 ```json
 {

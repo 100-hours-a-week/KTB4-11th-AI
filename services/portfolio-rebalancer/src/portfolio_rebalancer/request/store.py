@@ -152,19 +152,19 @@ rebalance_orders = sa.Table(
 
 
 # portfolio_holdings names a company by DART's corp_code, which no exchange accepts as an
-# order identifier, so the stock code is joined in from companies. These tables belong to
+# order identifier, so the stock code is joined in from corporations. These tables belong to
 # portfolio-builder and news-graph-builder, so they are read rather than mirrored here.
 LATEST_PORTFOLIO = sa.text(
     "SELECT id, cash_weight FROM portfolios ORDER BY created_at DESC, id DESC LIMIT 1"
 )
 PORTFOLIO_HOLDINGS = sa.text(
     "SELECT h.company_id, c.stock_code, h.weight, h.reason"
-    " FROM portfolio_holdings h JOIN companies c ON c.corp_code = h.company_id"
+    " FROM portfolio_holdings h JOIN corporations c ON c.corp_code = h.company_id"
     " WHERE h.portfolio_id = :portfolio_id"
 )
 PORTFOLIO_EXITS = sa.text(
     "SELECT e.company_id, c.stock_code, e.reason"
-    " FROM portfolio_exits e JOIN companies c ON c.corp_code = e.company_id"
+    " FROM portfolio_exits e JOIN corporations c ON c.corp_code = e.company_id"
     " WHERE e.portfolio_id = :portfolio_id"
 )
 
