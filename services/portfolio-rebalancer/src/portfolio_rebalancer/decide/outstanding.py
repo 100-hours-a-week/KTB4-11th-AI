@@ -54,34 +54,38 @@ def narrow(
     band is left alone, which is what makes the hourly poll idempotent within a day.
     Nothing moves on a day the exchange does not open.
 
-    A pair the model portfolio does not name is left alone: this service has no reason to
+    An order for a company the model portfolio does not hold is left alone: this service
     move someone else's order.
     """
     if not is_open(now.date()):
         return []
 
     left = days_left(started, now)
-    named: dict[str, Holding | Exit] = {name.stock_code: name for name in portfolio.holdings}
-    named |= {leaving.stock_code: leaving for leaving in portfolio.exits}
+    companies: dict[str, Holding | Exit] = {
+        company.stock_code: company for company in portfolio.holdings
+    }
+    companies |= {leaving.stock_code: leaving for leaving in portfolio.exits}
 
     orders = []
     for (code, side), order in working.items():
-        name = named.get(code)
+        company = companies.get(code)
         reference = references.get(code)
-        if name is None or reference is None:
+        if company is None or reference is None:
             continue
 
         quote = limit_and_trigger(reference, left, side)
         if quote is not None and quote[0] == order.price:
             continue
 
-        orders.append(_order(account.account_id, name, code, side, order.quantity, reference, left))
+        orders.append(
+            _order(account.account_id, company, code, side, order.quantity, reference, left)
+        )
     return orders
 
 
 def at_market(
     account: AccountState,
-    name: Holding | Exit,
+    company: Holding | Exit,
     code: str,
     side: str,
     quantity: int,
@@ -92,12 +96,12 @@ def at_market(
     No band and no limit: the point of crossing the trigger is that waiting on the limit
     has stopped being worth it.
     """
-    return _order(account.account_id, name, code, side, quantity, reference, left=0)
+    return _order(account.account_id, company, code, side, quantity, reference, left=0)
 
 
 def _order(
     account_id: int,
-    name: Holding | Exit,
+    company: Holding | Exit,
     code: str,
     side: str,
     quantity: int,
@@ -107,12 +111,12 @@ def _order(
     quote = limit_and_trigger(reference, left, side)
     return Order(
         account_id=account_id,
-        company_id=name.company_id,
+        company_id=company.company_id,
         stock_code=code,
         action=side,
         shares=quantity,
-        reason=name.reason,
-        weight=getattr(name, "weight", None),
+        reason=company.reason,
+        weight=getattr(company, "weight", None),
         reference=on_tick(reference),
         band=band_for(left),
         limit=quote[0] if quote else None,

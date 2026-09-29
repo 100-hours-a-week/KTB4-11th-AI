@@ -7,7 +7,7 @@ pairs advanced a rung.
 Prices come from two places, and the order matters. `stocks[].current_price` is what the
 Backend is trading on, so it wins wherever the poll gives it. QuestDB's last close fills
 in for a stock the account does not hold yet, which the poll cannot quote and which is
-exactly the case of buying a name for the first time.
+exactly the case of buying a company for the first time.
 
 Orders are committed before they are sent, in their own transaction. Holding the
 transaction open across the send would undo the point of recording first: a failed send
@@ -185,7 +185,7 @@ def _prices(db, portfolio, state, account) -> dict[str, float]:
     merge below: the two never carry the same code.
     """
     quoted = polled_prices(account)
-    wanted = {name.stock_code for name in portfolio.holdings}
+    wanted = {company.stock_code for company in portfolio.holdings}
     wanted |= {leaving.stock_code for leaving in portfolio.exits}
     wanted |= set(state.held)
     missing = sorted(wanted - quoted.keys())
@@ -212,12 +212,12 @@ def _struck(portfolio, state, working, references, recorded, prices) -> list:
         for (code, side) in working
         if code in triggers and code in prices and trigger_hit(side, triggers[code], prices[code])
     }
-    named = {name.stock_code: name for name in portfolio.holdings}
-    named |= {leaving.stock_code: leaving for leaving in portfolio.exits}
+    companies = {company.stock_code: company for company in portfolio.holdings}
+    companies |= {leaving.stock_code: leaving for leaving in portfolio.exits}
     return [
-        at_market(state, named[code], code, side, order.quantity, references[code])
+        at_market(state, companies[code], code, side, order.quantity, references[code])
         for (code, side), order in working.items()
-        if code in hit and code in named and code in references
+        if code in hit and code in companies and code in references
     ]
 
 

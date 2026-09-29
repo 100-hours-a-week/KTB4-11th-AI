@@ -48,8 +48,8 @@ def rebalance(
     far as the cash reaches, and a later pass places the rest as the sells fill.
 
     A sell is always possible, so a target weight that cannot be reached by buying does
-    not block the sells that fund it. A held name the model portfolio does not name and
-    the exits do not name is left alone, because no reason exists to act on it.
+    not block the sells that fund it. A held company that is in neither the portfolio nor
+    the exits is left alone, because no reason exists to act on it.
     """
     sells = [
         _order(
@@ -64,30 +64,30 @@ def rebalance(
         if account.held.get(leaving.stock_code, 0) > 0
     )
     exited = {leaving.stock_code for leaving in portfolio.exits}
-    named = [name for name in portfolio.holdings if name.stock_code not in exited]
+    kept = [company for company in portfolio.holdings if company.stock_code not in exited]
 
-    priced = [name for name in named if prices.get(name.stock_code, 0.0) > 0]
-    unpriced = [name for name in named if prices.get(name.stock_code, 0.0) <= 0]
+    priced = [company for company in kept if prices.get(company.stock_code, 0.0) > 0]
+    unpriced = [company for company in kept if prices.get(company.stock_code, 0.0) <= 0]
 
     shares, dropped = _target_shares(priced, account, prices, proceeds, portfolio.cash_weight)
 
     buys, more_sells = [], []
-    for name in priced:
-        if name.stock_code in dropped:
+    for company in priced:
+        if company.stock_code in dropped:
             continue
-        delta = shares[name.stock_code] - account.held.get(name.stock_code, 0)
+        delta = shares[company.stock_code] - account.held.get(company.stock_code, 0)
         if delta > 0:
-            buys.append(_order(account.account_id, name, BUY, delta, prices, days_left))
+            buys.append(_order(account.account_id, company, BUY, delta, prices, days_left))
         elif delta < 0:
-            more_sells.append(_order(account.account_id, name, SELL, -delta, prices, days_left))
+            more_sells.append(_order(account.account_id, company, SELL, -delta, prices, days_left))
 
     skips = [
         *(
-            _skip(account.account_id, name, NO_BUDGET)
-            for name in priced
-            if name.stock_code in dropped
+            _skip(account.account_id, company, NO_BUDGET)
+            for company in priced
+            if company.stock_code in dropped
         ),
-        *(_skip(account.account_id, name, NO_PRICE) for name in unpriced),
+        *(_skip(account.account_id, company, NO_PRICE) for company in unpriced),
     ]
 
     return [*sells, *more_sells, *_affordable(buys, account.cash), *skips]
@@ -114,59 +114,59 @@ def _affordable(buys: list[Order], cash: float) -> list[Order]:
     return placed
 
 
-def _skip(account_id: int, name: Holding, note: str) -> Order:
+def _skip(account_id: int, company: Holding, note: str) -> Order:
     return Order(
         account_id=account_id,
-        company_id=name.company_id,
-        stock_code=name.stock_code,
+        company_id=company.company_id,
+        stock_code=company.stock_code,
         action=SKIP,
         shares=0,
-        reason=name.reason,
-        weight=name.weight,
+        reason=company.reason,
+        weight=company.weight,
         note=note,
     )
 
 
 def _target_shares(
-    named: Sequence[Holding],
+    kept: Sequence[Holding],
     account: AccountState,
     prices: Mapping[str, float],
     proceeds: float,
     cash_weight: float,
 ) -> tuple[dict[str, int], set[str]]:
-    """How many shares of each name to end up holding, and the names dropped as too dear.
+    """How many shares of each company to end up holding, and those dropped as too dear.
 
-    A dropped name that is already held keeps its value: it is not being sold, so that
+    A dropped company that is already held keeps its value: it is not being sold, so that
     value cannot fund the other buys. Locking it lowers the capital and the targets are
     computed again. The locked set only grows, so this ends.
     """
     locked: set[str] = set()
     while True:
-        open_names = [name for name in named if name.stock_code not in locked]
+        still_open = [company for company in kept if company.stock_code not in locked]
         capital = (
             account.cash
             + proceeds
             + sum(
-                account.held.get(name.stock_code, 0) * prices[name.stock_code]
-                for name in open_names
+                account.held.get(company.stock_code, 0) * prices[company.stock_code]
+                for company in still_open
             )
         )
-        positions, _ = whole_shares(open_names, prices, capital, cash_weight)
+        positions, _ = whole_shares(still_open, prices, capital, cash_weight)
         sized = {position.stock_code: position.shares for position in positions}
         held_drops = {
-            name.stock_code
-            for name in open_names
-            if name.stock_code not in sized and account.held.get(name.stock_code, 0) > 0
+            company.stock_code
+            for company in still_open
+            if company.stock_code not in sized and account.held.get(company.stock_code, 0) > 0
         }
         if not held_drops:
-            dropped = {name.stock_code for name in named if name.stock_code not in sized}
+            dropped = {company.stock_code for company in kept if company.stock_code not in sized}
             return sized, dropped
         locked |= held_drops
 
 
 def _order(
     account_id: int,
-    name: Holding | Exit,
+    company: Holding | Exit,
     action: str,
     shares: int,
     prices: Mapping[str, float],
@@ -176,16 +176,16 @@ def _order(
 
     Both sides carry the full quantity: whichever fills, the other is cancelled.
     """
-    reference = prices.get(name.stock_code, 0.0)
+    reference = prices.get(company.stock_code, 0.0)
     quote = limit_and_trigger(reference, days_left, action) if reference > 0 else None
     return Order(
         account_id=account_id,
-        company_id=name.company_id,
-        stock_code=name.stock_code,
+        company_id=company.company_id,
+        stock_code=company.stock_code,
         action=action,
         shares=shares,
-        reason=name.reason,
-        weight=getattr(name, "weight", None),
+        reason=company.reason,
+        weight=getattr(company, "weight", None),
         # Carried even at market: it is the price the decision was made on, and it is
         # what a market order is costed against when the cash is checked.
         reference=on_tick(reference) if reference > 0 else None,
