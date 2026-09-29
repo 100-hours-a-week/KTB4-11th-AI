@@ -20,4 +20,5 @@ class Settings(BaseSettings):
     kiwoom_accounts: list[KiwoomAccount] = Field(min_length=1)
     kiwoom_mode: Literal["real", "demo"] = "real"
     request_interval: float = 1.3
-    index_code: str = "201"
+    postgres_dsn: str
+    index_name: str = "KOSPI200"

@@ -15,7 +15,7 @@ read on its own.
 | Auth | a token, issuance unsettled | a JWT this service signs, HS256 over a shared secret | the Backend shares `JWT_SECRET`, so we sign |
 | Tick rounding | the Backend rounds prices | **we** round to a KRX tick | the Backend answers 400, it does not round |
 | Transaction | one per tick | the order is committed before it is sent | a failed send was rolling the record back |
-| Migration | `0006` after `#42`'s `0005` | `0006` after `#54`'s `0005` | `#42` was closed and replaced by `#54` |
+| Migration | `0006` after `#42`'s `0005` | `0007` after `#69`'s `0006` | `#42` was replaced by `#54`'s `0005`, and `#69` took `0006` |
 | `rebalance()` | `(portfolio, previous, account, prices)` | `(portfolio, account, prices, days_left)` | exits belong to the portfolio; the band comes from the deadline |
 | Ladder budget | three days each for selling and buying | **three trading days for both together** | a buy funded by a sell cannot start its own three days |
 | Band | from days elapsed | from days **left** | an order that starts late starts narrow rather than restarting |
@@ -525,10 +525,10 @@ def tick(engine, db, client, token, now: datetime | None = None) -> int:
 
 ## Migration
 
-`0006_create_rebalance_tables.py`, `down_revision = "0005"`. It chains after `#54`'s
-`0005_create_portfolios.py` — `#42` carried an identical file but was closed and replaced.
-Numbering this `0005` as well would leave the Alembic tree with two heads, so the work proceeds
-and only its tests wait for `#54`.
+`0007_create_rebalance_tables.py`, `down_revision = "0006"`. It chains after `#54`'s
+`0005_create_portfolios.py` and `#69`'s `0006_reshape_reference_tables.py`, both on `dev`.
+`rebalance_orders.portfolio_id` references `portfolios.id` from `0005`, and the holdings are
+read through `corporations`, which `0006` created by renaming `companies`.
 
 `#54` also makes `service_name` a required keyword of `ktb_core.setup_logging`, which this
 service must pass or die on startup. CI runs no type checker, so a test pins the call.

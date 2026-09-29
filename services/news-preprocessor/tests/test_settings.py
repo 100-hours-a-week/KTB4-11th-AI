@@ -2,7 +2,7 @@ import pytest
 from news_preprocessor.settings import Settings
 from pydantic import ValidationError
 
-DSN = "postgresql+psycopg://ktb:ktb@localhost:5432/news"
+DSN = "postgresql+psycopg://ktb:ktb@localhost:5432/ktb"
 
 
 @pytest.fixture

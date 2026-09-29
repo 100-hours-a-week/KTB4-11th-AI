@@ -98,16 +98,6 @@ def test_derived_timeframes_are_rejected_before_opening_a_sender(timeframe):
     assert db.sender_calls == 0
 
 
-def test_latest_members_reads_the_latest_snapshot_with_bound_index_code():
-    db = FakeDatabase(pd.DataFrame({"symbol": ["005930", "000660"]}))
-
-    assert Store(db).latest_members("201") == frozenset({"005930", "000660"})
-
-    sql, binds = db.queries[0]
-    assert "universe_members" in sql
-    assert binds == ["201"]
-
-
 def test_read_regular_candles_returns_oldest_first():
     later = TS.replace(minute=20)
     frame = pd.DataFrame(

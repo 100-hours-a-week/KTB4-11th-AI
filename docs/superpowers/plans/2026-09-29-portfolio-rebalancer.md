@@ -45,7 +45,7 @@ the directory listing: `ladder.py`, `model.py` and `allocate.py` all failed that
 ## Global Constraints
 
 - The service skeleton exists on `dev` from #46, but its FastAPI app is removed: **this service has no inbound surface.** It is one command run on a schedule, and compose owns the interval.
-- This depends on **#54** for `portfolios`, `portfolio_holdings`, `portfolio_exits` and for `setup_logging`'s required `service_name`. Its migration is `0006` with `down_revision = "0005"`; numbering it `0005` too would leave the Alembic tree with two heads.
+- This depends on **#54** for `portfolios`, `portfolio_holdings`, `portfolio_exits` and for `setup_logging`'s required `service_name`. Its migration is `0007` with `down_revision = "0006"`, after #69's `0006_reshape_reference_tables.py`.
 - **Price a holding from the poll and a first purchase from QuestDB.** `stocks[].current_price` is what the Backend trades on, so it wins for anything held; QuestDB is asked only for the codes the poll did not quote, which is what makes a first purchase possible. A stock neither can price is skipped with a note.
 - A user has several accounts and each is decided on its own. Nothing — cash, holdings, pending orders, or the rebalance itself — is shared between an account and its siblings.
 - Use `stock_code` everywhere. The poll now spells it that way on holdings as well as on pending orders, so nothing has to be converted.
@@ -89,7 +89,7 @@ across the pure modules, each caught by a test.
 - [x] **Task 1: Whole shares from weights and prices** — `decide/shares.py`, 12 tests.
 - [x] **Task 2: The reservation pair, its KRX tick, and reading it back** — `decide/reservations.py`, 33 tests.
 - [x] **Task 4: Fold pending orders into spendable state** — `decide/accounts.py`, 26 tests.
-- [x] **Task 5: The account mirror and the order history** — `0006_create_rebalance_tables.py` and `request/store.py`, 31 tests against a real PostgreSQL.
+- [x] **Task 5: The account mirror and the order history** — `0007_create_rebalance_tables.py` and `request/store.py`, 31 tests against a real PostgreSQL.
 - [x] **Task 6: The rebalance decision and the outstanding-order decision** — `decide/rebalance.py` and `decide/outstanding.py`, 43 tests.
 - [x] **Task 3: The last close for a stock the poll does not quote** — `request/prices.py`, 12 tests.
 - [x] **Task 7: The exchange calendar** — `decide/trading_days.py`, 12 tests.

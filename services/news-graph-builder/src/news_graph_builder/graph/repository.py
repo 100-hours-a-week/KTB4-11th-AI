@@ -1,9 +1,9 @@
 from datetime import datetime
 
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 from sqlalchemy.dialects.postgresql import insert
 
-from news_graph_builder.common import normalize
 from news_graph_builder.database import cluster_entities, cluster_summaries, entities, relations
 from news_graph_builder.graph.dto import Extraction
 
@@ -13,7 +13,7 @@ def upsert_plain_entity(conn: sa.Connection, *, raw_name: str, name: str, type_:
     return conn.execute(
         statement.on_conflict_do_update(
             index_elements=[entities.c.name, entities.c.type],
-            index_where=entities.c.corp_code.is_(None),
+            index_where=entities.c.stock_code.is_(None),
             set_={"name": statement.excluded.name},
         ).returning(entities.c.id)
     ).scalar_one()

@@ -9,6 +9,8 @@ dependencies = [
     "pydantic-settings>=2.7",
     "kwcli",
     "questdb>=5.0",
+    "sqlalchemy>=2.0.54",
+    "psycopg[binary]>=3.3.6",
 ]
 
 [project.scripts]
