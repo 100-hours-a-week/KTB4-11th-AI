@@ -14,11 +14,12 @@ into `decide/` and `request/`. `shares` turns weights and prices into whole shar
 `reservations` turns an order into its two prices, puts them on a KRX tick and reads them back;
 `trading_days` says which days the exchange opens; `accounts` folds pending orders into
 spendable cash and held quantity and reads the poll's quotes; `rebalance` sequences sells before
-buys; `outstanding` moves an order already at the Backend. `backend` signs the JWT and owns both
-Backend calls, `store` owns PostgreSQL. `tick` calls them in order and decides nothing.
+buys; `outstanding` moves an order already at the Backend. `prices` reads QuestDB for what the
+poll does not quote, `backend` signs the JWT and owns both Backend calls, `store` owns
+PostgreSQL. `tick` calls them in order and decides nothing.
 
-**Tech Stack:** Python 3.13, SQLAlchemy, psycopg, httpx, PyJWT, exchange-calendars, pytest.
-**No FastAPI and no QuestDB** — see the constraints.
+**Tech Stack:** Python 3.13, questdb 5.0, SQLAlchemy, psycopg, httpx, PyJWT,
+exchange-calendars, pytest. **No FastAPI** — see the constraints.
 
 **Naming:** Plain descriptive names over jargon. Read every module name back as if seeing only
 the directory listing: `ladder.py`, `model.py` and `allocate.py` all failed that test and became
@@ -32,7 +33,7 @@ the directory listing: `ladder.py`, `model.py` and `allocate.py` all failed that
 
 | the 28th said | it turned out |
 |---|---|
-| read the latest close from QuestDB | this service has no QuestDB access; every price is the poll's `current_price` |
+| read the latest close from QuestDB for everything | the poll's `current_price` for holdings, QuestDB only for a stock not held |
 | an HTTP server with `POST /rebalance` | nothing calls it, and the route design left the ladder with no trigger |
 | send limit prices unrounded, the Backend rounds them | the Backend answers **400**; we round |
 | sell before buying, the proceeds fund the buys in the same rebalance | the proceeds are not money until the sells fill, so the buys wait |
@@ -45,7 +46,7 @@ the directory listing: `ladder.py`, `model.py` and `allocate.py` all failed that
 
 - The service skeleton exists on `dev` from #46, but its FastAPI app is removed: **this service has no inbound surface.** It is one command run on a schedule, and compose owns the interval.
 - This depends on **#54** for `portfolios`, `portfolio_holdings`, `portfolio_exits` and for `setup_logging`'s required `service_name`. Its migration is `0006` with `down_revision = "0005"`; numbering it `0005` too would leave the Alembic tree with two heads.
-- **Take every price from the Backend's own poll**, `stocks[].current_price`. This service has no QuestDB access, so a stock the poll does not quote cannot be sized and is skipped with a note.
+- **Price a holding from the poll and a first purchase from QuestDB.** `stocks[].current_price` is what the Backend trades on, so it wins for anything held; QuestDB is asked only for the codes the poll did not quote, which is what makes a first purchase possible. A stock neither can price is skipped with a note.
 - A user has several accounts and each is decided on its own. Nothing — cash, holdings, pending orders, or the rebalance itself — is shared between an account and its siblings.
 - Use `stock_code` everywhere. The poll now spells it that way on holdings as well as on pending orders, so nothing has to be converted.
 - **Put every price on a KRX tick, to the nearest one.** The Backend rejects an off-tick price with a 400. Nearest rather than up or down is load-bearing: flooring breaks the day recovery.
@@ -90,6 +91,7 @@ across the pure modules, each caught by a test.
 - [x] **Task 4: Fold pending orders into spendable state** — `decide/accounts.py`, 26 tests.
 - [x] **Task 5: The account mirror and the order history** — `0006_create_rebalance_tables.py` and `request/store.py`, 31 tests against a real PostgreSQL.
 - [x] **Task 6: The rebalance decision and the outstanding-order decision** — `decide/rebalance.py` and `decide/outstanding.py`, 43 tests.
+- [x] **Task 3: The last close for a stock the poll does not quote** — `request/prices.py`, 12 tests.
 - [x] **Task 7: The exchange calendar** — `decide/trading_days.py`, 12 tests.
 - [x] **Task 8: The tick, the JWT, and the Backend client** — `tick.py`, `request/backend.py`, `settings.py`, 55 tests.
 - [x] **Task 9: Compose, the docs, and the whole branch** — 569 passed; ruff, tach and deptry clean; both compose files render; the image builds and the calendar answers inside it.
@@ -104,6 +106,6 @@ Two things were measured rather than reasoned about.
 Storage is exercised against a real PostgreSQL rather than a fake, because what is being checked
 is what the database does. A fake missed a foreign key that could not resolve.
 
-The whole cycle runs end to end against a real PostgreSQL with a stubbed Backend:
+The whole cycle runs end to end against a real QuestDB and PostgreSQL with a stubbed Backend:
 the sell alone while there is no cash, then a part-funded buy, then the same quantity narrowing
 5% to 3% to 1%, then market.

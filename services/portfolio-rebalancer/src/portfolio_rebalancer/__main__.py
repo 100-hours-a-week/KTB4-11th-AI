@@ -2,8 +2,9 @@
 
 The service is invoked once per poll and exits, the way `market-collector` is; compose owns
 the interval. Nothing calls this service, so it has no HTTP server: every input is a
-PostgreSQL read or an outbound call: every price comes from the Backend's own poll, so
-there is no market data store to reach.
+datastore read or an outbound call. The Backend's poll quotes what the account holds;
+QuestDB supplies the last close for a stock it does not, which is what a first purchase
+needs.
 """
 
 import logging
@@ -12,6 +13,7 @@ import sqlalchemy as sa
 from ktb_core.logging import setup_logging
 
 from portfolio_rebalancer.request.backend import bearer_token, build_client
+from portfolio_rebalancer.request.prices import connect
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.tick import tick
 
@@ -26,14 +28,17 @@ def main() -> None:
 
     engine = sa.create_engine(settings.postgres_dsn)
     try:
-        with build_client(settings.backend_url) as client:
+        with (
+            connect(settings.questdb_conf) as db,
+            build_client(settings.backend_url) as client,
+        ):
             token = bearer_token(
                 settings.backend_jwt_secret.get_secret_value(),
                 settings.backend_jwt_subject,
             )
             # The tick owns its transactions: an order has to be committed before it is
             # sent, so one transaction cannot span the send.
-            sent = tick(engine, client, token)
+            sent = tick(engine, db, client, token)
         log.info("tick finished", extra={"orders_sent": sent})
     finally:
         engine.dispose()

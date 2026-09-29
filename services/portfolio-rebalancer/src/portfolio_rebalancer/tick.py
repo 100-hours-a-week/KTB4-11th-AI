@@ -4,9 +4,10 @@ Every account is handled on its own. An account with nothing recorded against th
 portfolio gets a fresh rebalance; one that already has orders out gets its outstanding
 pairs advanced a rung.
 
-Every price comes from the poll: `stocks[].current_price` is what the Backend is trading
-on, and it is the only quote this service sees. A stock the account does not hold has no
-price, so nothing can be sized for it and it is skipped with a note.
+Prices come from two places, and the order matters. `stocks[].current_price` is what the
+Backend is trading on, so it wins wherever the poll gives it. QuestDB's last close fills
+in for a stock the account does not hold yet, which the poll cannot quote and which is
+exactly the case of buying a name for the first time.
 
 Orders are committed before they are sent, in their own transaction. Holding the
 transaction open across the send would undo the point of recording first: a failed send
@@ -29,6 +30,7 @@ from portfolio_rebalancer.decide.rebalance import rebalance
 from portfolio_rebalancer.decide.reservations import outstanding_orders, trigger_hit
 from portfolio_rebalancer.decide.trading_days import days_left
 from portfolio_rebalancer.request.backend import fetch_accounts, send_orders
+from portfolio_rebalancer.request.prices import latest_prices
 from portfolio_rebalancer.request.store import (
     amend_orders,
     discard_unsent,
@@ -53,7 +55,7 @@ def market_now() -> datetime:
     return datetime.now(KST)
 
 
-def tick(engine: Any, client: Any, token: str, now: datetime | None = None) -> int:
+def tick(engine: Any, db: Any, client: Any, token: str, now: datetime | None = None) -> int:
     """Returns the number of orders sent to the Backend."""
     now = now or market_now()
 
@@ -69,13 +71,13 @@ def tick(engine: Any, client: Any, token: str, now: datetime | None = None) -> i
 
     sent = 0
     for account in managed_accounts(polled):
-        sent += _account(engine, client, token, portfolio, account, now)
+        sent += _account(engine, db, client, token, portfolio, account, now)
     return sent
 
 
-def _account(engine, client, token, portfolio, account, now) -> int:
+def _account(engine, db, client, token, portfolio, account, now) -> int:
     state = apply_pending(account)
-    prices = polled_prices(account)
+    prices = _prices(db, portfolio, state, account)
     working = outstanding_orders(account.get("pending_orders") or ())
 
     with engine.begin() as conn:
@@ -172,6 +174,26 @@ def _continue(engine, client, token, portfolio, state, working, recorded, starte
             amend_orders(conn, portfolio.portfolio_id, moved)
         sent += _send(engine, client, token, portfolio, state, moved)
     return sent
+
+
+def _prices(db, portfolio, state, account) -> dict[str, float]:
+    """What each stock costs, the poll's live quote taking precedence.
+
+    QuestDB is asked only for what the poll did not quote -- a stock the account does not
+    hold yet -- so a first purchase has a reference and everything else is priced at what
+    the Backend is actually trading on. The precedence is that omission rather than the
+    merge below: the two never carry the same code.
+    """
+    quoted = polled_prices(account)
+    wanted = {name.stock_code for name in portfolio.holdings}
+    wanted |= {leaving.stock_code for leaving in portfolio.exits}
+    wanted |= set(state.held)
+    missing = sorted(wanted - quoted.keys())
+
+    closes = (
+        {code: price.close for code, price in latest_prices(db, missing).items()} if missing else {}
+    )
+    return closes | quoted
 
 
 def _struck(portfolio, state, working, references, recorded, prices) -> list:

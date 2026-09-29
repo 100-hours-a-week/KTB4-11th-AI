@@ -159,6 +159,7 @@ services:
     stop_grace_period: 2m
     environment:
       <<: *postgres-environment
+      PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
       PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL}
       PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET}
       PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT:-portfolio-rebalancer}
@@ -166,6 +167,8 @@ services:
       PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS: ${PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS:-3600}
     depends_on:
       postgres:
+        condition: service_healthy
+      questdb:
         condition: service_healthy
 
   news-preprocessor:

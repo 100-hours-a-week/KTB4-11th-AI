@@ -56,6 +56,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      questdb:
+        condition: service_healthy
     restart: "no"
 
   news-clusterer:
@@ -70,6 +72,8 @@ services:
       - NEWS_CLUSTERER_LOG_LEVEL=${NEWS_CLUSTERER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
+        condition: service_healthy
+      questdb:
         condition: service_healthy
     restart: "no"
 
@@ -91,6 +95,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      questdb:
+        condition: service_healthy
     restart: "no"
 
   market-analyzer-mcp:
@@ -108,12 +114,15 @@ services:
       dockerfile: docker/portfolio-rebalancer.Dockerfile
     environment:
       - PORTFOLIO_REBALANCER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/ktb
+      - PORTFOLIO_REBALANCER_QUESTDB_CONF=ws::addr=questdb:9000;
       - PORTFOLIO_REBALANCER_BACKEND_URL
       - PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET
       - PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT
       - PORTFOLIO_REBALANCER_LOG_LEVEL=${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
+        condition: service_healthy
+      questdb:
         condition: service_healthy
     restart: "no"
 
