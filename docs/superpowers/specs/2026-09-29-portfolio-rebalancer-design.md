@@ -1,0 +1,483 @@
+# Portfolio Rebalancer Design
+
+Supersedes `2026-09-28-portfolio-rebalancer-design.md`. That document is left as the record of
+what was decided on the 28th; this one records what implementing it and measuring against the
+real datastores and the real Backend changed. Everything not listed under **What Changed** is
+carried over unaltered, and the sections below restate the design in full so this file can be
+read on its own.
+
+## What Changed
+
+| | 28th | 29th | why |
+|---|---|---|---|
+| Shape | HTTP server `portfolio-rebalancer-http`, `POST /rebalance` | scheduled one-shot `portfolio-rebalancer`, no inbound surface | nothing calls it, and the ladder had no trigger |
+| Order endpoint | `account_id` in the body | `POST /api/v1/accounts/{account_id}/orders` | the Backend places orders per account |
+| Auth | a token, issuance unsettled | a JWT this service signs, HS256 over a shared secret | the Backend shares `JWT_SECRET`, so we sign |
+| Tick rounding | the Backend rounds prices | **we** round to a KRX tick | the Backend answers 400, it does not round |
+| Transaction | one per tick | the order is committed before it is sent | a failed send was rolling the record back |
+| QuestDB | `bars_1m` over psycopg | `bars` with a `timeframe` column, official `questdb` client | `dev` collapsed the four tables into one |
+| Migration | `0006` after `#42`'s `0005` | `0006` after `#54`'s `0005` | `#42` was closed and replaced by `#54` |
+| `rebalance()` | `(portfolio, previous, account, prices)` | `(portfolio, account, prices)` | exits belong to the portfolio already |
+
+## Purpose
+
+A model portfolio is relative weights. A user has an amount of money and can only buy whole
+shares. `portfolio-rebalancer` reconciles the three and emits the buy and sell requests that
+move an account toward the portfolio.
+
+The problem that defines the service: capital 10,000,000 with SK하이닉스 at 5% gives a budget
+of 500,000, and one share costs 1,800,000. The weight says buy it; the price says it cannot be
+bought at all.
+
+## Scope
+
+The service will:
+
+- read the current model portfolio from PostgreSQL;
+- rebalance every AI-managed, active account separately, using only that account's own cash, holdings and pending orders;
+- poll the Backend hourly for active users, their holdings, cash and pending orders;
+- read the latest close per stock code from QuestDB;
+- decide which companies can be bought and at what whole-share quantity;
+- **round every price it sends to a valid KRX tick**;
+- emit buy and sell requests to the Backend with the reason behind each;
+- record what it ordered so a restart does not order twice.
+
+The service will not choose which companies belong in the portfolio, place orders at the
+exchange, or account for fees, taxes and slippage.
+
+Rounding prices to exchange ticks was on this list as something the service would *not* do. It
+now does: the Backend rejects an off-tick price with a 400 rather than rounding it.
+
+## Position in the System
+
+**The service has no inbound surface.** It is invoked on a schedule, does one pass, and exits —
+the shape `market-collector` uses, with compose owning the interval.
+
+```mermaid
+flowchart LR
+  COMPOSE(compose\nPORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS) --> PR[portfolio-rebalancer]
+  PB[portfolio-builder] -->|portfolios · portfolio_holdings · portfolio_exits| PG[(PostgreSQL)]
+  PG <--> PR
+  QDB[(QuestDB)] -->|latest close from bars| PR
+  BE[Backend] -->|GET /api/v1/users?state=active| PR
+  PR -->|POST /api/v1/accounts/id/orders| BE
+```
+
+Every input is a datastore read or an outbound call, and every output is a write or an outbound
+call. FastAPI only ever served inbound requests, and the only route was `GET /health`.
+
+**The route design left the ladder with no trigger.** A band narrows once per trading day, but
+`POST /rebalance` would be called by portfolio-builder, which runs on the weekly judgement.
+Days two and three and the market rung would never fire. Only a scheduled pass can notice that a
+pair is still outstanding, which is what reading the day back out of the pair is for.
+
+Idempotency did not depend on the route either: "do not act twice on the same portfolio and
+account" is the same `rebalance_orders` lookup whether a route or a tick asks it.
+
+So `AGENTS.md`'s HTTP-edge sentence loses the rebalancer edge. Prices still come from QuestDB
+directly.
+
+## Account State
+
+`GET /api/v1/users?state=active` is polled once an hour, carrying a JWT. Each active user carries
+one or more accounts, and every account is decided on its own:
+
+| field | use |
+|---|---|
+| `account_id` | identifies the account an order is placed against; one user has several |
+| `is_ai_managed` | only an AI-managed account is rebalanced |
+| `is_active` | an inactive account is skipped |
+| `cash_balance` | cash before pending commitments |
+| `stocks[]` — `stock_id`, `amount`, `total_price` | quantity held, and the principal put into it |
+| `pending_orders[]` | orders placed and not yet filled |
+
+Pending orders are subtracted before anything is decided:
+
+```
+available cash = cash_balance − Σ(pending buys: price × amount)
+held quantity  = stocks[].amount + Σ(pending buys) − Σ(pending sells)
+```
+
+A pending sell adds no cash, because the proceeds do not exist until it fills. A holding's
+`total_price` is principal, not a current value, so the position is priced from QuestDB.
+
+The poll is written to PostgreSQL as **the latest state, not a history**, replaced each time.
+Five tables, and only `rebalance_orders` accumulates:
+
+| table | from the payload | contents |
+|---|---|---|
+| `users` | `user_id`, `nickname`, `state` | one row per user |
+| `accounts` | `account_id`, `account_name`, `is_ai_managed`, `is_duel_account`, `is_active`, `cash_balance` | one row per account |
+| `account_holdings` | `stocks[]` | what the account holds, per account |
+| `account_pending_orders` | `pending_orders[]` | orders still outstanding, per account |
+| `rebalance_orders` | — | **history** — every order this service sent, and why |
+
+Three columns are renamed: `amount` becomes `quantity`, `total_price` becomes `principal`, and
+`stock_id` becomes `stock_code` so a holding and a pending order name the same thing the same
+way.
+
+**Both quantities are stored as decimals.** The poll types a holding's `amount` as an integer
+and a pending order's as `123.44`. A mirror that rounds is no longer a mirror of the Backend, so
+the rounding to whole shares happens where orders are decided.
+
+**`rebalance_orders.reason` is nullable**, matching `portfolio_holdings.reason` upstream. `NOT
+NULL` fails on real data from portfolio-builder.
+
+**A user has several accounts, and each has its own holdings and pending orders.** The example
+payload spells `accounts` as an object; the Backend sends a list. Both shapes are accepted, since
+which one arrives is unconfirmed.
+
+## Prices
+
+QuestDB holds one `bars` table with a `timeframe` column, not four tables — `dev` collapsed
+them. It is read through the official `questdb` client over QWP/WebSocket (`ws::`), the same
+client `market-collector` writes with, so there is one QuestDB client in the repository rather
+than two. The client refuses an `http::` connection string outright.
+
+One statement covers every code. `LATEST ON ts PARTITION BY symbol` applies the timeframe and
+session filters **before** picking the newest row per symbol, checked against a live instance:
+an extended-session row newer than the last regular one is correctly passed over. A code with no
+candle is left out of the result rather than priced at zero, which would read as a free share.
+
+## Allocation
+
+`cash_weight` comes from the model portfolio and does two jobs. It is held back before any
+budget is computed, so the money available for stocks is `capital × (1 − cash_weight)`, and
+whatever the residual pass cannot spend is added back to it.
+
+Capital is the account's cash, plus the proceeds of the exits, plus the market value of the
+names being kept. So a name already held at half its target is bought only up to the target
+rather than bought again.
+
+The model portfolio has no ranking and no reserve list. A company whose budget cannot cover one
+share is dropped and **its weight is shared equally over the companies that remain** — equal,
+not in proportion, so one expensive name is not absorbed by whichever holding happened to be
+largest. If nothing can be bought, the whole amount is cash.
+
+```
+investable = capital × (1 − cash_weight)
+
+loop:
+    budget_i = investable × weight_i / Σ weights
+    if every company can afford one share: break
+    drop the companies that cannot
+    share their weight equally over those that remain
+```
+
+An equal share of freed weight raises every remaining budget, so a company that was affordable
+stays affordable. The set only shrinks, so the loop ends.
+
+**A dropped name that is held is locked out of the capital.** Its value cannot be spent while it
+is not being sold, so counting it would size the other buys against money the account cannot
+reach. Locking it lowers the capital and the targets are computed again; the locked set only
+grows, so this ends too.
+
+### The Residual Pass
+
+Flooring each budget to whole shares leaves cash worth spending. Measured over ten weights on
+10,000,000, flooring alone leaves 8–13% idle, which is a different portfolio from the one
+portfolio-builder decided on.
+
+The residual is spent one share at a time, in two phases: first for whichever company is
+furthest below its ideal amount, and once none is below it, the companies in descending weight
+order. Dividing the residual equally instead leaves most of it unspent, because a tenth of it
+rarely covers a share. Phase two is reached in about a third of random portfolios, so it is not
+dead code.
+
+## Order Ladder
+
+An order is not sent at market first. Each one goes out as **two reservations around a reference
+price**, both for the full quantity:
+
+```
+reference 78,000, step ± 5%   →   74,100 × 100 shares   and   81,900 × 100 shares
+```
+
+Whichever fills, fills, and **the Backend cancels the other**. The low side alone risks never
+filling; the high side is what makes the fill happen.
+
+The band narrows once per trading day, and the third day ends in a market order rather than a
+fourth band, so **every order fills within three trading days**:
+
+| day | band | 78,000 reference |
+|---|---|---|
+| 1 | reference ± 5% | 74,100 / 81,900 |
+| 2 | reference ± 3% | 75,700 / 80,300 |
+| 3 | reference ± 1%, then market if that does not fill | 77,200 / 78,800 |
+
+The market rung is what guarantees the fill; narrowing does not. A ± 1% band is *harder* to
+reach than ± 5%, so a price that has walked away from the reference is less likely to come back
+inside the narrow band than the wide one.
+
+The reference is fixed when the first pair is placed and every later step is measured from that
+same number, not from whatever the close has become since.
+
+**Trading days are approximated by weekdays.** Nothing narrows on a Saturday or Sunday, since
+there are only three rungs and one spent on a closed market is wasted. A mid-week public holiday
+advances a rung a day early, which costs some price chasing but cannot break the fill, because
+the last rung is a market order either way. Reading the session dates out of QuestDB's `bars`
+would make it exact.
+
+### Prices Are Quoted on a KRX Tick
+
+The Backend answers **400** for a price that is not on a tick. It does not round, so this service
+does:
+
+| price | tick |
+|---|---|
+| under 2,000 | 1 |
+| 2,000 – under 5,000 | 5 |
+| 5,000 – under 20,000 | 10 |
+| 20,000 – under 50,000 | 50 |
+| 50,000 – under 200,000 | 100 |
+| 200,000 – under 500,000 | 500 |
+| 500,000 and over | 1,000 |
+
+**Rounding is to the nearest tick, and that is load-bearing rather than a preference.** Flooring
+breaks the day recovery below, because the pair stops being symmetric about its reference and
+the ratio no longer matches its band.
+
+The reference travels in the payload too, so it is quoted on a tick as well. A market order
+carries no price.
+
+### The Step Is Read Back From the Pair
+
+Nothing has to be stored, and the Backend does not have to carry the reference on the order.
+Two prices determine both unknowns:
+
+```
+reference = (low + high) / 2
+ratio     = (high − low) / (high + low)
+```
+
+The bands are two percentage points apart, so nothing is ambiguous. Checked by brute force over
+**2,432,028** `(reference, day)` combinations from 500 to 3,000,000 won: the day comes back right
+every time and the reference within 0.2%. In **37,847** of those the low falls in one tick band
+and the high in the next, so the two are rounded by different amounts — the case most likely to
+break it, and it holds.
+
+Two pending orders for the same company and side are one pair. A lone order means the other side
+already filled; three is a state this service did not create. Neither is narrowed, because a rung
+placed against a position that has moved is worse than leaving it. A pair carries the **smaller**
+of the two outstanding quantities, which is what a partial fill left to buy.
+
+## Rebalance Flow
+
+The initial purchase needs only capital and the model portfolio. A later rebalance works from
+what portfolio-builder has already decided — holdings to keep and exits to sell — and **sells
+before it buys**, because the proceeds of the sells are part of the cash the buys spend.
+
+```mermaid
+flowchart TD
+  a(tick) --> b{rebalance_orders has\na record for this account}
+  b -->|no| c[exits → sell in full]
+  c --> d[available cash = cash + proceeds + kept value]
+  d --> e[target quantity per company]
+  e --> f{against held quantity}
+  f -->|more| g[buy — allocation rules apply]
+  f -->|less| h[sell the difference]
+  f -->|same| i[hold]
+  b -->|yes| j{an outstanding pair}
+  j -->|no| i
+  j -->|yes| k{a trading day has passed}
+  k -->|no| i
+  k -->|yes| l[narrow one rung, as an amendment]
+```
+
+The allocation rules apply to the buy side only. A sell is always possible, so a target weight
+that cannot be reached by buying does not block the sells that fund it. A name too dear to buy,
+or one with no price in QuestDB, is **skipped** with a note rather than sold: being unaffordable
+is a buy-side outcome and the model portfolio still names it. A held name in neither the
+portfolio nor the exits is left alone, because no reason exists to act on it and every order
+carries one.
+
+## Interface
+
+There is no HTTP interface. The service is one command, run on a schedule.
+
+Outbound, both carrying `Authorization: Bearer <jwt>`:
+
+```
+GET  /api/v1/users?state=active
+POST /api/v1/accounts/{account_id}/orders
+```
+
+**The account is part of the order path, not only the body.** `send_orders` takes the account
+from the orders rather than the caller, so one account's orders cannot be posted to another
+account's endpoint, and a batch spanning two accounts is refused: a path can only name one. Both
+call sites already pass a single account's orders.
+
+An order carries what to do and why — the reason portfolio-builder stored on that holding
+(`portfolio_holdings.reason`) or on the exit (`portfolio_exits.reason`). `stock_code` travels
+with `company_id` because `company_id` is DART's `corp_code`, which no exchange accepts as an
+order identifier; the stock code is joined in from `companies`.
+
+```json
+{
+  "orders": [
+    {"company_id": "00126380", "stock_code": "005930", "action": "buy", "shares": 10,
+     "reference": 78000, "band": 0.05, "low": 74100, "high": 81900,
+     "weight": 0.08, "reason": "...", "account_id": 11},
+    {"company_id": "00164779", "stock_code": "000660", "action": "skip", "shares": 0,
+     "weight": 0.05, "account_id": 11,
+     "note": "one share costs more than the budget; its weight was shared out equally"}
+  ]
+}
+```
+
+### The JWT
+
+The Backend shares a `JWT_SECRET`, so this service **signs its own token** rather than being
+handed one: HS256 over `sub`, `iat` and `exp`, with a five-minute life because a tick lives for
+seconds. The subject is configuration, not a constant, because the Backend decides which identity
+may read every user. The secret is a `SecretStr`, kept out of logs and repr.
+
+**The claim set is unverified.** `GET /api/v1/users` does not exist on the Backend yet, and its
+filter answers 401 for every path — including ones that do not exist — so no response
+distinguishes a rejected token from a missing route. Eight claim shapes, three HMAC algorithms
+and five ways of carrying the token were tried against the live tunnel; all identical. If the
+Backend wants a role, an audience or an issuer, they are added in `bearer_token` and nowhere
+else.
+
+## Failure Handling
+
+**A stale price can misjudge affordability.** The only price available is the newest close in
+QuestDB's `bars`, and its freshness is the collector's cron period, not the market's.
+Affordability is a threshold, so a stale 1,750,000 against a budget of 1,800,000 says "buyable"
+when the real price has moved to 1,850,000 and it is not. Two cheap mitigations, both worth
+having: require `budget ≥ price × (1 + margin)`, and return the `ts` of the close used so the
+caller can refuse a price older than it will trade on.
+
+**An order is committed before it is sent, in its own transaction.** Holding one transaction
+across the send undoes the point of recording first. Demonstrated against a real PostgreSQL with
+a Backend that took the request and then answered 404: the Backend held the order and
+`rebalance_orders` held nothing — the silent order this section exists to prevent.
+
+That leaves a third state, recorded but never stamped as sent, and **the poll answers it.** Every
+placeable order goes out in one request, so a single outstanding pair means the request arrived
+and only the reply was lost: stamp them. No pair at all means the Backend never took them, so
+the record is discarded and the next pass decides again at current prices — better than replaying
+a decision made at yesterday's. Nothing that reached the Backend is ever dropped.
+
+A discarded record therefore gets a **new** reference, share count and band. A placed order keeps
+the reference its first pair fixed; a record with no pair has no first pair to keep.
+
+**Duplicate orders need less guarding than they appear to.** The poll returns only orders that
+are still pending, so a filled order leaves `pending_orders` and appears in `stocks[]`. The next
+poll computes the target against the new holdings, finds no gap, and places nothing. The unique
+constraint on `(portfolio_id, account_id, stock_code)` is what makes a repeat a no-op, and it is
+also why a narrowing is an **amendment in place** rather than a second row.
+
+## Deferred
+
+**An outstanding pair when the next weekly judgement lands.** Three daily steps need three
+trading days, so the ladder finishes inside any week with three or more of them:
+
+| holidays | trading days | finishes |
+|---|---|---|
+| 0 | 5 | Wednesday |
+| 1 | 4 | Thursday |
+| 2 | 3 | Friday |
+| 3 or more | 2 or fewer | runs into the next week |
+
+Only a week cut to two trading days overflows, which in practice means a Seollal or Chuseok
+week. **The intended behaviour is to cancel the outstanding pair** and let the new portfolio's
+order replace it. It is not implemented in this version, because the case is rare enough that
+the handling can wait.
+
+**The work queue.** `#54` records that this service consumes it after the MVP. Not implemented.
+
+**A holiday calendar.** Weekdays stand in for trading days, as above.
+
+## Code Structure
+
+Grouped along the line this document already drew — pure decisions against I/O.
+
+| module | kind | responsibility |
+|---|---|---|
+| `decide/shares.py` | pure | weights and prices to whole shares, and spending the residual |
+| `decide/reservations.py` | pure | the pair's prices, the KRX tick, reading a pair back, finding pairs |
+| `decide/accounts.py` | pure | fold pending orders into cash and holdings |
+| `decide/rebalance.py` | pure | what an account with nothing outstanding should hold |
+| `decide/outstanding.py` | pure | an order already at the Backend: did it arrive, should it narrow |
+| `request/prices.py` | I/O | the latest close from QuestDB |
+| `request/backend.py` | I/O | the JWT, the account poll, the order send |
+| `request/store.py` | I/O | the account mirror and the order history in PostgreSQL |
+| `tick.py` | orchestration | calls the above in order, and decides nothing |
+| `portfolio.py`, `order.py` | data | the model portfolio as read, and the order as sent |
+
+`decide/` has no database, socket or clock, so every decision is tested without anything
+running. `request/` holds no decisions.
+
+Two modules were split out of one during implementation: deciding what to hold and advancing an
+already-placed order are revised for different reasons, so they are separate files, and the
+shapes they share live on their own rather than inside either.
+
+```python
+def whole_shares(
+    targets: Sequence[Holding],
+    prices: Mapping[str, float],
+    capital: float,
+    cash_weight: float,
+    margin: float = 0.0,
+) -> tuple[list[Position], float]:
+    """Positions to hold, and the cash left un-invested."""
+
+
+def reservation_prices(reference: float, day: int) -> tuple[float, float] | None:
+    """The low and high price for a day, on a KRX tick, or None once at market."""
+
+
+def read_reservation(low: float, high: float) -> tuple[float, int]:
+    """The reference price and the day, recovered from an outstanding pair."""
+
+
+def find_pairs(pending_orders) -> dict[tuple[str, str], Pair]:
+    """The outstanding pairs, keyed by stock code and side."""
+
+
+def apply_pending(account: Mapping[str, object]) -> AccountState:
+    """What the account can actually spend and what it actually holds."""
+
+
+def rebalance(portfolio: Portfolio, account: AccountState, prices) -> list[Order]:
+    """Sells first, then buys with the cash they free."""
+
+
+def narrow(portfolio, account, pairs, last_sent, today) -> list[Order]:
+    """Advance each outstanding pair one rung, at most once per trading day."""
+
+
+def reached_the_backend(stock_codes, pairs) -> bool:
+    """Whether orders recorded but never stamped as sent actually got there."""
+
+
+def tick(engine, db, client, token, today=None) -> int:
+    """One pass: poll, decide, send. Returns the number of orders sent."""
+```
+
+## Migration
+
+`0006_create_rebalance_tables.py`, `down_revision = "0005"`. It chains after `#54`'s
+`0005_create_portfolios.py` — `#42` carried an identical file but was closed and replaced.
+Numbering this `0005` as well would leave the Alembic tree with two heads, so the work proceeds
+and only its tests wait for `#54`.
+
+`#54` also makes `service_name` a required keyword of `ktb_core.setup_logging`, which this
+service must pass or die on startup. CI runs no type checker, so a test pins the call.
+
+## Verification
+
+Each test pins a property the rules have to hold. Beyond the properties, two things were
+measured rather than reasoned about:
+
+- **The pair survives tick rounding.** 2,432,028 combinations, zero day-recovery failures,
+  37,847 of them straddling two tick bands.
+- **A failed send leaves a record.** Reproduced against a real PostgreSQL, before and after.
+
+Storage is exercised against a real PostgreSQL rather than a fake, because what is being checked
+is what the database does — cascades, a unique constraint, and replace-not-append. A fake missed
+a foreign key that could not resolve.
+
+The whole ladder runs end to end against a real QuestDB and PostgreSQL with a stubbed Backend:
+±5%, then ±3%, then ±1%, then market, then nothing, with the same-day re-run emitting nothing.
