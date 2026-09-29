@@ -100,14 +100,12 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
         (
             "news_graph_builder.database",
             {
-                "companies",
-                "company_aliases",
+                "corporations",
+                "corporation_aliases",
                 "entities",
                 "cluster_summaries",
                 "cluster_entities",
                 "relations",
-                "themes",
-                "theme_companies",
             },
         ),
     ],

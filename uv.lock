@@ -729,18 +729,22 @@ source = { editable = "services/market-collector" }
 dependencies = [
     { name = "ktb-core" },
     { name = "kwcli" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "questdb" },
+    { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "ktb-core", editable = "packages/core" },
     { name = "kwcli" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "questdb", specifier = ">=5.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.54" },
 ]
 
 [[package]]
@@ -922,7 +926,6 @@ source = { editable = "services/news-graph-builder" }
 dependencies = [
     { name = "httpx" },
     { name = "ktb-core" },
-    { name = "opendartreader" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
@@ -932,7 +935,6 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "ktb-core", editable = "packages/core" },
-    { name = "opendartreader", specifier = ">=0.3.3" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "sqlalchemy", specifier = ">=2.0.54" },

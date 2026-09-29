@@ -11,7 +11,7 @@ from market_collector.kiwoom.parse import KST
 from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
 from market_collector.store import Store
-from market_collector.universe import IndexClient, fetch_members, upsert_members
+from market_collector.symbols import load_symbols
 
 log = logging.getLogger(__name__)
 
@@ -26,16 +26,10 @@ def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
 
 
 def archive_ohlcv(settings: Settings, now: datetime) -> int:
-    index_client = IndexClient(
-        build_client(settings.kiwoom_accounts[0], settings.kiwoom_mode),
-        interval=settings.request_interval,
-    )
-    members = fetch_members(index_client, settings.index_code)
-    symbols = sorted({member.symbol for member in members})
+    symbols = load_symbols(settings.postgres_dsn, settings.index_name)
 
     with questdb.connect(settings.questdb_conf) as db:
         store = Store(db)
-        upsert_members(store, now, settings.index_code, members)
         latest = store.latest_bar_timestamps()
 
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
