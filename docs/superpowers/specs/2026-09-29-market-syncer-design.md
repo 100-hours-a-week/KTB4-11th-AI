@@ -54,9 +54,37 @@ FKs and unique indexes, then rename tables and columns. `downgrade` reverses it.
    empty-result guards stay: an empty fetch never replaces a populated table. If a sync failed and
    `corporations` is empty, exit 1 immediately.
 
-The advisory lock, the Kiwoom client, the DART client and the join and alias logic are moved from
-`news-graph-builder`, not rewritten. The KOSPI 200 fetch (`fetch_kospi200_codes`) already exists in
-`theme/kiwoom.py`; it moves over unchanged.
+The advisory lock and the join and alias logic move from `news-graph-builder` unchanged. The
+Kiwoom and DART access is rewritten on the libraries below; the KOSPI 200 fetch keeps its request
+(`ka20002`, `mrkt_tp=2`, `inds_cd=201`).
+
+## External clients
+
+No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART through
+`OpenDartReader`.
+
+**Kiwoom (`kiwoom`)**
+- Build the client as `market-collector` does: `KiwoomAuth(mode, StaticSecretProvider(app_key,
+  secret_key), MemoryTokenStore())` and `KiwoomClient(auth)`. The SDK issues and refreshes the
+  token, so `fetch_token` and the hand-written paging loop are deleted.
+- Paging uses `client.iterate_pages(api_id=, path=, body=, max_pages=0, page_delay_seconds=)`, with
+  the `next_key` stall guard that `market-collector`'s `IndexClient` has.
+- Calls: `ka10099` (KOSPI stocks, `mrkt_tp=0`), `ka20002` (KOSPI 200), `ka90001` (themes),
+  `ka90002` (theme members).
+- `KIWOOM_BASE_URI` is replaced by `KIWOOM_MODE` (`real` or `demo`), the SDK's way to choose the
+  paper-trading domain.
+- One account is enough: this service makes a few hundred sequential calls.
+
+**OpenDART (`OpenDartReader`)**
+- `OpenDartReader(api_key).corp_codes` gives the DataFrame of `corp_code`, `corp_name`,
+  `corp_eng_name`, `stock_code`. The current code calls the internal `dart_list.corp_codes`; that
+  goes away.
+- The constructor writes a `docs_cache/` pickle into the working directory and reads `.env`. The
+  image therefore needs a writable working directory (a `WORKDIR` under `/tmp` or a tmpfs mount),
+  and the cache is harmless because the job runs once a day.
+- The existing error handling stays: the DART status error is a `ValueError` holding a
+  `{'status', 'message'}` dict and is re-raised as a `RuntimeError` without the key in the message.
+- `stock_code` NaN handling (`fillna("")`) stays.
 
 ## Changes to existing members
 
@@ -78,7 +106,8 @@ The advisory lock, the Kiwoom client, the DART client and the join and alias log
 - New `services/market-syncer` (uv member, console script `market-syncer`), `docker/market-syncer.Dockerfile`,
   `docker/requirements/market-syncer.txt`, compose dev and prod entries, CI matrix entry, `tach.toml` module,
   `AGENTS.md` and `README.md` tables.
-- `ktb-core` dependency only; no dependency on other services.
+- `ktb-core`, `kiwoom`, `opendartreader`, `sqlalchemy` and `psycopg`; no `httpx`, and no dependency on other services. `news-graph-builder`
+  drops `opendartreader` and keeps `httpx` for the LLM call.
 
 ## Settings (`MARKET_SYNCER_` prefix)
 
@@ -86,8 +115,8 @@ The advisory lock, the Kiwoom client, the DART client and the join and alias log
 |---|---|
 | `POSTGRES_DSN` | required |
 | `KIWOOM_APP_KEY`, `KIWOOM_SECRET_KEY` | required |
-| `KIWOOM_BASE_URI` | `https://api.kiwoom.com` |
-| `KIWOOM_REQUEST_INTERVAL` | `0.2` |
+| `KIWOOM_MODE` | `real` (`real` or `demo`) |
+| `KIWOOM_REQUEST_INTERVAL` | `0.2` (seconds between pages) |
 | `DART_API_KEY` | required |
 | `LOG_LEVEL` | `INFO` |
 
@@ -112,5 +141,6 @@ enable the others.
    of entity resolution. Say so if you want every Kiwoom KOSPI row, with a nullable `corp_code`.
 2. **Theme membership scope.** Themes used to keep only KOSPI 200 members. This design keeps every member that
    is in `corporations`, and consumers filter through `corporation_indices`. Say so if you want the old filter.
-3. **Kiwoom client.** The moved httpx client is kept as is. `market-collector` uses the `kiwoom` SDK, and
-   unifying the two is a separate refactor.
+3. **`mrkt_tp` for KOSPI 200.** Kiwoom's spec says `mrkt_tp=2` is KOSPI 200; `news-graph-builder` sends `2`, while
+   `market-collector`'s `ka20002` call sent `0` with the same `inds_cd=201`. market-syncer uses `2`. This should be
+   checked against a real response once, since `market-collector` has been trading on the `0` result.
