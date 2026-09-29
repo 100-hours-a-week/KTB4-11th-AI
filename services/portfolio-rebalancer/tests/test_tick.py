@@ -1,18 +1,29 @@
 """The tick calls the other modules in order. The modules themselves are tested
 elsewhere, so these fakes stand in for the datastores and the Backend."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 
 from portfolio_rebalancer import tick as tick_module
 from portfolio_rebalancer.decide.reservations import PRICE_BANDS, reservation_prices
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 from portfolio_rebalancer.request.prices import Price
-from portfolio_rebalancer.tick import market_today, tick
+from portfolio_rebalancer.tick import market_now, tick
 
+# 2026-09-28 週 has five sessions, so a Monday cycle starts with five days.
 MONDAY = date(2026, 9, 28)
 TUESDAY = date(2026, 9, 29)
+THURSDAY = date(2026, 10, 1)
+FRIDAY = date(2026, 10, 2)
 SAMSUNG = ("00126380", "005930")
 HYNIX = ("00164779", "000660")
+
+
+KST = timezone(timedelta(hours=9))
+
+
+def noon(day):
+    """A KST datetime in the middle of the session, well before the 14:30 cutoff."""
+    return datetime(day.year, day.month, day.day, 11, 0, tzinfo=KST)
 
 
 def portfolio(holdings=None, exits=()):
@@ -149,9 +160,10 @@ class Fakes:
                     self.today.year, self.today.month, self.today.day, tzinfo=UTC
                 )
 
-    def run(self, today=TUESDAY):
-        self.today = today
-        return tick(_Engine(), "db", "client", "a-token", today=today)
+    def run(self, now=None):
+        now = now or noon(TUESDAY)
+        self.today = now.date()
+        return tick(_Engine(), "db", "client", "a-token", now=now)
 
 
 class _Conn:
@@ -233,7 +245,7 @@ def test_an_account_whose_plan_is_already_met_emits_nothing(monkeypatch):
         recorded={11: already},
     )
 
-    assert fakes.run(today=MONDAY) == 0
+    assert fakes.run(now=noon(MONDAY)) == 0
     assert fakes.recorded_rows == []
     assert fakes.sent == []
 
@@ -248,7 +260,7 @@ def test_an_outstanding_pair_is_amended_rather_than_recorded_again(monkeypatch):
         recorded={11: already},
     )
 
-    assert fakes.run() == 1
+    assert fakes.run(now=noon(THURSDAY)) == 1
     assert fakes.recorded_rows == []
     assert [order.band for order in fakes.amended[0]] == [PRICE_BANDS[1]]
     assert fakes.calls.index("amend") < fakes.calls.index("send")
@@ -266,7 +278,7 @@ def test_a_pair_already_matching_the_plan_is_left_alone(monkeypatch):
         recorded={11: already},
     )
 
-    assert fakes.run(today=MONDAY) == 0
+    assert fakes.run(now=noon(MONDAY)) == 0
     assert fakes.amended == []
 
 
@@ -313,9 +325,13 @@ def test_the_held_stocks_are_priced_too_not_just_the_portfolios(monkeypatch):
     assert "000660" in asked[0]
 
 
-def test_market_today_is_the_exchanges_date():
-    """The service may run anywhere; the market is in Seoul."""
-    assert isinstance(market_today(), date)
+def test_market_now_is_on_the_exchanges_clock():
+    """The service may run anywhere; the market is in Seoul, and the 15:30 close is what
+    the last day's market order has to beat."""
+    now = market_now()
+
+    assert now.tzinfo is not None
+    assert now.utcoffset() == timedelta(hours=9)
 
 
 def test_a_recorded_order_that_is_no_longer_on_the_market_is_put_back(monkeypatch):
@@ -329,7 +345,7 @@ def test_a_recorded_order_that_is_no_longer_on_the_market_is_put_back(monkeypatc
         recorded={11: already},
     )
 
-    assert fakes.run(today=MONDAY) > 0
+    assert fakes.run(now=noon(MONDAY)) > 0
     assert fakes.amended
     assert fakes.recorded_rows == []
 
@@ -356,7 +372,7 @@ def test_an_unsent_record_whose_pair_is_outstanding_is_stamped_sent(monkeypatch)
         recorded={11: unsent},
     )
 
-    fakes.run(today=TUESDAY)
+    fakes.run(now=noon(TUESDAY))
 
     assert (42, 11) in fakes.marked
     assert fakes.discarded == []
@@ -368,7 +384,7 @@ def test_an_unsent_record_with_no_pair_is_discarded_and_decided_again(monkeypatc
     unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(monkeypatch, recorded={11: unsent})
 
-    sent = fakes.run(today=TUESDAY)
+    sent = fakes.run(now=noon(TUESDAY))
 
     assert fakes.discarded == [(42, 11)]
     assert sent == 1
@@ -388,7 +404,7 @@ def test_a_stamped_record_is_not_discarded(monkeypatch):
         recorded={11: mixed},
     )
 
-    fakes.run(today=TUESDAY)
+    fakes.run(now=noon(TUESDAY))
 
     assert fakes.discarded == []
 
@@ -410,7 +426,7 @@ def test_a_discarded_record_gets_a_new_reference_from_current_prices(monkeypatch
     unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(monkeypatch, prices={"005930": 90_000.0}, recorded={11: unsent})
 
-    fakes.run(today=TUESDAY)
+    fakes.run(now=noon(TUESDAY))
 
     order = fakes.sent[0][0]
     assert order.reference == 90_000.0
@@ -421,10 +437,10 @@ def test_a_discarded_record_is_re_sized_at_the_new_price(monkeypatch):
     """The share count is decided again too, not carried over from the discarded record."""
     unsent = [recorded_row("005930", sent_at=None)]
     cheap = Fakes(monkeypatch, prices={"005930": 10_000.0}, recorded={11: [dict(unsent[0])]})
-    cheap.run(today=TUESDAY)
+    cheap.run(now=noon(TUESDAY))
 
     dear = Fakes(monkeypatch, prices={"005930": 500_000.0}, recorded={11: [dict(unsent[0])]})
-    dear.run(today=TUESDAY)
+    dear.run(now=noon(TUESDAY))
 
     assert cheap.sent[0][0].shares > dear.sent[0][0].shares
 
@@ -448,7 +464,7 @@ def test_a_cycle_with_no_cash_places_only_the_sell(monkeypatch):
     )
     fakes = Fakes(monkeypatch, model=plan, users=users)
 
-    fakes.run(today=MONDAY)
+    fakes.run(now=noon(MONDAY))
 
     assert [order.action for order in fakes.sent[0]] == ["sell"]
 
@@ -465,16 +481,16 @@ def test_the_buy_arrives_once_the_sell_has_freed_the_cash(monkeypatch):
     users = polled(account(cash=4_120_000.0))
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
-    fakes.run(today=MONDAY)
+    fakes.run(now=noon(MONDAY))
 
     buys = [order for order in fakes.sent[0] if order.action == "buy"]
     assert buys
     assert buys[0].shares * buys[0].high <= 4_120_000.0
 
 
-def test_an_order_placed_after_a_day_of_selling_starts_narrow(monkeypatch):
-    """Selling and buying share three trading days. A day spent selling leaves two, and
-    two days is the 3% band -- the ladder does not restart."""
+def test_an_order_placed_late_in_the_week_starts_narrow(monkeypatch):
+    """Selling and buying share the week's five sessions. Placed on the Thursday there are
+    two left, and two days is the 3% band -- the ladder does not restart."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -485,17 +501,15 @@ def test_an_order_placed_after_a_day_of_selling_starts_narrow(monkeypatch):
     users = polled(account(cash=4_120_000.0))
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
-    fakes.run(today=TUESDAY)
+    fakes.run(now=noon(THURSDAY))
 
     buys = [order for order in fakes.sent[0] if order.action == "buy"]
     assert buys[0].band == PRICE_BANDS[1]
 
 
-def test_a_buy_placed_on_the_last_day_goes_straight_to_market(monkeypatch):
-    """If the sell only filled at the deadline, the buy has no days left to chase a
-    price, and the market rung is what guarantees it fills at all."""
-    from datetime import date
-
+def test_a_buy_placed_after_the_cutoff_goes_straight_to_market(monkeypatch):
+    """KRX closes at 15:30. Past the cutoff on the last session there is no day left to
+    chase a price with, and the market rung is what guarantees it fills at all."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -506,7 +520,7 @@ def test_a_buy_placed_on_the_last_day_goes_straight_to_market(monkeypatch):
     users = polled(account(cash=4_120_000.0))
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
-    fakes.run(today=date(2026, 10, 1))
+    fakes.run(now=datetime(2026, 10, 2, 15, 0, tzinfo=KST))
 
     buys = [order for order in fakes.sent[0] if order.action == "buy"]
     assert (buys[0].low, buys[0].high, buys[0].band) == (None, None, None)

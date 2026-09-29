@@ -12,13 +12,14 @@ be a live order nothing knows about.
 
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
-from portfolio_rebalancer.decide.outstanding import days_left, narrow, reached_the_backend
+from portfolio_rebalancer.decide.outstanding import narrow, reached_the_backend
 from portfolio_rebalancer.decide.rebalance import rebalance
-from portfolio_rebalancer.decide.reservations import PRICE_BANDS, find_pairs
+from portfolio_rebalancer.decide.reservations import find_pairs
+from portfolio_rebalancer.decide.trading_days import days_left
 from portfolio_rebalancer.request.backend import fetch_accounts, send_orders
 from portfolio_rebalancer.request.prices import latest_prices
 from portfolio_rebalancer.request.store import (
@@ -31,24 +32,23 @@ from portfolio_rebalancer.request.store import (
     stored_orders,
 )
 
-__all__ = ["market_today", "tick"]
+__all__ = ["market_now", "tick"]
 
 SKIP = "skip"
-LADDER_DAYS = len(PRICE_BANDS)
 # KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
 
 log = logging.getLogger(__name__)
 
 
-def market_today() -> date:
-    """Today on the exchange. The service may run anywhere; the market is in Seoul."""
-    return datetime.now(KST).date()
+def market_now() -> datetime:
+    """Now on the exchange. The service may run anywhere; the market is in Seoul."""
+    return datetime.now(KST)
 
 
-def tick(engine: Any, db: Any, client: Any, token: str, today: date | None = None) -> int:
+def tick(engine: Any, db: Any, client: Any, token: str, now: datetime | None = None) -> int:
     """Returns the number of orders sent to the Backend."""
-    today = today or market_today()
+    now = now or market_now()
 
     with engine.begin() as conn:
         portfolio = latest_portfolio(conn)
@@ -62,11 +62,11 @@ def tick(engine: Any, db: Any, client: Any, token: str, today: date | None = Non
 
     sent = 0
     for account in managed_accounts(polled):
-        sent += _account(engine, db, client, token, portfolio, account, today)
+        sent += _account(engine, db, client, token, portfolio, account, now)
     return sent
 
 
-def _account(engine, db, client, token, portfolio, account, today) -> int:
+def _account(engine, db, client, token, portfolio, account, now) -> int:
     state = apply_pending(account)
     pairs = find_pairs(account.get("pending_orders") or ())
 
@@ -77,10 +77,10 @@ def _account(engine, db, client, token, portfolio, account, today) -> int:
         recorded = _settle_unsent(engine, portfolio, state, recorded, pairs)
 
     if not recorded:
-        return _open(engine, db, client, token, portfolio, state, today)
+        return _open(engine, db, client, token, portfolio, state, now)
 
     started = min(row["created_at"] for row in recorded).astimezone(KST).date()
-    return _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, today)
+    return _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, now)
 
 
 def _settle_unsent(engine, portfolio, state, recorded, pairs) -> Sequence[Mapping[str, Any]]:
@@ -102,9 +102,12 @@ def _settle_unsent(engine, portfolio, state, recorded, pairs) -> Sequence[Mappin
         return stored_orders(conn, portfolio.portfolio_id, state.account_id)
 
 
-def _open(engine, db, client, token, portfolio, state, today) -> int:
-    """First pass for this portfolio and account: the whole ladder is still ahead."""
-    plan = _plan(db, portfolio, state, LADDER_DAYS)
+def _open(engine, db, client, token, portfolio, state, now) -> int:
+    """First pass for this portfolio and account: the cycle's whole budget is ahead.
+
+    That budget is the trading days left in this week, so a Chuseok week gives fewer.
+    """
+    plan = _plan(db, portfolio, state, days_left(now.date(), now))
     if not plan:
         return 0
 
@@ -115,14 +118,14 @@ def _open(engine, db, client, token, portfolio, state, today) -> int:
     return _send(engine, client, token, portfolio, state, [o for o in plan if o.action != SKIP])
 
 
-def _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, today):
+def _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, now):
     """Keep an open cycle moving: fund what the sells have freed, then re-quote the rest.
 
     Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     brought in line with it. A stock the plan has already placed at the right quantity and
     band is left alone, which is what makes the hourly poll idempotent within a day.
     """
-    left = days_left(started, today)
+    left = days_left(started, now)
     plan = _plan(db, portfolio, state, left)
     outstanding = {code: pair for (code, _), pair in pairs.items()}
     known = {row["stock_code"] for row in recorded}
@@ -138,7 +141,7 @@ def _continue(engine, db, client, token, portfolio, state, pairs, recorded, star
         # it was never placed, or it left the book without filling.
         (place if order.stock_code not in known else amend).append(order)
 
-    requote = narrow(portfolio, state, pairs, started, today)
+    requote = narrow(portfolio, state, pairs, started, now)
 
     sent = 0
     if place:

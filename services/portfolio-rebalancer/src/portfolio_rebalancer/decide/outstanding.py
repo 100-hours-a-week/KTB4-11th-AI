@@ -7,11 +7,10 @@ different decision and lives in `decide/rebalance.py`.
 """
 
 from collections.abc import Iterable, Mapping
-from datetime import date, timedelta
+from datetime import date, datetime
 
 from portfolio_rebalancer.decide.accounts import AccountState
 from portfolio_rebalancer.decide.reservations import (
-    PRICE_BANDS,
     Pair,
     band_for,
     days_left_of,
@@ -19,29 +18,13 @@ from portfolio_rebalancer.decide.reservations import (
     prices_for,
     read_reservation,
 )
+from portfolio_rebalancer.decide.trading_days import days_left, is_open
 from portfolio_rebalancer.order import Order
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
-__all__ = ["AT_MARKET", "days_left", "narrow", "reached_the_backend"]
+__all__ = ["AT_MARKET", "narrow", "reached_the_backend"]
 
 AT_MARKET = "the bands are spent; sent at market, which is what guarantees the fill"
-SATURDAY = 5
-LADDER_DAYS = len(PRICE_BANDS)
-
-
-def days_left(started: date, today: date) -> int:
-    """Trading days still available to a rebalance that began on `started`.
-
-    Selling and buying share this budget: two days spent selling leave one for buying.
-    Trading days are approximated by weekdays, which is exact except across a public
-    holiday, where it spends a day the market did not open for.
-    """
-    spent = sum(
-        1
-        for offset in range((today - started).days)
-        if (started + timedelta(days=offset)).weekday() < SATURDAY
-    )
-    return max(LADDER_DAYS - spent, 0)
 
 
 def reached_the_backend(
@@ -63,21 +46,22 @@ def narrow(
     account: AccountState,
     pairs: Mapping[tuple[str, str], Pair],
     started: date,
-    today: date,
+    now: datetime,
 ) -> list[Order]:
     """Re-quote each outstanding pair at the band its remaining days allow.
 
     The band comes from the deadline rather than from a counter, so a tick the service
     missed cannot hand an order back a day it no longer has. A pair already at the right
     band is left alone, which is what makes the hourly poll idempotent within a day.
+    Nothing moves on a day the exchange does not open.
 
     A pair the model portfolio does not name is left alone: this service has no reason to
     move someone else's order.
     """
-    if today.weekday() >= SATURDAY:
+    if not is_open(now.date()):
         return []
 
-    left = days_left(started, today)
+    left = days_left(started, now)
     named: dict[str, Holding | Exit] = {name.stock_code: name for name in portfolio.holdings}
     named |= {leaving.stock_code: leaving for leaving in portfolio.exits}
 

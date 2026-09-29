@@ -20,6 +20,9 @@ read on its own.
 | `rebalance()` | `(portfolio, previous, account, prices)` | `(portfolio, account, prices, days_left)` | exits belong to the portfolio; the band comes from the deadline |
 | Ladder budget | three days each for selling and buying | **three trading days for both together** | a buy funded by a sell cannot start its own three days |
 | Band | from days elapsed | from days **left** | an order that starts late starts narrow rather than restarting |
+| Trading days | weekdays | `exchange-calendars` XKRX | 한글날 is not a weekend |
+| Budget | three days, fixed | the week's remaining sessions | the next judgement is the deadline |
+| Market rung | the morning after | 14:30 on the last session | KRX closes at 15:30 |
 | Buys | sized against the sells' expected proceeds | sized against **cash that exists** | the proceeds are not money until the sells fill |
 
 ## Purpose
@@ -221,11 +224,19 @@ inside the narrow band than the wide one.
 The reference is fixed when the first pair is placed and every later step is measured from that
 same number, not from whatever the close has become since.
 
-**Trading days are approximated by weekdays.** Nothing narrows on a Saturday or Sunday, since
-there are only three rungs and one spent on a closed market is wasted. A mid-week public holiday
-advances a rung a day early, which costs some price chasing but cannot break the fill, because
-the last rung is a market order either way. Reading the session dates out of QuestDB's `bars`
-would make it exact.
+**Trading days come from `exchange-calendars`' XKRX**, so public holidays are real rather than
+approximated. A Chuseok week really is three sessions, and 한글날 on a Friday really does end
+the week on the Thursday.
+
+**The budget is the sessions left in the week the cycle began**, not a fixed three, because the
+next judgement lands the week after and an order still working then would be acting on a
+portfolio that has been replaced. Five sessions means two days of selling leaves three for
+buying; a short week leaves less. With more sessions than bands the widest band simply holds
+until the narrowing has somewhere to go.
+
+**The last session ends at 14:30, not at midnight.** KRX closes at 15:30, so the market order
+has to be in before that rather than the morning after. Polling at least hourly puts a pass
+inside that final hour.
 
 ### Prices Are Quoted on a KRX Tick
 
