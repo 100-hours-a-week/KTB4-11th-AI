@@ -118,11 +118,34 @@ def test_a_buy_waits_below_the_market_and_triggers_above_it():
     assert trigger > 78_000.0 > limit
 
 
-def test_the_two_sides_are_mirror_images():
-    sell = limit_and_trigger(78_000.0, 2, "sell")
-    buy = limit_and_trigger(78_000.0, 2, "buy")
+def test_the_two_sides_are_mirror_images_of_each_other():
+    """Mirrored about the reference: the sell's limit is where the buy's trigger is."""
+    sell_limit, sell_trigger = limit_and_trigger(78_000.0, 3, "sell")
+    buy_limit, buy_trigger = limit_and_trigger(78_000.0, 3, "buy")
 
-    assert sell == tuple(reversed(buy))
+    assert (sell_limit, sell_trigger) == (buy_trigger, buy_limit)
+
+
+def test_the_trigger_does_not_narrow_with_the_limit():
+    """Waiting stops being worth it at the same price whatever day it is. Tightening the
+    trigger would send an order at market on a move the limit was still willing to wait
+    out."""
+    triggers = {limit_and_trigger(78_000.0, days, "sell")[1] for days in (3, 2, 1)}
+    limits = {limit_and_trigger(78_000.0, days, "sell")[0] for days in (3, 2, 1)}
+
+    assert len(triggers) == 1
+    assert len(limits) == 3
+
+
+@pytest.mark.parametrize("side", ["buy", "sell"])
+def test_the_trigger_stays_at_the_widest_band(side):
+    from portfolio_rebalancer.decide.reservations import TRIGGER_BAND
+
+    _, trigger = limit_and_trigger(78_000.0, 1, side)
+    away = abs(trigger - 78_000.0) / 78_000.0
+
+    assert away == pytest.approx(TRIGGER_BAND, abs=0.001)
+    assert TRIGGER_BAND == PRICE_BANDS[0]
 
 
 @pytest.mark.parametrize("side", ["buy", "sell"])

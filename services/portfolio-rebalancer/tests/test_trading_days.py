@@ -1,6 +1,6 @@
 """The exchange calendar, against real Korean holidays."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 
 import pytest
 from portfolio_rebalancer.decide.reservations import PRICE_BANDS, band_for
@@ -79,19 +79,18 @@ def test_the_last_day_runs_out_at_the_cutoff_not_at_midnight():
     friday = date(2026, 10, 2)
 
     assert days_left(FULL_WEEK, at(friday, 14, 0)) == 1
-    assert days_left(FULL_WEEK, at(friday, MARKET_CUTOFF.hour, MARKET_CUTOFF.minute)) == 0
+    assert days_left(FULL_WEEK, at(friday, 14, 59)) == 1
+    assert days_left(FULL_WEEK, at(friday, 15, 0)) == 0
     assert days_left(FULL_WEEK, at(friday, 15, 29)) == 0
 
 
-def test_the_cutoff_leaves_an_hour_before_the_close():
-    """Polling at least hourly then always puts a pass inside the window."""
+def test_the_cutoff_is_the_last_poll_before_the_close():
+    """Polling starts at 09:00 on the hour, so 15:00 is the last pass before 15:30."""
     from portfolio_rebalancer.decide.trading_days import CLOSE
 
-    before_close = datetime.combine(date(2026, 1, 1), CLOSE) - datetime.combine(
-        date(2026, 1, 1), MARKET_CUTOFF
-    )
-
-    assert before_close >= timedelta(hours=1)
+    assert MARKET_CUTOFF == time(15, 0)
+    assert CLOSE == time(15, 30)
+    assert MARKET_CUTOFF < CLOSE
 
 
 def test_the_cutoff_does_not_shorten_an_earlier_day():

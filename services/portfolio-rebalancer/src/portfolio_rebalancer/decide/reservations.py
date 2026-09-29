@@ -6,8 +6,10 @@ near side cannot be an order at all -- a sell below the market fills instantly a
 market price, which is the opposite of waiting. So it becomes a **trigger** this service
 watches in QuestDB, and crossing it sends the order at market.
 
-    sell   limit at reference + band     market if the price falls to reference - band
-    buy    limit at reference - band     market if the price rises to reference + band
+    sell   limit at reference + band     market if the price falls to reference - 5%
+    buy    limit at reference - band     market if the price rises to reference + 5%
+
+The limit narrows as the days run down; the trigger stays at 5%.
 """
 
 from collections.abc import Iterable, Mapping
@@ -16,6 +18,7 @@ from dataclasses import dataclass
 __all__ = [
     "PRICE_BANDS",
     "TICK_SIZES",
+    "TRIGGER_BAND",
     "Outstanding",
     "band_for",
     "limit_and_trigger",
@@ -33,6 +36,11 @@ SELL = "sell"
 # within the week. Narrowing alone would not guarantee that: a 1% band is harder to
 # reach than a 5% one.
 PRICE_BANDS: tuple[float, ...] = (0.05, 0.03, 0.01)
+
+# The trigger does not narrow with the limit. It is the point where waiting stops being
+# worth it, and that does not get closer just because fewer days remain -- tightening it
+# would send orders at market on a move the limit was still willing to wait out.
+TRIGGER_BAND = PRICE_BANDS[0]
 
 # KRX moves in these steps, and the Backend answers 400 for a price that is not on one.
 # (upper bound exclusive, step)
@@ -79,17 +87,20 @@ def band_for(days_left: int) -> float | None:
 def limit_and_trigger(reference: float, days_left: int, side: str) -> tuple[float, float] | None:
     """The price to place and the price that sends the order to market.
 
-    None once the sessions run out: then the order goes at market outright. Both prices
-    are put on a KRX tick, the limit because the Backend would reject it otherwise and
-    the trigger so the two stay a fixed distance apart.
+    None once the sessions run out: then the order goes at market outright.
+
+    Only the limit narrows. The trigger is fixed at `TRIGGER_BAND`, because the point at
+    which waiting stops being worth it does not move closer as the deadline approaches.
+    Both prices are put on a KRX tick, the limit because the Backend would reject it
+    otherwise and the trigger so it is comparable with a quoted price.
     """
     band = band_for(days_left)
     if band is None:
         return None
 
-    below = on_tick(reference * (1 - band))
-    above = on_tick(reference * (1 + band))
-    return (above, below) if side == SELL else (below, above)
+    if side == SELL:
+        return on_tick(reference * (1 + band)), on_tick(reference * (1 - TRIGGER_BAND))
+    return on_tick(reference * (1 - band)), on_tick(reference * (1 + TRIGGER_BAND))
 
 
 def trigger_hit(side: str, trigger: float, price: float) -> bool:

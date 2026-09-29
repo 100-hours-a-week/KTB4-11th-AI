@@ -21,6 +21,9 @@ read on its own.
 | Ladder budget | three days each for selling and buying | **three trading days for both together** | a buy funded by a sell cannot start its own three days |
 | Band | from days elapsed | from days **left** | an order that starts late starts narrow rather than restarting |
 | Order shape | two limits, one either side | **one limit plus a trigger we watch** | a limit on the near side fills instantly |
+| Trigger | narrowed with the limit | **fixed at 5%** | tightening it strikes a move the limit would wait out |
+| Current price | QuestDB's last close | the poll's `stocks[].current_price` | it is what the Backend trades on |
+| Last-session cutoff | 14:30 | **15:00** | polling is hourly from 09:00, so that is the last pass |
 | Trading days | weekdays | `exchange-calendars` XKRX | 한글날 is not a weekend |
 | Budget | three days, fixed | the week's remaining sessions | the next judgement is the deadline |
 | Market rung | the morning after | 14:30 on the last session | KRX closes at 15:30 |
@@ -95,7 +98,7 @@ one or more accounts, and every account is decided on its own:
 | `is_ai_managed` | only an AI-managed account is rebalanced |
 | `is_active` | an inactive account is skipped |
 | `cash_balance` | cash before pending commitments |
-| `stocks[]` — `stock_id`, `amount`, `total_price` | quantity held, and the principal put into it |
+| `stocks[]` — `stock_id`, `amount`, `total_price`, `current_price` | quantity held, the principal put into it, and what the Backend quotes it at now |
 | `pending_orders[]` | orders placed and not yet filled |
 
 Pending orders are subtracted before anything is decided:
@@ -198,14 +201,20 @@ so only the far side can be left sitting: a sell above the market waits for a ri
 it waits for a dip. The near side cannot be an order at all — a sell below the market fills
 instantly at the market price, which is the opposite of waiting.
 
-So each order is **one limit at the far side, and a trigger at the near side that this service
-watches in QuestDB**. Crossing the trigger replaces the limit with a market order.
+So each order is **one limit at the far side, and a trigger at the near side this service
+watches**. Crossing the trigger replaces the limit with a market order.
 
 ```
-reference 78,000, band ± 5%
-  sell    limit 81,900      market if the price falls to 74,100
-  buy     limit 74,100      market if the price rises to 81,900
+reference 78,000
+  sessions left   sell limit   buy limit   trigger (fixed)
+  3               81,900       74,100      -5% / +5%  =  74,100 / 81,900
+  2               80,300       75,700      74,100 / 81,900
+  1               78,800       77,200      74,100 / 81,900
 ```
+
+**Only the limit narrows. The trigger stays at 5%.** The point at which waiting stops being
+worth it does not move closer just because fewer days remain — tightening it would send an order
+at market on a move the limit was still willing to wait out.
 
 A sell that has fallen to its trigger has lost the chance to sell high, so getting out at market
 beats holding the order. A buy that has risen to its trigger is not getting its dip.
@@ -242,9 +251,9 @@ portfolio that has been replaced. Five sessions means two days of selling leaves
 buying; a short week leaves less. With more sessions than bands the widest band simply holds
 until the narrowing has somewhere to go.
 
-**The last session ends at 14:30, not at midnight.** KRX closes at 15:30, so the market order
-has to be in before that rather than the morning after. Polling at least hourly puts a pass
-inside that final hour.
+**The last session ends at 15:00, not at midnight.** Polling starts at 09:00 on the hour and
+KRX closes at 15:30, so 15:00 is the last pass before the close and the final band's order goes
+at market there rather than the morning after.
 
 ### Prices Are Quoted on a KRX Tick
 
@@ -273,6 +282,11 @@ carries no price.
 **One order per stock and side.** More than one is a state this service did not create, so it is
 left alone rather than guessing which is ours. Nothing is double counted when pending orders are
 folded into cash and holdings, because the near side was never an order.
+
+**The trigger is compared with `stocks[].current_price`**, the Backend's own quote, rather than
+with QuestDB's last close: it is the number the Backend is trading on. A stock the account does
+not hold yet has no entry, and QuestDB fills in — treating a missing quote as zero would fire
+every sell trigger at once.
 
 **The reference comes from the record, not from the prices.** One limit price cannot say what it
 was a band away from, so `rebalance_orders.reference_price` keeps it and

@@ -1,5 +1,9 @@
 import pytest
-from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
+from portfolio_rebalancer.decide.accounts import (
+    apply_pending,
+    managed_accounts,
+    polled_prices,
+)
 
 
 def account(**changes):
@@ -230,3 +234,25 @@ def test_a_reservation_is_one_order_so_nothing_is_double_counted():
 
     assert state.cash == 2_884_000.0 - 15 * 74_100.0
     assert state.held["005930"] == 100 + 15
+
+
+def test_the_polled_price_is_what_the_backend_quotes():
+    """The trigger is compared with the Backend's own number, not QuestDB's last close."""
+    held = [
+        {"stock_id": "005930", "total_price": 1, "amount": 10, "current_price": 79_500.0},
+        {"stock_id": "000660", "total_price": 1, "amount": 2, "current_price": 410_000.0},
+    ]
+
+    assert polled_prices(account(stocks=held)) == {"005930": 79_500.0, "000660": 410_000.0}
+
+
+def test_a_holding_without_a_quote_is_left_out():
+    """The caller falls back rather than treating a missing quote as zero, which would
+    fire every sell trigger at once."""
+    held = [{"stock_id": "005930", "total_price": 1, "amount": 10}]
+
+    assert polled_prices(account(stocks=held)) == {}
+
+
+def test_no_holdings_means_no_quotes():
+    assert polled_prices(account(stocks=[])) == {}

@@ -638,3 +638,55 @@ def test_a_struck_order_keeps_the_outstanding_quantity(monkeypatch):
     fakes.run(now=noon(MONDAY))
 
     assert fakes.amended[0][0].shares == 21
+
+
+def test_the_trigger_uses_the_polled_price_not_questdb(monkeypatch):
+    """QuestDB holds the last close; the Backend quotes what it is trading on. A sell
+    whose QuestDB price looks fine must still be struck if the poll says otherwise."""
+    plan = Portfolio(
+        portfolio_id=42,
+        cash_weight=0.0,
+        holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
+        exits=[Exit(*HYNIX, reason="퇴출")],
+    )
+    limit, trigger = limit_and_trigger(412_000.0, 5, "sell")
+    already = [
+        recorded_row(
+            "000660",
+            sent_at=datetime(2026, 9, 28, tzinfo=UTC),
+            reference=412_000.0,
+            trigger=trigger,
+            side="sell",
+        )
+    ]
+    held = [{"stock_id": "000660", "total_price": 1, "amount": 10, "current_price": trigger}]
+    outstanding = [pending(stock_code="000660", order_type="sell", price=limit, amount=10)]
+    fakes = Fakes(
+        monkeypatch,
+        model=plan,
+        users=polled(account(cash=0.0, stocks=held, pending_orders=outstanding)),
+        # QuestDB still says the price is comfortably above the trigger.
+        prices={"005930": 78_000.0, "000660": 412_000.0},
+        recorded={11: already},
+    )
+
+    fakes.run(now=noon(MONDAY))
+
+    struck = next(o for batch in fakes.amended for o in batch if o.stock_code == "000660")
+    assert (struck.limit, struck.trigger) == (None, None)
+
+
+def test_questdb_fills_in_for_a_stock_the_account_does_not_hold_yet(monkeypatch):
+    """An outstanding buy on a stock never held has no quote in the poll."""
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    _, trigger = limit_and_trigger(78_000.0, 3, "buy")
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(cash=0.0, stocks=[], pending_orders=working_buy())),
+        prices={"005930": trigger},
+        recorded={11: already},
+    )
+
+    fakes.run(now=noon(MONDAY))
+
+    assert fakes.amended[0][0].limit is None

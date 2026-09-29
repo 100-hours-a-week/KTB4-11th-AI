@@ -3,7 +3,7 @@
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
-__all__ = ["AccountState", "apply_pending", "managed_accounts"]
+__all__ = ["AccountState", "apply_pending", "managed_accounts", "polled_prices"]
 
 PENDING = "pending"
 BUY = "buy"
@@ -40,6 +40,20 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
             held[code] = max(held.get(code, 0) - quantity, 0)
 
     return AccountState(account_id=int(account["account_id"]), cash=cash, held=held)  # type: ignore[arg-type]
+
+
+def polled_prices(account: Mapping[str, object]) -> dict[str, float]:
+    """What each held stock is worth right now, as the poll reports it.
+
+    `stocks[].current_price` is the Backend's own quote, so the trigger is compared with
+    the same number the Backend is trading on rather than with QuestDB's last close.
+    A stock the account does not hold yet has no entry, and the caller falls back.
+    """
+    return {
+        str(holding["stock_id"]): float(holding["current_price"])  # type: ignore[arg-type]
+        for holding in account.get("stocks") or ()  # type: ignore[union-attr]
+        if holding.get("current_price") is not None
+    }
 
 
 def managed_accounts(

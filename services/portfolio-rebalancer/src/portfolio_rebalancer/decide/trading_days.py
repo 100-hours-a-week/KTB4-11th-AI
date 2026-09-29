@@ -15,10 +15,11 @@ from typing import Any
 __all__ = ["CLOSE", "MARKET_CUTOFF", "days_left", "is_open", "week_deadline"]
 
 EXCHANGE = "XKRX"
-# KRX closes at 15:30. On the last day the market order has to be in before that, so the
-# final hour switches to market: polling at least hourly puts a pass inside it.
+# KRX closes at 15:30, and polling starts at 09:00 on the hour, so 15:00 is the last pass
+# before the close. The final band's order goes at market there rather than the morning
+# after.
 CLOSE = time(15, 30)
-MARKET_CUTOFF = time(14, 30)
+MARKET_CUTOFF = time(15, 0)
 
 
 @lru_cache(maxsize=1)

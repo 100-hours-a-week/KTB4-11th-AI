@@ -15,7 +15,11 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
+from portfolio_rebalancer.decide.accounts import (
+    apply_pending,
+    managed_accounts,
+    polled_prices,
+)
 from portfolio_rebalancer.decide.outstanding import at_market, narrow, reached_the_backend
 from portfolio_rebalancer.decide.rebalance import rebalance
 from portfolio_rebalancer.decide.reservations import outstanding_orders, trigger_hit
@@ -68,6 +72,7 @@ def tick(engine: Any, db: Any, client: Any, token: str, now: datetime | None = N
 
 def _account(engine, db, client, token, portfolio, account, now) -> int:
     state = apply_pending(account)
+    quoted = polled_prices(account)
     working = outstanding_orders(account.get("pending_orders") or ())
 
     with engine.begin() as conn:
@@ -80,7 +85,9 @@ def _account(engine, db, client, token, portfolio, account, now) -> int:
         return _open(engine, db, client, token, portfolio, state, now)
 
     started = min(row["created_at"] for row in recorded).astimezone(KST).date()
-    return _continue(engine, db, client, token, portfolio, state, working, recorded, started, now)
+    return _continue(
+        engine, db, client, token, portfolio, state, working, recorded, started, now, quoted
+    )
 
 
 def _settle_unsent(engine, portfolio, state, recorded, working) -> Sequence[Mapping[str, Any]]:
@@ -119,7 +126,7 @@ def _open(engine, db, client, token, portfolio, state, now) -> int:
     return _send(engine, client, token, portfolio, state, [o for o in plan if o.action != SKIP])
 
 
-def _continue(engine, db, client, token, portfolio, state, working, recorded, started, now):
+def _continue(engine, db, client, token, portfolio, state, working, recorded, started, now, quoted):
     """Keep an open cycle moving: fund what the sells have freed, then re-quote the rest.
 
     Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
@@ -150,7 +157,9 @@ def _continue(engine, db, client, token, portfolio, state, working, recorded, st
 
     # A working order whose trigger the market has reached stops waiting: crossing it is
     # the signal that the limit is not going to fill on the terms it was placed on.
-    struck = _struck(portfolio, state, working, references, recorded, prices)
+    # The Backend's own quote decides the trigger; QuestDB's last close only fills in for
+    # a stock the account does not hold yet, which has no quote in the poll.
+    struck = _struck(portfolio, state, working, references, recorded, prices | quoted)
     requote = narrow(portfolio, state, _without(working, struck), references, started, now)
 
     sent = 0
