@@ -1,4 +1,4 @@
-from portfolio_rebalancer.allocate import Target, allocate, spend_leftover
+from portfolio_rebalancer.decide.allocate import Target, allocate, spend_leftover
 
 CAPITAL = 10_000_000
 

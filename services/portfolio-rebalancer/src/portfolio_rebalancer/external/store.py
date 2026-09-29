@@ -10,10 +10,11 @@ from typing import Any
 
 import sqlalchemy as sa
 
-from portfolio_rebalancer.rebalance import Exit, Holding, Portfolio
+from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
 __all__ = [
     "amend_orders",
+    "discard_unsent",
     "latest_portfolio",
     "metadata",
     "record_orders",
@@ -343,6 +344,21 @@ def mark_sent(conn: Any, portfolio_id: int, account_id: int) -> None:
             rebalance_orders.c.sent_at.is_(None),
         )
         .values(sent_at=sa.func.now())
+    )
+
+
+def discard_unsent(conn: Any, portfolio_id: int, account_id: int) -> None:
+    """Forget orders the Backend never took.
+
+    Only rows with no `sent_at` are removed, so nothing that reached the Backend is ever
+    dropped from the history.
+    """
+    conn.execute(
+        rebalance_orders.delete().where(
+            rebalance_orders.c.portfolio_id == portfolio_id,
+            rebalance_orders.c.account_id == account_id,
+            rebalance_orders.c.sent_at.is_(None),
+        )
     )
 
 

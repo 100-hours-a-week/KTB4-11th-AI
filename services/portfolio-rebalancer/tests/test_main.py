@@ -39,14 +39,15 @@ def test_logging_is_set_up_under_the_service_name(monkeypatch):
     assert recorder.logging == [("INFO", SERVICE_NAME)]
 
 
-def test_the_tick_gets_a_connection_a_questdb_handle_a_client_and_a_token(monkeypatch):
+def test_the_tick_gets_the_engine_a_questdb_handle_a_client_and_a_token(monkeypatch):
     recorder = Recorder()
     wire(monkeypatch, recorder)
 
     __main__.main()
 
-    conn, db, client, token = recorder.ticks[0]
-    assert (conn, db, client, token) == ("conn", "db", "client", "a-token")
+    engine, db, client, token = recorder.ticks[0]
+    assert (db, client, token) == ("db", "client", "a-token")
+    assert hasattr(engine, "begin")
 
 
 def test_the_engine_is_disposed_even_when_the_tick_raises(monkeypatch):
@@ -63,15 +64,17 @@ def test_the_engine_is_disposed_even_when_the_tick_raises(monkeypatch):
     assert recorder.disposed == 1
 
 
-def test_the_tick_runs_inside_one_transaction(monkeypatch):
-    """The mirror and the orders land together or not at all, so a failure cannot leave a
-    poll half applied."""
+def test_the_tick_owns_its_transactions_rather_than_being_handed_one(monkeypatch):
+    """An order has to be committed before it is sent, so no single transaction may span
+    the send. main() therefore hands over the engine, not a connection."""
     recorder = Recorder()
     wire(monkeypatch, recorder)
 
     __main__.main()
 
-    assert recorder.ticks[0][0] == "conn"
+    handed = recorder.ticks[0][0]
+    assert hasattr(handed, "begin")
+    assert not isinstance(handed, str)
 
 
 class _settings:

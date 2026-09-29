@@ -11,8 +11,8 @@ import logging
 import sqlalchemy as sa
 from ktb_core.logging import setup_logging
 
-from portfolio_rebalancer.backend import acquire_token, build_client
-from portfolio_rebalancer.prices import connect
+from portfolio_rebalancer.external.backend import acquire_token, build_client
+from portfolio_rebalancer.external.prices import connect
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.tick import tick
 
@@ -32,10 +32,9 @@ def main() -> None:
             build_client(settings.backend_url) as client,
         ):
             token = acquire_token(client)
-            # One transaction per tick: the mirror and the orders land together or not at
-            # all, so a failure cannot leave a poll half applied.
-            with engine.begin() as conn:
-                sent = tick(conn, db, client, token)
+            # The tick owns its transactions: an order has to be committed before it is
+            # sent, so one transaction cannot span the send.
+            sent = tick(engine, db, client, token)
         log.info("tick finished", extra={"orders_sent": sent})
     finally:
         engine.dispose()

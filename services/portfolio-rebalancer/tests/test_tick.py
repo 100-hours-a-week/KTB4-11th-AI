@@ -5,9 +5,9 @@ from datetime import UTC, date, datetime
 
 import pytest
 from portfolio_rebalancer import tick as tick_module
-from portfolio_rebalancer.prices import Price
-from portfolio_rebalancer.rebalance import Holding, Portfolio
-from portfolio_rebalancer.reservations import PRICE_BANDS, reservation_prices
+from portfolio_rebalancer.decide.reservations import PRICE_BANDS, reservation_prices
+from portfolio_rebalancer.external.prices import Price
+from portfolio_rebalancer.portfolio import Holding, Portfolio
 from portfolio_rebalancer.tick import market_today, tick
 
 MONDAY = date(2026, 9, 28)
@@ -67,6 +67,8 @@ class Fakes:
         self.marked: list[tuple] = []
         self.saved: list[list] = []
         self._recorded = recorded if recorded is not None else {}
+        self.discarded: list[tuple] = []
+        self.today = TUESDAY
 
         model = portfolio() if model is None else model
         users = polled() if users is None else users
@@ -116,11 +118,46 @@ class Fakes:
         monkeypatch.setattr(
             tick_module,
             "mark_sent",
-            lambda conn, pid, aid: note("mark") or self.marked.append((pid, aid)),
+            lambda conn, pid, aid: (
+                note("mark") or self.marked.append((pid, aid)) or self._stamp(aid)
+            ),
+        )
+        monkeypatch.setattr(
+            tick_module,
+            "discard_unsent",
+            lambda conn, pid, aid: (
+                note("discard")
+                or self.discarded.append((pid, aid))
+                or self._recorded.pop(aid, None)
+            ),
         )
 
+    def _stamp(self, account_id):
+        """The real mark_sent stamps now(), so a stamped order counts as sent today."""
+        for row in self._recorded.get(account_id, []):
+            if row["sent_at"] is None:
+                row["sent_at"] = datetime(
+                    self.today.year, self.today.month, self.today.day, tzinfo=UTC
+                )
+
     def run(self, today=TUESDAY):
-        return tick("conn", "db", "client", "a-token", today=today)
+        self.today = today
+        return tick(_Engine(), "db", "client", "a-token", today=today)
+
+
+class _Conn:
+    def __enter__(self):
+        return "conn"
+
+    def __exit__(self, *args):
+        return None
+
+
+class _Engine:
+    """Every begin() is its own transaction, which is the point of the split."""
+
+    def begin(self):
+        return _Conn()
 
 
 def test_no_model_portfolio_polls_nothing_and_sends_nothing(monkeypatch):
@@ -270,3 +307,78 @@ def test_an_account_with_no_pending_orders_and_a_record_does_nothing(monkeypatch
     )
 
     assert fakes.run() == 0
+
+
+def test_the_record_is_committed_before_the_send():
+    """Holding one transaction across the send would undo the point of recording first:
+    a failed send rolls the record back, and if the request had already reached the
+    Backend there is a live order nothing knows about."""
+    import inspect
+
+    source = inspect.getsource(tick_module._open)
+    record_at = source.index("record_orders")
+    send_at = source.index("send_orders")
+    between = source[record_at:send_at]
+
+    assert "engine.begin()" in source[:record_at]
+    # The transaction that wrote the record must close before the send.
+    assert between.count("with engine.begin()") == 0
+
+
+def test_an_unsent_record_whose_pair_is_outstanding_is_stamped_sent(monkeypatch):
+    """All placeable orders go out in one request, so an outstanding pair means the
+    request arrived and only the reply was lost."""
+    low, high = reservation_prices(78_000.0, 0)
+    unsent = [{"stock_code": "005930", "sent_at": None}]
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(pending_orders=[pending(price=low), pending(price=high)])),
+        recorded={11: unsent},
+    )
+
+    fakes.run(today=TUESDAY)
+
+    assert fakes.marked == [(42, 11)]
+    assert fakes.discarded == []
+    assert fakes.recorded_rows == []
+
+
+def test_an_unsent_record_with_no_pair_is_discarded_and_decided_again(monkeypatch):
+    """No pair at all means the Backend never took it, so replaying yesterday's decision
+    would be worse than deciding again at today's prices."""
+    unsent = [{"stock_code": "005930", "sent_at": None}]
+    fakes = Fakes(monkeypatch, recorded={11: unsent})
+
+    sent = fakes.run(today=TUESDAY)
+
+    assert fakes.discarded == [(42, 11)]
+    assert sent == 1
+    assert fakes.recorded_rows
+
+
+def test_a_stamped_record_is_not_discarded(monkeypatch):
+    """Nothing that reached the Backend is ever dropped from the history."""
+    low, high = reservation_prices(78_000.0, 0)
+    mixed = [
+        {"stock_code": "005930", "sent_at": datetime(2026, 9, 28, tzinfo=UTC)},
+        {"stock_code": "000660", "sent_at": None},
+    ]
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(pending_orders=[pending(price=low), pending(price=high)])),
+        recorded={11: mixed},
+    )
+
+    fakes.run(today=TUESDAY)
+
+    assert fakes.discarded == []
+
+
+def test_the_poll_mirror_commits_separately_from_the_orders(monkeypatch):
+    """A send that fails must not roll back the mirror: the next pass needs it to work out
+    what happened."""
+    import inspect
+
+    source = inspect.getsource(tick_module.tick)
+
+    assert source.count("with engine.begin()") == 2

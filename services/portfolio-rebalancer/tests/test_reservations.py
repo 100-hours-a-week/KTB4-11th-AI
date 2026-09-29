@@ -1,5 +1,5 @@
 import pytest
-from portfolio_rebalancer.reservations import (
+from portfolio_rebalancer.decide.reservations import (
     PRICE_BANDS,
     Pair,
     find_pairs,

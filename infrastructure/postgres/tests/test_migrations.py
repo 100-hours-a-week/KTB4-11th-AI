@@ -101,7 +101,7 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
             },
         ),
         (
-            "portfolio_rebalancer.store",
+            "portfolio_rebalancer.external.store",
             {
                 "users",
                 "accounts",

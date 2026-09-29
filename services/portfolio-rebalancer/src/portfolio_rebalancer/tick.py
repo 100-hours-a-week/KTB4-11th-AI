@@ -2,21 +2,28 @@
 
 Every account is handled on its own. An account with nothing recorded against the current
 portfolio gets a fresh rebalance; one that already has orders out gets its outstanding
-pairs advanced a rung. Both paths record before sending, so a crash in between leaves a
-record rather than a silent order.
+pairs advanced a rung.
+
+Orders are committed before they are sent, in their own transaction. Holding the
+transaction open across the send would undo the point of recording first: a failed send
+would roll the record back, and if the request had already reached the Backend there would
+be a live order nothing knows about.
 """
 
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from portfolio_rebalancer.accounts import apply_pending, managed_accounts
-from portfolio_rebalancer.backend import fetch_accounts, send_orders
-from portfolio_rebalancer.prices import latest_prices
-from portfolio_rebalancer.rebalance import narrow, rebalance
-from portfolio_rebalancer.reservations import find_pairs
-from portfolio_rebalancer.store import (
+from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
+from portfolio_rebalancer.decide.outstanding import narrow, reached_the_backend
+from portfolio_rebalancer.decide.rebalance import rebalance
+from portfolio_rebalancer.decide.reservations import find_pairs
+from portfolio_rebalancer.external.backend import fetch_accounts, send_orders
+from portfolio_rebalancer.external.prices import latest_prices
+from portfolio_rebalancer.external.store import (
     amend_orders,
+    discard_unsent,
     latest_portfolio,
     mark_sent,
     record_orders,
@@ -38,30 +45,61 @@ def market_today() -> date:
     return datetime.now(KST).date()
 
 
-def tick(conn: Any, db: Any, client: Any, token: str, today: date | None = None) -> int:
+def tick(engine: Any, db: Any, client: Any, token: str, today: date | None = None) -> int:
     """Returns the number of orders sent to the Backend."""
     today = today or market_today()
 
-    portfolio = latest_portfolio(conn)
+    with engine.begin() as conn:
+        portfolio = latest_portfolio(conn)
     if portfolio is None:
         log.info("no model portfolio yet; nothing to rebalance")
         return 0
 
     polled = fetch_accounts(client, token)
-    save_poll(conn, polled)
+    with engine.begin() as conn:
+        save_poll(conn, polled)
 
     sent = 0
     for account in managed_accounts(polled):
-        state = apply_pending(account)
-        recorded = stored_orders(conn, portfolio.portfolio_id, state.account_id)
-        if recorded:
-            sent += _advance(conn, client, token, portfolio, state, account, recorded, today)
-        else:
-            sent += _open(conn, db, client, token, portfolio, state)
+        sent += _account(engine, db, client, token, portfolio, account, today)
     return sent
 
 
-def _open(conn, db, client, token, portfolio, state) -> int:
+def _account(engine, db, client, token, portfolio, account, today) -> int:
+    state = apply_pending(account)
+    pairs = find_pairs(account.get("pending_orders") or ())
+
+    with engine.begin() as conn:
+        recorded = stored_orders(conn, portfolio.portfolio_id, state.account_id)
+
+    if any(row["sent_at"] is None for row in recorded):
+        recorded = _settle_unsent(engine, portfolio, state, recorded, pairs)
+
+    if recorded:
+        return _advance(engine, client, token, portfolio, state, pairs, recorded, today)
+    return _open(engine, db, client, token, portfolio, state)
+
+
+def _settle_unsent(engine, portfolio, state, recorded, pairs) -> Sequence[Mapping[str, Any]]:
+    """Work out what happened to orders recorded but never stamped as sent.
+
+    All placeable orders go out in one request, so one outstanding pair means the request
+    arrived and only the reply was lost: stamp them. No pair at all means the Backend never
+    took them, so the record is discarded and the next pass decides again from current
+    prices, which is better than replaying a decision made at yesterday's.
+    """
+    arrived = reached_the_backend((row["stock_code"] for row in recorded), pairs)
+    with engine.begin() as conn:
+        if arrived:
+            log.info("orders reached the Backend; stamping them sent")
+            mark_sent(conn, portfolio.portfolio_id, state.account_id)
+            return stored_orders(conn, portfolio.portfolio_id, state.account_id)
+        log.warning("orders never reached the Backend; discarding to decide again")
+        discard_unsent(conn, portfolio.portfolio_id, state.account_id)
+        return stored_orders(conn, portfolio.portfolio_id, state.account_id)
+
+
+def _open(engine, db, client, token, portfolio, state) -> int:
     """First rebalance for this portfolio and account."""
     codes = {name.stock_code for name in portfolio.holdings}
     codes |= {leaving.stock_code for leaving in portfolio.exits}
@@ -74,16 +112,17 @@ def _open(conn, db, client, token, portfolio, state) -> int:
 
     # Skips are recorded because "we could not buy this" is part of the decision, but
     # there is nothing to place for them.
-    record_orders(conn, portfolio.portfolio_id, orders)
+    with engine.begin() as conn:
+        record_orders(conn, portfolio.portfolio_id, orders)
     placeable = [order for order in orders if order.action != SKIP]
     send_orders(client, token, placeable)
-    mark_sent(conn, portfolio.portfolio_id, state.account_id)
+    with engine.begin() as conn:
+        mark_sent(conn, portfolio.portfolio_id, state.account_id)
     return len(placeable)
 
 
-def _advance(conn, client, token, portfolio, state, account, recorded, today) -> int:
+def _advance(engine, client, token, portfolio, state, pairs, recorded, today) -> int:
     """Move outstanding pairs to their next rung, if a trading day has passed."""
-    pairs = find_pairs(account.get("pending_orders") or ())
     if not pairs:
         return 0
 
@@ -92,7 +131,9 @@ def _advance(conn, client, token, portfolio, state, account, recorded, today) ->
     if not orders:
         return 0
 
-    amend_orders(conn, portfolio.portfolio_id, orders)
+    with engine.begin() as conn:
+        amend_orders(conn, portfolio.portfolio_id, orders)
     send_orders(client, token, orders)
-    mark_sent(conn, portfolio.portfolio_id, state.account_id)
+    with engine.begin() as conn:
+        mark_sent(conn, portfolio.portfolio_id, state.account_id)
     return len(orders)
