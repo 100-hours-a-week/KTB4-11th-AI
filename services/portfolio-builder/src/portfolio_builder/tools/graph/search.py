@@ -34,9 +34,10 @@ def search_graph(name: str, depth: int = 2, *, engine: sa.Engine) -> str:
                     "  WHERE w.hop < :depth"
                     ")"
                     " SELECT w.entity_id AS id, min(w.hop) AS hop, e.raw_name AS name,"
-                    " e.type, e.corp_code AS company_id"
+                    " e.type, c.corp_code AS company_id"
                     " FROM walk w JOIN entities e ON e.id = w.entity_id"
-                    " GROUP BY w.entity_id, e.raw_name, e.type, e.corp_code"
+                    " LEFT JOIN corporations c ON c.stock_code = e.stock_code"
+                    " GROUP BY w.entity_id, e.raw_name, e.type, c.corp_code"
                     " ORDER BY hop, id"
                     " LIMIT :limit"
                 ),

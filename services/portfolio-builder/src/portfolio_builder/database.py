@@ -3,10 +3,11 @@ from sqlalchemy.dialects import postgresql
 
 metadata = sa.MetaData()
 
-companies = sa.Table(
-    "companies",
+corporations = sa.Table(
+    "corporations",
     metadata,
-    sa.Column("corp_code", sa.Text, primary_key=True),
+    sa.Column("stock_code", sa.Text, primary_key=True),
+    sa.Column("corp_code", sa.Text, nullable=False, unique=True),
 )
 
 portfolios = sa.Table(
@@ -34,7 +35,7 @@ portfolio_holdings = sa.Table(
         sa.ForeignKey("portfolios.id", ondelete="CASCADE"),
         primary_key=True,
     ),
-    sa.Column("company_id", sa.Text, sa.ForeignKey("companies.corp_code"), primary_key=True),
+    sa.Column("company_id", sa.Text, sa.ForeignKey("corporations.corp_code"), primary_key=True),
     sa.Column("weight", sa.Double, nullable=False),
     sa.Column("reason", sa.Text, nullable=True),
     sa.Column(
@@ -54,7 +55,7 @@ portfolio_exits = sa.Table(
         sa.ForeignKey("portfolios.id", ondelete="CASCADE"),
         primary_key=True,
     ),
-    sa.Column("company_id", sa.Text, sa.ForeignKey("companies.corp_code"), primary_key=True),
+    sa.Column("company_id", sa.Text, sa.ForeignKey("corporations.corp_code"), primary_key=True),
     sa.Column("reason", sa.Text, nullable=False),
     sa.Column(
         "cited_cluster_ids",

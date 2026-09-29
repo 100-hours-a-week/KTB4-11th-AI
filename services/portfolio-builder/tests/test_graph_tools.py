@@ -19,6 +19,16 @@ def test_seeds_match_normalised_names_and_company_aliases(engine):
         assert find_seed_entities(conn, "hbm") == [4]
 
 
+def test_seeds_follow_an_alias_to_the_company_entity(engine):
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO corporation_aliases (alias, stock_code) VALUES ('hynix', '000660')"
+            )
+        )
+        assert find_seed_entities(conn, "Hynix") == [3]
+
+
 def test_an_unknown_name_lists_candidates(engine):
     with engine.connect() as conn, pytest.raises(ToolError, match="삼성전자"):
         find_seed_entities(conn, "삼성바이오")
@@ -32,6 +42,17 @@ def test_search_graph_reaches_nodes_nearest_first(engine, depth, expected):
     result = json.loads(_tools(engine)["search_graph"].invoke({"name": "삼성전자", "depth": depth}))
 
     assert [n["id"] for n in result["nodes"]] == expected
+
+
+def test_search_graph_nodes_carry_the_dart_company_id(engine):
+    result = json.loads(_tools(engine)["search_graph"].invoke({"name": "삼성전자", "depth": 3}))
+
+    assert [(n["id"], n["company_id"]) for n in result["nodes"]] == [
+        (1, "00126380"),
+        (2, None),
+        (4, None),
+        (3, "00164779"),
+    ]
 
 
 def test_search_graph_returns_edges_between_reached_nodes(engine):

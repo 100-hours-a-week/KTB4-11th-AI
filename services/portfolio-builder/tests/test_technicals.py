@@ -144,7 +144,7 @@ def test_bars_reads_the_timeframe_view_newest_first_and_reverses(
     db = FakeDB([rows])
     monkeypatch.setattr(market_module.questdb, "connect", lambda conf: db)
 
-    bars, as_of = QuestDBMarket("ws::addr=x:9000;").bars("005930", timeframe)
+    bars, as_of = QuestDBMarket("ws::addr=x:9000;", None).bars("005930", timeframe)
 
     sql, binds = db.queries[0]
     assert f"FROM {view} " in sql
@@ -157,21 +157,21 @@ def test_bars_reads_the_timeframe_view_newest_first_and_reverses(
 
 def test_bars_rejects_an_unknown_timeframe():
     with pytest.raises(KeyError):
-        QuestDBMarket("x").bars("005930", "5m")
+        QuestDBMarket("x", None).bars("005930", "5m")
 
 
-def test_universe_closes_groups_the_latest_snapshot_by_symbol(monkeypatch):
-    members = [{"symbol": "005930"}, {"symbol": "000660"}]
+def test_universe_closes_groups_kospi200_members_by_symbol(monkeypatch, engine):
     closes = [
         {"symbol": "000660", "close": 10.0},
         {"symbol": "005930", "close": 1.0},
         {"symbol": "005930", "close": 2.0},
+        {"symbol": "373220", "close": 5.0},
         {"symbol": "999999", "close": 5.0},
     ]
-    db = FakeDB([members, closes])
+    db = FakeDB([closes])
     monkeypatch.setattr(market_module.questdb, "connect", lambda conf: db)
 
-    universe = QuestDBMarket("x").universe_closes()
+    universe = QuestDBMarket("x", engine).universe_closes()
 
     assert {k: v.tolist() for k, v in universe.items()} == {
         "005930": [1.0, 2.0],

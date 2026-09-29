@@ -1,14 +1,20 @@
-from opendartreader.dart_list import corp_codes
+from typing import NamedTuple
 
-from news_graph_builder.company.dto import DartCompany
-from news_graph_builder.company.settings import CompanySettings
+from opendartreader import OpenDartReader
+
+__all__ = ["DartCorporation", "fetch_corp_codes"]
 
 
-def fetch_corp_codes(*, settings: CompanySettings | None = None) -> list[DartCompany]:
-    settings = settings or CompanySettings()
-    api_key = settings.dart_api_key.get_secret_value()
+class DartCorporation(NamedTuple):
+    corp_code: str  # 8 digits ID from OpenDART
+    corp_name: str
+    corp_eng_name: str | None
+    stock_code: str  # 6 alphanumeric ID
+
+
+def fetch_corp_codes(api_key: str) -> list[DartCorporation]:
     try:
-        frame = corp_codes(api_key)
+        frame = OpenDartReader(api_key).corp_codes
     except Exception as error:
         # DART status errors are a ValueError holding a {'status', 'message'} dict.
         detail = (
@@ -18,7 +24,7 @@ def fetch_corp_codes(*, settings: CompanySettings | None = None) -> list[DartCom
         )
         raise RuntimeError(f"DART corp_codes failed: {detail}") from None
     return [
-        DartCompany(
+        DartCorporation(
             row.corp_code,
             row.corp_name,
             row.corp_eng_name.strip() or None,

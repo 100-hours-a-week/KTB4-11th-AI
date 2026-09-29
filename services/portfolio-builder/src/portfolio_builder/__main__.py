@@ -53,7 +53,7 @@ def main() -> None:
         tools = [
             *news_tools(engine),
             *graph_tools(engine),
-            technicals_tool(engine, QuestDBMarket(settings.questdb_conf)),
+            technicals_tool(engine, QuestDBMarket(settings.questdb_conf, engine)),
             submit_tool(
                 engine,
                 briefing.previous_company_ids,

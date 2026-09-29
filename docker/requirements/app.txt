@@ -265,7 +265,9 @@ keyring==25.7.0 \
 kwcli==1.0.3 \
     --hash=sha256:4fd27c644f5d32b58f2fa2600ae77342e2604b7eb55229dc22d0aaea31731394 \
     --hash=sha256:6fa0ed6bc153445d7520e3e85bdf4921b98f9ad2474a017c75dd5013a837aeac
-    # via market-collector
+    # via
+    #   market-collector
+    #   market-syncer
 langchain==1.4.3 \
     --hash=sha256:0334066939dd1c7551889727ed2d09a72dea7a6aed2193ffb61817fb658d8921 \
     --hash=sha256:aed5c1a7cd581f70ddc076b75fdbcbae8031b8373983f86efd287aa70798abc2
@@ -475,7 +477,7 @@ numpy==2.5.3 \
 opendartreader==0.3.3 \
     --hash=sha256:4f43153fbd42d5e6f13f6d6a61c6736ddbe9d346f557537ac22788b023e6a04d \
     --hash=sha256:a9a646f34764b1e77a443ead4cebcdcef324cbed787c49f08f986d1d9d1f513c
-    # via news-graph-builder
+    # via market-syncer
 openrouter==0.10.8 \
     --hash=sha256:ac7f4cea1ec1c2a063b0ad9792a8f64dde68ed053279b6c42bee849a50afc47c \
     --hash=sha256:ff9b3cd2f55a3f905d21f56517344da9f9556ffbd2cb9d31ddc388c4b930aab6
@@ -582,6 +584,8 @@ psycopg==3.3.6 \
     --hash=sha256:a1db9f7148b06a28606767efaca51fa6f9398c5c0a3810519be69d7000bdb631 \
     --hash=sha256:c081f2250df751a943036e42db6df4571c66cd0aabe8291a7a506512b12007d2
     # via
+    #   market-collector
+    #   market-syncer
     #   news-clusterer
     #   news-graph-builder
     #   news-preprocessor
@@ -680,6 +684,7 @@ pydantic-settings==2.15.0 \
     --hash=sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117
     # via
     #   market-collector
+    #   market-syncer
     #   news-clusterer
     #   news-graph-builder
     #   news-preprocessor
@@ -820,6 +825,8 @@ sqlalchemy==2.1.1 \
     --hash=sha256:fdef70d59afce463bedef54580ba6a832f9f2313c1d0054e15cbb4ff46f37a97
     # via
     #   alembic
+    #   market-collector
+    #   market-syncer
     #   news-clusterer
     #   news-graph-builder
     #   news-preprocessor

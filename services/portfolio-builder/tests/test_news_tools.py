@@ -23,8 +23,10 @@ def test_get_news_cluster_returns_summary_articles_entities_relations(engine):
     assert result["cluster_id"] == 1
     assert result["title"] == "삼성전자 HBM 공급 확대"
     assert len(result["articles"]) == 2
-    assert {"id": 1, "name": "삼성전자", "type": "company", "company_id": "00126380"} in result[
-        "entities"
+    assert result["entities"] == [
+        {"id": 1, "name": "삼성전자", "type": "company", "company_id": "00126380"},
+        {"id": 2, "name": "엔비디아", "type": "company", "company_id": None},
+        {"id": 4, "name": "HBM", "type": "product", "company_id": None},
     ]
     assert [(r["source"], r["type"], r["target"]) for r in result["relations"]] == [
         ("삼성전자", "supplies", "엔비디아"),

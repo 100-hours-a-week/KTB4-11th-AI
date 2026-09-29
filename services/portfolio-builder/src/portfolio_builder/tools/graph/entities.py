@@ -14,7 +14,8 @@ def find_seed_entities(conn: sa.Connection, name: str) -> list[int]:
             sa.text(
                 "SELECT e.id FROM entities e WHERE e.name LIKE :pattern"
                 " UNION"
-                " SELECT e.id FROM company_aliases a JOIN entities e ON e.corp_code = a.corp_code"
+                " SELECT e.id FROM corporation_aliases a"
+                " JOIN entities e ON e.stock_code = a.stock_code"
                 " WHERE a.alias = :alias"
                 " ORDER BY id"
             ),

@@ -13,7 +13,7 @@ def upsert_plain_entity(conn: sa.Connection, *, raw_name: str, name: str, type_:
     return conn.execute(
         statement.on_conflict_do_update(
             index_elements=[entities.c.name, entities.c.type],
-            index_where=entities.c.corp_code.is_(None),
+            index_where=entities.c.stock_code.is_(None),
             set_={"name": statement.excluded.name},
         ).returning(entities.c.id)
     ).scalar_one()

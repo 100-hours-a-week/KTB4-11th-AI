@@ -4,12 +4,13 @@ from itertools import count
 
 import pytest
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 
 _external_ids = count()
 
 TABLES = (
-    "theme_companies, themes, relations, cluster_entities, cluster_summaries, entities,"
-    " company_aliases, companies, article_clusters, clusters, articles"
+    "relations, cluster_entities, cluster_summaries, entities,"
+    " corporation_aliases, corporations, article_clusters, clusters, articles"
 )
 
 
@@ -80,3 +81,24 @@ def read_updated_at(conn: sa.Connection, cluster_id: int) -> datetime:
 @pytest.fixture
 def updated_at():
     return read_updated_at
+
+
+def add_corporation(
+    conn: sa.Connection, stock_code: str, name: str, corp_code: str, *other_names: str
+) -> None:
+    conn.execute(
+        sa.text(
+            "INSERT INTO corporations (stock_code, name, corp_code)"
+            " VALUES (:stock_code, :name, :corp_code)"
+        ),
+        {"stock_code": stock_code, "name": name, "corp_code": corp_code},
+    )
+    conn.execute(
+        sa.text("INSERT INTO corporation_aliases (alias, stock_code) VALUES (:alias, :stock_code)"),
+        [{"alias": normalize(alias), "stock_code": stock_code} for alias in (name, *other_names)],
+    )
+
+
+@pytest.fixture
+def corporation():
+    return add_corporation

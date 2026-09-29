@@ -17,12 +17,12 @@ def resolve_company(engine: sa.Engine, name: str) -> Company:
     with engine.connect() as conn:
         company = conn.execute(
             sa.text(
-                "SELECT corp_code, corp_name, stock_code FROM ("
-                "  SELECT c.corp_code, c.corp_name, c.stock_code, 0 AS priority"
-                "  FROM companies c WHERE c.corp_code = :code"
+                "SELECT corp_code, name AS corp_name, stock_code FROM ("
+                "  SELECT c.corp_code, c.name, c.stock_code, 0 AS priority"
+                "  FROM corporations c WHERE c.corp_code = :code"
                 "  UNION ALL"
-                "  SELECT c.corp_code, c.corp_name, c.stock_code, 1"
-                "  FROM company_aliases a JOIN companies c ON c.corp_code = a.corp_code"
+                "  SELECT c.corp_code, c.name, c.stock_code, 1"
+                "  FROM corporation_aliases a JOIN corporations c ON c.stock_code = a.stock_code"
                 "  WHERE a.alias = :alias"
                 ") AS matches ORDER BY priority LIMIT 1"
             ),
@@ -33,8 +33,7 @@ def resolve_company(engine: sa.Engine, name: str) -> Company:
         candidates = list(
             conn.execute(
                 sa.text(
-                    "SELECT corp_name FROM companies WHERE corp_name ILIKE :pattern"
-                    " ORDER BY corp_name LIMIT 5"
+                    "SELECT name FROM corporations WHERE name ILIKE :pattern ORDER BY name LIMIT 5"
                 ),
                 {"pattern": like_contains(name.strip())},
             ).scalars()

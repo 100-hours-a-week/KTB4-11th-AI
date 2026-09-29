@@ -22,6 +22,7 @@ docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f
 docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
+docker compose -f compose.dev.yaml up market-syncer   # needs the Kiwoom and DART keys below; run before news-graph-builder
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
 PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from OPENROUTER_API_KEY in .env
 docker compose -f compose.dev.yaml up -d portfolio-rebalancer-http
@@ -34,10 +35,11 @@ KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv ru
 
 pytest runs with `--import-mode=importlib`, so test files with the same name (e.g. `test_settings.py`) can exist in several members without `__init__.py`.
 
-**After changing any member's dependencies**, run `uv lock`, then regenerate that service's image requirements. The Dockerfiles install from these hash-pinned files, not from `uv.lock`:
+**After changing any member's dependencies**, run `uv lock`, then regenerate that service's image requirements and the production image's. The Dockerfiles install from these hash-pinned files, not from `uv.lock`:
 
 ```bash
 uv export --package <svc> --no-dev --no-emit-workspace --format requirements-txt -o docker/requirements/<svc>.txt
+uv export --all-packages --no-dev --group migrations --no-emit-workspace --format requirements-txt -o docker/requirements/app.txt
 ```
 
 Use exactly this path. `uv export` writes the command into the file header, so a different `-o` produces a diff.
@@ -77,11 +79,13 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `NEWS_GRAPH_BUILDER_LLM_TIMEOUT` | news-graph-builder `graph` (seconds) | `120` |
 | `NEWS_GRAPH_BUILDER_MAX_ENTITIES` | news-graph-builder `graph` | `30` |
 | `NEWS_GRAPH_BUILDER_MAX_RELATIONS` | news-graph-builder `graph` | `50` |
-| `NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY` | news-graph-builder `kiwoom` | required |
-| `NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY` | news-graph-builder `kiwoom` | required |
-| `NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI` | news-graph-builder `kiwoom` (swap in the paper-trading domain) | `https://api.kiwoom.com` |
-| `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | news-graph-builder `kiwoom` (seconds between calls) | `0.2` |
-| `NEWS_GRAPH_BUILDER_DART_API_KEY` | news-graph-builder `company`; compose fills it from `OPENDART_API_KEY` in `.env` | required |
+| `MARKET_SYNCER_POSTGRES_DSN` | market-syncer | required |
+| `MARKET_SYNCER_KIWOOM_APP_KEY` | market-syncer | required |
+| `MARKET_SYNCER_KIWOOM_SECRET_KEY` | market-syncer | required |
+| `MARKET_SYNCER_KIWOOM_MODE` | market-syncer (`real` or `demo`) | `real` |
+| `MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL` | market-syncer (seconds between pages) | `0.2` |
+| `MARKET_SYNCER_DART_API_KEY` | market-syncer; `compose.dev.yaml` fills it from `OPENDART_API_KEY` in `.env` | required |
+| `MARKET_SYNCER_LOG_LEVEL` | market-syncer | `INFO` |
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder | required |
 | `PORTFOLIO_BUILDER_QUESTDB_CONF` | portfolio-builder (official client config, e.g. `ws::addr=localhost:9000;`) | required |
 | `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | portfolio-builder | required |
@@ -90,11 +94,13 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | portfolio-builder | `7` |
 | `PORTFOLIO_BUILDER_MAX_TURNS` | portfolio-builder | `150` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | portfolio-builder | `INFO` |
+| `MARKET_COLLECTOR_POSTGRES_DSN` | market-collector | required |
 | `MARKET_COLLECTOR_QUESTDB_CONF` | market-collector | required |
 | `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | market-collector | required |
 | `MARKET_COLLECTOR_KIWOOM_MODE` | market-collector | `real` |
-| `MARKET_COLLECTOR_INDEX_CODE` | market-collector | `201` |
+| `MARKET_COLLECTOR_INDEX_NAME` | market-collector | `KOSPI200` |
 | `MARKET_COLLECTOR_REQUEST_INTERVAL` | market-collector | `1.3` |
+| `MARKET_COLLECTOR_LOG_LEVEL` | market-collector | `INFO` |
 | `PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL` | portfolio-rebalancer-http | `INFO` |
 | `PORTFOLIO_REBALANCER_HTTP_HOST` | portfolio-rebalancer-http | `0.0.0.0` |
 | `PORTFOLIO_REBALANCER_HTTP_PORT` | portfolio-rebalancer-http | `8000` |
@@ -109,6 +115,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 |---|---|---|---|
 | `services/news-preprocessor` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-clusterer` | service | cron: `main()` runs once and exits | `ktb-core` |
+| `services/market-syncer` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/market-collector` | service | single-run archive job for current KOSPI 200 OHLCV | `ktb-core` |
@@ -116,19 +123,19 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate through datastores, except for one HTTP edge.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all plus QuestDB bars and writes `portfolios`, `portfolio_holdings`, `portfolio_exits` (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself. The planned direct call is portfolio-builder → portfolio-rebalancer-http → Backend (design: `docs/superpowers/specs/2026-09-28-service-skeletons-design.md`).
+- **Services communicate through datastores, except for one HTTP edge.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, market-syncer writes Kiwoom and OpenDART reference data (`corporations`, `corporation_aliases`, KOSPI 200 membership in `corporation_indices`, `themes`, `theme_companies`; design: `docs/superpowers/specs/2026-09-29-market-syncer-design.md`) and runs before news-graph-builder and market-collector, news-graph-builder reads clusters and corporations and writes `cluster_summaries` and the knowledge graph (`entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`), market-collector reads its symbols from `corporation_indices` and writes OHLCV to QuestDB, and portfolio-builder reads them all (its KOSPI 200 universe comes from `corporation_indices`) plus QuestDB bars and writes `portfolios`, `portfolio_holdings`, `portfolio_exits` (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself. The planned direct call is portfolio-builder → portfolio-rebalancer-http → Backend (design: `docs/superpowers/specs/2026-09-28-service-skeletons-design.md`).
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
-- **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot.
+- **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot. Migration `0002` drops the old `universe_members` table.
 - **Work queue:** SQS in production, Redis in development. No consumer yet; portfolio-rebalancer-http consumes it after the MVP.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **portfolio-builder runs a LangChain `create_agent` agent on OpenRouter** and computes technical evidence with TA-Lib directly (not `ktb-market-analyzer`). The OpenRouter key lives only in the environment.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.
-- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`, `PORTFOLIO_REBALANCER_HTTP_`). There is deliberately no shared base class in core.
+- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `MARKET_COLLECTOR_`, `MARKET_SYNCER_`, `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`, `PORTFOLIO_REBALANCER_HTTP_`). There is deliberately no shared base class in core.
 - Every service's `main()` calls `ktb_core.logging.setup_logging()` first, which emits JSON logs on stdout.
 - **Postgres migrations** live in `infrastructure/postgres/migrations/`, with `alembic.ini` at the repo root. The DSN comes only from `KTB_POSTGRES_DSN`, and a test asserts that no `sqlalchemy.url` is committed. A dedicated job runs migrations. Services never run them at boot.
-- **Docker:** there is one image per service (`docker/<svc>.Dockerfile`) and the build context is the repo root. Each Dockerfile installs third-party deps from `docker/requirements/<svc>.txt`, then installs first-party members from source with `--no-deps`. When a service gains a new workspace dependency, add a `COPY` line and put the dependency on the `uv pip install` line of that service's Dockerfile.
+- **Docker:** there is one image per service (`docker/<svc>.Dockerfile`) and the build context is the repo root. Each Dockerfile installs third-party deps from `docker/requirements/<svc>.txt`, then installs first-party members from source with `--no-deps`. When a service gains a new workspace dependency, add a `COPY` line and put the dependency on the `uv pip install` line of that service's Dockerfile. Production (`compose.prod.yaml`) runs every service from the single `docker/app.Dockerfile` image, so a new service also goes on its `uv pip install` line.
 - **In development, workspace dependencies are not isolated.** `uv sync --all-packages` puts everything in one venv, so an undeclared import still works locally. It only fails in the image build.
-- **news-graph-builder needs a Kiwoom app key and a DART key.** The Kiwoom key can place trades: prefer a paper-trading (모의투자) key via `NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI`, never commit it, and register the task's outbound IP with Kiwoom.
+- **market-syncer needs a Kiwoom app key and a DART key.** The Kiwoom key can place trades: prefer a paper-trading (모의투자) key with `MARKET_SYNCER_KIWOOM_MODE=demo`, never commit it, and register the task's outbound IP with Kiwoom.
 
 ## Conventions
 

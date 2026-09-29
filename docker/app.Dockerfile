@@ -17,6 +17,7 @@ RUN uv pip install --no-deps \
     ./packages/core \
     ./packages/market-analyzer \
     ./services/market-collector \
+    ./services/market-syncer \
     ./services/news-clusterer \
     ./services/news-graph-builder \
     ./services/news-preprocessor \

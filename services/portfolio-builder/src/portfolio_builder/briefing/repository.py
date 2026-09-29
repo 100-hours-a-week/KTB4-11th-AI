@@ -21,16 +21,16 @@ def find_previous_portfolio(conn: sa.Connection) -> PreviousPortfolio | None:
         return None
     holdings = conn.execute(
         sa.text(
-            "SELECT c.corp_code, c.corp_name, c.stock_code, h.weight, h.reason"
-            " FROM portfolio_holdings h JOIN companies c ON c.corp_code = h.company_id"
+            "SELECT c.corp_code, c.name AS corp_name, c.stock_code, h.weight, h.reason"
+            " FROM portfolio_holdings h JOIN corporations c ON c.corp_code = h.company_id"
             " WHERE h.portfolio_id = :id ORDER BY h.weight DESC"
         ),
         {"id": portfolio["id"]},
     ).mappings()
     exits = conn.execute(
         sa.text(
-            "SELECT c.corp_code, c.corp_name, c.stock_code, e.reason"
-            " FROM portfolio_exits e JOIN companies c ON c.corp_code = e.company_id"
+            "SELECT c.corp_code, c.name AS corp_name, c.stock_code, e.reason"
+            " FROM portfolio_exits e JOIN corporations c ON c.corp_code = e.company_id"
             " WHERE e.portfolio_id = :id"
         ),
         {"id": portfolio["id"]},
@@ -52,10 +52,10 @@ def find_recent_news(conn: sa.Connection, window_days: int) -> RecentNews:
     )
     mentions = conn.execute(
         sa.text(
-            "SELECT DISTINCT ce.cluster_id, co.corp_code, co.corp_name, co.stock_code"
+            "SELECT DISTINCT ce.cluster_id, co.corp_code, co.name AS corp_name, co.stock_code"
             " FROM cluster_entities ce"
             " JOIN entities e ON e.id = ce.entity_id"
-            " JOIN companies co ON co.corp_code = e.corp_code"
+            " JOIN corporations co ON co.stock_code = e.stock_code"
             " WHERE ce.cluster_id = ANY(CAST(:ids AS bigint[]))"
             " ORDER BY co.corp_code, ce.cluster_id"
         ),
@@ -68,10 +68,11 @@ def find_recent_news(conn: sa.Connection, window_days: int) -> RecentNews:
     themes = list(
         conn.execute(
             sa.text(
-                "SELECT tc.corp_code, t.name, tc.is_main"
+                "SELECT co.corp_code, t.name, tc.is_major"
                 " FROM theme_companies tc JOIN themes t ON t.theme_code = tc.theme_code"
-                " WHERE tc.corp_code = ANY(CAST(:codes AS text[]))"
-                " ORDER BY tc.is_main DESC, t.name"
+                " JOIN corporations co ON co.stock_code = tc.stock_code"
+                " WHERE co.corp_code = ANY(CAST(:codes AS text[]))"
+                " ORDER BY tc.is_major DESC, t.name"
             ),
             {"codes": list(companies)},
         ).mappings()
@@ -79,6 +80,6 @@ def find_recent_news(conn: sa.Connection, window_days: int) -> RecentNews:
     themes_by_company: dict[str, list[str]] = defaultdict(list)
     for t in themes:
         themes_by_company[t["corp_code"]].append(
-            f"{t['name']} (main)" if t["is_main"] else t["name"]
+            f"{t['name']} (main)" if t["is_major"] else t["name"]
         )
     return RecentNews(clusters, companies, themes_by_company, len(themes))

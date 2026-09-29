@@ -27,6 +27,21 @@ def test_first_run_briefs_only_clusters_inside_the_window(engine):
     assert "반도체 수출 둔화" not in briefing.text
 
 
+def test_each_mentioned_company_lists_its_own_themes(engine):
+    briefing = load_briefing(engine, 60)
+
+    assert briefing.company_count == 2
+    assert briefing.theme_count == 2
+    assert (
+        f"- 삼성전자 (company_id {SAMSUNG}, stock_code 005930): clusters 1; themes: HBM (main)"
+        in briefing.text.splitlines()
+    )
+    assert (
+        f"- SK하이닉스 (company_id {HYNIX}, stock_code 000660): clusters 2; themes: HBM"
+        in briefing.text.splitlines()
+    )
+
+
 def _submission(company_id, reason, commentary, clusters):
     return Submission(
         holdings=[

@@ -37,8 +37,9 @@ def get_news_cluster(id: int, *, engine: sa.Engine) -> str:
         ).mappings()
         entities = conn.execute(
             sa.text(
-                "SELECT e.id, e.raw_name AS name, e.type, e.corp_code AS company_id"
+                "SELECT e.id, e.raw_name AS name, e.type, c.corp_code AS company_id"
                 " FROM cluster_entities ce JOIN entities e ON e.id = ce.entity_id"
+                " LEFT JOIN corporations c ON c.stock_code = e.stock_code"
                 " WHERE ce.cluster_id = :id ORDER BY e.id"
             ),
             {"id": id},
