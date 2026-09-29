@@ -14,10 +14,13 @@ from portfolio_rebalancer.backend import acquire_token, build_client
 from portfolio_rebalancer.prices import connect
 from portfolio_rebalancer.settings import Settings
 
+SERVICE_NAME = "portfolio-rebalancer"
+
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
+    # service_name is required from #54 onwards; see packages/core/src/ktb_core/logging.py.
+    setup_logging(settings.log_level, service_name=SERVICE_NAME)
     logging.getLogger(__name__).info("portfolio-rebalancer tick starting")
 
     with connect(settings.questdb_conf) as db, build_client(settings.backend_url) as client:
@@ -28,12 +31,12 @@ def main() -> None:
 def tick(db: object, client: object, token: str) -> None:
     """Poll, decide, send.
 
-    The model portfolio and the order history live in PostgreSQL, which #42 has not landed
+    The model portfolio and the order history live in PostgreSQL, which #54 has not landed
     yet, so there is nothing to read a portfolio from. Refusing here beats polling the
     Backend and silently deciding nothing.
     """
     raise NotImplementedError(
-        "the PostgreSQL store lands with #42; see docs/superpowers/plans/"
+        "the PostgreSQL store lands with #54; see docs/superpowers/plans/"
         "2026-09-28-portfolio-rebalancer.md task 5"
     )
 

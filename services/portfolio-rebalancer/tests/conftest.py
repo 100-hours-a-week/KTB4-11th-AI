@@ -16,8 +16,8 @@ REPO_ROOT = next(
 
 @pytest.fixture(scope="session")
 def migrated(pg_dsn, pg_engine):
-    """Bring the schema to head once. `0006` chains after #42's `0005`, so this skips
-    with a clear reason rather than failing obscurely while #42 is unmerged."""
+    """Bring the schema to head once. `0006` chains after #54's `0005`, so this skips
+    with a clear reason rather than failing obscurely while #54 is unmerged."""
     import os
 
     os.environ["KTB_POSTGRES_DSN"] = pg_dsn
@@ -26,7 +26,7 @@ def migrated(pg_dsn, pg_engine):
         command.upgrade(config, "head")
     except Exception as failure:  # noqa: BLE001
         if "0005" in str(failure):
-            pytest.skip("0005_create_portfolios.py lands with #42")
+            pytest.skip("0005_create_portfolios.py lands with #54")
         raise
     return pg_engine
 

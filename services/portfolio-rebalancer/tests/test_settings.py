@@ -3,7 +3,7 @@ from portfolio_rebalancer.settings import Settings
 from pydantic import ValidationError
 
 GIVEN = {
-    "postgres_dsn": "postgresql+psycopg://ktb:ktb@postgres:5432/news",
+    "postgres_dsn": "postgresql+psycopg://ktb:ktb@postgres:5432/ktb",
     "questdb_conf": "ws::addr=localhost:9000;",
     "backend_url": "http://backend:8080",
 }

@@ -17,7 +17,7 @@ x-postgres-environment: &postgres-environment
   NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
   NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
   PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/ktb
 
 services:
   postgres:
