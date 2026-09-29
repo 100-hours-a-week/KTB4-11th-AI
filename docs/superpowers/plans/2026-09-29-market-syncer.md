@@ -87,10 +87,13 @@ non-KOSPI 200 members.
 
 - `docker/market-syncer.Dockerfile` (copy `news-graph-builder`'s; writable `WORKDIR` for
   `docs_cache/`), `uv export --package market-syncer --no-dev --no-emit-workspace --format
-  requirements-txt -o docker/requirements/market-syncer.txt`.
-- `compose.dev.yaml` and `compose.prod.yaml`: add `market-syncer`; remove Kiwoom/DART env from
-  `news-graph-builder`; add the Postgres DSN to `market-collector`; make `market-collector` and
-  `news-graph-builder` wait for `market-syncer` in the schedule.
+  requirements-txt -o docker/requirements/market-syncer.txt`. Production runs every service from
+  `docker/app.Dockerfile`, so add `market-syncer` to its install line and re-export `app.txt`.
+- `compose.dev.yaml` and `compose.prod.yaml`: add `market-syncer` (prod: `working_dir: /tmp`, since
+  `/app` is not writable); remove Kiwoom/DART env from `news-graph-builder`; add the Postgres DSN to
+  `market-collector`. The order (`market-syncer` before `market-collector` and `news-graph-builder`)
+  belongs to the host's systemd schedule, which is not in this repo; compose has no `depends_on` on
+  it, so a graph-builder run does not trigger a sync.
 - `.github/workflows/ci-dev.yaml`: add `market-syncer` to both lists.
 - `tach.toml`: add the `market_syncer` module.
 - `AGENTS.md` and `README.md`: members table, service list, env-var table (new `MARKET_SYNCER_*`

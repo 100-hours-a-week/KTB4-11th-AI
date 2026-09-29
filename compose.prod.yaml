@@ -15,7 +15,9 @@ x-app: &app
 x-postgres-environment: &postgres-environment
   NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/news
   NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  MARKET_SYNCER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
   NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
   PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
 
 services:
@@ -171,6 +173,25 @@ services:
       postgres:
         condition: service_healthy
 
+  market-syncer:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["market-syncer"]
+    # OpenDartReader writes docs_cache/ into the working directory; /app is not writable by app.
+    working_dir: /tmp
+    mem_limit: 512m
+    environment:
+      <<: *postgres-environment
+      MARKET_SYNCER_KIWOOM_APP_KEY: ${MARKET_SYNCER_KIWOOM_APP_KEY:-}
+      MARKET_SYNCER_KIWOOM_SECRET_KEY: ${MARKET_SYNCER_KIWOOM_SECRET_KEY:-}
+      MARKET_SYNCER_KIWOOM_MODE: ${MARKET_SYNCER_KIWOOM_MODE:-real}
+      MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL: ${MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL:-0.2}
+      MARKET_SYNCER_DART_API_KEY: ${MARKET_SYNCER_DART_API_KEY:-}
+      MARKET_SYNCER_LOG_LEVEL: ${MARKET_SYNCER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   news-graph-builder:
     <<: *app
     profiles: ["jobs"]
@@ -181,10 +202,6 @@ services:
       NEWS_GRAPH_BUILDER_LLM_BASE_URI: ${NEWS_GRAPH_BUILDER_LLM_BASE_URI:-}
       NEWS_GRAPH_BUILDER_LLM_MODEL: ${NEWS_GRAPH_BUILDER_LLM_MODEL:-}
       NEWS_GRAPH_BUILDER_LLM_API_KEY: ${NEWS_GRAPH_BUILDER_LLM_API_KEY:-}
-      NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY: ${NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY:-}
-      NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY: ${NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY:-}
-      NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI: ${NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI:-https://api.kiwoom.com}
-      NEWS_GRAPH_BUILDER_DART_API_KEY: ${NEWS_GRAPH_BUILDER_DART_API_KEY:-}
       NEWS_GRAPH_BUILDER_LOG_LEVEL: ${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -228,13 +245,17 @@ services:
     restart: on-failure
     stop_grace_period: 2m
     environment:
+      <<: *postgres-environment
       MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
       MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
       MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
+      MARKET_COLLECTOR_INDEX_NAME: ${MARKET_COLLECTOR_INDEX_NAME:-KOSPI200}
       MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
       MARKET_COLLECTOR_POLL_INTERVAL_SECONDS: ${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}
     depends_on:
       questdb:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   portfolio-builder:
