@@ -5,7 +5,9 @@ from dataclasses import dataclass
 
 __all__ = [
     "PRICE_BANDS",
+    "TICK_SIZES",
     "Pair",
+    "on_tick",
     "find_pairs",
     "next_rung",
     "read_reservation",
@@ -13,6 +15,18 @@ __all__ = [
 ]
 
 PENDING = "pending"
+
+# KRX moves in these steps, and the Backend answers 400 for a price that is not on one.
+# (upper bound exclusive, step)
+TICK_SIZES: tuple[tuple[float, int], ...] = (
+    (2_000, 1),
+    (5_000, 5),
+    (20_000, 10),
+    (50_000, 50),
+    (200_000, 100),
+    (500_000, 500),
+)
+TOP_TICK = 1_000
 
 
 @dataclass(frozen=True)
@@ -30,12 +44,34 @@ class Pair:
 PRICE_BANDS: tuple[float, ...] = (0.05, 0.03, 0.01)
 
 
+def tick_size(price: float) -> int:
+    """The step KRX quotes this price in."""
+    for ceiling, tick in TICK_SIZES:
+        if price < ceiling:
+            return tick
+    return TOP_TICK
+
+
+def on_tick(price: float) -> float:
+    """The nearest price KRX will accept.
+
+    Rounding to nearest rather than up or down keeps the pair symmetric about its
+    reference, which is what lets the day be read back out of it.
+    """
+    tick = tick_size(price)
+    return float(round(price / tick) * tick)
+
+
 def reservation_prices(reference: float, day: int) -> tuple[float, float] | None:
-    """The low and high price for a day, or None once the ladder is at market."""
+    """The low and high price for a day, or None once the ladder is at market.
+
+    Both are placed on a KRX tick here rather than left to the Backend, which rejects an
+    off-tick price with a 400 instead of rounding it.
+    """
     if day >= len(PRICE_BANDS):
         return None
     band = PRICE_BANDS[day]
-    return reference * (1 - band), reference * (1 + band)
+    return on_tick(reference * (1 - band)), on_tick(reference * (1 + band))
 
 
 def read_reservation(low: float, high: float) -> tuple[float, int]:

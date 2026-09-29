@@ -214,3 +214,20 @@ def test_a_send_time_in_the_future_is_left_alone():
     )
 
     assert orders == []
+
+
+def test_a_narrowed_pair_also_lands_on_a_tick():
+    """Every rung goes to the Backend, not just the first, so every rung has to be
+    quotable."""
+    from portfolio_rebalancer.decide.reservations import tick_size
+
+    for reference in (1_999.0, 49_999.0, 499_999.0):
+        pairs = {("005930", "buy"): pair_for(day=0, reference=reference)}
+
+        orders = narrow(
+            portfolio(holdings=[holding()]), account(), pairs, {"005930": at(MONDAY)}, TUESDAY
+        )
+
+        order = orders[0]
+        for price in (order.low, order.high, order.reference):
+            assert price % tick_size(price) == 0, f"{reference} → {price}"

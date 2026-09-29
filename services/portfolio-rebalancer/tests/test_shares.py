@@ -1,13 +1,14 @@
-from portfolio_rebalancer.decide.shares import Target, spend_leftover, whole_shares
+from portfolio_rebalancer.decide.shares import spend_leftover, whole_shares
+from portfolio_rebalancer.portfolio import Holding
 
 CAPITAL = 10_000_000
 
 WEIGHTS = (0.20, 0.15, 0.12, 0.10, 0.10, 0.08, 0.08, 0.07, 0.05, 0.05)
 
 
-def targets(weights=WEIGHTS) -> list[Target]:
+def targets(weights=WEIGHTS) -> list[Holding]:
     return [
-        Target(company_id=f"C{i:02d}", stock_code=f"{i:06d}", weight=w)
+        Holding(company_id=f"C{i:02d}", stock_code=f"{i:06d}", weight=w, reason=None)
         for i, w in enumerate(weights)
     ]
 

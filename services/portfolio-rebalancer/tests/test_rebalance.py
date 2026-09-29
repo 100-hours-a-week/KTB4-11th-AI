@@ -275,3 +275,20 @@ def test_a_name_with_no_price_that_is_held_is_never_sold():
     )
 
     assert "sell" not in {order.action for order in orders}
+
+
+def test_every_price_on_an_order_lands_on_a_tick():
+    """The Backend answers 400 for an off-tick price, so this has to hold for the low, the
+    high and the reference that travels with them."""
+    from portfolio_rebalancer.decide.reservations import tick_size
+
+    awkward = {"005930": 1_999.0, "000660": 49_999.0, "035420": 499_999.0}
+    holdings = [holding(SAMSUNG, 0.4), holding(HYNIX, 0.3), holding(NAVER, 0.3)]
+
+    orders = rebalance(portfolio(holdings=holdings), account(cash=500_000_000.0), awkward)
+
+    priced = [order for order in orders if order.low is not None]
+    assert priced
+    for order in priced:
+        for price in (order.low, order.high, order.reference):
+            assert price % tick_size(price) == 0, f"{order.stock_code} {price}"

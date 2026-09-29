@@ -10,7 +10,13 @@ from collections.abc import Iterable, Mapping
 from datetime import date, datetime
 
 from portfolio_rebalancer.decide.accounts import AccountState
-from portfolio_rebalancer.decide.reservations import PRICE_BANDS, Pair, next_rung, read_reservation
+from portfolio_rebalancer.decide.reservations import (
+    PRICE_BANDS,
+    Pair,
+    next_rung,
+    on_tick,
+    read_reservation,
+)
 from portfolio_rebalancer.order import Order
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
@@ -66,7 +72,7 @@ def narrow(
                 shares=pair.quantity,
                 reason=name.reason,
                 weight=getattr(name, "weight", None),
-                reference=reference,
+                reference=on_tick(reference),
                 band=PRICE_BANDS[read_reservation(*rung)[1]] if rung else None,
                 low=rung[0] if rung else None,
                 high=rung[1] if rung else None,

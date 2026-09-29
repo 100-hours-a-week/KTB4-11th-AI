@@ -8,16 +8,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import cycle
 
-__all__ = ["Position", "Target", "spend_leftover", "whole_shares"]
+from portfolio_rebalancer.portfolio import Holding
 
-
-@dataclass(frozen=True)
-class Target:
-    """A company in the model portfolio, with the weight it should carry."""
-
-    company_id: str
-    stock_code: str
-    weight: float
+__all__ = ["Position", "spend_leftover", "whole_shares"]
 
 
 @dataclass(frozen=True)
@@ -32,7 +25,7 @@ class Position:
 
 
 def whole_shares(
-    targets: Sequence[Target],
+    targets: Sequence[Holding],
     prices: Mapping[str, float],
     capital: float,
     cash_weight: float,

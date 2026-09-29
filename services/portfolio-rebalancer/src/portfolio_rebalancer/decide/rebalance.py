@@ -7,8 +7,8 @@ the Backend is a different decision and lives in `decide/outstanding.py`.
 from collections.abc import Mapping, Sequence
 
 from portfolio_rebalancer.decide.accounts import AccountState
-from portfolio_rebalancer.decide.reservations import PRICE_BANDS, reservation_prices
-from portfolio_rebalancer.decide.shares import Target, whole_shares
+from portfolio_rebalancer.decide.reservations import PRICE_BANDS, on_tick, reservation_prices
+from portfolio_rebalancer.decide.shares import whole_shares
 from portfolio_rebalancer.order import Order
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
@@ -111,15 +111,7 @@ def _target_shares(
                 for name in open_names
             )
         )
-        positions, _ = whole_shares(
-            [
-                Target(company_id=name.company_id, stock_code=name.stock_code, weight=name.weight)
-                for name in open_names
-            ],
-            prices,
-            capital,
-            cash_weight,
-        )
+        positions, _ = whole_shares(open_names, prices, capital, cash_weight)
         sized = {position.stock_code: position.shares for position in positions}
         held_drops = {
             name.stock_code
@@ -153,7 +145,7 @@ def _order(
         shares=shares,
         reason=name.reason,
         weight=getattr(name, "weight", None),
-        reference=reference if pair else None,
+        reference=on_tick(reference) if pair else None,
         band=PRICE_BANDS[FIRST_DAY] if pair else None,
         low=pair[0] if pair else None,
         high=pair[1] if pair else None,
