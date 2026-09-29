@@ -5,24 +5,26 @@ x-app: &app
   init: true
   restart: "no"
   logging:
-    driver: json-file
+    driver: awslogs
     options:
-      max-size: 10m
-      max-file: "3"
+      awslogs-region: ap-northeast-2
+      awslogs-group: /stockspoon/ai/application
+      awslogs-create-group: "false"
+      tag: "{{.Name}}-{{.ID}}"
 
 x-postgres-environment: &postgres-environment
-  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/ktb
-  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/ktb
-  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/ktb
-  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/ktb
+  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18-trixie
     environment:
-      POSTGRES_USER: ktb
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ktb
+      POSTGRES_DB: ${POSTGRES_DB}
     command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=50"]
     shm_size: 128m
     mem_limit: 900m
@@ -30,19 +32,24 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ktb -d ktb"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 12
       start_period: 10s
     logging:
-      driver: json-file
+      driver: awslogs
       options:
-        max-size: 10m
-        max-file: "3"
+        awslogs-region: ap-northeast-2
+        awslogs-group: /stockspoon/ai/postgres
+        awslogs-create-group: "false"
+        tag: "{{.Name}}-{{.ID}}"
 
   questdb:
     image: questdb/questdb:10.0.1
+    environment:
+      QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
+      QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
     mem_limit: 1200m
     restart: unless-stopped
     volumes:
@@ -54,17 +61,27 @@ services:
       retries: 12
       start_period: 20s
     logging:
-      driver: json-file
+      driver: awslogs
       options:
-        max-size: 10m
-        max-file: "3"
+        awslogs-region: ap-northeast-2
+        awslogs-group: /stockspoon/ai/questdb
+        awslogs-create-group: "false"
+        tag: "{{.Name}}-{{.ID}}"
 
   postgres-migrate:
     <<: *app
     profiles: ["tools"]
-    command: ["alembic", "upgrade", "head"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "postgres migration started"
+        alembic upgrade head
+        status=$$?
+        echo "postgres migration finished: status=$$status"
+        exit "$$status"
     environment:
-      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/ktb
+      KTB_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,7 +89,15 @@ services:
   questdb-migrate:
     <<: *app
     profiles: ["tools"]
-    command: ["python", "infrastructure/questdb/migrate.py"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "questdb migration started"
+        python infrastructure/questdb/migrate.py
+        status=$$?
+        echo "questdb migration finished: status=$$status"
+        exit "$$status"
     environment:
       KTB_QUESTDB_CONF: ws::addr=questdb:9000;
     depends_on:
@@ -171,13 +196,46 @@ services:
   market-collector:
     <<: *app
     profiles: ["jobs"]
-    command: ["market-collector"]
+    # 애플리케이션은 단발 작업이므로 운영 시간 동안 같은 컨테이너에서 반복 실행합니다.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        stop() {
+          if [ -n "$${child:-}" ]; then
+            kill -TERM "$$child" 2>/dev/null || true
+            wait "$$child" 2>/dev/null || true
+          fi
+          exit 0
+        }
+
+        trap stop TERM INT
+
+        while true; do
+          market-collector &
+          child=$$!
+          wait "$$child"
+          status=$$?
+          child=
+
+          if [ "$$status" -ne 0 ]; then
+            exit "$$status"
+          fi
+
+          sleep "$${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}" &
+          child=$$!
+          wait "$$child"
+          child=
+        done
     mem_limit: 768m
+    restart: on-failure
+    stop_grace_period: 2m
     environment:
       MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
       MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
       MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
       MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
+      MARKET_COLLECTOR_POLL_INTERVAL_SECONDS: ${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}
     depends_on:
       questdb:
         condition: service_healthy

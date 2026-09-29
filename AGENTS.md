@@ -48,6 +48,12 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 
 | Variable | Used by | Default |
 |---|---|---|
+| `POSTGRES_USER` | compose | required |
+| `POSTGRES_DB` | compose | required |
+| `POSTGRES_PASSWORD` | compose | required |
+| `QUESTDB_USER` | compose | required |
+| `QUESTDB_DATABASE` | portfolio-builder QuestDB DSN | required |
+| `QUESTDB_PASSWORD` | compose, portfolio-builder QuestDB DSN | required |
 | `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
 | `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `ktb_test`, never `ktb` | — |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
