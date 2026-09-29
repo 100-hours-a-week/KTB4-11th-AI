@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import httpx
 import pytest
-from portfolio_rebalancer.external.backend import (
+from portfolio_rebalancer.request.backend import (
     bearer_token,
     build_client,
     fetch_accounts,
@@ -148,7 +148,9 @@ def test_the_jwt_goes_out_on_both_calls():
     orders, seen_orders = recorder(responder({"message": "ok"}))
     send_orders(orders, bearer_token(JWT), [FakeOrder(11, "005930", "buy", 1)])
 
+    assert seen_users[0].url.path == "/api/v1/users"
     assert seen_users[0].headers["authorization"] == f"Bearer {JWT}"
+    assert seen_orders[0].url.path == "/api/v1/orders"
     assert seen_orders[0].headers["authorization"] == f"Bearer {JWT}"
 
 

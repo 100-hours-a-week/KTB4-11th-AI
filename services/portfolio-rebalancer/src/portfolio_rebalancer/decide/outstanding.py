@@ -1,4 +1,4 @@
-"""Decide what to do about an order that is already at the Backend. Pure: no I/O.
+"""Decide what to do about an order that is already at the Backend.
 
 Two questions live here, and both are answered from the outstanding pairs the poll
 reports rather than from anything this service stored: has the order arrived, and should
@@ -41,16 +41,7 @@ def narrow(
     last_sent: Mapping[str, datetime | None],
     today: date,
 ) -> list[Order]:
-    """Advance each outstanding pair by one rung, at most once per trading day.
 
-    The rung comes from the pair itself, so the reference stays the one the first pair
-    fixed rather than wherever the price has walked since. A pair the model portfolio does
-    not name is left alone: this service has no reason to move someone else's order.
-
-    Trading days are approximated by weekdays. A mid-week public holiday therefore
-    advances a rung a day early, which costs some price chasing but cannot break the fill,
-    because the last rung is a market order either way.
-    """
     if today.weekday() >= SATURDAY:
         return []
 

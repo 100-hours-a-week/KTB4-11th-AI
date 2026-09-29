@@ -14,7 +14,6 @@ import httpx
 __all__ = ["bearer_token", "build_client", "fetch_accounts", "send_orders"]
 
 USERS_PATH = "/api/v1/users"
-# The Backend has not confirmed the order path; only the prefix is known.
 ORDERS_PATH = "/api/v1/orders"
 TIMEOUT = 10.0
 

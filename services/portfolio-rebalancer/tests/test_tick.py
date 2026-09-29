@@ -6,8 +6,8 @@ from datetime import UTC, date, datetime
 import pytest
 from portfolio_rebalancer import tick as tick_module
 from portfolio_rebalancer.decide.reservations import PRICE_BANDS, reservation_prices
-from portfolio_rebalancer.external.prices import Price
 from portfolio_rebalancer.portfolio import Holding, Portfolio
+from portfolio_rebalancer.request.prices import Price
 from portfolio_rebalancer.tick import market_today, tick
 
 MONDAY = date(2026, 9, 28)

@@ -3,7 +3,8 @@ database does: cascades, a unique constraint, and replace-not-append."""
 
 import pytest
 import sqlalchemy as sa
-from portfolio_rebalancer.external.store import (
+from portfolio_rebalancer.order import Order
+from portfolio_rebalancer.request.store import (
     account_holdings,
     account_pending_orders,
     accounts,
@@ -15,7 +16,6 @@ from portfolio_rebalancer.external.store import (
     stored_orders,
     users,
 )
-from portfolio_rebalancer.order import Order
 
 pytestmark = pytest.mark.usefixtures("migrated")
 
@@ -227,13 +227,13 @@ def test_recording_nothing_writes_nothing(conn, portfolio_id):
 
 def test_no_portfolio_reads_as_none_rather_than_an_empty_one(conn):
     """An empty Portfolio would look like "sell everything"; None means "nothing decided yet"."""
-    from portfolio_rebalancer.external.store import latest_portfolio
+    from portfolio_rebalancer.request.store import latest_portfolio
 
     assert latest_portfolio(conn) is None
 
 
 def test_the_newest_portfolio_wins(conn):
-    from portfolio_rebalancer.external.store import latest_portfolio
+    from portfolio_rebalancer.request.store import latest_portfolio
 
     older, newer = (
         conn.execute(
@@ -253,7 +253,7 @@ def test_the_newest_portfolio_wins(conn):
 
 def test_a_holding_carries_the_stock_code_joined_in_from_companies(conn, portfolio_id):
     """company_id is DART's corp_code, which no exchange accepts as an order identifier."""
-    from portfolio_rebalancer.external.store import latest_portfolio
+    from portfolio_rebalancer.request.store import latest_portfolio
 
     conn.execute(
         sa.text(
@@ -277,7 +277,7 @@ def test_a_holding_carries_the_stock_code_joined_in_from_companies(conn, portfol
 
 
 def test_a_holding_with_no_reason_upstream_carries_none(conn, portfolio_id):
-    from portfolio_rebalancer.external.store import latest_portfolio
+    from portfolio_rebalancer.request.store import latest_portfolio
 
     conn.execute(
         sa.text(
@@ -297,7 +297,7 @@ def test_a_holding_with_no_reason_upstream_carries_none(conn, portfolio_id):
 
 
 def test_an_exit_carries_its_reason(conn, portfolio_id):
-    from portfolio_rebalancer.external.store import latest_portfolio
+    from portfolio_rebalancer.request.store import latest_portfolio
 
     conn.execute(
         sa.text(

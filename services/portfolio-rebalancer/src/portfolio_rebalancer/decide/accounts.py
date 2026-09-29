@@ -20,13 +20,7 @@ class AccountState:
 
 
 def apply_pending(account: Mapping[str, object]) -> AccountState:
-    """Fold outstanding orders into the numbers.
 
-    Cash committed to a pending buy is not spendable, and a pending order moves the
-    quantity the account is on its way to holding. A pending sell adds no cash, because
-    the proceeds do not exist until it fills. `total_price` is ignored: it is the
-    principal put in, not what the position is worth now.
-    """
     cash = float(account["cash_balance"])  # type: ignore[arg-type]
     held = {
         str(holding["stock_id"]): int(holding["amount"])

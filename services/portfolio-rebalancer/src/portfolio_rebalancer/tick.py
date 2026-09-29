@@ -19,9 +19,9 @@ from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
 from portfolio_rebalancer.decide.outstanding import narrow, reached_the_backend
 from portfolio_rebalancer.decide.rebalance import rebalance
 from portfolio_rebalancer.decide.reservations import find_pairs
-from portfolio_rebalancer.external.backend import fetch_accounts, send_orders
-from portfolio_rebalancer.external.prices import latest_prices
-from portfolio_rebalancer.external.store import (
+from portfolio_rebalancer.request.backend import fetch_accounts, send_orders
+from portfolio_rebalancer.request.prices import latest_prices
+from portfolio_rebalancer.request.store import (
     amend_orders,
     discard_unsent,
     latest_portfolio,

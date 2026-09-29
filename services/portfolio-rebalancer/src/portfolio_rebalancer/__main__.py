@@ -11,8 +11,8 @@ import logging
 import sqlalchemy as sa
 from ktb_core.logging import setup_logging
 
-from portfolio_rebalancer.external.backend import bearer_token, build_client
-from portfolio_rebalancer.external.prices import connect
+from portfolio_rebalancer.request.backend import bearer_token, build_client
+from portfolio_rebalancer.request.prices import connect
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.tick import tick
 
