@@ -150,10 +150,40 @@ def test_the_jwt_goes_out_on_both_calls():
 
     assert seen_users[0].url.path == "/api/v1/users"
     assert seen_users[0].headers["authorization"] == f"Bearer {JWT}"
-    assert seen_orders[0].url.path == "/api/v1/orders"
+    assert seen_orders[0].url.path == "/api/v1/accounts/11/orders"
     assert seen_orders[0].headers["authorization"] == f"Bearer {JWT}"
 
 
 def test_the_client_is_built_against_the_backend_url():
     with build_client("http://backend:8080") as client:
         assert str(client.base_url) == "http://backend:8080"
+
+
+def test_orders_go_to_the_account_that_owns_them():
+    """The account is part of the path, so it comes from the orders and not the caller."""
+    client, seen = recorder(responder({"message": "ok"}))
+
+    send_orders(client, TOKEN, [FakeOrder(12, "005930", "buy", 1)])
+
+    assert seen[0].url.path == "/api/v1/accounts/12/orders"
+
+
+def test_orders_spanning_two_accounts_are_refused():
+    """One path can only name one account, so posting a mixed batch would put one
+    account's order on another account's endpoint."""
+    client, seen = recorder(responder({"message": "ok"}))
+    mixed = [FakeOrder(11, "005930", "buy", 1), FakeOrder(12, "000660", "buy", 1)]
+
+    with pytest.raises(ValueError, match="several accounts"):
+        send_orders(client, TOKEN, mixed)
+
+    assert seen == []
+
+
+def test_the_account_still_travels_in_the_body_as_well():
+    """The path is authoritative; the body keeps it so the Backend can cross-check."""
+    client, seen = recorder(responder({"message": "ok"}))
+
+    send_orders(client, TOKEN, [FakeOrder(11, "005930", "buy", 1)])
+
+    assert json.loads(seen[0].content)["orders"][0]["account_id"] == 11

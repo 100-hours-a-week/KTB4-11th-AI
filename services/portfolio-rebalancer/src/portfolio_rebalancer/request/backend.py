@@ -14,7 +14,8 @@ import httpx
 __all__ = ["bearer_token", "build_client", "fetch_accounts", "send_orders"]
 
 USERS_PATH = "/api/v1/users"
-ORDERS_PATH = "/api/v1/orders"
+# Orders are placed per account, so the account is part of the path, not just the body.
+ORDERS_PATH = "/api/v1/accounts/{account_id}/orders"
 TIMEOUT = 10.0
 
 
@@ -45,11 +46,24 @@ def fetch_accounts(client: httpx.Client, token: str) -> list[Mapping[str, object
 
 
 def send_orders(client: httpx.Client, token: str, orders: Sequence[Any]) -> None:
-    """Place each order as its pair of reservations."""
+    """Place each order as its pair of reservations, against the account that owns them.
+
+    The account comes from the orders rather than the caller, so one account's orders can
+    never be posted to another account's endpoint. Mixing accounts in one call is refused
+    for the same reason: the path can only name one.
+    """
     if not orders:
         return
+
+    accounts = {order.account_id for order in orders}
+    if len(accounts) > 1:
+        raise ValueError(f"orders span several accounts, which one path cannot name: {accounts}")
+
+    account_id = accounts.pop()
     body = {"orders": [_as_payload(order) for order in orders]}
-    response = client.post(ORDERS_PATH, json=body, headers=_auth(token))
+    response = client.post(
+        ORDERS_PATH.format(account_id=account_id), json=body, headers=_auth(token)
+    )
     response.raise_for_status()
 
 
