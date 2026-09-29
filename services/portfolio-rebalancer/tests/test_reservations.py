@@ -1,6 +1,8 @@
 import pytest
 from portfolio_rebalancer.reservations import (
     PRICE_BANDS,
+    find_pairs,
+    next_rung,
     read_reservation,
     reservation_prices,
 )
@@ -79,3 +81,102 @@ def test_no_band_rounds_into_a_neighbour(reference):
         own = abs(ratio - band)
         others = [abs(ratio - other) for i, other in enumerate(PRICE_BANDS) if i != day]
         assert own < min(others)
+
+
+def pending(stock_code="005930", order_type="buy", price=74_100.0, amount=100):
+    return {
+        "order_type": order_type,
+        "status": "pending",
+        "stock_code": stock_code,
+        "price": price,
+        "amount": amount,
+    }
+
+
+def test_two_pending_orders_on_the_same_stock_and_side_are_one_pair():
+    low, high = reservation_prices(78_000.0, 0)
+    orders = [pending(price=low), pending(price=high)]
+
+    pairs = find_pairs(orders)
+
+    assert pairs == {("005930", "buy"): (low, high)}
+
+
+def test_a_lone_pending_order_is_not_mistaken_for_a_pair():
+    """Half a pair means the other side already filled or was never placed; narrowing it
+    would place a rung against a position that has moved."""
+    assert find_pairs([pending()]) == {}
+
+
+def test_the_same_stock_on_opposite_sides_is_not_a_pair():
+    orders = [pending(order_type="buy"), pending(order_type="sell")]
+
+    assert find_pairs(orders) == {}
+
+
+def test_two_stocks_each_make_their_own_pair():
+    orders = [
+        pending(stock_code="005930", price=74_100.0),
+        pending(stock_code="005930", price=81_900.0),
+        pending(stock_code="000660", price=391_400.0),
+        pending(stock_code="000660", price=432_600.0),
+    ]
+
+    pairs = find_pairs(orders)
+
+    assert set(pairs) == {("005930", "buy"), ("000660", "buy")}
+
+
+def test_an_order_that_is_not_pending_is_ignored():
+    low, high = reservation_prices(78_000.0, 0)
+    settled = pending(price=high) | {"status": "filled"}
+
+    assert find_pairs([pending(price=low), settled]) == {}
+
+
+def test_more_than_two_orders_on_one_side_is_not_treated_as_a_pair():
+    """Three outstanding orders is a state this service did not create, so it leaves it
+    alone rather than guessing which two are the pair."""
+    orders = [pending(price=74_100.0), pending(price=81_900.0), pending(price=78_000.0)]
+
+    assert find_pairs(orders) == {}
+
+
+def test_the_low_comes_back_first_whatever_order_they_arrive_in():
+    low, high = reservation_prices(78_000.0, 0)
+
+    forwards = find_pairs([pending(price=low), pending(price=high)])
+    backwards = find_pairs([pending(price=high), pending(price=low)])
+
+    assert forwards == backwards == {("005930", "buy"): (low, high)}
+
+
+def test_the_next_rung_narrows_the_band():
+    low, high = reservation_prices(78_000.0, 0)
+
+    rung = next_rung(low, high)
+
+    assert rung == reservation_prices(78_000.0, 1)
+    assert rung[1] - rung[0] < high - low
+
+
+def test_the_rung_after_the_last_band_is_market():
+    """Day three ends at market, which is what guarantees the fill."""
+    low, high = reservation_prices(78_000.0, len(PRICE_BANDS) - 1)
+
+    assert next_rung(low, high) is None
+
+
+@pytest.mark.parametrize("reference", REFERENCES)
+def test_every_rung_is_reachable_from_the_one_before(reference):
+    low, high = reservation_prices(reference, 0)
+    seen = [0]
+    # Bounded so a rung that stops advancing fails here rather than looping forever.
+    for _ in range(len(PRICE_BANDS)):
+        rung = next_rung(rounded(low), rounded(high))
+        if rung is None:
+            break
+        low, high = rung
+        seen.append(read_reservation(rounded(low), rounded(high))[1])
+
+    assert seen == list(range(len(PRICE_BANDS)))
