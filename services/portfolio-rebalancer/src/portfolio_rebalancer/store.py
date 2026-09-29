@@ -13,6 +13,7 @@ import sqlalchemy as sa
 from portfolio_rebalancer.rebalance import Exit, Holding, Portfolio
 
 __all__ = [
+    "amend_orders",
     "latest_portfolio",
     "metadata",
     "record_orders",
@@ -274,6 +275,18 @@ def _save_account(conn: Any, user_id: int, account: Mapping[str, object]) -> Non
         conn.execute(account_pending_orders.insert(), pending)
 
 
+RESERVED = "reserved"
+AT_MARKET = "market"
+SKIPPED = "skip"
+
+
+def _rung(order: Any) -> str:
+    """Which rung of the ladder the order sits on, which `side` does not say."""
+    if order.action == "skip":
+        return SKIPPED
+    return RESERVED if order.low is not None else AT_MARKET
+
+
 def record_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
     """Write every order before anything is sent, leaving `sent_at` null."""
     rows = [
@@ -287,12 +300,38 @@ def record_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
             "low_price": order.low,
             "high_price": order.high,
             "reason": order.reason,
-            "status": order.action,
+            "status": _rung(order),
         }
         for order in orders
     ]
     if rows:
         conn.execute(rebalance_orders.insert(), rows)
+
+
+def amend_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
+    """Move an already-recorded order to its next rung.
+
+    A narrowing is one amended order, not a second one: the unique constraint on
+    (portfolio_id, account_id, stock_code) is what forbids a duplicate. `sent_at` goes
+    back to null so the amendment is recorded before it is sent, exactly as the first
+    rung was.
+    """
+    for order in orders:
+        conn.execute(
+            rebalance_orders.update()
+            .where(
+                rebalance_orders.c.portfolio_id == portfolio_id,
+                rebalance_orders.c.account_id == order.account_id,
+                rebalance_orders.c.stock_code == order.stock_code,
+            )
+            .values(
+                quantity=order.shares,
+                low_price=order.low,
+                high_price=order.high,
+                status=_rung(order),
+                sent_at=None,
+            )
+        )
 
 
 def mark_sent(conn: Any, portfolio_id: int, account_id: int) -> None:

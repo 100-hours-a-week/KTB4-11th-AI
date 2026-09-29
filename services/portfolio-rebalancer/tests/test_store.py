@@ -8,6 +8,7 @@ from portfolio_rebalancer.store import (
     account_holdings,
     account_pending_orders,
     accounts,
+    amend_orders,
     mark_sent,
     rebalance_orders,
     record_orders,
@@ -315,3 +316,74 @@ def test_an_exit_carries_its_reason(conn, portfolio_id):
     left = latest_portfolio(conn).exits[0]
 
     assert (left.stock_code, left.reason) == ("000660", "비중 축소")
+
+
+def test_a_recorded_pair_is_marked_reserved(conn, portfolio_id):
+    """side says buy or sell; status says which rung it sits on."""
+    record_orders(conn, portfolio_id, [order()])
+
+    assert rows(conn, rebalance_orders)[0]["status"] == "reserved"
+
+
+def test_a_market_order_is_marked_market(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order(low=None, high=None)])
+
+    assert rows(conn, rebalance_orders)[0]["status"] == "market"
+
+
+def test_a_skip_is_marked_skip(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order(action="skip", shares=0, low=None, high=None)])
+
+    assert rows(conn, rebalance_orders)[0]["status"] == "skip"
+
+
+def test_amending_replaces_the_pair_in_place(conn, portfolio_id):
+    """A narrowing is one amended order. The unique constraint forbids a second row, so
+    an insert here would raise instead."""
+    record_orders(conn, portfolio_id, [order()])
+
+    amend_orders(conn, portfolio_id, [order(low=75_660.0, high=80_340.0)])
+
+    recorded = rows(conn, rebalance_orders)
+    assert len(recorded) == 1
+    assert (float(recorded[0]["low_price"]), float(recorded[0]["high_price"])) == (
+        75_660.0,
+        80_340.0,
+    )
+
+
+def test_amending_puts_the_order_back_to_unsent(conn, portfolio_id):
+    """The amendment is recorded before it is sent, exactly as the first rung was."""
+    record_orders(conn, portfolio_id, [order()])
+    mark_sent(conn, portfolio_id, account_id=11)
+
+    amend_orders(conn, portfolio_id, [order(low=75_660.0, high=80_340.0)])
+
+    assert rows(conn, rebalance_orders)[0]["sent_at"] is None
+
+
+def test_amending_to_market_clears_the_pair(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order()])
+
+    amend_orders(conn, portfolio_id, [order(low=None, high=None)])
+
+    recorded = rows(conn, rebalance_orders)[0]
+    assert (recorded["low_price"], recorded["high_price"]) == (None, None)
+    assert recorded["status"] == "market"
+
+
+def test_amending_carries_the_outstanding_quantity(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order(shares=100)])
+
+    amend_orders(conn, portfolio_id, [order(shares=60, low=75_660.0, high=80_340.0)])
+
+    assert float(rows(conn, rebalance_orders)[0]["quantity"]) == 60.0
+
+
+def test_amending_leaves_another_account_alone(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order(account_id=11), order(account_id=12)])
+
+    amend_orders(conn, portfolio_id, [order(account_id=11, low=1.0, high=2.0)])
+
+    untouched = next(r for r in rows(conn, rebalance_orders) if r["account_id"] == 12)
+    assert float(untouched["low_price"]) == 74_100.0
