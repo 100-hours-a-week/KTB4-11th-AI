@@ -1,10 +1,14 @@
-"""Turn weights and prices into whole shares. Pure: no I/O."""
+"""How many shares of each company to hold. Pure: no I/O.
+
+A budget divided by a price is rarely a whole number, so the floor leaves cash behind and
+this module spends it. Deciding what to hold at all is `rebalance.py`.
+"""
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import cycle
 
-__all__ = ["Position", "Target", "allocate", "spend_leftover"]
+__all__ = ["Position", "Target", "spend_leftover", "whole_shares"]
 
 
 @dataclass(frozen=True)
@@ -27,7 +31,7 @@ class Position:
     weight: float
 
 
-def allocate(
+def whole_shares(
     targets: Sequence[Target],
     prices: Mapping[str, float],
     capital: float,

@@ -7,8 +7,8 @@ the Backend is a different decision and lives in `decide/outstanding.py`.
 from collections.abc import Mapping, Sequence
 
 from portfolio_rebalancer.decide.accounts import AccountState
-from portfolio_rebalancer.decide.allocate import Target, allocate
 from portfolio_rebalancer.decide.reservations import PRICE_BANDS, reservation_prices
+from portfolio_rebalancer.decide.shares import Target, whole_shares
 from portfolio_rebalancer.order import Order
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
@@ -111,7 +111,7 @@ def _target_shares(
                 for name in open_names
             )
         )
-        positions, _ = allocate(
+        positions, _ = whole_shares(
             [
                 Target(company_id=name.company_id, stock_code=name.stock_code, weight=name.weight)
                 for name in open_names
@@ -120,15 +120,15 @@ def _target_shares(
             capital,
             cash_weight,
         )
-        allocated = {position.stock_code: position.shares for position in positions}
+        sized = {position.stock_code: position.shares for position in positions}
         held_drops = {
             name.stock_code
             for name in open_names
-            if name.stock_code not in allocated and account.held.get(name.stock_code, 0) > 0
+            if name.stock_code not in sized and account.held.get(name.stock_code, 0) > 0
         }
         if not held_drops:
-            dropped = {name.stock_code for name in named if name.stock_code not in allocated}
-            return allocated, dropped
+            dropped = {name.stock_code for name in named if name.stock_code not in sized}
+            return sized, dropped
         locked |= held_drops
 
 

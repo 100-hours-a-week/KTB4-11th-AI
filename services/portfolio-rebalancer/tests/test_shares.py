@@ -1,4 +1,4 @@
-from portfolio_rebalancer.decide.allocate import Target, allocate, spend_leftover
+from portfolio_rebalancer.decide.shares import Target, spend_leftover, whole_shares
 
 CAPITAL = 10_000_000
 
@@ -20,8 +20,8 @@ def invested(positions) -> float:
     return sum(p.shares * p.price for p in positions)
 
 
-def test_every_affordable_company_is_allocated_and_none_dropped():
-    positions, cash = allocate(targets(), flat(10_000), CAPITAL, cash_weight=0.0)
+def test_every_affordable_company_gets_shares_and_none_is_dropped():
+    positions, cash = whole_shares(targets(), flat(10_000), CAPITAL, cash_weight=0.0)
 
     assert len(positions) == 10
     assert all(p.shares > 0 for p in positions)
@@ -31,7 +31,7 @@ def test_every_affordable_company_is_allocated_and_none_dropped():
 def test_an_unaffordable_company_is_dropped():
     prices = flat(10_000) | {"000002": 9_000_000}
 
-    positions, _ = allocate(targets(), prices, CAPITAL, cash_weight=0.0)
+    positions, _ = whole_shares(targets(), prices, CAPITAL, cash_weight=0.0)
 
     assert {p.stock_code for p in positions} == {t.stock_code for t in targets()} - {"000002"}
 
@@ -41,7 +41,7 @@ def test_a_dropped_weight_is_shared_equally_not_proportionally():
     proportion it would have gone mostly to the 0.20, which is the whole distinction."""
     prices = flat(10_000) | {"000002": 9_000_000}
 
-    positions, _ = allocate(targets(), prices, CAPITAL, cash_weight=0.0)
+    positions, _ = whole_shares(targets(), prices, CAPITAL, cash_weight=0.0)
 
     by_code = {p.stock_code: p.weight for p in positions}
     equal_share = 0.12 / 9
@@ -54,20 +54,20 @@ def test_dropping_a_company_never_makes_another_unaffordable():
     """A survivor's budget only rises, so one pass cannot cascade into another drop."""
     prices = flat(1_200_000) | {"000000": 100_000}
 
-    positions, _ = allocate(targets(), prices, CAPITAL, cash_weight=0.0)
+    positions, _ = whole_shares(targets(), prices, CAPITAL, cash_weight=0.0)
 
     assert all(p.shares >= 1 for p in positions)
 
 
 def test_every_company_unaffordable_leaves_the_whole_amount_in_cash():
-    positions, cash = allocate(targets(), flat(50_000_000), CAPITAL, cash_weight=0.0)
+    positions, cash = whole_shares(targets(), flat(50_000_000), CAPITAL, cash_weight=0.0)
 
     assert positions == []
     assert cash == CAPITAL
 
 
 def test_cash_weight_is_held_back_before_any_budget():
-    positions, cash = allocate(targets(), flat(10_000), CAPITAL, cash_weight=0.25)
+    positions, cash = whole_shares(targets(), flat(10_000), CAPITAL, cash_weight=0.25)
 
     assert invested(positions) <= CAPITAL * 0.75
     assert cash >= CAPITAL * 0.25
@@ -75,7 +75,7 @@ def test_cash_weight_is_held_back_before_any_budget():
 
 def test_cash_is_never_negative():
     for price in (1_000, 137_000, 999_999):
-        _, cash = allocate(targets(), flat(price), CAPITAL, cash_weight=0.1)
+        _, cash = whole_shares(targets(), flat(price), CAPITAL, cash_weight=0.1)
         assert cash >= 0
 
 
@@ -84,8 +84,8 @@ def test_a_margin_drops_a_company_whose_budget_only_just_covers_a_share():
     as affordable when it sits inside the margin."""
     prices = flat(10_000) | {"000009": 495_000}
 
-    without, _ = allocate(targets(), prices, CAPITAL, cash_weight=0.0, margin=0.0)
-    with_margin, _ = allocate(targets(), prices, CAPITAL, cash_weight=0.0, margin=0.05)
+    without, _ = whole_shares(targets(), prices, CAPITAL, cash_weight=0.0, margin=0.0)
+    with_margin, _ = whole_shares(targets(), prices, CAPITAL, cash_weight=0.0, margin=0.05)
 
     assert "000009" in {p.stock_code for p in without}
     assert "000009" not in {p.stock_code for p in with_margin}
