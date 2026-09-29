@@ -436,25 +436,32 @@ the handling can wait.
 
 ## Code Structure
 
-Grouped along the line this document already drew — pure decisions against I/O.
+Grouped by domain, the way `news-graph-builder` and `portfolio-builder` are: each package has a
+`dto.py`, a `repository.py` for its PostgreSQL queries, and the modules that decide. Outside
+clients sit at the top level, as `llm.py` and `market.py` do in those services.
 
 | module | kind | responsibility |
 |---|---|---|
-| `decide/shares.py` | pure | weights and prices to whole shares, and spending the residual |
-| `decide/reservations.py` | pure | the pair's prices, the KRX tick, reading a pair back, finding pairs |
-| `decide/trading_days.py` | pure | which days XKRX opens, and how many a cycle has left |
-| `decide/accounts.py` | pure | fold pending orders into cash and holdings |
-| `decide/rebalance.py` | pure | what an account with nothing outstanding should hold |
-| `decide/outstanding.py` | pure | an order already at the Backend: did it arrive, should it narrow |
-| `request/prices.py` | I/O | the last close from QuestDB, for a stock the poll does not quote |
-| `request/backend.py` | I/O | the JWT, the account poll, the order send |
-| `request/store.py` | I/O | queries on the account mirror and the order history in PostgreSQL |
-| `database.py` | schema | the SQLAlchemy tables, mirroring the migrations, as every service keeps them |
+| `portfolio/dto.py` | data | the model portfolio as read |
+| `portfolio/repository.py` | I/O | the newest model portfolio, joined to `corporations` for stock codes |
+| `account/dto.py` | data | what an account can spend and what it holds |
+| `account/service.py` | pure | fold pending orders into cash and holdings; the managed accounts |
+| `account/repository.py` | I/O | the account mirror of the Backend poll |
+| `order/dto.py` | data | the order as sent, a working order, a sized position |
+| `order/shares.py` | pure | weights and prices to whole shares, and spending the residual |
+| `order/reservations.py` | pure | the pair's prices, the KRX tick, reading a pair back, finding pairs |
+| `order/rebalance.py` | pure | what an account with nothing outstanding should hold |
+| `order/outstanding.py` | pure | an order already at the Backend: did it arrive, should it narrow |
+| `order/repository.py` | I/O | the order history in `rebalance_orders` |
+| `trading_days.py` | pure | which days XKRX opens, and how many a cycle has left |
+| `market.py` | I/O | the last close from QuestDB, for a stock the poll does not quote |
+| `backend.py` | I/O | the JWT, the account poll, the order send |
+| `database.py` | schema | the SQLAlchemy tables, mirroring the migrations |
 | `tick.py` | orchestration | calls the above in order, and decides nothing |
-| `portfolio.py`, `order.py` | data | the model portfolio as read, and the order as sent |
 
-`decide/` has no database, socket or clock, so every decision is tested without anything
-running. `request/` holds no decisions.
+The `service.py`, `shares.py`, `reservations.py`, `rebalance.py`, `outstanding.py` and
+`trading_days.py` modules have no database, socket or clock, so every decision is tested
+without anything running. Repositories and clients hold no decisions.
 
 Two modules were split out of one during implementation: deciding what to hold and advancing an
 already-placed order are revised for different reasons, so they are separate files, and the

@@ -58,9 +58,9 @@ the directory listing: `ladder.py`, `model.py` and `allocate.py` all failed that
 - `cash_weight` is held back before any budget is computed and the unspent leftover is added back to it.
 - **Trading days come from `exchange-calendars`' XKRX, not from weekdays.** The budget is the sessions left in the week the cycle began, and the last session ends at 14:30 so the market order beats the 15:30 close.
 - Keep comments and docstrings sparse, matching `services/market-collector`.
-- Keep every decision in a pure module and every side effect in an I/O module, grouped as `decide/` and `request/`. A module that both queries and decides has two reasons to change; split it. So does one that holds two decisions.
+- Keep every decision in a pure module and every side effect in an I/O module, grouped by domain (`portfolio/`, `account/`, `order/`) like the other services, with a `repository.py` per package for PostgreSQL. A module that both queries and decides has two reasons to change; split it. So does one that holds two decisions.
 - **Commit an order before sending it.** One transaction across the send undoes the point of recording first. An order recorded but never stamped is resolved from the poll: a pair outstanding means it arrived, no pair means it did not.
-- The Backend JWT is signed here from a shared secret. Confine signing to `request/backend.py`, and do not thread a secret through any pure module.
+- The Backend JWT is signed here from a shared secret. Confine signing to `backend.py`, and do not thread a secret through any pure module.
 - Store the account poll as the latest state only. `rebalance_orders` is the one table that accumulates.
 - Do not implement cancelling an outstanding pair when a new judgement arrives. The intended behaviour is to cancel, but it is deferred.
 

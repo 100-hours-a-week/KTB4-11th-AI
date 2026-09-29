@@ -1,4 +1,4 @@
-from portfolio_rebalancer.decide.shares import spend_leftover, whole_shares
+from portfolio_rebalancer.order.shares import spend_leftover, whole_shares
 from portfolio_rebalancer.portfolio import Holding
 
 CAPITAL = 10_000_000

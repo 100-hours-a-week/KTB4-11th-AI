@@ -1,26 +1,10 @@
-"""Fold the hourly poll into what an account can spend and what it holds. Pure: no I/O."""
-
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass
 
-__all__ = ["AccountState", "apply_pending", "managed_accounts", "polled_prices"]
-
-PENDING = "pending"
-BUY = "buy"
-SELL = "sell"
-
-
-@dataclass(frozen=True)
-class AccountState:
-    """What an account can actually spend and what it actually holds."""
-
-    account_id: int
-    cash: float
-    held: dict[str, int]
+from portfolio_rebalancer.account.dto import AccountState
+from portfolio_rebalancer.order.dto import BUY, PENDING, SELL
 
 
 def apply_pending(account: Mapping[str, object]) -> AccountState:
-
     cash = float(account["cash_balance"])  # type: ignore[arg-type]
     held = {
         str(holding["stock_code"]): int(holding["amount"])
@@ -43,11 +27,7 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
 
 
 def polled_prices(account: Mapping[str, object]) -> dict[str, float]:
-    """What each held stock is worth right now, as the poll reports it.
-
-    `stocks[].current_price` is the Backend's own quote and the only price this service
-    sees. A stock the account does not hold yet has no entry and therefore no price.
-    """
+    # The Backend's own quote; a stock the account does not hold yet has none.
     return {
         str(holding["stock_code"]): float(holding["current_price"])  # type: ignore[arg-type]
         for holding in account.get("stocks") or ()  # type: ignore[union-attr]
@@ -58,13 +38,9 @@ def polled_prices(account: Mapping[str, object]) -> dict[str, float]:
 def managed_accounts(
     users: Sequence[Mapping[str, object]],
 ) -> Iterator[Mapping[str, object]]:
-    """Only the accounts that are both AI-managed and active.
-
-    A user has several accounts, so every qualifying one is yielded. The example payload
-    spells `accounts` as a single object rather than a list, so both shapes are accepted.
-    """
     for user in users:
         accounts = user.get("accounts") or ()
+        # The example payload spells `accounts` as one object where the Backend sends a list.
         if isinstance(accounts, Mapping):
             accounts = (accounts,)
         for account in accounts:

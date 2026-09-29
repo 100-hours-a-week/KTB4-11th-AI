@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from portfolio_rebalancer.request.prices import connect, latest_prices
+from portfolio_rebalancer.market import connect, latest_prices
 
 TS = datetime(2026, 9, 28, 6, 19, tzinfo=UTC)
 

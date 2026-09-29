@@ -1,5 +1,4 @@
 from portfolio_rebalancer import __main__
-from portfolio_rebalancer.__main__ import SERVICE_NAME
 
 
 class Recorder:
@@ -30,14 +29,12 @@ def wire(monkeypatch, recorder, sent=3):
 
 
 def test_logging_is_set_up_under_the_service_name(monkeypatch):
-    """#54 makes service_name a required keyword of setup_logging, so a tick that omitted
-    it would die on startup. Stubbed, because core's signature lands with #54."""
     recorder = Recorder()
     wire(monkeypatch, recorder)
 
     __main__.main()
 
-    assert recorder.logging == [("INFO", SERVICE_NAME)]
+    assert recorder.logging == [("INFO", "portfolio-rebalancer")]
 
 
 def test_the_tick_gets_the_engine_both_datastores_and_a_token(monkeypatch):

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import httpx
 import jwt as pyjwt
 import pytest
-from portfolio_rebalancer.request.backend import (
+from portfolio_rebalancer.backend import (
     bearer_token,
     build_client,
     fetch_accounts,

@@ -1,28 +1,17 @@
-"""Decide what an account should hold: sells first, then buys with the cash they free.
-
-This is the decision for an account with nothing outstanding. Moving an order already at
-the Backend is a different decision and lives in `decide/outstanding.py`.
-"""
-
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 
-from portfolio_rebalancer.decide.accounts import AccountState
-from portfolio_rebalancer.decide.reservations import (
+from portfolio_rebalancer.account.dto import AccountState
+from portfolio_rebalancer.order.dto import BUY, SELL, SKIP, Order
+from portfolio_rebalancer.order.reservations import (
     PRICE_BANDS,
     band_for,
     limit_and_trigger,
     on_tick,
 )
-from portfolio_rebalancer.decide.shares import whole_shares
-from portfolio_rebalancer.order import Order
-from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
+from portfolio_rebalancer.order.shares import whole_shares
+from portfolio_rebalancer.portfolio.dto import Exit, Holding, Portfolio
 
-__all__ = ["rebalance"]
-
-BUY = "buy"
-SELL = "sell"
-SKIP = "skip"
 LADDER_DAYS = len(PRICE_BANDS)
 
 NO_PRICE = "no price for this stock code, so its weight was shared out equally"
@@ -35,22 +24,19 @@ def rebalance(
     prices: Mapping[str, float],
     days_left: int = LADDER_DAYS,
 ) -> list[Order]:
-    """Sells first, then as much of the buy side as the cash on hand covers.
-
-    Selling and buying share one deadline, so `days_left` decides the band every order
-    is quoted at. An order placed after the sells have taken a day starts narrow rather
-    than restarting the ladder.
-
-    **Buys are limited to cash that exists.** The targets are computed against the whole
-    portfolio, including what the exits are worth, but their proceeds are not money until
-    the sells fill. Placing the full buy side on the first day would put orders on the
-    market with nothing behind them, so the buys go out in descending weight order for as
-    far as the cash reaches, and a later pass places the rest as the sells fill.
-
-    A sell is always possible, so a target weight that cannot be reached by buying does
-    not block the sells that fund it. A held company that is in neither the portfolio nor
-    the exits is left alone, because no reason exists to act on it.
-    """
+    # Selling and buying share one deadline, so `days_left` decides the band every order is
+    # quoted at. An order placed after the sells have taken a day starts narrow rather than
+    # restarting the ladder.
+    #
+    # Buys are limited to cash that exists. The targets are computed against the whole
+    # portfolio, including what the exits are worth, but their proceeds are not money until
+    # the sells fill. Placing the full buy side on the first day would put orders on the
+    # market with nothing behind them, so the buys go out in descending weight order for as
+    # far as the cash reaches, and a later pass places the rest as the sells fill.
+    #
+    # A sell is always possible, so a target weight that cannot be reached by buying does
+    # not block the sells that fund it. A held company that is in neither the portfolio nor
+    # the exits is left alone, because no reason exists to act on it.
     sells = [
         _order(
             account.account_id, leaving, SELL, account.held[leaving.stock_code], prices, days_left
@@ -94,13 +80,10 @@ def rebalance(
 
 
 def _affordable(buys: list[Order], cash: float) -> list[Order]:
-    """The buys cash on hand can pay for, largest weight first.
-
-    Costed at the high price, because only one side of a pair fills and the high side is
-    the one that would actually be paid. An order the cash cannot cover in full is cut to
-    the shares it can, rather than dropped: half the position now and the rest as the
-    sells fill beats nothing at all.
-    """
+    # Largest weight first, costed at the high price, because only one side of a pair fills
+    # and the high side is the one that would actually be paid. An order the cash cannot
+    # cover in full is cut to the shares it can, rather than dropped: half the position now
+    # and the rest as the sells fill beats nothing at all.
     placed = []
     for order in sorted(buys, key=lambda order: -(order.weight or 0.0)):
         price = order.trigger or order.reference or 0.0
@@ -134,12 +117,9 @@ def _target_shares(
     proceeds: float,
     cash_weight: float,
 ) -> tuple[dict[str, int], set[str]]:
-    """How many shares of each company to end up holding, and those dropped as too dear.
-
-    A dropped company that is already held keeps its value: it is not being sold, so that
-    value cannot fund the other buys. Locking it lowers the capital and the targets are
-    computed again. The locked set only grows, so this ends.
-    """
+    # A dropped company that is already held keeps its value: it is not being sold, so that
+    # value cannot fund the other buys. Locking it lowers the capital and the targets are
+    # computed again. The locked set only grows, so this ends.
     locked: set[str] = set()
     while True:
         still_open = [company for company in kept if company.stock_code not in locked]
@@ -172,10 +152,7 @@ def _order(
     prices: Mapping[str, float],
     days_left: int,
 ) -> Order:
-    """A fresh order starts on the first day, so it goes out as the widest pair.
-
-    Both sides carry the full quantity: whichever fills, the other is cancelled.
-    """
+    # Both sides carry the full quantity: whichever fills, the other is cancelled.
     reference = prices.get(company.stock_code, 0.0)
     quote = limit_and_trigger(reference, days_left, action) if reference > 0 else None
     return Order(

@@ -1,27 +1,8 @@
-"""How many shares of each company to hold. Pure: no I/O.
-
-A budget divided by a price is rarely a whole number, so the floor leaves cash behind and
-this module spends it. Deciding what to hold at all is `rebalance.py`.
-"""
-
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from itertools import cycle
 
-from portfolio_rebalancer.portfolio import Holding
-
-__all__ = ["Position", "spend_leftover", "whole_shares"]
-
-
-@dataclass(frozen=True)
-class Position:
-    """How much of one company to hold, once whole shares are accounted for."""
-
-    company_id: str
-    stock_code: str
-    shares: int
-    price: float
-    weight: float
+from portfolio_rebalancer.order.dto import Position
+from portfolio_rebalancer.portfolio.dto import Holding
 
 
 def whole_shares(
@@ -31,12 +12,9 @@ def whole_shares(
     cash_weight: float,
     margin: float = 0.0,
 ) -> tuple[list[Position], float]:
-    """Positions to hold, and the cash left un-invested.
-
-    A company whose budget cannot cover one share is dropped and its weight is shared
-    equally over the rest. An equal share raises every remaining budget, so a survivor
-    stays affordable and the set only shrinks.
-    """
+    # A company whose budget cannot cover one share is dropped and its weight is shared
+    # equally over the rest. An equal share raises every remaining budget, so a survivor
+    # stays affordable and the set only shrinks.
     investable = capital * (1 - cash_weight)
     weights = {t.stock_code: t.weight for t in targets}
     by_code = {t.stock_code: t for t in targets}
@@ -87,12 +65,9 @@ def spend_leftover(
     ideal: Mapping[str, float],
     leftover: float,
 ) -> tuple[dict[str, int], float]:
-    """Spend what whole-share rounding left behind, one share at a time.
-
-    First for whichever company is furthest below its ideal amount; once none is below
-    it, round the companies in descending weight order. Dividing the leftover equally
-    instead would leave most of it unspent, because a tenth of it rarely covers a share.
-    """
+    # One share at a time: first for whichever company is furthest below its ideal amount,
+    # then round the companies in descending weight order. Dividing the leftover equally
+    # would leave most of it unspent, because a tenth of it rarely covers a share.
     shares = dict(shares)
     ring = cycle(sorted(ideal, key=lambda code: -ideal[code]))
     while True:

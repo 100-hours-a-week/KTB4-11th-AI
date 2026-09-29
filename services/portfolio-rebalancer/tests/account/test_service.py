@@ -1,5 +1,5 @@
 import pytest
-from portfolio_rebalancer.decide.accounts import (
+from portfolio_rebalancer.account import (
     apply_pending,
     managed_accounts,
     polled_prices,

@@ -4,9 +4,9 @@ elsewhere, so these fakes stand in for the datastores and the Backend."""
 from datetime import UTC, date, datetime, timedelta, timezone
 
 from portfolio_rebalancer import tick as tick_module
-from portfolio_rebalancer.decide.reservations import PRICE_BANDS, limit_and_trigger
+from portfolio_rebalancer.market import Price
+from portfolio_rebalancer.order.reservations import PRICE_BANDS, limit_and_trigger
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
-from portfolio_rebalancer.request.prices import Price
 from portfolio_rebalancer.tick import market_now, tick
 
 # 2026-09-28 週 has five sessions, so a Monday cycle starts with five days.
@@ -58,7 +58,7 @@ def account(account_id=11, cash=10_000_000.0, stocks=(), pending_orders=()):
 def recorded_row(
     stock_code, sent_at=None, created=MONDAY, reference=78_000.0, trigger=None, side="buy"
 ):
-    """A rebalance_orders row as stored_orders returns it.
+    """A rebalance_orders row as find_orders returns it.
 
     created_at is what the cycle start -- and so the remaining days -- is derived from,
     and reference_price is what a single limit price cannot say for itself.
@@ -126,10 +126,12 @@ class Fakes:
             self.calls.append(name)
             return value
 
-        monkeypatch.setattr(tick_module, "latest_portfolio", lambda conn: note("portfolio", model))
+        monkeypatch.setattr(
+            tick_module, "find_latest_portfolio", lambda conn: note("portfolio", model)
+        )
         monkeypatch.setattr(tick_module, "fetch_accounts", lambda c, t: note("fetch", users))
         monkeypatch.setattr(
-            tick_module, "save_poll", lambda conn, u: note("save") or self.saved.append(u)
+            tick_module, "write_poll", lambda conn, u: note("save") or self.saved.append(u)
         )
         monkeypatch.setattr(
             tick_module,
@@ -146,7 +148,7 @@ class Fakes:
         )
         monkeypatch.setattr(
             tick_module,
-            "stored_orders",
+            "find_orders",
             lambda conn, pid, aid: note("stored") or self._recorded.get(aid, []),
         )
         monkeypatch.setattr(
@@ -213,7 +215,7 @@ class _Engine:
 def test_no_model_portfolio_polls_nothing_and_sends_nothing(monkeypatch):
     """Polling the Backend to then decide nothing would be a wasted round trip."""
     fakes = Fakes(monkeypatch, model=None)
-    monkeypatch.setattr(tick_module, "latest_portfolio", lambda conn: None)
+    monkeypatch.setattr(tick_module, "find_latest_portfolio", lambda conn: None)
 
     assert fakes.run() == 0
     assert "fetch" not in fakes.calls

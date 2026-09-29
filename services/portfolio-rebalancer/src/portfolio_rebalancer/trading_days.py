@@ -1,19 +1,9 @@
-"""Which days the Korean exchange opens, and how many a rebalance has left.
-
-The weekly judgement is the deadline: a cycle has the trading days that remain in the
-week it began, and selling and buying share them. Five of them means two days of selling
-leaves three for buying; a Chuseok week with three means far less.
-
-Sessions come from `exchange-calendars`' XKRX, so public holidays are real rather than
-approximated by weekdays.
-"""
-
 from datetime import date, datetime, time
 from functools import lru_cache
 from typing import Any
 
-__all__ = ["CLOSE", "MARKET_CUTOFF", "days_left", "is_open", "week_deadline"]
-
+# Sessions come from exchange-calendars, so public holidays such as Chuseok are real rather
+# than approximated by weekdays.
 EXCHANGE = "XKRX"
 # KRX closes at 15:30, and polling starts at 09:00 on the hour, so 15:00 is the last pass
 # before the close. The final band's order goes at market there rather than the morning
@@ -22,9 +12,9 @@ CLOSE = time(15, 30)
 MARKET_CUTOFF = time(15, 0)
 
 
+# Built once: constructing the calendar walks decades of holidays.
 @lru_cache(maxsize=1)
 def _calendar() -> Any:
-    """Built once. Constructing it walks decades of holidays, so it is not cheap."""
     import exchange_calendars
 
     return exchange_calendars.get_calendar(EXCHANGE)
@@ -35,11 +25,8 @@ def is_open(day: date) -> bool:
 
 
 def week_deadline(started: date) -> date:
-    """The last session of the week the cycle began in.
-
-    The next judgement lands the following week, so an order still working then would be
-    acting on a portfolio that has been replaced.
-    """
+    # The next judgement lands the following week, so an order still working then would be
+    # acting on a portfolio that has been replaced.
     monday = started.fromordinal(started.toordinal() - started.weekday())
     sunday = monday.fromordinal(monday.toordinal() + 6)
     sessions = _sessions(monday, sunday)
@@ -47,14 +34,9 @@ def week_deadline(started: date) -> date:
 
 
 def days_left(started: date, now: datetime) -> int:
-    """Sessions from now to the deadline, counting today.
-
-    A day the market does not open takes nothing off the budget, and a cycle past its
-    deadline has nothing left -- which is the market rung.
-
-    On the last day the budget runs out at `MARKET_CUTOFF` rather than at midnight, so
-    the market order goes in before the close instead of the morning after.
-    """
+    # Selling and buying share the sessions left in the week the cycle began, counting today.
+    # A cycle past its deadline has none, which is the market rung, and on the last day the
+    # budget runs out at MARKET_CUTOFF so the market order goes in before the close.
     today = now.date()
     deadline = week_deadline(started)
     if today > deadline:

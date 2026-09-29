@@ -1,8 +1,8 @@
 import pytest
-from portfolio_rebalancer.decide.reservations import (
+from portfolio_rebalancer.order.dto import Outstanding
+from portfolio_rebalancer.order.reservations import (
     PRICE_BANDS,
     TICK_SIZES,
-    Outstanding,
     band_for,
     limit_and_trigger,
     on_tick,
@@ -139,7 +139,7 @@ def test_the_trigger_does_not_narrow_with_the_limit():
 
 @pytest.mark.parametrize("side", ["buy", "sell"])
 def test_the_trigger_stays_at_the_widest_band(side):
-    from portfolio_rebalancer.decide.reservations import TRIGGER_BAND
+    from portfolio_rebalancer.order.reservations import TRIGGER_BAND
 
     _, trigger = limit_and_trigger(78_000.0, 1, side)
     away = abs(trigger - 78_000.0) / 78_000.0
