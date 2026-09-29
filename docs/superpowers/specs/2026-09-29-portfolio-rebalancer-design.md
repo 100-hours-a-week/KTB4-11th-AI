@@ -436,6 +436,7 @@ Grouped along the line this document already drew — pure decisions against I/O
 |---|---|---|
 | `decide/shares.py` | pure | weights and prices to whole shares, and spending the residual |
 | `decide/reservations.py` | pure | the pair's prices, the KRX tick, reading a pair back, finding pairs |
+| `decide/trading_days.py` | pure | which days XKRX opens, and how many a cycle has left |
 | `decide/accounts.py` | pure | fold pending orders into cash and holdings |
 | `decide/rebalance.py` | pure | what an account with nothing outstanding should hold |
 | `decide/outstanding.py` | pure | an order already at the Backend: did it arrive, should it narrow |
@@ -464,7 +465,15 @@ def whole_shares(
 
 
 def reservation_prices(reference: float, day: int) -> tuple[float, float] | None:
-    """The low and high price for a day, on a KRX tick, or None once at market."""
+    """The low and high price for a band, on a KRX tick, or None once at market."""
+
+
+def prices_for(reference: float, days_left: int) -> tuple[float, float] | None:
+    """The pair to place with this many sessions left, or None to go to market."""
+
+
+def days_left_of(low: float, high: float) -> int:
+    """How many sessions an outstanding pair still has, read back out of it."""
 
 
 def read_reservation(low: float, high: float) -> tuple[float, int]:
@@ -479,19 +488,32 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
     """What the account can actually spend and what it actually holds."""
 
 
-def rebalance(portfolio: Portfolio, account: AccountState, prices) -> list[Order]:
-    """Sells first, then buys with the cash they free."""
+def rebalance(
+    portfolio: Portfolio,
+    account: AccountState,
+    prices: Mapping[str, float],
+    days_left: int = LADDER_DAYS,
+) -> list[Order]:
+    """Sells first, then as much of the buy side as the cash on hand covers."""
 
 
-def narrow(portfolio, account, pairs, last_sent, today) -> list[Order]:
-    """Advance each outstanding pair one rung, at most once per trading day."""
+def narrow(portfolio, account, pairs, started: date, now: datetime) -> list[Order]:
+    """Re-quote each outstanding pair at the band its remaining sessions allow."""
+
+
+def days_left(started: date, now: datetime) -> int:
+    """Sessions from now to the week's deadline, ending at 14:30 on the last one."""
+
+
+def is_open(day: date) -> bool:
+    """Whether XKRX holds a session that day."""
 
 
 def reached_the_backend(stock_codes, pairs) -> bool:
     """Whether orders recorded but never stamped as sent actually got there."""
 
 
-def tick(engine, db, client, token, today=None) -> int:
+def tick(engine, db, client, token, now: datetime | None = None) -> int:
     """One pass: poll, decide, send. Returns the number of orders sent."""
 ```
 
