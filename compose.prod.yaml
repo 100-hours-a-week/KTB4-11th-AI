@@ -13,20 +13,20 @@ x-app: &app
       tag: "{{.Name}}-{{.ID}}"
 
 x-postgres-environment: &postgres-environment
-  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/news
-  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  MARKET_SYNCER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  MARKET_SYNCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18-trixie
     environment:
-      POSTGRES_USER: ktb
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: news
+      POSTGRES_DB: ${POSTGRES_DB}
     command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=50"]
     shm_size: 128m
     mem_limit: 900m
@@ -34,7 +34,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ktb -d news"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -49,6 +49,9 @@ services:
 
   questdb:
     image: questdb/questdb:10.0.1
+    environment:
+      QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
+      QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
     mem_limit: 1200m
     restart: unless-stopped
     volumes:
@@ -80,7 +83,7 @@ services:
         echo "postgres migration finished: status=$$status"
         exit "$$status"
     environment:
-      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+      KTB_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,24 +105,6 @@ services:
     depends_on:
       questdb:
         condition: service_healthy
-
-  market-analyzer-mcp:
-    <<: *app
-    command: ["market-analyzer-mcp"]
-    mem_limit: 384m
-    restart: unless-stopped
-    environment:
-      MARKET_ANALYZER_MCP_LOG_LEVEL: ${MARKET_ANALYZER_MCP_LOG_LEVEL:-INFO}
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
 
   portfolio-rebalancer-http:
     <<: *app
@@ -265,8 +250,12 @@ services:
     mem_limit: 768m
     environment:
       <<: *postgres-environment
-      PORTFOLIO_BUILDER_QUESTDB_DSN: postgresql://admin:quest@questdb:8812/qdb
-      PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL: http://news-clusterer:8000
+      PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_BUILDER_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
+      PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
+      PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
+      PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
       PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:

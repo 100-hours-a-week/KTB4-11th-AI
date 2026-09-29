@@ -23,7 +23,7 @@ def env(monkeypatch, pg_dsn):
     }.items():
         monkeypatch.setenv(f"MARKET_SYNCER_{name}", value)
     # setup_logging replaces the root handlers, which would detach caplog.
-    monkeypatch.setattr(entry, "setup_logging", lambda level: None)
+    monkeypatch.setattr(entry, "setup_logging", lambda level, **kwargs: None)
 
 
 class FakeAuth:

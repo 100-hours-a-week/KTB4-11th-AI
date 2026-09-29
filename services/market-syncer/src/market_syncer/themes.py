@@ -1,9 +1,9 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 from sqlalchemy.dialects.postgresql import insert
 
-from market_syncer.common import normalize
 from market_syncer.database import corporations, theme_companies
 from market_syncer.database import themes as themes_table
 from market_syncer.kiwoom import Theme, ThemeMember

@@ -1,9 +1,9 @@
 from collections.abc import Collection, Sequence
 
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 from sqlalchemy.dialects.postgresql import insert
 
-from market_syncer.common import normalize
 from market_syncer.dart import DartCorporation
 from market_syncer.database import corporation_aliases, corporation_indices, corporations
 

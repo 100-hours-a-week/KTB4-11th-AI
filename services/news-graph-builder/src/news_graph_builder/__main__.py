@@ -24,7 +24,7 @@ RUN_LOCK = int.from_bytes(b"ngrb")
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, service_name="news-graph-builder")
     logger.info("news-graph-builder started")
     failed = 0
     with httpx.Client() as client, ExitStack() as cleanup:

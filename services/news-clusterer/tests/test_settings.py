@@ -2,7 +2,7 @@ import pytest
 from news_clusterer.settings import Settings
 from pydantic import ValidationError
 
-REQUIRED = {"NEWS_CLUSTERER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/news"}
+REQUIRED = {"NEWS_CLUSTERER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb"}
 
 
 @pytest.fixture

@@ -5,7 +5,7 @@ import pytest
 from market_collector import __main__ as cli
 from market_collector.settings import Settings
 
-QDB = "http::addr=localhost:9000;"
+QDB = "ws::addr=localhost:9000;"
 ACCOUNTS = '[{"app_key":"k1","secret_key":"s1"},{"app_key":"k2","secret_key":"s2"}]'
 POSTGRES_DSN = "postgresql+psycopg://ktb:FAKE-PASSWORD@localhost:5432/news"
 NOW = datetime(2026, 9, 28, 3, 0, tzinfo=UTC)

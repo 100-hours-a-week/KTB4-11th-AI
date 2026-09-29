@@ -16,7 +16,6 @@ COPY services services
 RUN uv pip install --no-deps \
     ./packages/core \
     ./packages/market-analyzer \
-    ./services/market-analyzer-mcp \
     ./services/market-collector \
     ./services/market-syncer \
     ./services/news-clusterer \

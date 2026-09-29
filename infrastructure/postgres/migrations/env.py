@@ -13,7 +13,7 @@ def _database_url() -> str:
     if not url:
         raise RuntimeError(
             f"{DSN_ENV} is not set. Example: "
-            f"{DSN_ENV}=postgresql+psycopg://ktb:ktb@localhost:5432/news"
+            f"{DSN_ENV}=postgresql+psycopg://ktb:ktb@localhost:5432/ktb"
         )
     return url
 

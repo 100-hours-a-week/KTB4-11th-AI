@@ -4,7 +4,7 @@ from itertools import count
 
 import pytest
 import sqlalchemy as sa
-from news_graph_builder.common import normalize
+from ktb_core.normalize import normalize
 
 _external_ids = count()
 

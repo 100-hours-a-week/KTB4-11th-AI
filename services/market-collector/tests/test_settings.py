@@ -2,7 +2,7 @@ import pytest
 from market_collector.settings import Settings
 from pydantic import ValidationError
 
-QDB = "http::addr=localhost:9000;"
+QDB = "ws::addr=localhost:9000;"
 ACCOUNTS = '[{"app_key":"k1","secret_key":"s1"},{"app_key":"k2","secret_key":"s2"}]'
 POSTGRES_DSN = "postgresql+psycopg://ktb:FAKE-PASSWORD@localhost:5432/news"
 

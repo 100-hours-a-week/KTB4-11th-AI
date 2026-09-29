@@ -26,7 +26,7 @@ INDEX_NAME = "KOSPI200"
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, service_name="market-syncer")
     logging.getLogger("urllib3").setLevel(logging.INFO)
     logger.info("market-syncer started")
     interval = settings.kiwoom_request_interval
