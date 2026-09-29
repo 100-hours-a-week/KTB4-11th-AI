@@ -22,20 +22,22 @@ def sync_themes(
 
     stock_codes = set(conn.execute(sa.select(corporations.c.stock_code)).scalars())
     unique_themes = list({theme.code: theme for theme in themes}.values())
-    is_main_by_key: dict[tuple[str, str], bool] = {}
+    is_major_by_key: dict[tuple[str, str], bool] = {}
     skipped = 0
     for theme in unique_themes:
-        main_parts = {part.strip() for part in theme.main_stocks.split(",") if part.strip()}
-        main_names = {name for part in main_parts if (name := normalize(part))}
+        major_parts = {part.strip() for part in theme.main_stocks.split(",") if part.strip()}
+        major_names = {name for part in major_parts if (name := normalize(part))}
         for member in members.get(theme.code, []):
             if member.stock_code not in stock_codes:
                 skipped += 1
                 continue
-            is_main = member.stock_code in main_parts or normalize(member.stock_name) in main_names
+            is_major = (
+                member.stock_code in major_parts or normalize(member.stock_name) in major_names
+            )
             key = (theme.code, member.stock_code)
-            is_main_by_key[key] = is_main_by_key.get(key, False) or is_main
+            is_major_by_key[key] = is_major_by_key.get(key, False) or is_major
 
-    if not is_main_by_key:
+    if not is_major_by_key:
         raise ValueError("no theme member is a KOSPI corporation")
 
     conn.execute(sa.delete(theme_companies))
@@ -47,8 +49,8 @@ def sync_themes(
     conn.execute(
         insert(theme_companies),
         [
-            {"theme_code": theme_code, "stock_code": stock_code, "is_main": is_main}
-            for (theme_code, stock_code), is_main in is_main_by_key.items()
+            {"theme_code": theme_code, "stock_code": stock_code, "is_major": is_major}
+            for (theme_code, stock_code), is_major in is_major_by_key.items()
         ],
     )
-    return len(is_main_by_key), sum(is_main_by_key.values()), skipped
+    return len(is_major_by_key), sum(is_major_by_key.values()), skipped

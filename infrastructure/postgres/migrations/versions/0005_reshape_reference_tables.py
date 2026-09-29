@@ -87,6 +87,7 @@ def upgrade() -> None:
     op.drop_column("entities", "corp_code")
     op.drop_column("corporation_aliases", "corp_code")
     op.drop_column("theme_companies", "corp_code")
+    op.alter_column("theme_companies", "is_main", new_column_name="is_major")
 
     op.create_table(
         "corporation_indices",
@@ -99,6 +100,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("corporation_indices")
+    op.alter_column("theme_companies", "is_major", new_column_name="is_main")
 
     op.drop_constraint(
         "corporation_aliases_stock_code_fkey", "corporation_aliases", type_="foreignkey"

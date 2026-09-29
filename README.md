@@ -106,7 +106,7 @@ erDiagram
     theme_companies {
         text theme_code PK, FK "ON DELETE CASCADE"
         text stock_code PK, FK "ON DELETE CASCADE"
-        boolean is_main "테마 주요종목 여부"
+        boolean is_major "테마 주요종목 여부"
     }
 ```
 

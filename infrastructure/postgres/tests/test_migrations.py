@@ -216,7 +216,7 @@ def test_theme_memberships_cascade_from_themes_and_corporations(pg_dsn, pg_engin
             )
             conn.execute(
                 sa.text(
-                    "INSERT INTO theme_companies (theme_code, stock_code, is_main)"
+                    "INSERT INTO theme_companies (theme_code, stock_code, is_major)"
                     " VALUES ('1', '005930', true), ('2', '000660', false)"
                 )
             )
@@ -310,7 +310,7 @@ def test_upgrade_to_0005_rekeys_every_reference_by_stock_code(pg_dsn, pg_engine,
             ).all()
             memberships = conn.execute(
                 sa.text(
-                    "SELECT theme_code, stock_code, is_main FROM theme_companies"
+                    "SELECT theme_code, stock_code, is_major FROM theme_companies"
                     " ORDER BY stock_code"
                 )
             ).all()
@@ -444,6 +444,8 @@ def test_0005_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch
             "synced_at",
         }
         assert "corp_code" not in _columns(conn, "entities") | _columns(conn, "theme_companies")
+        assert {"is_major"} <= _columns(conn, "theme_companies")
+        assert "is_main" not in _columns(conn, "theme_companies")
 
         target = "REFERENCES corporations(stock_code)"
         assert _constraints(conn, "corporation_aliases", "f") == {

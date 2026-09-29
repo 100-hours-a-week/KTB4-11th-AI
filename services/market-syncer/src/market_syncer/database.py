@@ -60,6 +60,6 @@ theme_companies = sa.Table(
         sa.ForeignKey("corporations.stock_code", ondelete="CASCADE"),
         primary_key=True,
     ),
-    sa.Column("is_main", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("is_major", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Index("theme_companies_stock_code_idx", "stock_code"),
 )

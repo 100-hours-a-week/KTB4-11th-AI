@@ -33,7 +33,7 @@ output that cannot be rebuilt.
 | `corporation_aliases` | `alias` PK, `stock_code` FK | was `company_aliases` |
 | `corporation_indices` | (`stock_code` FK, `index_name`) PK | new. Only `KOSPI200` rows are written (`005930 / KOSPI200`); the `index_name` column keeps the table open to more indices later |
 | `themes` | unchanged | |
-| `theme_companies` | (`theme_code` FK, `stock_code` FK) PK, `is_main` | `corp_code` becomes `stock_code` |
+| `theme_companies` | (`theme_code` FK, `stock_code` FK) PK, `is_major` | `corp_code` becomes `stock_code`, `is_main` is renamed `is_major` |
 | `entities` | `corp_code` becomes `stock_code` FK | unique-index names follow |
 
 Migration order: add `stock_code` to `entities`, backfill through the old `corp_code` join, swap the
@@ -49,7 +49,7 @@ FKs and unique indexes, then rename tables and columns. `downgrade` reverses it.
 4. **Index:** fetch KOSPI 200 constituents (Kiwoom index code `201`, a constant) and replace the
    `KOSPI200` rows in `corporation_indices` in one transaction. Constituents missing from `corporations` are skipped
    and counted.
-5. **Themes:** same parsing and `is_main` logic, keyed by `stock_code`, keeping every member that is
+5. **Themes:** same parsing and major-stock logic (column `is_major`), keyed by `stock_code`, keeping every member that is
    in `corporations` (no KOSPI 200 filter). Full replace in one transaction.
 6. Each step is its own transaction. A failed step is logged and makes the run exit 1. The
    empty-result guards stay: an empty fetch never replaces a populated table. If a sync failed and

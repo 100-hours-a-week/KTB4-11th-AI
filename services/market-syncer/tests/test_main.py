@@ -91,7 +91,7 @@ def test_syncs_corporations_index_and_themes(env, engine, query, market_data, ca
         ("005930", "KOSPI200")
     ]
     assert query(
-        engine, "SELECT theme_code, stock_code, is_main FROM theme_companies ORDER BY 2"
+        engine, "SELECT theme_code, stock_code, is_major FROM theme_companies ORDER BY 2"
     ) == [("100", "000660", False), ("100", "005930", True)]
     assert market_data.client.auth.tokens == 1
     assert market_data.dart_keys == [SECRETS[2]]

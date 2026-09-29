@@ -27,7 +27,7 @@ def sync(engine, themes, members):
 
 def memberships(query, engine):
     return query(
-        engine, "SELECT theme_code, stock_code, is_main FROM theme_companies ORDER BY 1, 2"
+        engine, "SELECT theme_code, stock_code, is_major FROM theme_companies ORDER BY 1, 2"
     )
 
 
@@ -69,13 +69,13 @@ def test_main_stocks_match_by_code_or_normalized_name(engine, query, corporation
 
     _, main, _ = sync(engine, [Theme("100", "HBM", main_stocks)], members)
 
-    rows = {stock_code: is_main for _, stock_code, is_main in memberships(query, engine)}
+    rows = {stock_code: is_major for _, stock_code, is_major in memberships(query, engine)}
     assert rows["000660"] is True
     assert rows["005930"] is ("삼성전자" in main_stocks)
     assert main == sum(rows.values())
 
 
-def test_a_repeated_member_is_main_if_any_listing_is(engine, query, corporations):
+def test_a_repeated_member_is_major_if_any_listing_is(engine, query, corporations):
     themes = [Theme("100", "HBM", ""), Theme("100", "HBM", "SK하이닉스")]
     members = {"100": [ThemeMember("000660", "SK하이닉스"), ThemeMember("000660", "하이닉스")]}
 
