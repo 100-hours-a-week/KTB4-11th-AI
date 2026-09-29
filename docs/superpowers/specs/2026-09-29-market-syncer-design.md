@@ -1,8 +1,8 @@
 # market-syncer design
 
 `market-syncer` is the only service that synchronizes market **reference data** from Kiwoom and
-OpenDART: KOSPI corporations, the indices they belong to (KOSPI 200, KRX 300, ...), and Kiwoom
-themes. It does not touch OHLCV; `market-collector` keeps that job.
+OpenDART: KOSPI corporations, their KOSPI 200 membership, and Kiwoom themes. The scope is fixed:
+the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLCV; `market-collector` keeps that job.
 
 ## Why
 
@@ -31,7 +31,7 @@ output that cannot be rebuilt.
 |---|---|---|
 | `corporations` | `stock_code` PK, `name`, `market`, `corp_code` UNIQUE, `eng_name`, `synced_at` | was `companies`; the key moves from DART `corp_code` to `stock_code`. `market` is `KOSPI` |
 | `corporation_aliases` | `alias` PK, `stock_code` FK | was `company_aliases` |
-| `corporation_indices` | (`stock_code` FK, `index_name`) PK | new. `005930 / KOSPI200`, `005930 / KRX300` |
+| `corporation_indices` | (`stock_code` FK, `index_name`) PK | new. Only `KOSPI200` rows are written (`005930 / KOSPI200`); the `index_name` column keeps the table open to more indices later |
 | `themes` | unchanged | |
 | `theme_companies` | (`theme_code` FK, `stock_code` FK) PK, `is_main` | `corp_code` becomes `stock_code` |
 | `entities` | `corp_code` becomes `stock_code` FK | unique-index names follow |
@@ -46,8 +46,8 @@ FKs and unique indexes, then rename tables and columns. `downgrade` reverses it.
 3. **Corporations:** Kiwoom KOSPI list joined with DART `corp_code` by `stock_code`. Upsert
    `corporations` and `corporation_aliases`. Unmatched Kiwoom rows (ETFs and the like) are dropped,
    as today.
-4. **Indices:** for each configured index, fetch its constituents and replace that index's rows in
-   `corporation_indices` in one transaction. Constituents missing from `corporations` are skipped
+4. **Index:** fetch KOSPI 200 constituents (Kiwoom index code `201`, a constant) and replace the
+   `KOSPI200` rows in `corporation_indices` in one transaction. Constituents missing from `corporations` are skipped
    and counted.
 5. **Themes:** unchanged logic, keyed by `stock_code`. Full replace in one transaction.
 6. Each step is its own transaction. A failed step is logged and makes the run exit 1. The
@@ -56,7 +56,7 @@ FKs and unique indexes, then rename tables and columns. `downgrade` reverses it.
 
 The advisory lock, the Kiwoom client, the DART client and the join and alias logic are moved from
 `news-graph-builder`, not rewritten. The KOSPI 200 fetch (`fetch_kospi200_codes`) already exists in
-`theme/kiwoom.py`; it is generalized to take an index code.
+`theme/kiwoom.py`; it moves over unchanged.
 
 ## Changes to existing members
 
@@ -89,7 +89,6 @@ The advisory lock, the Kiwoom client, the DART client and the join and alias log
 | `KIWOOM_BASE_URI` | `https://api.kiwoom.com` |
 | `KIWOOM_REQUEST_INTERVAL` | `0.2` |
 | `DART_API_KEY` | required |
-| `INDEXES` | `KOSPI200=201` (comma-separated `name=kiwoom_index_code`) |
 | `LOG_LEVEL` | `INFO` |
 
 ## Rollout
@@ -103,17 +102,15 @@ enable the others.
 
 - Moved unit tests keep their assertions with renamed identifiers.
 - New: index replace is atomic and rejects an empty fetch; constituents outside `corporations` are
-  skipped; `INDEXES` parsing; market-collector reads its symbols from Postgres.
+  skipped; market-collector reads its symbols from Postgres.
 - `infrastructure/postgres/tests/test_migrations.py`: upgrade from `0004` with existing `entities`
   rows keeps their company link, and downgrade restores it.
 
 ## Open points
 
-1. **KRX 300 index code.** I don't know Kiwoom's `inds_cd` for KRX 300 and won't guess. The default
-   ships with `KOSPI200=201` only; add KRX 300 once the code is confirmed against the Kiwoom docs.
-2. **Corporation scope.** Kept as "KOSPI stocks that join to a DART record", so ETFs and the like stay out
+1. **Corporation scope.** Kept as "KOSPI stocks that join to a DART record", so ETFs and the like stay out
    of entity resolution. Say so if you want every Kiwoom KOSPI row, with a nullable `corp_code`.
-3. **Theme membership scope.** Themes used to keep only KOSPI 200 members. This design keeps every member that
+2. **Theme membership scope.** Themes used to keep only KOSPI 200 members. This design keeps every member that
    is in `corporations`, and consumers filter through `corporation_indices`. Say so if you want the old filter.
-4. **Kiwoom client.** The moved httpx client is kept as is. `market-collector` uses the `kiwoom` SDK, and
+3. **Kiwoom client.** The moved httpx client is kept as is. `market-collector` uses the `kiwoom` SDK, and
    unifying the two is a separate refactor.
