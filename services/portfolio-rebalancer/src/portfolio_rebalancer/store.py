@@ -102,6 +102,14 @@ account_pending_orders = sa.Table(
     sa.Index("account_pending_orders_account_id_idx", "account_id"),
 )
 
+# Declared only so rebalance_orders' foreign key resolves. portfolio-builder owns this
+# table, and the migrations own its schema, so nothing here describes it beyond the key.
+portfolios = sa.Table(
+    "portfolios",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True),
+)
+
 rebalance_orders = sa.Table(
     "rebalance_orders",
     metadata,
