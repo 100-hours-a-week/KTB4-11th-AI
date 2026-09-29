@@ -189,15 +189,15 @@ def test_downgrade_to_0002_copies_summaries_back(pg_dsn, pg_engine, monkeypatch)
             conn.execute(sa.text("TRUNCATE clusters CASCADE"))
 
 
-def test_theme_memberships_cascade_from_themes_and_companies(pg_dsn, pg_engine, monkeypatch):
+def test_theme_memberships_cascade_from_themes_and_corporations(pg_dsn, pg_engine, monkeypatch):
     monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
     command.upgrade(_alembic_config(), "head")
     try:
         with pg_engine.begin() as conn:
             conn.execute(
                 sa.text(
-                    "INSERT INTO companies (corp_code, stock_code, corp_name)"
-                    " VALUES ('00126380', '005930', '삼성전자'), ('00164779', '000660',"
+                    "INSERT INTO corporations (stock_code, corp_code, name)"
+                    " VALUES ('005930', '00126380', '삼성전자'), ('000660', '00164779',"
                     " 'SK하이닉스')"
                 )
             )
@@ -208,19 +208,19 @@ def test_theme_memberships_cascade_from_themes_and_companies(pg_dsn, pg_engine, 
             )
             conn.execute(
                 sa.text(
-                    "INSERT INTO theme_companies (theme_code, corp_code, is_main)"
-                    " VALUES ('1', '00126380', true), ('2', '00164779', false)"
+                    "INSERT INTO theme_companies (theme_code, stock_code, is_main)"
+                    " VALUES ('1', '005930', true), ('2', '000660', false)"
                 )
             )
         with pg_engine.begin() as conn:
             conn.execute(sa.text("DELETE FROM themes WHERE theme_code = '1'"))
-            conn.execute(sa.text("DELETE FROM companies WHERE corp_code = '00164779'"))
+            conn.execute(sa.text("DELETE FROM corporations WHERE stock_code = '000660'"))
         with pg_engine.connect() as conn:
             remaining = conn.execute(sa.text("SELECT count(*) FROM theme_companies")).scalar_one()
         assert remaining == 0
     finally:
         with pg_engine.begin() as conn:
-            conn.execute(sa.text("TRUNCATE theme_companies, themes, companies CASCADE"))
+            conn.execute(sa.text("TRUNCATE theme_companies, themes, corporations CASCADE"))
 
 
 def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypatch):
@@ -235,3 +235,228 @@ def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypat
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None
+
+
+def _seed_0004(conn) -> None:
+    conn.execute(
+        sa.text(
+            "INSERT INTO companies (corp_code, stock_code, corp_name, corp_eng_name)"
+            " VALUES ('00126380', '005930', '삼성전자', 'Samsung Electronics'),"
+            " ('00164779', '000660', 'SK하이닉스', NULL)"
+        )
+    )
+    conn.execute(
+        sa.text(
+            "INSERT INTO company_aliases (alias, corp_code)"
+            " VALUES ('삼성', '00126380'), ('하이닉스', '00164779')"
+        )
+    )
+    conn.execute(
+        sa.text(
+            "INSERT INTO entities (raw_name, name, type, corp_code)"
+            " VALUES ('삼성', '삼성전자', 'CORPORATION', '00126380'),"
+            " ('애플', '애플', 'CORPORATION', NULL)"
+        )
+    )
+    conn.execute(sa.text("INSERT INTO themes (theme_code, name) VALUES ('1', 'HBM')"))
+    conn.execute(
+        sa.text(
+            "INSERT INTO theme_companies (theme_code, corp_code, is_main)"
+            " VALUES ('1', '00126380', true), ('1', '00164779', false)"
+        )
+    )
+
+
+def _truncate_reference_tables(pg_engine) -> None:
+    with pg_engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "TRUNCATE corporation_indices, theme_companies, themes, corporation_aliases,"
+                " entities, corporations CASCADE"
+            )
+        )
+
+
+def test_upgrade_to_0005_rekeys_every_reference_by_stock_code(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.downgrade(config, "0004")
+    try:
+        with pg_engine.begin() as conn:
+            _seed_0004(conn)
+
+        command.upgrade(config, "head")
+
+        with pg_engine.connect() as conn:
+            corporations = conn.execute(
+                sa.text(
+                    "SELECT stock_code, corp_code, name, eng_name, market"
+                    " FROM corporations ORDER BY stock_code"
+                )
+            ).all()
+            aliases = conn.execute(
+                sa.text("SELECT alias, stock_code FROM corporation_aliases ORDER BY alias")
+            ).all()
+            entities = conn.execute(
+                sa.text("SELECT raw_name, stock_code FROM entities ORDER BY raw_name")
+            ).all()
+            memberships = conn.execute(
+                sa.text(
+                    "SELECT theme_code, stock_code, is_main FROM theme_companies"
+                    " ORDER BY stock_code"
+                )
+            ).all()
+        assert corporations == [
+            ("000660", "00164779", "SK하이닉스", None, "KOSPI"),
+            ("005930", "00126380", "삼성전자", "Samsung Electronics", "KOSPI"),
+        ]
+        assert aliases == [("삼성", "005930"), ("하이닉스", "000660")]
+        assert entities == [("삼성", "005930"), ("애플", None)]
+        assert memberships == [("1", "000660", False), ("1", "005930", True)]
+    finally:
+        _truncate_reference_tables(pg_engine)
+
+
+def test_downgrade_from_0005_restores_corp_code_links(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    schema_query = sa.text(
+        "SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint"
+        " WHERE connamespace = 'public'::regnamespace"
+        " UNION SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'"
+        " UNION SELECT table_name, column_name, data_type || ' ' || is_nullable"
+        " || ' ' || coalesce(column_default, '')"
+        " FROM information_schema.columns WHERE table_schema = 'public'"
+    )
+    command.downgrade(config, "0002")
+    command.upgrade(config, "0004")
+    try:
+        with pg_engine.begin() as conn:
+            schema_at_0004 = set(conn.execute(schema_query).all())
+            _seed_0004(conn)
+        command.upgrade(config, "0005")
+
+        command.downgrade(config, "0004")
+
+        with pg_engine.connect() as conn:
+            assert set(conn.execute(schema_query).all()) == schema_at_0004
+            assert conn.execute(sa.text("SELECT to_regclass('corporations')")).scalar() is None
+            assert _columns(conn, "companies") == {
+                "corp_code",
+                "stock_code",
+                "corp_name",
+                "corp_eng_name",
+                "synced_at",
+            }
+            aliases = conn.execute(
+                sa.text("SELECT alias, corp_code FROM company_aliases ORDER BY alias")
+            ).all()
+            entities = conn.execute(
+                sa.text("SELECT raw_name, corp_code FROM entities ORDER BY raw_name")
+            ).all()
+            memberships = conn.execute(
+                sa.text(
+                    "SELECT theme_code, corp_code, is_main FROM theme_companies ORDER BY corp_code"
+                )
+            ).all()
+            assert "stock_code" not in _columns(conn, "entities")
+        assert aliases == [("삼성", "00126380"), ("하이닉스", "00164779")]
+        assert entities == [("삼성", "00126380"), ("애플", None)]
+        assert memberships == [("1", "00126380", True), ("1", "00164779", False)]
+    finally:
+        command.upgrade(config, "head")
+        _truncate_reference_tables(pg_engine)
+
+
+def _primary_key_columns(conn, table: str) -> tuple[str, list[str]]:
+    row = conn.execute(
+        sa.text(
+            "SELECT c.conname, array_agg(a.attname ORDER BY k.ord)"
+            " FROM pg_constraint c"
+            " CROSS JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)"
+            " JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum"
+            " WHERE c.conrelid = to_regclass(:t) AND c.contype = 'p'"
+            " GROUP BY c.conname"
+        ),
+        {"t": table},
+    ).one()
+    return row[0], list(row[1])
+
+
+def _constraints(conn, table: str, contype: str) -> dict[str, str]:
+    return dict(
+        conn.execute(
+            sa.text(
+                "SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint"
+                " WHERE conrelid = to_regclass(:t) AND contype = :c"
+            ),
+            {"t": table, "c": contype},
+        ).all()
+    )
+
+
+def _indexes(conn, table: str) -> dict[str, str]:
+    return dict(
+        conn.execute(
+            sa.text("SELECT indexname, indexdef FROM pg_indexes WHERE tablename = :t"),
+            {"t": table},
+        ).all()
+    )
+
+
+def test_0005_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+
+    with pg_engine.connect() as conn:
+        for table in ("companies", "company_aliases"):
+            assert conn.execute(sa.text("SELECT to_regclass(:t)"), {"t": table}).scalar() is None
+        assert _primary_key_columns(conn, "corporations") == ("corporations_pkey", ["stock_code"])
+        assert _primary_key_columns(conn, "corporation_aliases") == (
+            "corporation_aliases_pkey",
+            ["alias"],
+        )
+        assert _primary_key_columns(conn, "corporation_indices") == (
+            "corporation_indices_pkey",
+            ["stock_code", "index_name"],
+        )
+        assert _primary_key_columns(conn, "theme_companies") == (
+            "theme_companies_pkey",
+            ["theme_code", "stock_code"],
+        )
+        assert _constraints(conn, "corporations", "u") == {
+            "corporations_corp_code_key": "UNIQUE (corp_code)"
+        }
+        assert _columns(conn, "corporations") == {
+            "stock_code",
+            "corp_code",
+            "name",
+            "eng_name",
+            "market",
+            "synced_at",
+        }
+        assert "corp_code" not in _columns(conn, "entities") | _columns(conn, "theme_companies")
+
+        target = "REFERENCES corporations(stock_code)"
+        assert _constraints(conn, "corporation_aliases", "f") == {
+            "corporation_aliases_stock_code_fkey": f"FOREIGN KEY (stock_code) {target}"
+        }
+        assert _constraints(conn, "entities", "f") == {
+            "entities_stock_code_fkey": f"FOREIGN KEY (stock_code) {target}"
+        }
+        assert _constraints(conn, "corporation_indices", "f") == {
+            "corporation_indices_stock_code_fkey": f"FOREIGN KEY (stock_code) {target}"
+        }
+        assert (
+            _constraints(conn, "theme_companies", "f")["theme_companies_stock_code_fkey"]
+            == f"FOREIGN KEY (stock_code) {target} ON DELETE CASCADE"
+        )
+
+        entity_indexes = _indexes(conn, "entities")
+        assert entity_indexes["entities_stock_code_key"].endswith(
+            "USING btree (stock_code) WHERE (stock_code IS NOT NULL)"
+        )
+        assert entity_indexes["entities_name_type_key"].endswith(
+            "USING btree (name, type) WHERE (stock_code IS NULL)"
+        )
+        assert "theme_companies_stock_code_idx" in _indexes(conn, "theme_companies")
