@@ -16,14 +16,13 @@ def wire(monkeypatch, recorder, sent=3):
         lambda level, *, service_name: recorder.logging.append((level, service_name)),
     )
     monkeypatch.setattr(__main__, "Settings", lambda: _settings())
-    monkeypatch.setattr(__main__, "connect", lambda conf: _closing("db"))
     monkeypatch.setattr(__main__, "build_client", lambda url: _closing("client"))
     monkeypatch.setattr(__main__, "bearer_token", lambda secret, subject: "a-token")
     monkeypatch.setattr(__main__.sa, "create_engine", lambda dsn: _engine(recorder))
     monkeypatch.setattr(
         __main__,
         "tick",
-        lambda conn, db, client, token: recorder.ticks.append((conn, db, client, token)) or sent,
+        lambda engine, client, token: recorder.ticks.append((engine, client, token)) or sent,
     )
 
 
@@ -38,14 +37,14 @@ def test_logging_is_set_up_under_the_service_name(monkeypatch):
     assert recorder.logging == [("INFO", SERVICE_NAME)]
 
 
-def test_the_tick_gets_the_engine_a_questdb_handle_a_client_and_a_token(monkeypatch):
+def test_the_tick_gets_the_engine_a_client_and_a_token(monkeypatch):
     recorder = Recorder()
     wire(monkeypatch, recorder)
 
     __main__.main()
 
-    engine, db, client, token = recorder.ticks[0]
-    assert (db, client, token) == ("db", "client", "a-token")
+    engine, client, token = recorder.ticks[0]
+    assert (client, token) == ("client", "a-token")
     assert hasattr(engine, "begin")
 
 
@@ -86,7 +85,6 @@ class _Secret:
 
 class _settings:
     log_level = "INFO"
-    questdb_conf = "ws::addr=questdb:9000;"
     backend_url = "http://backend:8080"
     postgres_dsn = "postgresql+psycopg://ktb:ktb@postgres:5432/ktb"
     backend_jwt_secret = _Secret("a-shared-secret-of-at-least-thirty-two-bytes")

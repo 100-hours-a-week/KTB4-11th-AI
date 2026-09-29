@@ -15,14 +15,14 @@ read on its own.
 | Auth | a token, issuance unsettled | a JWT this service signs, HS256 over a shared secret | the Backend shares `JWT_SECRET`, so we sign |
 | Tick rounding | the Backend rounds prices | **we** round to a KRX tick | the Backend answers 400, it does not round |
 | Transaction | one per tick | the order is committed before it is sent | a failed send was rolling the record back |
-| QuestDB | `bars_1m` over psycopg | `bars` with a `timeframe` column, official `questdb` client | `dev` collapsed the four tables into one |
 | Migration | `0006` after `#42`'s `0005` | `0006` after `#54`'s `0005` | `#42` was closed and replaced by `#54` |
 | `rebalance()` | `(portfolio, previous, account, prices)` | `(portfolio, account, prices, days_left)` | exits belong to the portfolio; the band comes from the deadline |
 | Ladder budget | three days each for selling and buying | **three trading days for both together** | a buy funded by a sell cannot start its own three days |
 | Band | from days elapsed | from days **left** | an order that starts late starts narrow rather than restarting |
 | Order shape | two limits, one either side | **one limit plus a trigger we watch** | a limit on the near side fills instantly |
 | Trigger | narrowed with the limit | **fixed at 5%** | tightening it strikes a move the limit would wait out |
-| Current price | QuestDB's last close | the poll's `stocks[].current_price` | it is what the Backend trades on |
+| Prices | QuestDB `bars` | **the poll's `stocks[].current_price`, only** | this service has no QuestDB access |
+| `stocks[]` key | `stock_id`, converted at the parser | `stock_code` | the poll spells it that way now |
 | Last-session cutoff | 14:30 | **15:00** | polling is hourly from 09:00, so that is the last pass |
 | Trading days | weekdays | `exchange-calendars` XKRX | 한글날 is not a weekend |
 | Budget | three days, fixed | the week's remaining sessions | the next judgement is the deadline |
@@ -46,7 +46,7 @@ The service will:
 - read the current model portfolio from PostgreSQL;
 - rebalance every AI-managed, active account separately, using only that account's own cash, holdings and pending orders;
 - poll the Backend hourly for active users, their holdings, cash and pending orders;
-- read the latest close per stock code from QuestDB;
+- take every price from the Backend's own poll;
 - decide which companies can be bought and at what whole-share quantity;
 - **round every price it sends to a valid KRX tick**;
 - emit buy and sell requests to the Backend with the reason behind each;
@@ -68,8 +68,7 @@ flowchart LR
   COMPOSE(compose\nPORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS) --> PR[portfolio-rebalancer]
   PB[portfolio-builder] -->|portfolios · portfolio_holdings · portfolio_exits| PG[(PostgreSQL)]
   PG <--> PR
-  QDB[(QuestDB)] -->|latest close from bars| PR
-  BE[Backend] -->|GET /api/v1/users?state=active| PR
+  BE[Backend] -->|GET /api/v1/users?state=active\nholdings · cash · pending · current_price| PR
   PR -->|POST /api/v1/accounts/id/orders| BE
 ```
 
@@ -84,8 +83,8 @@ pair is still outstanding, which is what reading the day back out of the pair is
 Idempotency did not depend on the route either: "do not act twice on the same portfolio and
 account" is the same `rebalance_orders` lookup whether a route or a tick asks it.
 
-So `AGENTS.md`'s HTTP-edge sentence loses the rebalancer edge. Prices still come from QuestDB
-directly.
+So `AGENTS.md`'s HTTP-edge sentence loses the rebalancer edge, and this service reaches only
+PostgreSQL and the Backend.
 
 ## Account State
 
@@ -98,7 +97,7 @@ one or more accounts, and every account is decided on its own:
 | `is_ai_managed` | only an AI-managed account is rebalanced |
 | `is_active` | an inactive account is skipped |
 | `cash_balance` | cash before pending commitments |
-| `stocks[]` — `stock_id`, `amount`, `total_price`, `current_price` | quantity held, the principal put into it, and what the Backend quotes it at now |
+| `stocks[]` — `stock_code`, `amount`, `total_price`, `current_price` | quantity held, the principal put into it, and what the Backend quotes it at now |
 | `pending_orders[]` | orders placed and not yet filled |
 
 Pending orders are subtracted before anything is decided:
@@ -109,7 +108,7 @@ held quantity  = stocks[].amount + Σ(pending buys) − Σ(pending sells)
 ```
 
 A pending sell adds no cash, because the proceeds do not exist until it fills. A holding's
-`total_price` is principal, not a current value, so the position is priced from QuestDB.
+`total_price` is principal, not a current value; `current_price` is what the position is worth.
 
 The poll is written to PostgreSQL as **the latest state, not a history**, replaced each time.
 Five tables, and only `rebalance_orders` accumulates:
@@ -122,9 +121,9 @@ Five tables, and only `rebalance_orders` accumulates:
 | `account_pending_orders` | `pending_orders[]` | orders still outstanding, per account |
 | `rebalance_orders` | — | **history** — every order this service sent, and why |
 
-Three columns are renamed: `amount` becomes `quantity`, `total_price` becomes `principal`, and
-`stock_id` becomes `stock_code` so a holding and a pending order name the same thing the same
-way.
+Two columns are renamed: `amount` becomes `quantity` and `total_price` becomes `principal`.
+`stock_code` comes through as it is — the poll spells it that way on holdings as well as on
+pending orders, so nothing has to be converted.
 
 **Both quantities are stored as decimals.** The poll types a holding's `amount` as an integer
 and a pending order's as `123.44`. A mirror that rounds is no longer a mirror of the Backend, so
@@ -139,15 +138,14 @@ which one arrives is unconfirmed.
 
 ## Prices
 
-QuestDB holds one `bars` table with a `timeframe` column, not four tables — `dev` collapsed
-them. It is read through the official `questdb` client over QWP/WebSocket (`ws::`), the same
-client `market-collector` writes with, so there is one QuestDB client in the repository rather
-than two. The client refuses an `http::` connection string outright.
+**Every price comes from the poll.** This service has no QuestDB access, so
+`stocks[].current_price` is the only quote it sees — which is also the number the Backend is
+trading on, so the trigger is compared with the right thing rather than with a last close.
 
-One statement covers every code. `LATEST ON ts PARTITION BY symbol` applies the timeframe and
-session filters **before** picking the newest row per symbol, checked against a live instance:
-an extended-session row newer than the last regular one is correctly passed over. A code with no
-candle is left out of the result rather than priced at zero, which would read as a free share.
+The consequence is real and worth stating plainly: **a stock the Backend does not quote cannot
+be sized.** It is skipped with a note and its weight is shared out equally over the rest, which
+is the same handling a name too dear to buy gets. For the service to open a position in a name
+the account does not hold yet, the poll has to quote it.
 
 ## Allocation
 
@@ -283,10 +281,8 @@ carries no price.
 left alone rather than guessing which is ours. Nothing is double counted when pending orders are
 folded into cash and holdings, because the near side was never an order.
 
-**The trigger is compared with `stocks[].current_price`**, the Backend's own quote, rather than
-with QuestDB's last close: it is the number the Backend is trading on. A stock the account does
-not hold yet has no entry, and QuestDB fills in — treating a missing quote as zero would fire
-every sell trigger at once.
+**The trigger is compared with `stocks[].current_price`**, which is the only price there is. A
+missing quote is not read as zero: that would fire every sell trigger at once.
 
 **The reference comes from the record, not from the prices.** One limit price cannot say what it
 was a band away from, so `rebalance_orders.reference_price` keeps it and
@@ -331,7 +327,7 @@ and the quantity would wobble between passes instead of settling.
 
 The allocation rules apply to the buy side only. A sell is always possible, so a target weight
 that cannot be reached by buying does not block the sells that fund it. A name too dear to buy,
-or one with no price in QuestDB, is **skipped** with a note rather than sold: being unaffordable
+or one the poll does not quote, is **skipped** with a note rather than sold: being unaffordable
 is a buy-side outcome and the model portfolio still names it. A held name in neither the
 portfolio nor the exits is left alone, because no reason exists to act on it and every order
 carries one.
@@ -386,12 +382,10 @@ else.
 
 ## Failure Handling
 
-**A stale price can misjudge affordability.** The only price available is the newest close in
-QuestDB's `bars`, and its freshness is the collector's cron period, not the market's.
-Affordability is a threshold, so a stale 1,750,000 against a budget of 1,800,000 says "buyable"
-when the real price has moved to 1,850,000 and it is not. Two cheap mitigations, both worth
-having: require `budget ≥ price × (1 + margin)`, and return the `ts` of the close used so the
-caller can refuse a price older than it will trade on.
+**A stale price can misjudge affordability.** The poll runs hourly, so its quote can be an hour
+old. Affordability is a threshold, so a stale 1,750,000 against a budget of 1,800,000 says
+"buyable" when the real price has moved to 1,850,000 and it is not. The cheap mitigation is to
+require `budget ≥ price × (1 + margin)`, which `whole_shares` already takes.
 
 **An order is committed before it is sent, in its own transaction.** Holding one transaction
 across the send undoes the point of recording first. Demonstrated against a real PostgreSQL with
@@ -446,7 +440,6 @@ Grouped along the line this document already drew — pure decisions against I/O
 | `decide/accounts.py` | pure | fold pending orders into cash and holdings |
 | `decide/rebalance.py` | pure | what an account with nothing outstanding should hold |
 | `decide/outstanding.py` | pure | an order already at the Backend: did it arrive, should it narrow |
-| `request/prices.py` | I/O | the latest close from QuestDB |
 | `request/backend.py` | I/O | the JWT, the account poll, the order send |
 | `request/store.py` | I/O | the account mirror and the order history in PostgreSQL |
 | `tick.py` | orchestration | calls the above in order, and decides nothing |
@@ -546,5 +539,5 @@ Storage is exercised against a real PostgreSQL rather than a fake, because what 
 is what the database does — cascades, a unique constraint, and replace-not-append. A fake missed
 a foreign key that could not resolve.
 
-The whole ladder runs end to end against a real QuestDB and PostgreSQL with a stubbed Backend:
+The whole ladder runs end to end against a real PostgreSQL with a stubbed Backend:
 ±5%, then ±3%, then ±1%, then market, then nothing, with the same-day re-run emitting nothing.

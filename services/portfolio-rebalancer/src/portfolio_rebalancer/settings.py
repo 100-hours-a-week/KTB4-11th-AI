@@ -10,7 +10,6 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     postgres_dsn: str
-    questdb_conf: str
     backend_url: str
     # A credential: SecretStr keeps it out of logs and repr.
     backend_jwt_secret: SecretStr

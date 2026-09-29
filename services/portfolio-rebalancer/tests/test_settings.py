@@ -5,7 +5,6 @@ from pydantic import ValidationError
 SECRET = "a-shared-secret-of-at-least-thirty-two-bytes"
 GIVEN = {
     "postgres_dsn": "postgresql+psycopg://ktb:ktb@postgres:5432/ktb",
-    "questdb_conf": "ws::addr=localhost:9000;",
     "backend_url": "http://backend:8080",
     "backend_jwt_secret": SECRET,
 }

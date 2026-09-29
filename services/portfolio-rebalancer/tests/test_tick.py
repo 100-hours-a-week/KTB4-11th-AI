@@ -6,7 +6,6 @@ from datetime import UTC, date, datetime, timedelta, timezone
 from portfolio_rebalancer import tick as tick_module
 from portfolio_rebalancer.decide.reservations import PRICE_BANDS, limit_and_trigger
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
-from portfolio_rebalancer.request.prices import Price
 from portfolio_rebalancer.tick import market_now, tick
 
 # 2026-09-28 週 has five sessions, so a Monday cycle starts with five days.
@@ -74,6 +73,25 @@ def recorded_row(
     }
 
 
+def _quote(users, prices):
+    """Put a current_price on every stock the poll reports, and list a priced stock the
+    account does not hold with a quantity of zero.
+
+    The Backend is the only source of prices now, so a stock it does not quote cannot be
+    sized at all.
+    """
+    for user in users:
+        for account_ in user["accounts"]:
+            held = {str(s["stock_code"]): s for s in account_["stocks"]}
+            for code, price in prices.items():
+                entry = held.get(code)
+                if entry is None:
+                    entry = {"stock_code": code, "total_price": 0, "amount": 0}
+                    account_["stocks"].append(entry)
+                entry["current_price"] = price
+    return users
+
+
 def polled(*accounts):
     return [
         {
@@ -100,8 +118,9 @@ class Fakes:
         self.today = TUESDAY
 
         model = portfolio() if model is None else model
-        users = polled() if users is None else users
         prices = {"005930": 78_000.0, "000660": 412_000.0} if prices is None else prices
+        self.users = _quote(polled() if users is None else users, prices)
+        users = self.users
 
         def note(name, value=None):
             self.calls.append(name)
@@ -111,18 +130,6 @@ class Fakes:
         monkeypatch.setattr(tick_module, "fetch_accounts", lambda c, t: note("fetch", users))
         monkeypatch.setattr(
             tick_module, "save_poll", lambda conn, u: note("save") or self.saved.append(u)
-        )
-        monkeypatch.setattr(
-            tick_module,
-            "latest_prices",
-            lambda db, codes: (
-                note("prices")
-                or {
-                    code: Price(close=prices[code], ts=datetime(2026, 9, 29, tzinfo=UTC))
-                    for code in codes
-                    if code in prices
-                }
-            ),
         )
         monkeypatch.setattr(
             tick_module,
@@ -172,7 +179,7 @@ class Fakes:
     def run(self, now=None):
         now = now or noon(TUESDAY)
         self.today = now.date()
-        return tick(_Engine(), "db", "client", "a-token", now=now)
+        return tick(_Engine(), "client", "a-token", now=now)
 
 
 class _Conn:
@@ -205,7 +212,7 @@ def test_the_poll_is_mirrored_before_anything_is_decided(monkeypatch):
     fakes.run()
 
     assert fakes.calls.index("save") < fakes.calls.index("stored")
-    assert fakes.saved == [polled()]
+    assert fakes.saved == [fakes.users]
 
 
 def test_a_fresh_account_is_recorded_before_it_is_sent(monkeypatch):
@@ -247,7 +254,7 @@ def test_an_account_whose_plan_is_already_met_emits_nothing(monkeypatch):
     """A cycle keeps working until the plan is satisfied, and a satisfied plan asks for
     nothing: the account holds its target and has no cash left to spend."""
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
-    held = [{"stock_id": "005930", "total_price": 7_800_000, "amount": 100}]
+    held = [{"stock_code": "005930", "total_price": 7_800_000, "amount": 100}]
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, stocks=held)),
@@ -315,23 +322,26 @@ def test_each_account_is_decided_on_its_own(monkeypatch):
     assert sorted(account_id for _, account_id in fakes.marked) == [11, 12]
 
 
-def test_the_held_stocks_are_priced_too_not_just_the_portfolios(monkeypatch):
-    """A holding has to be valued to know whether it is above or below its target."""
-    asked = []
-    fakes = Fakes(
-        monkeypatch,
-        users=polled(account(stocks=[{"stock_id": "000660", "total_price": 1, "amount": 2}])),
+def test_a_stock_the_backend_does_not_quote_cannot_be_sized(monkeypatch):
+    """Every price comes from the poll now, so a name it does not quote is skipped with a
+    note and its weight is shared out -- there is nothing else to price it with."""
+    held = [{"stock_code": "005930", "total_price": 1, "amount": 1, "current_price": 78_000.0}]
+    users = polled(account(cash=10_000_000.0, stocks=held))
+    plan = Portfolio(
+        portfolio_id=42,
+        cash_weight=0.0,
+        holdings=[
+            Holding(*SAMSUNG, weight=0.5, reason="사유"),
+            Holding(*HYNIX, weight=0.5, reason="사유"),
+        ],
+        exits=[],
     )
-    original = tick_module.latest_prices
-    monkeypatch.setattr(
-        tick_module,
-        "latest_prices",
-        lambda db, codes: asked.append(list(codes)) or original(db, codes),
-    )
+    fakes = Fakes(monkeypatch, model=plan, users=users, prices={})
 
     fakes.run()
 
-    assert "000660" in asked[0]
+    skipped = [o for o in fakes.recorded_rows[0] if o.action == "skip"]
+    assert [o.stock_code for o in skipped] == ["000660"]
 
 
 def test_market_now_is_on_the_exchanges_clock():
@@ -469,7 +479,7 @@ def test_a_cycle_with_no_cash_places_only_the_sell(monkeypatch):
         exits=[Exit(*HYNIX, reason="퇴출")],
     )
     users = polled(
-        account(cash=0.0, stocks=[{"stock_id": "000660", "total_price": 1, "amount": 10}])
+        account(cash=0.0, stocks=[{"stock_code": "000660", "total_price": 1, "amount": 10}])
     )
     fakes = Fakes(monkeypatch, model=plan, users=users)
 
@@ -640,9 +650,9 @@ def test_a_struck_order_keeps_the_outstanding_quantity(monkeypatch):
     assert fakes.amended[0][0].shares == 21
 
 
-def test_the_trigger_uses_the_polled_price_not_questdb(monkeypatch):
-    """QuestDB holds the last close; the Backend quotes what it is trading on. A sell
-    whose QuestDB price looks fine must still be struck if the poll says otherwise."""
+def test_the_trigger_uses_the_price_the_poll_reports(monkeypatch):
+    """The Backend's own quote is the only price there is, so it is what the trigger is
+    compared with."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -659,14 +669,13 @@ def test_the_trigger_uses_the_polled_price_not_questdb(monkeypatch):
             side="sell",
         )
     ]
-    held = [{"stock_id": "000660", "total_price": 1, "amount": 10, "current_price": trigger}]
+    held = [{"stock_code": "000660", "total_price": 1, "amount": 10, "current_price": trigger}]
     outstanding = [pending(stock_code="000660", order_type="sell", price=limit, amount=10)]
     fakes = Fakes(
         monkeypatch,
         model=plan,
         users=polled(account(cash=0.0, stocks=held, pending_orders=outstanding)),
-        # QuestDB still says the price is comfortably above the trigger.
-        prices={"005930": 78_000.0, "000660": 412_000.0},
+        prices={"005930": 78_000.0},
         recorded={11: already},
     )
 
@@ -676,8 +685,9 @@ def test_the_trigger_uses_the_polled_price_not_questdb(monkeypatch):
     assert (struck.limit, struck.trigger) == (None, None)
 
 
-def test_questdb_fills_in_for_a_stock_the_account_does_not_hold_yet(monkeypatch):
-    """An outstanding buy on a stock never held has no quote in the poll."""
+def test_an_outstanding_buy_is_struck_from_the_quote_the_poll_gives_it(monkeypatch):
+    """The Backend quotes it even at a quantity of zero, which is the only way a buy on a
+    stock not yet held can be watched at all."""
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     _, trigger = limit_and_trigger(78_000.0, 3, "buy")
     fakes = Fakes(

@@ -247,9 +247,9 @@ def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypat
         assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None
 
 
-# Every key the hourly account poll carries, against the column it has to reach. The poll
-# renames three of them: `amount` to `quantity`, `total_price` to `principal`, and
-# `stock_id` to `stock_code` so a holding and a pending order name the same thing alike.
+# Every key the hourly account poll carries, against the column it has to reach. Two are
+# renamed: `amount` to `quantity` and `total_price` to `principal`. `stock_code` comes
+# through as it is, on holdings as well as on pending orders.
 POLL_FIELDS = {
     "users": {"user_id": "user_id", "nickname": "nickname", "state": "state"},
     "accounts": {
@@ -261,7 +261,7 @@ POLL_FIELDS = {
         "cash_balance": "cash_balance",
     },
     "account_holdings": {
-        "stock_id": "stock_code",
+        "stock_code": "stock_code",
         "amount": "quantity",
         "total_price": "principal",
     },

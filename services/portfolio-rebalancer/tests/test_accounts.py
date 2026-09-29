@@ -14,7 +14,7 @@ def account(**changes):
         "is_duel_account": False,
         "is_active": True,
         "cash_balance": 10_000_000.0,
-        "stocks": [{"stock_id": "005930", "total_price": 7_800_000, "amount": 100}],
+        "stocks": [{"stock_code": "005930", "total_price": 7_800_000, "amount": 100}],
         "pending_orders": [],
     }
     return values | changes
@@ -76,8 +76,8 @@ def test_a_pending_sell_lowers_it():
 
 def test_a_holding_with_no_pending_order_is_untouched():
     holdings = [
-        {"stock_id": "005930", "total_price": 7_800_000, "amount": 100},
-        {"stock_id": "000660", "total_price": 4_120_000, "amount": 10},
+        {"stock_code": "005930", "total_price": 7_800_000, "amount": 100},
+        {"stock_code": "000660", "total_price": 4_120_000, "amount": 10},
     ]
     state = apply_pending(account(stocks=holdings, pending_orders=[order(amount=5)]))
 
@@ -93,16 +93,18 @@ def test_a_pending_buy_for_something_not_held_yet_becomes_a_holding():
 def test_total_price_is_principal_and_never_reaches_the_state():
     """It is the money put in, not what the position is worth, so pricing must come from
     QuestDB instead."""
-    cheap = apply_pending(account(stocks=[{"stock_id": "005930", "total_price": 1, "amount": 100}]))
+    cheap = apply_pending(
+        account(stocks=[{"stock_code": "005930", "total_price": 1, "amount": 100}])
+    )
     dear = apply_pending(
-        account(stocks=[{"stock_id": "005930", "total_price": 999_999_999, "amount": 100}])
+        account(stocks=[{"stock_code": "005930", "total_price": 999_999_999, "amount": 100}])
     )
 
     assert cheap == dear
 
 
-def test_stock_id_becomes_stock_code():
-    """A holding and a pending order have to name the same thing the same way."""
+def test_a_holding_and_a_pending_order_name_the_same_thing_alike():
+    """The poll spells both `stock_code`, so nothing has to be converted."""
     state = apply_pending(account(pending_orders=[order(stock_code="005930", amount=1)]))
 
     assert state.held == {"005930": 101}
@@ -194,13 +196,13 @@ def test_an_account_never_carries_a_siblings_numbers():
     first = account(
         account_id=11,
         cash_balance=1_000.0,
-        stocks=[{"stock_id": "005930", "total_price": 1, "amount": 1}],
+        stocks=[{"stock_code": "005930", "total_price": 1, "amount": 1}],
         pending_orders=[],
     )
     second = account(
         account_id=12,
         cash_balance=2_000.0,
-        stocks=[{"stock_id": "000660", "total_price": 2, "amount": 2}],
+        stocks=[{"stock_code": "000660", "total_price": 2, "amount": 2}],
         pending_orders=[order(stock_code="000660", price=100.0, amount=1)],
     )
 
@@ -239,8 +241,8 @@ def test_a_reservation_is_one_order_so_nothing_is_double_counted():
 def test_the_polled_price_is_what_the_backend_quotes():
     """The trigger is compared with the Backend's own number, not QuestDB's last close."""
     held = [
-        {"stock_id": "005930", "total_price": 1, "amount": 10, "current_price": 79_500.0},
-        {"stock_id": "000660", "total_price": 1, "amount": 2, "current_price": 410_000.0},
+        {"stock_code": "005930", "total_price": 1, "amount": 10, "current_price": 79_500.0},
+        {"stock_code": "000660", "total_price": 1, "amount": 2, "current_price": 410_000.0},
     ]
 
     assert polled_prices(account(stocks=held)) == {"005930": 79_500.0, "000660": 410_000.0}
@@ -249,7 +251,7 @@ def test_the_polled_price_is_what_the_backend_quotes():
 def test_a_holding_without_a_quote_is_left_out():
     """The caller falls back rather than treating a missing quote as zero, which would
     fire every sell trigger at once."""
-    held = [{"stock_id": "005930", "total_price": 1, "amount": 10}]
+    held = [{"stock_code": "005930", "total_price": 1, "amount": 10}]
 
     assert polled_prices(account(stocks=held)) == {}
 

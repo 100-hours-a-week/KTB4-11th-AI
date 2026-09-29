@@ -23,7 +23,7 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
 
     cash = float(account["cash_balance"])  # type: ignore[arg-type]
     held = {
-        str(holding["stock_id"]): int(holding["amount"])
+        str(holding["stock_code"]): int(holding["amount"])
         for holding in account.get("stocks") or ()  # type: ignore[union-attr]
     }
     # One order per reservation: the near side is a trigger this service watches, not an
@@ -45,12 +45,11 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
 def polled_prices(account: Mapping[str, object]) -> dict[str, float]:
     """What each held stock is worth right now, as the poll reports it.
 
-    `stocks[].current_price` is the Backend's own quote, so the trigger is compared with
-    the same number the Backend is trading on rather than with QuestDB's last close.
-    A stock the account does not hold yet has no entry, and the caller falls back.
+    `stocks[].current_price` is the Backend's own quote and the only price this service
+    sees. A stock the account does not hold yet has no entry and therefore no price.
     """
     return {
-        str(holding["stock_id"]): float(holding["current_price"])  # type: ignore[arg-type]
+        str(holding["stock_code"]): float(holding["current_price"])  # type: ignore[arg-type]
         for holding in account.get("stocks") or ()  # type: ignore[union-attr]
         if holding.get("current_price") is not None
     }

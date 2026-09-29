@@ -87,7 +87,6 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_ANALYZER_MCP_HOST` | market-analyzer-mcp | `0.0.0.0` |
 | `MARKET_ANALYZER_MCP_PORT` | market-analyzer-mcp | `8000` |
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |
-| `PORTFOLIO_REBALANCER_QUESTDB_CONF` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | portfolio-rebalancer (HS256 secret shared with the Backend) | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT` | portfolio-rebalancer | `portfolio-rebalancer` |
@@ -112,7 +111,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. portfolio-rebalancer has no inbound surface and nothing calls it: it reads the model portfolio from PostgreSQL and prices from QuestDB, and its only outbound calls are to the Backend (design: `docs/superpowers/specs/2026-09-28-portfolio-rebalancer-design.md`). market-analyzer-mcp is never published outside the Docker network, so its DNS-rebinding protection is off.
+- **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. portfolio-rebalancer has no inbound surface and nothing calls it: it reads the model portfolio from PostgreSQL, takes every price from the Backend's own poll, and its only outbound calls are to the Backend (design: `docs/superpowers/specs/2026-09-28-portfolio-rebalancer-design.md`). market-analyzer-mcp is never published outside the Docker network, so its DNS-rebinding protection is off.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot.
 - **Work queue:** SQS in production, Redis in development. portfolio-builder is its only consumer.

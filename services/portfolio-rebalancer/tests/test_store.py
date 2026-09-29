@@ -28,7 +28,7 @@ def poll(**changes):
         "is_duel_account": False,
         "is_active": True,
         "cash_balance": 1234.00,
-        "stocks": [{"stock_id": "005930", "total_price": 12341234, "amount": 123}],
+        "stocks": [{"stock_code": "005930", "total_price": 12341234, "amount": 123}],
         "pending_orders": [
             {
                 "order_type": "buy",
@@ -99,7 +99,7 @@ def test_a_second_poll_replaces_holdings_rather_than_adding_to_them(conn):
     """A stock sold since the last poll has to disappear, not linger."""
     save_poll(conn, poll())
     later = poll()
-    later[0]["accounts"][0]["stocks"] = [{"stock_id": "000660", "total_price": 1, "amount": 2}]
+    later[0]["accounts"][0]["stocks"] = [{"stock_code": "000660", "total_price": 1, "amount": 2}]
 
     save_poll(conn, later)
 
@@ -130,7 +130,7 @@ def test_several_accounts_of_one_user_each_keep_their_own_rows(conn):
     two = poll()
     second = dict(two[0]["accounts"][0])
     second["account_id"] = 12
-    second["stocks"] = [{"stock_id": "035420", "total_price": 5, "amount": 5}]
+    second["stocks"] = [{"stock_code": "035420", "total_price": 5, "amount": 5}]
     two[0]["accounts"] = [two[0]["accounts"][0], second]
 
     save_poll(conn, two)

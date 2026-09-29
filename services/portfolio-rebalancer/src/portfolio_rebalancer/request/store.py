@@ -251,7 +251,7 @@ def _save_account(conn: Any, user_id: int, account: Mapping[str, object]) -> Non
     holdings = [
         {
             "account_id": account_id,
-            "stock_code": str(holding["stock_id"]),
+            "stock_code": str(holding["stock_code"]),
             "quantity": holding["amount"],
             "principal": holding["total_price"],
         }

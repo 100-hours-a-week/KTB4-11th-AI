@@ -4,6 +4,10 @@ Every account is handled on its own. An account with nothing recorded against th
 portfolio gets a fresh rebalance; one that already has orders out gets its outstanding
 pairs advanced a rung.
 
+Every price comes from the poll: `stocks[].current_price` is what the Backend is trading
+on, and it is the only quote this service sees. A stock the account does not hold has no
+price, so nothing can be sized for it and it is skipped with a note.
+
 Orders are committed before they are sent, in their own transaction. Holding the
 transaction open across the send would undo the point of recording first: a failed send
 would roll the record back, and if the request had already reached the Backend there would
@@ -25,7 +29,6 @@ from portfolio_rebalancer.decide.rebalance import rebalance
 from portfolio_rebalancer.decide.reservations import outstanding_orders, trigger_hit
 from portfolio_rebalancer.decide.trading_days import days_left
 from portfolio_rebalancer.request.backend import fetch_accounts, send_orders
-from portfolio_rebalancer.request.prices import latest_prices
 from portfolio_rebalancer.request.store import (
     amend_orders,
     discard_unsent,
@@ -50,7 +53,7 @@ def market_now() -> datetime:
     return datetime.now(KST)
 
 
-def tick(engine: Any, db: Any, client: Any, token: str, now: datetime | None = None) -> int:
+def tick(engine: Any, client: Any, token: str, now: datetime | None = None) -> int:
     """Returns the number of orders sent to the Backend."""
     now = now or market_now()
 
@@ -66,13 +69,13 @@ def tick(engine: Any, db: Any, client: Any, token: str, now: datetime | None = N
 
     sent = 0
     for account in managed_accounts(polled):
-        sent += _account(engine, db, client, token, portfolio, account, now)
+        sent += _account(engine, client, token, portfolio, account, now)
     return sent
 
 
-def _account(engine, db, client, token, portfolio, account, now) -> int:
+def _account(engine, client, token, portfolio, account, now) -> int:
     state = apply_pending(account)
-    quoted = polled_prices(account)
+    prices = polled_prices(account)
     working = outstanding_orders(account.get("pending_orders") or ())
 
     with engine.begin() as conn:
@@ -82,11 +85,11 @@ def _account(engine, db, client, token, portfolio, account, now) -> int:
         recorded = _settle_unsent(engine, portfolio, state, recorded, working)
 
     if not recorded:
-        return _open(engine, db, client, token, portfolio, state, now)
+        return _open(engine, client, token, portfolio, state, prices, now)
 
     started = min(row["created_at"] for row in recorded).astimezone(KST).date()
     return _continue(
-        engine, db, client, token, portfolio, state, working, recorded, started, now, quoted
+        engine, client, token, portfolio, state, working, recorded, started, now, prices
     )
 
 
@@ -109,12 +112,11 @@ def _settle_unsent(engine, portfolio, state, recorded, working) -> Sequence[Mapp
         return stored_orders(conn, portfolio.portfolio_id, state.account_id)
 
 
-def _open(engine, db, client, token, portfolio, state, now) -> int:
+def _open(engine, client, token, portfolio, state, prices, now) -> int:
     """First pass for this portfolio and account: the cycle's whole budget is ahead.
 
     That budget is the trading days left in this week, so a Chuseok week gives fewer.
     """
-    prices = _prices(db, portfolio, state)
     plan = rebalance(portfolio, state, prices, days_left=days_left(now.date(), now))
     if not plan:
         return 0
@@ -126,7 +128,7 @@ def _open(engine, db, client, token, portfolio, state, now) -> int:
     return _send(engine, client, token, portfolio, state, [o for o in plan if o.action != SKIP])
 
 
-def _continue(engine, db, client, token, portfolio, state, working, recorded, started, now, quoted):
+def _continue(engine, client, token, portfolio, state, working, recorded, started, now, prices):
     """Keep an open cycle moving: fund what the sells have freed, then re-quote the rest.
 
     Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
@@ -134,7 +136,6 @@ def _continue(engine, db, client, token, portfolio, state, working, recorded, st
     band is left alone, which is what makes the hourly poll idempotent within a day.
     """
     left = days_left(started, now)
-    prices = _prices(db, portfolio, state)
     plan = rebalance(portfolio, state, prices, days_left=left)
     references = {
         row["stock_code"]: float(row["reference_price"])
@@ -157,9 +158,7 @@ def _continue(engine, db, client, token, portfolio, state, working, recorded, st
 
     # A working order whose trigger the market has reached stops waiting: crossing it is
     # the signal that the limit is not going to fill on the terms it was placed on.
-    # The Backend's own quote decides the trigger; QuestDB's last close only fills in for
-    # a stock the account does not hold yet, which has no quote in the poll.
-    struck = _struck(portfolio, state, working, references, recorded, prices | quoted)
+    struck = _struck(portfolio, state, working, references, recorded, prices)
     requote = narrow(portfolio, state, _without(working, struck), references, started, now)
 
     sent = 0
@@ -173,13 +172,6 @@ def _continue(engine, db, client, token, portfolio, state, working, recorded, st
             amend_orders(conn, portfolio.portfolio_id, moved)
         sent += _send(engine, client, token, portfolio, state, moved)
     return sent
-
-
-def _prices(db, portfolio, state) -> dict[str, float]:
-    codes = {name.stock_code for name in portfolio.holdings}
-    codes |= {leaving.stock_code for leaving in portfolio.exits}
-    codes |= set(state.held)
-    return {code: price.close for code, price in latest_prices(db, sorted(codes)).items()}
 
 
 def _struck(portfolio, state, working, references, recorded, prices) -> list:
