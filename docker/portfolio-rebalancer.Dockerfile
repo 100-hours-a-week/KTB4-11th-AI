@@ -7,13 +7,13 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 RUN uv venv "$VIRTUAL_ENV"
 
-COPY docker/requirements/portfolio-rebalancer-http.txt ./requirements.txt
+COPY docker/requirements/portfolio-rebalancer.txt ./requirements.txt
 RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
 COPY packages/core packages/core
-COPY services/portfolio-rebalancer-http services/portfolio-rebalancer-http
-RUN uv pip install --no-deps ./packages/core ./services/portfolio-rebalancer-http
+COPY services/portfolio-rebalancer services/portfolio-rebalancer
+RUN uv pip install --no-deps ./packages/core ./services/portfolio-rebalancer
 
 FROM python:3.13-slim-bookworm AS runtime
 
@@ -24,5 +24,4 @@ COPY --from=builder --chown=app:app /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER app
-EXPOSE 8000
-CMD ["portfolio-rebalancer-http"]
+CMD ["portfolio-rebalancer"]

@@ -3,9 +3,9 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from portfolio_rebalancer_http.accounts import AccountState
-from portfolio_rebalancer_http.allocate import Target, allocate
-from portfolio_rebalancer_http.reservations import PRICE_BANDS, reservation_prices
+from portfolio_rebalancer.accounts import AccountState
+from portfolio_rebalancer.allocate import Target, allocate
+from portfolio_rebalancer.reservations import PRICE_BANDS, reservation_prices
 
 __all__ = ["Exit", "Holding", "Order", "Portfolio", "rebalance"]
 

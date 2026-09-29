@@ -1,20 +1,17 @@
 [project]
-name = "portfolio-rebalancer-http"
+name = "portfolio-rebalancer"
 version = "0.1.0"
-description = "HTTP service turning model portfolios into buy and sell requests"
+description = "Turns model portfolios into buy and sell requests on the Backend"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
-    "fastapi>=0.141",
     "httpx>=0.28",
-    "pydantic>=2.9",
     "pydantic-settings>=2.7",
     "questdb[dataframe]>=5.0",
-    "uvicorn>=0.54",
 ]
 
 [project.scripts]
-portfolio-rebalancer-http = "portfolio_rebalancer_http.__main__:main"
+portfolio-rebalancer = "portfolio_rebalancer.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }

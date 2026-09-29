@@ -102,7 +102,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer news-graph-builder portfolio-builder market-collector market-analyzer-mcp portfolio-rebalancer-http; do
+          for pkg in news-preprocessor news-clusterer news-graph-builder portfolio-builder market-collector market-analyzer-mcp portfolio-rebalancer; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done
@@ -122,7 +122,7 @@ jobs:
           - portfolio-builder
           - market-collector
           - market-analyzer-mcp
-          - portfolio-rebalancer-http
+          - portfolio-rebalancer
 
     steps:
       - uses: actions/checkout@v7

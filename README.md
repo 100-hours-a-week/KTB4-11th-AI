@@ -7,7 +7,7 @@
 - `portfolio-builder`: 뉴스 데이터를 바탕으로 포트폴리오 생성
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
 - `market-analyzer-mcp`: 시장 분석 도구를 제공하는 MCP 서버 (Docker 네트워크 내부 전용)
-- `portfolio-rebalancer-http`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 HTTP 서버
+- `portfolio-rebalancer`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 주기 실행 작업
 
 ## 데이터베이스 (ERD)
 
@@ -191,12 +191,11 @@ erDiagram
 | `MARKET_ANALYZER_MCP_HOST` | | `0.0.0.0` |
 | `MARKET_ANALYZER_MCP_PORT` | | `8000` |
 
-### portfolio-rebalancer-http (`PORTFOLIO_REBALANCER_HTTP_`)
+### portfolio-rebalancer (`PORTFOLIO_REBALANCER_`)
 
 | 변수 | 필수 | 기본값 |
 |---|---|---|
-| `PORTFOLIO_REBALANCER_HTTP_QUESTDB_CONF` | 필수 | |
-| `PORTFOLIO_REBALANCER_HTTP_BACKEND_URL` | 필수 | |
-| `PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL` | | `INFO` |
-| `PORTFOLIO_REBALANCER_HTTP_HOST` | | `0.0.0.0` |
-| `PORTFOLIO_REBALANCER_HTTP_PORT` | | `8000` |
+| `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | |
+| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | |
+| `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` |
+| `PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS` | | `3600` (compose 전용) |

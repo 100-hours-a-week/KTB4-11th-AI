@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import httpx
 import pytest
-from portfolio_rebalancer_http.backend import (
+from portfolio_rebalancer.backend import (
     acquire_token,
     build_client,
     fetch_accounts,

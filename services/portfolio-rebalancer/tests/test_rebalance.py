@@ -1,6 +1,6 @@
-from portfolio_rebalancer_http.accounts import AccountState
-from portfolio_rebalancer_http.rebalance import Exit, Holding, Portfolio, rebalance
-from portfolio_rebalancer_http.reservations import PRICE_BANDS
+from portfolio_rebalancer.accounts import AccountState
+from portfolio_rebalancer.rebalance import Exit, Holding, Portfolio, rebalance
+from portfolio_rebalancer.reservations import PRICE_BANDS
 
 SAMSUNG = ("00126380", "005930")
 HYNIX = ("00164779", "000660")

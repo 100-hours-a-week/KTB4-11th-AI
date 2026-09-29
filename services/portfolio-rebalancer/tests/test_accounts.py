@@ -1,5 +1,5 @@
 import pytest
-from portfolio_rebalancer_http.accounts import apply_pending, managed_accounts
+from portfolio_rebalancer.accounts import apply_pending, managed_accounts
 
 
 def account(**changes):

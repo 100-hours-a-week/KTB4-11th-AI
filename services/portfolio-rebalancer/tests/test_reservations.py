@@ -1,5 +1,5 @@
 import pytest
-from portfolio_rebalancer_http.reservations import (
+from portfolio_rebalancer.reservations import (
     PRICE_BANDS,
     read_reservation,
     reservation_prices,

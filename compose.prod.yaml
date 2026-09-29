@@ -119,27 +119,51 @@ services:
       retries: 5
       start_period: 10s
 
-  portfolio-rebalancer-http:
+  portfolio-rebalancer:
     <<: *app
-    command: ["portfolio-rebalancer-http"]
+    profiles: ["jobs"]
+    # 한 번의 tick이 폴링·판단·주문을 끝내고 종료하므로 같은 컨테이너에서 반복 실행합니다.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        stop() {
+          if [ -n "$${child:-}" ]; then
+            kill -TERM "$$child" 2>/dev/null || true
+            wait "$$child" 2>/dev/null || true
+          fi
+          exit 0
+        }
+
+        trap stop TERM INT
+
+        while true; do
+          portfolio-rebalancer &
+          child=$$!
+          wait "$$child"
+          status=$$?
+          child=
+
+          if [ "$$status" -ne 0 ]; then
+            exit "$$status"
+          fi
+
+          sleep "$${PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS:-3600}" &
+          child=$$!
+          wait "$$child"
+          child=
+        done
     mem_limit: 384m
-    restart: unless-stopped
+    restart: on-failure
+    stop_grace_period: 2m
     environment:
-      PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL: ${PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL:-INFO}
-      PORTFOLIO_REBALANCER_HTTP_QUESTDB_CONF: ws::addr=questdb:9000;
-      PORTFOLIO_REBALANCER_HTTP_BACKEND_URL: ${PORTFOLIO_REBALANCER_HTTP_BACKEND_URL}
-    ports:
-      - "${PUBLIC_HTTP_PORT:-8000}:8000"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL}
+      PORTFOLIO_REBALANCER_LOG_LEVEL: ${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
+      PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS: ${PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS:-3600}
+    depends_on:
+      questdb:
+        condition: service_healthy
 
   news-preprocessor:
     <<: *app

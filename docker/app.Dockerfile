@@ -22,7 +22,7 @@ RUN uv pip install --no-deps \
     ./services/news-graph-builder \
     ./services/news-preprocessor \
     ./services/portfolio-builder \
-    ./services/portfolio-rebalancer-http
+    ./services/portfolio-rebalancer
 
 FROM python:3.13-slim-bookworm AS runtime
 
@@ -36,4 +36,4 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 USER app
 EXPOSE 8000
-CMD ["portfolio-rebalancer-http"]
+CMD ["portfolio-rebalancer"]
