@@ -7,7 +7,10 @@ __all__ = [
     "PRICE_BANDS",
     "TICK_SIZES",
     "Pair",
+    "band_for",
+    "days_left_of",
     "on_tick",
+    "prices_for",
     "find_pairs",
     "next_rung",
     "read_reservation",
@@ -27,6 +30,10 @@ TICK_SIZES: tuple[tuple[float, int], ...] = (
     (500_000, 500),
 )
 TOP_TICK = 1_000
+# How far a pair's ratio may sit from its band and still be recognised. Tick rounding
+# moves it by at most 0.0006, so this is eight times the margin it needs -- and far
+# tighter than any two unrelated orders on the same stock would land.
+BAND_TOLERANCE = 0.005
 
 
 @dataclass(frozen=True)
@@ -106,16 +113,27 @@ def find_pairs(
         )
 
     # Both sides go out with the full quantity, so the smaller outstanding amount is what
-    # a partial fill left behind: that is what still has to be filled.
-    return {
-        key: Pair(
-            low=min(price for price, _ in side),
-            high=max(price for price, _ in side),
-            quantity=min(quantity for _, quantity in side),
-        )
-        for key, side in sides.items()
-        if len(side) == 2
-    }
+    # a partial fill left behind: that is what still has to be filled. Quantities cannot
+    # be required to match for the same reason, so what identifies a pair is that its two
+    # prices sit either side of a reference at one of the bands.
+    found = {}
+    for key, side in sides.items():
+        if len(side) != 2:
+            continue
+        low = min(price for price, _ in side)
+        high = max(price for price, _ in side)
+        if not _matches_a_band(low, high):
+            continue
+        found[key] = Pair(low=low, high=high, quantity=min(quantity for _, quantity in side))
+    return found
+
+
+def _matches_a_band(low: float, high: float) -> bool:
+    """Whether two prices could be one reservation rather than two unrelated orders."""
+    if low <= 0 or high <= low:
+        return False
+    ratio = (high - low) / (high + low)
+    return min(abs(ratio - band) for band in PRICE_BANDS) <= BAND_TOLERANCE
 
 
 def next_rung(low: float, high: float) -> tuple[float, float] | None:
@@ -126,3 +144,36 @@ def next_rung(low: float, high: float) -> tuple[float, float] | None:
     """
     reference, day = read_reservation(low, high)
     return reservation_prices(reference, day + 1)
+
+
+def _day_index(days_left: int) -> int:
+    """Which band a given number of days left corresponds to.
+
+    Selling and buying share one deadline, so the band comes from what is left rather
+    than from what has been spent: an order that starts late starts narrow instead of
+    restarting the ladder.
+    """
+    return max(len(PRICE_BANDS) - days_left, 0)
+
+
+def band_for(days_left: int) -> float | None:
+    """The band to quote with this many trading days left, or None to go to market."""
+    if days_left <= 0:
+        return None
+    return PRICE_BANDS[_day_index(days_left)]
+
+
+def prices_for(reference: float, days_left: int) -> tuple[float, float] | None:
+    """The pair to place with this many trading days left, or None to go to market."""
+    if days_left <= 0:
+        return None
+    return reservation_prices(reference, _day_index(days_left))
+
+
+def days_left_of(low: float, high: float) -> int:
+    """How many trading days an outstanding pair still has.
+
+    Read back out of the pair, so the deadline never has to be stored.
+    """
+    _, day = read_reservation(low, high)
+    return len(PRICE_BANDS) - day

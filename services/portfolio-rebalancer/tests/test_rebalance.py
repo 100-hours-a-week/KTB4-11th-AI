@@ -42,27 +42,48 @@ def test_an_exit_is_sold_in_full():
     assert actions(orders) == [("sell", "000660", 7)]
 
 
-def test_sells_come_before_the_buys_they_fund():
-    """The proceeds are part of the cash the buys spend, so the order matters on the wire."""
+def test_only_the_sell_goes_out_while_there_is_no_cash():
+    """The proceeds are not money until the sell fills, so placing the buy now would put
+    an order on the market with nothing behind it."""
     orders = rebalance(
         portfolio(holdings=[holding(SAMSUNG, 1.0)], exits=[exited(HYNIX)]),
         account(cash=0.0, held={"000660": 10}),
+        {"000660": 412_000.0, "005930": 78_000.0},
+    )
+
+    assert [order.action for order in orders] == ["sell"]
+
+
+def test_sells_come_before_the_buys_on_the_wire():
+    orders = rebalance(
+        portfolio(holdings=[holding(SAMSUNG, 1.0)], exits=[exited(HYNIX)]),
+        account(cash=4_120_000.0, held={"000660": 10}),
         {"000660": 412_000.0, "005930": 78_000.0},
     )
 
     assert [order.action for order in orders] == ["sell", "buy"]
 
 
-def test_an_exit_funds_a_buy_that_cash_alone_could_not():
-    """With no cash, the buy exists only because the sell came first."""
-    orders = rebalance(
-        portfolio(holdings=[holding(SAMSUNG, 1.0)], exits=[exited(HYNIX)]),
-        account(cash=0.0, held={"000660": 10}),
-        {"000660": 412_000.0, "005930": 78_000.0},
-    )
+def test_a_part_filled_sell_funds_a_part_of_the_buy():
+    """Three of ten shares sold is 1,236,000 of cash, so the buy is the shares that buys
+    -- not the whole target, and not nothing."""
+    plan = portfolio(holdings=[holding(SAMSUNG, 1.0)], exits=[exited(HYNIX)])
+    prices = {"000660": 412_000.0, "005930": 78_000.0}
+
+    orders = rebalance(plan, account(cash=1_236_000.0, held={"000660": 7}), prices)
 
     buy = next(order for order in orders if order.action == "buy")
-    assert buy.shares == 4_120_000 // 78_000
+    assert 0 < buy.shares * buy.high <= 1_236_000.0
+
+
+def test_a_buy_is_never_costed_below_the_side_that_would_be_paid():
+    """Only one side of a pair fills, and the high side is the one that costs money."""
+    plan = portfolio(holdings=[holding(SAMSUNG, 1.0)])
+
+    orders = rebalance(plan, account(cash=1_000_000.0), {"005930": 78_000.0})
+
+    buy = orders[0]
+    assert buy.shares * buy.high <= 1_000_000.0
 
 
 def test_holding_more_than_the_target_sells_the_difference():
@@ -132,10 +153,10 @@ def test_an_order_goes_out_as_the_widest_pair():
 
 
 def test_both_sides_of_the_pair_carry_the_full_quantity():
-    """100 shares means 100 at the low and 100 at the high, not 50 each."""
+    """One quantity, quoted twice -- not split across the two sides."""
     orders = rebalance(
         portfolio(holdings=[holding(SAMSUNG, 1.0)]),
-        account(cash=7_800_000.0),
+        account(cash=8_190_000.0),
         {"005930": 78_000.0},
     )
 
@@ -199,7 +220,7 @@ def test_a_held_name_counts_towards_the_target_rather_than_being_bought_again():
     the target means buying only the other half."""
     orders = rebalance(
         portfolio(holdings=[holding(SAMSUNG, 1.0)]),
-        account(cash=3_900_000.0, held={"005930": 50}),
+        account(cash=4_095_000.0, held={"005930": 50}),
         {"005930": 78_000.0},
     )
 

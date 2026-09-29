@@ -17,7 +17,10 @@ read on its own.
 | Transaction | one per tick | the order is committed before it is sent | a failed send was rolling the record back |
 | QuestDB | `bars_1m` over psycopg | `bars` with a `timeframe` column, official `questdb` client | `dev` collapsed the four tables into one |
 | Migration | `0006` after `#42`'s `0005` | `0006` after `#54`'s `0005` | `#42` was closed and replaced by `#54` |
-| `rebalance()` | `(portfolio, previous, account, prices)` | `(portfolio, account, prices)` | exits belong to the portfolio already |
+| `rebalance()` | `(portfolio, previous, account, prices)` | `(portfolio, account, prices, days_left)` | exits belong to the portfolio; the band comes from the deadline |
+| Ladder budget | three days each for selling and buying | **three trading days for both together** | a buy funded by a sell cannot start its own three days |
+| Band | from days elapsed | from days **left** | an order that starts late starts narrow rather than restarting |
+| Buys | sized against the sells' expected proceeds | sized against **cash that exists** | the proceeds are not money until the sells fill |
 
 ## Purpose
 
@@ -196,14 +199,20 @@ reference 78,000, step ± 5%   →   74,100 × 100 shares   and   81,900 × 100 
 Whichever fills, fills, and **the Backend cancels the other**. The low side alone risks never
 filling; the high side is what makes the fill happen.
 
-The band narrows once per trading day, and the third day ends in a market order rather than a
-fourth band, so **every order fills within three trading days**:
+**Selling and buying share one three-day budget.** The band comes from the trading days that
+remain, not from the days an order has been alive, so a buy placed after two days of selling
+starts on the 1% band and goes to market with everyone else rather than starting a fresh ladder.
+Two days spent selling leaves one for buying.
 
-| day | band | 78,000 reference |
+| days left | band | 78,000 reference |
 |---|---|---|
-| 1 | reference ± 5% | 74,100 / 81,900 |
+| 3 | reference ± 5% | 74,100 / 81,900 |
 | 2 | reference ± 3% | 75,700 / 80,300 |
-| 3 | reference ± 1%, then market if that does not fill | 77,200 / 78,800 |
+| 1 | reference ± 1% | 77,200 / 78,800 |
+| 0 | **market** | — |
+
+The deadline is read out of the record, not stored: the earliest `created_at` for this
+portfolio and account is when the cycle began. Weekends consume none of it.
 
 The market rung is what guarantees the fill; narrowing does not. A ± 1% band is *harder* to
 reach than ± 5%, so a price that has walked away from the reference is less likely to come back
@@ -256,8 +265,16 @@ every time and the reference within 0.2%. In **37,847** of those the low falls i
 and the high in the next, so the two are rounded by different amounts — the case most likely to
 break it, and it holds.
 
-Two pending orders for the same company and side are one pair. A lone order means the other side
-already filled; three is a state this service did not create. Neither is narrowed, because a rung
+Two pending orders for the same company and side are one pair **when their prices sit either
+side of a reference at one of the bands** — quantities cannot be the test, because a partial fill
+makes them differ. Two unrelated orders 33% apart are simply two orders. Measured over 656,826
+pairs: every real one is still recognised at a tolerance eight times what tick rounding needs.
+
+A reservation therefore counts **once** when pending orders are folded into cash and holdings,
+even though the poll reports it as two rows. Counting both committed twice the cash and twice
+the shares, which showed up as buying far less than the account could afford.
+
+A lone order means the other side already filled; three is a state this service did not create. Neither is narrowed, because a rung
 placed against a position that has moved is worse than leaving it. A pair carries the **smaller**
 of the two outstanding quantities, which is what a partial fill left to buy.
 
@@ -283,6 +300,17 @@ flowchart TD
   k -->|no| i
   k -->|yes| l[narrow one rung, as an amendment]
 ```
+
+**Buys are limited to cash that exists.** The targets are computed against the whole portfolio
+including what the exits are worth, but their proceeds are not money until the sells fill. So
+the first pass with no cash places only the sells; a pass that finds the sells part filled buys
+what that cash covers, largest weight first, costed at the high side because that is the side
+that would be paid. A sell that only fills at the deadline leaves the buy no days, and the buy
+goes straight to market.
+
+**An order already on the market keeps the quantity it was placed with.** Only its band moves.
+Re-deriving its quantity every pass would size it against cash the order itself has committed,
+and the quantity would wobble between passes instead of settling.
 
 The allocation rules apply to the buy side only. A sell is always possible, so a target weight
 that cannot be reached by buying does not block the sells that fund it. A name too dear to buy,

@@ -16,9 +16,9 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
-from portfolio_rebalancer.decide.outstanding import narrow, reached_the_backend
+from portfolio_rebalancer.decide.outstanding import days_left, narrow, reached_the_backend
 from portfolio_rebalancer.decide.rebalance import rebalance
-from portfolio_rebalancer.decide.reservations import find_pairs
+from portfolio_rebalancer.decide.reservations import PRICE_BANDS, find_pairs
 from portfolio_rebalancer.request.backend import fetch_accounts, send_orders
 from portfolio_rebalancer.request.prices import latest_prices
 from portfolio_rebalancer.request.store import (
@@ -34,6 +34,7 @@ from portfolio_rebalancer.request.store import (
 __all__ = ["market_today", "tick"]
 
 SKIP = "skip"
+LADDER_DAYS = len(PRICE_BANDS)
 # KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
 
@@ -75,9 +76,11 @@ def _account(engine, db, client, token, portfolio, account, today) -> int:
     if any(row["sent_at"] is None for row in recorded):
         recorded = _settle_unsent(engine, portfolio, state, recorded, pairs)
 
-    if recorded:
-        return _advance(engine, client, token, portfolio, state, pairs, recorded, today)
-    return _open(engine, db, client, token, portfolio, state)
+    if not recorded:
+        return _open(engine, db, client, token, portfolio, state, today)
+
+    started = min(row["created_at"] for row in recorded).astimezone(KST).date()
+    return _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, today)
 
 
 def _settle_unsent(engine, portfolio, state, recorded, pairs) -> Sequence[Mapping[str, Any]]:
@@ -99,40 +102,68 @@ def _settle_unsent(engine, portfolio, state, recorded, pairs) -> Sequence[Mappin
         return stored_orders(conn, portfolio.portfolio_id, state.account_id)
 
 
-def _open(engine, db, client, token, portfolio, state) -> int:
-    """First rebalance for this portfolio and account."""
-    codes = {name.stock_code for name in portfolio.holdings}
-    codes |= {leaving.stock_code for leaving in portfolio.exits}
-    codes |= set(state.held)
-    prices = {code: price.close for code, price in latest_prices(db, sorted(codes)).items()}
-
-    orders = rebalance(portfolio, state, prices)
-    if not orders:
+def _open(engine, db, client, token, portfolio, state, today) -> int:
+    """First pass for this portfolio and account: the whole ladder is still ahead."""
+    plan = _plan(db, portfolio, state, LADDER_DAYS)
+    if not plan:
         return 0
 
     # Skips are recorded because "we could not buy this" is part of the decision, but
     # there is nothing to place for them.
     with engine.begin() as conn:
-        record_orders(conn, portfolio.portfolio_id, orders)
-    placeable = [order for order in orders if order.action != SKIP]
-    send_orders(client, token, placeable)
-    with engine.begin() as conn:
-        mark_sent(conn, portfolio.portfolio_id, state.account_id)
-    return len(placeable)
+        record_orders(conn, portfolio.portfolio_id, plan)
+    return _send(engine, client, token, portfolio, state, [o for o in plan if o.action != SKIP])
 
 
-def _advance(engine, client, token, portfolio, state, pairs, recorded, today) -> int:
-    """Move outstanding pairs to their next rung, if a trading day has passed."""
-    if not pairs:
-        return 0
+def _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, today):
+    """Keep an open cycle moving: fund what the sells have freed, then re-quote the rest.
 
-    last_sent = {row["stock_code"]: row["sent_at"] for row in recorded}
-    orders = narrow(portfolio, state, pairs, last_sent, today)
+    Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
+    brought in line with it. A stock the plan has already placed at the right quantity and
+    band is left alone, which is what makes the hourly poll idempotent within a day.
+    """
+    left = days_left(started, today)
+    plan = _plan(db, portfolio, state, left)
+    outstanding = {code: pair for (code, _), pair in pairs.items()}
+    known = {row["stock_code"] for row in recorded}
+
+    # An order already on the market keeps the quantity it was placed with; only its band
+    # moves, which `narrow` does. Re-deriving its quantity every pass would size it
+    # against cash the order itself has committed, and it would wobble instead of settle.
+    place, amend = [], []
+    for order in (o for o in plan if o.action != SKIP):
+        if order.stock_code in outstanding:
+            continue
+        # Nothing is on the market for this stock, and the plan still asks for it: either
+        # it was never placed, or it left the book without filling.
+        (place if order.stock_code not in known else amend).append(order)
+
+    requote = narrow(portfolio, state, pairs, started, today)
+
+    sent = 0
+    if place:
+        with engine.begin() as conn:
+            record_orders(conn, portfolio.portfolio_id, place)
+        sent += _send(engine, client, token, portfolio, state, place)
+    if amend or requote:
+        with engine.begin() as conn:
+            amend_orders(conn, portfolio.portfolio_id, [*amend, *requote])
+        sent += _send(engine, client, token, portfolio, state, [*amend, *requote])
+    return sent
+
+
+def _plan(db, portfolio, state, left: int):
+    codes = {name.stock_code for name in portfolio.holdings}
+    codes |= {leaving.stock_code for leaving in portfolio.exits}
+    codes |= set(state.held)
+    prices = {code: price.close for code, price in latest_prices(db, sorted(codes)).items()}
+    return rebalance(portfolio, state, prices, days_left=left)
+
+
+def _send(engine, client, token, portfolio, state, orders) -> int:
+    """Send, then stamp. Recording already happened, so a crash here leaves a record."""
     if not orders:
         return 0
-
-    with engine.begin() as conn:
-        amend_orders(conn, portfolio.portfolio_id, orders)
     send_orders(client, token, orders)
     with engine.begin() as conn:
         mark_sent(conn, portfolio.portfolio_id, state.account_id)

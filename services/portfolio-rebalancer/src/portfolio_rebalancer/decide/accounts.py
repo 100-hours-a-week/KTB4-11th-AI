@@ -3,6 +3,8 @@
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 
+from portfolio_rebalancer.decide.reservations import find_pairs
+
 __all__ = ["AccountState", "apply_pending", "managed_accounts"]
 
 PENDING = "pending"
@@ -26,11 +28,25 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
         str(holding["stock_id"]): int(holding["amount"])
         for holding in account.get("stocks") or ()  # type: ignore[union-attr]
     }
+    pending = list(account.get("pending_orders") or ())  # type: ignore[arg-type]
 
-    for order in account.get("pending_orders") or ():  # type: ignore[union-attr]
+    # A reservation shows up as two pending orders, both for the full quantity, and only
+    # one of them can fill. Counting both would commit twice the cash and twice the
+    # shares, which shows up as buying far less than the account can afford.
+    pairs = find_pairs(pending)
+    for (code, side), pair in pairs.items():
+        if side == BUY:
+            cash -= pair.high * pair.quantity
+            held[code] = held.get(code, 0) + pair.quantity
+        elif side == SELL:
+            held[code] = max(held.get(code, 0) - pair.quantity, 0)
+
+    for order in pending:
         if order.get("status") != PENDING:
             continue
         code = str(order["stock_code"])
+        if (code, str(order["order_type"])) in pairs:
+            continue
         quantity = int(order["amount"])
         if order.get("order_type") == BUY:
             cash -= float(order["price"]) * quantity

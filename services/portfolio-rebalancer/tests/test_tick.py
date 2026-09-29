@@ -3,10 +3,9 @@ elsewhere, so these fakes stand in for the datastores and the Backend."""
 
 from datetime import UTC, date, datetime
 
-import pytest
 from portfolio_rebalancer import tick as tick_module
 from portfolio_rebalancer.decide.reservations import PRICE_BANDS, reservation_prices
-from portfolio_rebalancer.portfolio import Holding, Portfolio
+from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 from portfolio_rebalancer.request.prices import Price
 from portfolio_rebalancer.tick import market_today, tick
 
@@ -42,6 +41,16 @@ def account(account_id=11, cash=10_000_000.0, stocks=(), pending_orders=()):
         "cash_balance": cash,
         "stocks": list(stocks),
         "pending_orders": list(pending_orders),
+    }
+
+
+def recorded_row(stock_code, sent_at=None, created=MONDAY):
+    """A rebalance_orders row as stored_orders returns it. created_at is what the cycle
+    start -- and so the remaining days -- is derived from."""
+    return {
+        "stock_code": stock_code,
+        "sent_at": sent_at,
+        "created_at": datetime(created.year, created.month, created.day, 1, tzinfo=UTC),
     }
 
 
@@ -213,12 +222,18 @@ def test_a_skip_is_recorded_but_not_placed(monkeypatch):
     assert "skip" not in {order.action for order in fakes.sent[0]}
 
 
-def test_an_account_already_rebalanced_is_not_rebalanced_again(monkeypatch):
-    """The recorded orders are what make a repeated tick a no-op."""
-    already = [{"stock_code": "005930", "sent_at": datetime(2026, 9, 29, tzinfo=UTC)}]
-    fakes = Fakes(monkeypatch, recorded={11: already})
+def test_an_account_whose_plan_is_already_met_emits_nothing(monkeypatch):
+    """A cycle keeps working until the plan is satisfied, and a satisfied plan asks for
+    nothing: the account holds its target and has no cash left to spend."""
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    held = [{"stock_id": "005930", "total_price": 7_800_000, "amount": 100}]
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(cash=0.0, stocks=held)),
+        recorded={11: already},
+    )
 
-    assert fakes.run() == 0
+    assert fakes.run(today=MONDAY) == 0
     assert fakes.recorded_rows == []
     assert fakes.sent == []
 
@@ -226,7 +241,7 @@ def test_an_account_already_rebalanced_is_not_rebalanced_again(monkeypatch):
 def test_an_outstanding_pair_is_amended_rather_than_recorded_again(monkeypatch):
     """A narrowing is one amended order; the unique constraint forbids a second."""
     low, high = reservation_prices(78_000.0, 0)
-    already = [{"stock_code": "005930", "sent_at": datetime(2026, 9, 28, tzinfo=UTC)}]
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     fakes = Fakes(
         monkeypatch,
         users=polled(account(pending_orders=[pending(price=low), pending(price=high)])),
@@ -239,16 +254,19 @@ def test_an_outstanding_pair_is_amended_rather_than_recorded_again(monkeypatch):
     assert fakes.calls.index("amend") < fakes.calls.index("send")
 
 
-def test_an_outstanding_pair_sent_today_is_left_alone(monkeypatch):
+def test_a_pair_already_matching_the_plan_is_left_alone(monkeypatch):
+    """The poll runs hourly. A pair at the planned quantity and today's band is re-quoted
+    by nothing, or the Backend would see the same order every hour."""
     low, high = reservation_prices(78_000.0, 0)
-    already = [{"stock_code": "005930", "sent_at": datetime(2026, 9, 29, tzinfo=UTC)}]
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    outstanding = [pending(price=low, amount=52), pending(price=high, amount=52)]
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(pending_orders=[pending(price=low), pending(price=high)])),
+        users=polled(account(cash=0.0, pending_orders=outstanding)),
         recorded={11: already},
     )
 
-    assert fakes.run() == 0
+    assert fakes.run(today=MONDAY) == 0
     assert fakes.amended == []
 
 
@@ -260,17 +278,20 @@ def test_an_unmanaged_account_is_skipped_entirely(monkeypatch):
 
 
 def test_each_account_is_decided_on_its_own(monkeypatch):
-    """One account already out, one fresh: the fresh one still gets its orders."""
-    already = [{"stock_code": "005930", "sent_at": datetime(2026, 9, 29, tzinfo=UTC)}]
+    """Two accounts with different cash get different quantities: nothing is shared."""
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(account_id=11), account(account_id=12)),
-        recorded={11: already},
+        users=polled(
+            account(account_id=11, cash=1_000_000.0),
+            account(account_id=12, cash=10_000_000.0),
+        ),
     )
 
     fakes.run()
 
-    assert fakes.marked == [(42, 12)]
+    by_account = {batch[0].account_id: batch[0].shares for batch in fakes.sent}
+    assert by_account[11] < by_account[12]
+    assert sorted(account_id for _, account_id in fakes.marked) == [11, 12]
 
 
 def test_the_held_stocks_are_priced_too_not_just_the_portfolios(monkeypatch):
@@ -297,39 +318,38 @@ def test_market_today_is_the_exchanges_date():
     assert isinstance(market_today(), date)
 
 
-@pytest.mark.parametrize("empty", [[], None])
-def test_an_account_with_no_pending_orders_and_a_record_does_nothing(monkeypatch, empty):
-    already = [{"stock_code": "005930", "sent_at": datetime(2026, 9, 28, tzinfo=UTC)}]
+def test_a_recorded_order_that_is_no_longer_on_the_market_is_put_back(monkeypatch):
+    """The plan asks only for what is still missing, so if it still asks and nothing is
+    outstanding, the order is not where it should be and goes out again -- amended, since
+    the unique constraint allows one row per stock."""
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     fakes = Fakes(
         monkeypatch,
-        users=polled(account() | {"pending_orders": empty}),
+        users=polled(account(cash=10_000_000.0, pending_orders=[])),
         recorded={11: already},
     )
 
-    assert fakes.run() == 0
+    assert fakes.run(today=MONDAY) > 0
+    assert fakes.amended
+    assert fakes.recorded_rows == []
 
 
-def test_the_record_is_committed_before_the_send():
+def test_the_record_is_committed_before_the_send(monkeypatch):
     """Holding one transaction across the send would undo the point of recording first:
     a failed send rolls the record back, and if the request had already reached the
     Backend there is a live order nothing knows about."""
-    import inspect
+    fakes = Fakes(monkeypatch)
 
-    source = inspect.getsource(tick_module._open)
-    record_at = source.index("record_orders")
-    send_at = source.index("send_orders")
-    between = source[record_at:send_at]
+    fakes.run()
 
-    assert "engine.begin()" in source[:record_at]
-    # The transaction that wrote the record must close before the send.
-    assert between.count("with engine.begin()") == 0
+    assert fakes.calls.index("record") < fakes.calls.index("send") < fakes.calls.index("mark")
 
 
 def test_an_unsent_record_whose_pair_is_outstanding_is_stamped_sent(monkeypatch):
     """All placeable orders go out in one request, so an outstanding pair means the
     request arrived and only the reply was lost."""
     low, high = reservation_prices(78_000.0, 0)
-    unsent = [{"stock_code": "005930", "sent_at": None}]
+    unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(
         monkeypatch,
         users=polled(account(pending_orders=[pending(price=low), pending(price=high)])),
@@ -338,15 +358,14 @@ def test_an_unsent_record_whose_pair_is_outstanding_is_stamped_sent(monkeypatch)
 
     fakes.run(today=TUESDAY)
 
-    assert fakes.marked == [(42, 11)]
+    assert (42, 11) in fakes.marked
     assert fakes.discarded == []
-    assert fakes.recorded_rows == []
 
 
 def test_an_unsent_record_with_no_pair_is_discarded_and_decided_again(monkeypatch):
     """No pair at all means the Backend never took it, so replaying yesterday's decision
     would be worse than deciding again at today's prices."""
-    unsent = [{"stock_code": "005930", "sent_at": None}]
+    unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(monkeypatch, recorded={11: unsent})
 
     sent = fakes.run(today=TUESDAY)
@@ -360,8 +379,8 @@ def test_a_stamped_record_is_not_discarded(monkeypatch):
     """Nothing that reached the Backend is ever dropped from the history."""
     low, high = reservation_prices(78_000.0, 0)
     mixed = [
-        {"stock_code": "005930", "sent_at": datetime(2026, 9, 28, tzinfo=UTC)},
-        {"stock_code": "000660", "sent_at": None},
+        recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC)),
+        recorded_row("000660", sent_at=None),
     ]
     fakes = Fakes(
         monkeypatch,
@@ -388,7 +407,7 @@ def test_a_discarded_record_gets_a_new_reference_from_current_prices(monkeypatch
     """A placed order keeps the reference its first pair fixed. A record the Backend never
     took has no first pair, so there is nothing to keep: the whole decision is made again
     at today's price, back at the widest band."""
-    unsent = [{"stock_code": "005930", "sent_at": None}]
+    unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(monkeypatch, prices={"005930": 90_000.0}, recorded={11: unsent})
 
     fakes.run(today=TUESDAY)
@@ -400,7 +419,7 @@ def test_a_discarded_record_gets_a_new_reference_from_current_prices(monkeypatch
 
 def test_a_discarded_record_is_re_sized_at_the_new_price(monkeypatch):
     """The share count is decided again too, not carried over from the discarded record."""
-    unsent = [{"stock_code": "005930", "sent_at": None}]
+    unsent = [recorded_row("005930", sent_at=None)]
     cheap = Fakes(monkeypatch, prices={"005930": 10_000.0}, recorded={11: [dict(unsent[0])]})
     cheap.run(today=TUESDAY)
 
@@ -408,3 +427,86 @@ def test_a_discarded_record_is_re_sized_at_the_new_price(monkeypatch):
     dear.run(today=TUESDAY)
 
     assert cheap.sent[0][0].shares > dear.sent[0][0].shares
+
+
+def exits_only(cash=0.0, held=None, pending_orders=()):
+    """A cycle whose buy can only be funded by selling."""
+    return polled(
+        account(cash=cash, stocks=list((held or {}).items()), pending_orders=pending_orders)
+    )
+
+
+def test_a_cycle_with_no_cash_places_only_the_sell(monkeypatch):
+    plan = Portfolio(
+        portfolio_id=42,
+        cash_weight=0.0,
+        holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
+        exits=[Exit(*HYNIX, reason="퇴출")],
+    )
+    users = polled(
+        account(cash=0.0, stocks=[{"stock_id": "000660", "total_price": 1, "amount": 10}])
+    )
+    fakes = Fakes(monkeypatch, model=plan, users=users)
+
+    fakes.run(today=MONDAY)
+
+    assert [order.action for order in fakes.sent[0]] == ["sell"]
+
+
+def test_the_buy_arrives_once_the_sell_has_freed_the_cash(monkeypatch):
+    """Nothing is bought on credit: the buy appears on the pass after the cash does."""
+    plan = Portfolio(
+        portfolio_id=42,
+        cash_weight=0.0,
+        holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
+        exits=[Exit(*HYNIX, reason="퇴출")],
+    )
+    already = [recorded_row("000660", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    users = polled(account(cash=4_120_000.0))
+    fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
+
+    fakes.run(today=MONDAY)
+
+    buys = [order for order in fakes.sent[0] if order.action == "buy"]
+    assert buys
+    assert buys[0].shares * buys[0].high <= 4_120_000.0
+
+
+def test_an_order_placed_after_a_day_of_selling_starts_narrow(monkeypatch):
+    """Selling and buying share three trading days. A day spent selling leaves two, and
+    two days is the 3% band -- the ladder does not restart."""
+    plan = Portfolio(
+        portfolio_id=42,
+        cash_weight=0.0,
+        holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
+        exits=[Exit(*HYNIX, reason="퇴출")],
+    )
+    already = [recorded_row("000660", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    users = polled(account(cash=4_120_000.0))
+    fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
+
+    fakes.run(today=TUESDAY)
+
+    buys = [order for order in fakes.sent[0] if order.action == "buy"]
+    assert buys[0].band == PRICE_BANDS[1]
+
+
+def test_a_buy_placed_on_the_last_day_goes_straight_to_market(monkeypatch):
+    """If the sell only filled at the deadline, the buy has no days left to chase a
+    price, and the market rung is what guarantees it fills at all."""
+    from datetime import date
+
+    plan = Portfolio(
+        portfolio_id=42,
+        cash_weight=0.0,
+        holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
+        exits=[Exit(*HYNIX, reason="퇴출")],
+    )
+    already = [recorded_row("000660", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    users = polled(account(cash=4_120_000.0))
+    fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
+
+    fakes.run(today=date(2026, 10, 1))
+
+    buys = [order for order in fakes.sent[0] if order.action == "buy"]
+    assert (buys[0].low, buys[0].high, buys[0].band) == (None, None, None)
