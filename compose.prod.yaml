@@ -68,7 +68,15 @@ services:
   postgres-migrate:
     <<: *app
     profiles: ["tools"]
-    command: ["alembic", "upgrade", "head"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "postgres migration started"
+        alembic upgrade head
+        status=$$?
+        echo "postgres migration finished: status=$$status"
+        exit "$$status"
     environment:
       KTB_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
     depends_on:
@@ -78,7 +86,15 @@ services:
   questdb-migrate:
     <<: *app
     profiles: ["tools"]
-    command: ["python", "infrastructure/questdb/migrate.py"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "questdb migration started"
+        python infrastructure/questdb/migrate.py
+        status=$$?
+        echo "questdb migration finished: status=$$status"
+        exit "$$status"
     environment:
       KTB_QUESTDB_CONF: ws::addr=questdb:9000;
     depends_on:
