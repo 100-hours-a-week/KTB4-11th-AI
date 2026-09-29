@@ -6,7 +6,6 @@
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
-- `market-analyzer-mcp`: 시장 분석 도구를 제공하는 MCP 서버 (Docker 네트워크 내부 전용)
 - `portfolio-rebalancer-http`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 HTTP 서버
 - `portainer`: 컨테이너 상태와 CPU, 메모리, 네트워크, 디스크 I/O를 조회하고 노드 알림을 보내는 관리 UI
 
@@ -240,13 +239,6 @@ GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이�
 | `PORTFOLIO_BUILDER_MAX_TURNS` | | `150` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` |
 
-### market-analyzer-mcp (`MARKET_ANALYZER_MCP_`)
-
-| 변수 | 필수 | 기본값 |
-|---|---|---|
-| `MARKET_ANALYZER_MCP_LOG_LEVEL` | | `INFO` |
-| `MARKET_ANALYZER_MCP_HOST` | | `0.0.0.0` |
-| `MARKET_ANALYZER_MCP_PORT` | | `8000` |
 
 ### portfolio-rebalancer-http (`PORTFOLIO_REBALANCER_HTTP_`)
 

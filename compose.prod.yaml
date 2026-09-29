@@ -104,24 +104,6 @@ services:
       questdb:
         condition: service_healthy
 
-  market-analyzer-mcp:
-    <<: *app
-    command: ["market-analyzer-mcp"]
-    mem_limit: 384m
-    restart: unless-stopped
-    environment:
-      MARKET_ANALYZER_MCP_LOG_LEVEL: ${MARKET_ANALYZER_MCP_LOG_LEVEL:-INFO}
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   portfolio-rebalancer-http:
     <<: *app
     command: ["portfolio-rebalancer-http"]
