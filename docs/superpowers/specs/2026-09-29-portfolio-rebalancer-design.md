@@ -448,7 +448,8 @@ Grouped along the line this document already drew — pure decisions against I/O
 | `decide/outstanding.py` | pure | an order already at the Backend: did it arrive, should it narrow |
 | `request/prices.py` | I/O | the last close from QuestDB, for a stock the poll does not quote |
 | `request/backend.py` | I/O | the JWT, the account poll, the order send |
-| `request/store.py` | I/O | the account mirror and the order history in PostgreSQL |
+| `request/store.py` | I/O | queries on the account mirror and the order history in PostgreSQL |
+| `database.py` | schema | the SQLAlchemy tables, mirroring the migrations, as every service keeps them |
 | `tick.py` | orchestration | calls the above in order, and decides nothing |
 | `portfolio.py`, `order.py` | data | the model portfolio as read, and the order as sent |
 

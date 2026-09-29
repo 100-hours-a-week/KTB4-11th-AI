@@ -110,7 +110,7 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
         ),
         ("portfolio_builder.database", {"portfolios", "portfolio_holdings", "portfolio_exits"}),
         (
-            "portfolio_rebalancer.request.store",
+            "portfolio_rebalancer.database",
             {
                 "users",
                 "accounts",

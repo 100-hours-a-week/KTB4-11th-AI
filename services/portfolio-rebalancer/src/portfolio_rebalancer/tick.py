@@ -20,6 +20,9 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import httpx
+import sqlalchemy as sa
+
 from portfolio_rebalancer.decide.accounts import (
     apply_pending,
     managed_accounts,
@@ -55,7 +58,9 @@ def market_now() -> datetime:
     return datetime.now(KST)
 
 
-def tick(engine: Any, db: Any, client: Any, token: str, now: datetime | None = None) -> int:
+def tick(
+    engine: sa.Engine, db: Any, client: httpx.Client, token: str, now: datetime | None = None
+) -> int:
     """Returns the number of orders sent to the Backend."""
     now = now or market_now()
 

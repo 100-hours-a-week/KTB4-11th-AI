@@ -1,207 +1,93 @@
-"""The account mirror and the order history in PostgreSQL. No decisions here.
+"""Queries on the account mirror and the order history in PostgreSQL. No decisions here.
 
-The first four tables mirror the Backend poll and hold only the latest state, replaced on
+The four account tables mirror the Backend poll and hold only the latest state, replaced on
 every poll. `rebalance_orders` is the one table that accumulates, because what has to be
 traceable is the orders.
 """
 
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert
 
+from portfolio_rebalancer.database import (
+    account_holdings,
+    account_pending_orders,
+    accounts,
+    corporations,
+    portfolio_exits,
+    portfolio_holdings,
+    portfolios,
+    rebalance_orders,
+    users,
+)
+from portfolio_rebalancer.order import Order
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
 __all__ = [
     "amend_orders",
     "discard_unsent",
     "latest_portfolio",
-    "metadata",
+    "mark_sent",
     "record_orders",
     "save_poll",
     "stored_orders",
-    "mark_sent",
-    "users",
-    "accounts",
-    "account_holdings",
-    "account_pending_orders",
-    "rebalance_orders",
 ]
 
-# Mirrors infrastructure/postgres/migrations for queries only; the migrations own the schema.
-metadata = sa.MetaData()
 
-QUANTITY = sa.Numeric(18, 4)
-MONEY = sa.Numeric(18, 2)
+def latest_portfolio(conn: sa.Connection) -> Portfolio | None:
+    """The newest model portfolio portfolio-builder wrote, or None if it has written none.
 
-users = sa.Table(
-    "users",
-    metadata,
-    sa.Column("user_id", sa.BigInteger, primary_key=True),
-    sa.Column("nickname", sa.Text, nullable=False),
-    sa.Column("state", sa.Text, nullable=False),
-    sa.Column(
-        "polled_at",
-        sa.DateTime(timezone=True),
-        nullable=False,
-        server_default=sa.text("now()"),
-    ),
-)
-
-accounts = sa.Table(
-    "accounts",
-    metadata,
-    sa.Column("account_id", sa.BigInteger, primary_key=True),
-    sa.Column(
-        "user_id",
-        sa.BigInteger,
-        sa.ForeignKey("users.user_id", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    sa.Column("account_name", sa.Text, nullable=False),
-    sa.Column("is_ai_managed", sa.Boolean, nullable=False),
-    sa.Column("is_duel_account", sa.Boolean, nullable=False),
-    sa.Column("is_active", sa.Boolean, nullable=False),
-    sa.Column("cash_balance", MONEY, nullable=False),
-    sa.Column(
-        "polled_at",
-        sa.DateTime(timezone=True),
-        nullable=False,
-        server_default=sa.text("now()"),
-    ),
-    sa.Index("accounts_user_id_idx", "user_id"),
-)
-
-account_holdings = sa.Table(
-    "account_holdings",
-    metadata,
-    sa.Column(
-        "account_id",
-        sa.BigInteger,
-        sa.ForeignKey("accounts.account_id", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    sa.Column("stock_code", sa.Text, primary_key=True),
-    sa.Column("quantity", QUANTITY, nullable=False),
-    sa.Column("principal", MONEY, nullable=False),
-)
-
-account_pending_orders = sa.Table(
-    "account_pending_orders",
-    metadata,
-    sa.Column("id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
-    sa.Column(
-        "account_id",
-        sa.BigInteger,
-        sa.ForeignKey("accounts.account_id", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    sa.Column("order_type", sa.Text, nullable=False),
-    sa.Column("status", sa.Text, nullable=False),
-    sa.Column("stock_code", sa.Text, nullable=False),
-    sa.Column("price", MONEY, nullable=False),
-    sa.Column("quantity", QUANTITY, nullable=False),
-    sa.Index("account_pending_orders_account_id_idx", "account_id"),
-)
-
-# Declared only so rebalance_orders' foreign key resolves. portfolio-builder owns this
-# table, and the migrations own its schema, so nothing here describes it beyond the key.
-portfolios = sa.Table(
-    "portfolios",
-    metadata,
-    sa.Column("id", sa.BigInteger, primary_key=True),
-)
-
-rebalance_orders = sa.Table(
-    "rebalance_orders",
-    metadata,
-    sa.Column("id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
-    sa.Column(
-        "portfolio_id",
-        sa.BigInteger,
-        sa.ForeignKey("portfolios.id", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    sa.Column("account_id", sa.BigInteger, nullable=False),
-    sa.Column("stock_code", sa.Text, nullable=False),
-    sa.Column("side", sa.Text, nullable=False),
-    sa.Column("quantity", QUANTITY, nullable=False),
-    sa.Column("reference_price", MONEY, nullable=True),
-    # The price placed at the Backend; null once the order goes at market.
-    sa.Column("limit_price", MONEY, nullable=True),
-    # The price that ends the waiting and sends it at market.
-    sa.Column("trigger_price", MONEY, nullable=True),
-    # portfolio_holdings.reason is nullable upstream, so an order can carry none.
-    sa.Column("reason", sa.Text, nullable=True),
-    sa.Column(
-        "created_at",
-        sa.DateTime(timezone=True),
-        nullable=False,
-        server_default=sa.text("now()"),
-    ),
-    sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
-    sa.Column("status", sa.Text, nullable=False),
-    sa.UniqueConstraint(
-        "portfolio_id",
-        "account_id",
-        "stock_code",
-        name="rebalance_orders_portfolio_account_stock_key",
-    ),
-    sa.Index("rebalance_orders_portfolio_account_idx", "portfolio_id", "account_id"),
-)
-
-
-# portfolio_holdings names a company by DART's corp_code, which no exchange accepts as an
-# order identifier, so the stock code is joined in from corporations. These tables belong to
-# portfolio-builder and news-graph-builder, so they are read rather than mirrored here.
-LATEST_PORTFOLIO = sa.text(
-    "SELECT id, cash_weight FROM portfolios ORDER BY created_at DESC, id DESC LIMIT 1"
-)
-PORTFOLIO_HOLDINGS = sa.text(
-    "SELECT h.company_id, c.stock_code, h.weight, h.reason"
-    " FROM portfolio_holdings h JOIN corporations c ON c.corp_code = h.company_id"
-    " WHERE h.portfolio_id = :portfolio_id"
-)
-PORTFOLIO_EXITS = sa.text(
-    "SELECT e.company_id, c.stock_code, e.reason"
-    " FROM portfolio_exits e JOIN corporations c ON c.corp_code = e.company_id"
-    " WHERE e.portfolio_id = :portfolio_id"
-)
-
-
-def latest_portfolio(conn: Any) -> Portfolio | None:
-    """The newest model portfolio portfolio-builder wrote, or None if it has written none."""
-    row = conn.execute(LATEST_PORTFOLIO).mappings().first()
-    if row is None:
+    portfolio_holdings names a company by DART's corp_code, which no exchange accepts as an
+    order identifier, so the stock code is joined in from corporations.
+    """
+    portfolio = conn.execute(
+        sa.select(portfolios.c.id, portfolios.c.cash_weight)
+        .order_by(portfolios.c.created_at.desc(), portfolios.c.id.desc())
+        .limit(1)
+    ).first()
+    if portfolio is None:
         return None
 
-    bind = {"portfolio_id": row["id"]}
     holdings = [
         Holding(
-            company_id=held["company_id"],
-            stock_code=held["stock_code"],
-            weight=float(held["weight"]),
-            reason=held["reason"],
+            company_id=row.company_id,
+            stock_code=row.stock_code,
+            weight=float(row.weight),
+            reason=row.reason,
         )
-        for held in conn.execute(PORTFOLIO_HOLDINGS, bind).mappings()
+        for row in conn.execute(
+            sa.select(
+                portfolio_holdings.c.company_id,
+                corporations.c.stock_code,
+                portfolio_holdings.c.weight,
+                portfolio_holdings.c.reason,
+            )
+            .join(corporations, corporations.c.corp_code == portfolio_holdings.c.company_id)
+            .where(portfolio_holdings.c.portfolio_id == portfolio.id)
+        )
     ]
     exits = [
-        Exit(
-            company_id=left["company_id"],
-            stock_code=left["stock_code"],
-            reason=left["reason"],
+        Exit(company_id=row.company_id, stock_code=row.stock_code, reason=row.reason)
+        for row in conn.execute(
+            sa.select(
+                portfolio_exits.c.company_id,
+                corporations.c.stock_code,
+                portfolio_exits.c.reason,
+            )
+            .join(corporations, corporations.c.corp_code == portfolio_exits.c.company_id)
+            .where(portfolio_exits.c.portfolio_id == portfolio.id)
         )
-        for left in conn.execute(PORTFOLIO_EXITS, bind).mappings()
     ]
     return Portfolio(
-        portfolio_id=row["id"],
-        cash_weight=float(row["cash_weight"]),
+        portfolio_id=portfolio.id,
+        cash_weight=float(portfolio.cash_weight),
         holdings=holdings,
         exits=exits,
     )
 
 
-def save_poll(conn: Any, polled_users: Sequence[Mapping[str, object]]) -> None:
+def save_poll(conn: sa.Connection, polled_users: Sequence[Mapping[str, object]]) -> None:
     """Replace the mirror with what the poll just returned.
 
     A user or account seen again is updated rather than duplicated. Holdings and pending
@@ -210,7 +96,7 @@ def save_poll(conn: Any, polled_users: Sequence[Mapping[str, object]]) -> None:
     """
     for user in polled_users:
         conn.execute(
-            sa.dialects.postgresql.insert(users)
+            insert(users)
             .values(
                 user_id=user["user_id"],
                 nickname=user["nickname"],
@@ -230,7 +116,7 @@ def save_poll(conn: Any, polled_users: Sequence[Mapping[str, object]]) -> None:
             _save_account(conn, int(user["user_id"]), account)  # type: ignore[arg-type]
 
 
-def _save_account(conn: Any, user_id: int, account: Mapping[str, object]) -> None:
+def _save_account(conn: sa.Connection, user_id: int, account: Mapping[str, object]) -> None:
     account_id = int(account["account_id"])  # type: ignore[arg-type]
     values = {
         "user_id": user_id,
@@ -242,7 +128,7 @@ def _save_account(conn: Any, user_id: int, account: Mapping[str, object]) -> Non
         "polled_at": sa.func.now(),
     }
     conn.execute(
-        sa.dialects.postgresql.insert(accounts)
+        insert(accounts)
         .values(account_id=account_id, **values)
         .on_conflict_do_update(index_elements=["account_id"], set_=values)
     )
@@ -283,14 +169,14 @@ AT_MARKET = "market"
 SKIPPED = "skip"
 
 
-def _rung(order: Any) -> str:
+def _rung(order: Order) -> str:
     """Which rung of the ladder the order sits on, which `side` does not say."""
     if order.action == "skip":
         return SKIPPED
     return RESERVED if order.limit is not None else AT_MARKET
 
 
-def record_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
+def record_orders(conn: sa.Connection, portfolio_id: int, orders: Iterable[Order]) -> None:
     """Write every order before anything is sent, leaving `sent_at` null."""
     rows = [
         {
@@ -311,7 +197,7 @@ def record_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
         conn.execute(rebalance_orders.insert(), rows)
 
 
-def amend_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
+def amend_orders(conn: sa.Connection, portfolio_id: int, orders: Iterable[Order]) -> None:
     """Move an already-recorded order to its next rung.
 
     A narrowing is one amended order, not a second one: the unique constraint on
@@ -337,7 +223,7 @@ def amend_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
         )
 
 
-def mark_sent(conn: Any, portfolio_id: int, account_id: int) -> None:
+def mark_sent(conn: sa.Connection, portfolio_id: int, account_id: int) -> None:
     conn.execute(
         rebalance_orders.update()
         .where(
@@ -349,7 +235,7 @@ def mark_sent(conn: Any, portfolio_id: int, account_id: int) -> None:
     )
 
 
-def discard_unsent(conn: Any, portfolio_id: int, account_id: int) -> None:
+def discard_unsent(conn: sa.Connection, portfolio_id: int, account_id: int) -> None:
     """Forget orders the Backend never took.
 
     Only rows with no `sent_at` are removed, so nothing that reached the Backend is ever
@@ -364,7 +250,9 @@ def discard_unsent(conn: Any, portfolio_id: int, account_id: int) -> None:
     )
 
 
-def stored_orders(conn: Any, portfolio_id: int, account_id: int) -> list[Mapping[str, object]]:
+def stored_orders(
+    conn: sa.Connection, portfolio_id: int, account_id: int
+) -> list[Mapping[str, object]]:
     """What was already recorded, which is what a repeated rebalance replies with."""
     result = conn.execute(
         rebalance_orders.select()
