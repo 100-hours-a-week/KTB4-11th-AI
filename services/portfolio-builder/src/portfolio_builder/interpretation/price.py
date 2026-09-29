@@ -1,13 +1,19 @@
 from math import sqrt
 
-from portfolio_builder.interpretation.dto import Signal, percent
+from portfolio_builder.interpretation.dto import Scale, Signal, Threshold, percent
 from portfolio_builder.measurement import Measurements
 
 SIDEWAYS_BAND_SIGMA = 1.0
-MOVE_SIGMA = 1.0
-SHARP_MOVE_SIGMA = 2.0
-NEAR_52W_HIGH = 0.95
-FAR_BELOW_52W_HIGH = 0.70
+MOVE = Scale(
+    at_least=[Threshold(2.0, "sharp_rally"), Threshold(1.0, "rally")],
+    at_most=[Threshold(-2.0, "sharp_selloff"), Threshold(-1.0, "selloff")],
+    otherwise="flat",
+)
+YEAR_RANGE = Scale(
+    at_least=[Threshold(0.95, "near_52w_high")],
+    at_most=[Threshold(0.70, "far_below_52w_high")],
+    otherwise="mid_range",
+)
 
 
 def trend(m: Measurements) -> Signal | str:
@@ -42,17 +48,10 @@ def short_term_move(m: Measurements) -> Signal | str:
     if sigma <= 0:
         return "realized_volatility_20: zero volatility"
     move_sigma = move / (sigma * sqrt(5))
-    if move_sigma >= SHARP_MOVE_SIGMA:
-        state = "sharp_rally"
-    elif move_sigma >= MOVE_SIGMA:
-        state = "rally"
-    elif move_sigma > -MOVE_SIGMA:
-        state = "flat"
-    elif move_sigma > -SHARP_MOVE_SIGMA:
-        state = "selloff"
-    else:
-        state = "sharp_selloff"
-    return Signal(state, {"return_5_pct": percent(move), "move_sigma": round(move_sigma, 2)})
+    return Signal(
+        MOVE.classify(move_sigma),
+        {"return_5_pct": percent(move), "move_sigma": round(move_sigma, 2)},
+    )
 
 
 def breakout(m: Measurements) -> Signal | str:
@@ -74,10 +73,4 @@ def year_range(m: Measurements) -> Signal | str:
     if missing := m.missing("price_to_52w_high"):
         return missing
     ratio = float(m.values["price_to_52w_high"])
-    if ratio >= NEAR_52W_HIGH:
-        state = "near_52w_high"
-    elif ratio < FAR_BELOW_52W_HIGH:
-        state = "far_below_52w_high"
-    else:
-        state = "mid_range"
-    return Signal(state, {"price_vs_52w_high_pct": percent(ratio - 1)})
+    return Signal(YEAR_RANGE.classify(ratio), {"price_vs_52w_high_pct": percent(ratio - 1)})

@@ -5,6 +5,7 @@ import pytest
 from portfolio_builder.interpretation import Signal, interpret
 from portfolio_builder.interpretation.activity import liquidity, volatility, volume
 from portfolio_builder.interpretation.cross_section import relative_strength, short_term_rank
+from portfolio_builder.interpretation.dto import Scale, Threshold
 from portfolio_builder.interpretation.price import breakout, short_term_move, trend, year_range
 from portfolio_builder.measurement import Bars, Measurements, measure
 
@@ -13,6 +14,30 @@ SIGMA = 0.01
 
 def m(**values):
     return Measurements(values, {})
+
+
+SCALE = Scale(
+    at_least=[Threshold(1.0, "b"), Threshold(2.0, "a")],
+    at_most=[Threshold(-1.0, "d"), Threshold(-2.0, "e")],
+    otherwise="c",
+)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (2.5, "a"),
+        (2.0, "a"),
+        (1.5, "b"),
+        (1.0, "b"),
+        (0.0, "c"),
+        (-1.0, "d"),
+        (-2.0, "e"),
+        (-3, "e"),
+    ],
+)
+def test_scale_checks_the_most_extreme_threshold_first_in_either_list_order(value, expected):
+    assert SCALE.classify(value) == expected
 
 
 def state(result):
@@ -89,8 +114,8 @@ def test_breakout(above, distance, expected):
     [
         (0.95, "near_52w_high"),
         (0.949, "mid_range"),
-        (0.70, "mid_range"),
-        (0.699, "far_below_52w_high"),
+        (0.701, "mid_range"),
+        (0.70, "far_below_52w_high"),
     ],
 )
 def test_year_range(ratio, expected):

@@ -265,14 +265,15 @@ Traded value is approximated as `close × volume`; turnover is omitted (no share
 ### Signals (`interpretation/`)
 
 σ is the stock's own `realized_volatility_20`, so the same rule works on every timeframe.
-Thresholds are named constants in the module that uses them.
+Single-value rules are `Scale` tables of `Threshold(value, state)` in the module that uses them;
+`trend` and `breakout` combine several measurements and stay as code.
 
 | Signal | States | Rule |
 |---|---|---|
 | `trend` | `established_uptrend` · `established_downtrend` · `mixed` · `sideways` | `sideways` when `|sma20_vs_sma60|` < 1σ; otherwise both `price_vs_sma20` and `sma20_vs_sma60` up / both down / mixed |
 | `short_term_move` | `sharp_rally` · `rally` · `flat` · `selloff` · `sharp_selloff` | `return_5 / (σ√5)`: ≥2, ≥1, (−1, 1), ≤−1, ≤−2 |
 | `breakout` | `above_previous_high` · `near_previous_high` · `below_previous_high` | above the previous 20-bar high, or within 1σ of it |
-| `year_range` (1d) | `near_52w_high` · `mid_range` · `far_below_52w_high` | `price_to_52w_high` ≥ 0.95 / < 0.70 |
+| `year_range` (1d) | `near_52w_high` · `mid_range` · `far_below_52w_high` | `price_to_52w_high` ≥ 0.95 / ≤ 0.70 |
 | `relative_strength` (1d) | `top_quintile` · `middle` · `bottom_quintile` | `momentum_percentile` ≥ 80 / ≤ 20 |
 | `short_term_rank` (1d) | `top_decile` · `middle` · `bottom_decile` | `return_5_percentile` ≥ 90 / ≤ 10 |
 | `volatility` | `high_for_the_stock` · `normal` · `low_for_the_stock`; intraday `no_reference` | `volatility_percentile_1y` ≥ 80 / ≤ 20 |
