@@ -77,6 +77,7 @@ non-KOSPI 200 members.
 ## 5. market-collector
 
 - Delete `universe.py`, its tests, `store.write_universe_members` and its test.
+- Add QuestDB migration `0002_drop_universe_members.sql` and a test for it.
 - Add `symbols.py` with `load_symbols(dsn, index_name)` reading `corporation_indices`, raising when
   empty. `archive_ohlcv` uses it.
 - Settings: add `postgres_dsn`, replace `index_code` with `index_name` (default `KOSPI200`).

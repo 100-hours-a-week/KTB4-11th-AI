@@ -101,7 +101,7 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
 - Read symbols from Postgres: `corporation_indices WHERE index_name = :name`. New settings
   `MARKET_COLLECTOR_POSTGRES_DSN` and `MARKET_COLLECTOR_INDEX_NAME` (default `KOSPI200`); remove
   `MARKET_COLLECTOR_INDEX_CODE`. An empty result raises, as `EmptyUniverseError` does now.
-- The QuestDB `universe_members` table is left in place and no longer written.
+- QuestDB migration `0002_drop_universe_members.sql` drops the `universe_members` table.
 
 **Repo plumbing**
 - New `services/market-syncer` (uv member, console script `market-syncer`), `docker/market-syncer.Dockerfile`,

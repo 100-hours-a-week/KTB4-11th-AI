@@ -119,7 +119,7 @@ erDiagram
 
 - `corporations` 는 DART 고유번호와 연결되는 KOSPI 종목만, `corporation_indices` 는 KOSPI 200 구성 종목만 저장합니다.
 - `themes` / `theme_companies` 는 `corporations` 에 있는 종목만 저장합니다.
-- `market-syncer` 는 `news-graph-builder`, `market-collector` 보다 먼저 실행합니다. `market-collector` 는 수집 종목을 `corporation_indices` 에서 읽고, QuestDB `universe_members` 에는 더 이상 쓰지 않습니다.
+- `market-syncer` 는 `news-graph-builder`, `market-collector` 보다 먼저 실행합니다. `market-collector` 는 수집 종목을 `corporation_indices` 에서 읽고, QuestDB `universe_members` 는 QuestDB 마이그레이션 `0002` 로 삭제했습니다.
 
 ## 환경 변수
 
