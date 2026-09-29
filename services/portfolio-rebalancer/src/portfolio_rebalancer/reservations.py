@@ -1,9 +1,11 @@
 """An order's two reservation prices, and reading a pair back. Pure: no I/O."""
 
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 __all__ = [
     "PRICE_BANDS",
+    "Pair",
     "find_pairs",
     "next_rung",
     "read_reservation",
@@ -11,6 +13,16 @@ __all__ = [
 ]
 
 PENDING = "pending"
+
+
+@dataclass(frozen=True)
+class Pair:
+    """An outstanding reservation: its two prices and the quantity still to fill."""
+
+    low: float
+    high: float
+    quantity: int
+
 
 # Day three ends in a market order rather than a fourth band, so every order fills
 # within three trading days. Narrowing alone would not guarantee that: a 1% band is
@@ -40,7 +52,7 @@ def read_reservation(low: float, high: float) -> tuple[float, int]:
 
 def find_pairs(
     pending_orders: Iterable[Mapping[str, object]],
-) -> dict[tuple[str, str], tuple[float, float]]:
+) -> dict[tuple[str, str], Pair]:
     """The outstanding reservation pairs, keyed by stock code and side.
 
     Two pending orders on the same stock and the same side are one pair. A lone order
@@ -48,14 +60,26 @@ def find_pairs(
     create; neither is narrowed, because a rung placed against a moved position is worse
     than leaving it to the current one.
     """
-    sides: dict[tuple[str, str], list[float]] = {}
+    sides: dict[tuple[str, str], list[tuple[float, int]]] = {}
     for order in pending_orders:
         if order.get("status") != PENDING:
             continue
         key = (str(order["stock_code"]), str(order["order_type"]))
-        sides.setdefault(key, []).append(float(order["price"]))  # type: ignore[arg-type]
+        sides.setdefault(key, []).append(
+            (float(order["price"]), int(order["amount"]))  # type: ignore[arg-type]
+        )
 
-    return {key: (min(prices), max(prices)) for key, prices in sides.items() if len(prices) == 2}
+    # Both sides go out with the full quantity, so the smaller outstanding amount is what
+    # a partial fill left behind: that is what still has to be filled.
+    return {
+        key: Pair(
+            low=min(price for price, _ in side),
+            high=max(price for price, _ in side),
+            quantity=min(quantity for _, quantity in side),
+        )
+        for key, side in sides.items()
+        if len(side) == 2
+    }
 
 
 def next_rung(low: float, high: float) -> tuple[float, float] | None:

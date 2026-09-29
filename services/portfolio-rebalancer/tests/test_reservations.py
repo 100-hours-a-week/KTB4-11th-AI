@@ -1,6 +1,7 @@
 import pytest
 from portfolio_rebalancer.reservations import (
     PRICE_BANDS,
+    Pair,
     find_pairs,
     next_rung,
     read_reservation,
@@ -99,7 +100,7 @@ def test_two_pending_orders_on_the_same_stock_and_side_are_one_pair():
 
     pairs = find_pairs(orders)
 
-    assert pairs == {("005930", "buy"): (low, high)}
+    assert pairs == {("005930", "buy"): Pair(low=low, high=high, quantity=100)}
 
 
 def test_a_lone_pending_order_is_not_mistaken_for_a_pair():
@@ -148,7 +149,7 @@ def test_the_low_comes_back_first_whatever_order_they_arrive_in():
     forwards = find_pairs([pending(price=low), pending(price=high)])
     backwards = find_pairs([pending(price=high), pending(price=low)])
 
-    assert forwards == backwards == {("005930", "buy"): (low, high)}
+    assert forwards == backwards == {("005930", "buy"): Pair(low, high, 100)}
 
 
 def test_the_next_rung_narrows_the_band():
@@ -180,3 +181,19 @@ def test_every_rung_is_reachable_from_the_one_before(reference):
         seen.append(read_reservation(rounded(low), rounded(high))[1])
 
     assert seen == list(range(len(PRICE_BANDS)))
+
+
+def test_a_partly_filled_pair_carries_only_what_is_left():
+    """Both sides went out with 100. The low side shows 60 outstanding, so 40 already
+    filled and 60 is what a narrower rung has to ask for."""
+    low, high = reservation_prices(78_000.0, 0)
+    orders = [pending(price=low, amount=60), pending(price=high, amount=100)]
+
+    assert find_pairs(orders)[("005930", "buy")].quantity == 60
+
+
+def test_an_untouched_pair_carries_the_whole_quantity():
+    low, high = reservation_prices(78_000.0, 0)
+    orders = [pending(price=low, amount=100), pending(price=high, amount=100)]
+
+    assert find_pairs(orders)[("005930", "buy")].quantity == 100
