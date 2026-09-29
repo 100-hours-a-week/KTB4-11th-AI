@@ -5,10 +5,12 @@ x-app: &app
   init: true
   restart: "no"
   logging:
-    driver: json-file
+    driver: awslogs
     options:
-      max-size: 10m
-      max-file: "3"
+      awslogs-region: ap-northeast-2
+      awslogs-group: /stockspoon/ai/application
+      awslogs-create-group: "false"
+      tag: "{{.Name}}-{{.ID}}"
 
 x-postgres-environment: &postgres-environment
   NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/news
@@ -36,10 +38,12 @@ services:
       retries: 12
       start_period: 10s
     logging:
-      driver: json-file
+      driver: awslogs
       options:
-        max-size: 10m
-        max-file: "3"
+        awslogs-region: ap-northeast-2
+        awslogs-group: /stockspoon/ai/postgres
+        awslogs-create-group: "false"
+        tag: "{{.Name}}-{{.ID}}"
 
   questdb:
     image: questdb/questdb:10.0.1
@@ -54,10 +58,12 @@ services:
       retries: 12
       start_period: 20s
     logging:
-      driver: json-file
+      driver: awslogs
       options:
-        max-size: 10m
-        max-file: "3"
+        awslogs-region: ap-northeast-2
+        awslogs-group: /stockspoon/ai/questdb
+        awslogs-create-group: "false"
+        tag: "{{.Name}}-{{.ID}}"
 
   postgres-migrate:
     <<: *app
