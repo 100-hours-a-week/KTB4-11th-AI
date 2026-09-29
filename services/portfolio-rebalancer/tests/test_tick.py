@@ -382,3 +382,29 @@ def test_the_poll_mirror_commits_separately_from_the_orders(monkeypatch):
     source = inspect.getsource(tick_module.tick)
 
     assert source.count("with engine.begin()") == 2
+
+
+def test_a_discarded_record_gets_a_new_reference_from_current_prices(monkeypatch):
+    """A placed order keeps the reference its first pair fixed. A record the Backend never
+    took has no first pair, so there is nothing to keep: the whole decision is made again
+    at today's price, back at the widest band."""
+    unsent = [{"stock_code": "005930", "sent_at": None}]
+    fakes = Fakes(monkeypatch, prices={"005930": 90_000.0}, recorded={11: unsent})
+
+    fakes.run(today=TUESDAY)
+
+    order = fakes.sent[0][0]
+    assert order.reference == 90_000.0
+    assert order.band == PRICE_BANDS[0]
+
+
+def test_a_discarded_record_is_re_sized_at_the_new_price(monkeypatch):
+    """The share count is decided again too, not carried over from the discarded record."""
+    unsent = [{"stock_code": "005930", "sent_at": None}]
+    cheap = Fakes(monkeypatch, prices={"005930": 10_000.0}, recorded={11: [dict(unsent[0])]})
+    cheap.run(today=TUESDAY)
+
+    dear = Fakes(monkeypatch, prices={"005930": 500_000.0}, recorded={11: [dict(unsent[0])]})
+    dear.run(today=TUESDAY)
+
+    assert cheap.sent[0][0].shares > dear.sent[0][0].shares

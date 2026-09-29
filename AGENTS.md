@@ -89,6 +89,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer | required |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT` | portfolio-rebalancer (bearer token for the Backend) | required |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | portfolio-rebalancer | `INFO` |
 | `PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS` | portfolio-rebalancer | `3600` (compose only) |
 

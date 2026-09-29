@@ -4,13 +4,14 @@ from dataclasses import dataclass
 import httpx
 import pytest
 from portfolio_rebalancer.external.backend import (
-    acquire_token,
+    bearer_token,
     build_client,
     fetch_accounts,
     send_orders,
 )
 
-TOKEN = "a-token"
+JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWJhbGFuY2VyIn0.c2lnbmF0dXJl"
+TOKEN = JWT
 
 
 @dataclass(frozen=True)
@@ -114,13 +115,41 @@ def test_a_rejected_send_raises():
         send_orders(client, TOKEN, [FakeOrder(11, "005930", "buy", 1)])
 
 
-def test_acquiring_a_token_fails_loudly_while_the_scheme_is_unsettled():
-    """How the token is issued has not been decided. Until it is, this must refuse rather
-    than hand back an empty string, which would send an unauthenticated order."""
-    client, _ = recorder(responder({}))
+def test_a_configured_jwt_is_used_as_the_bearer_token():
+    assert bearer_token(JWT) == JWT
 
-    with pytest.raises(NotImplementedError, match="token"):
-        acquire_token(client)
+
+def test_surrounding_whitespace_is_trimmed():
+    """An environment variable copied from a file often carries a trailing newline."""
+    assert bearer_token(f"  {JWT}\n") == JWT
+
+
+def test_a_jwt_pasted_with_its_scheme_is_refused():
+    """It would go out as "Bearer Bearer ey..." and earn a 401 nobody could explain."""
+    with pytest.raises(ValueError, match="scheme"):
+        bearer_token(f"Bearer {JWT}")
+
+
+@pytest.mark.parametrize(
+    "not_a_jwt",
+    ["", "opaque-token", "two.segments", "four.seg.ments.here", "..", "a..c"],
+)
+def test_something_that_is_not_a_jwt_is_refused(not_a_jwt):
+    """Better at startup than as a 401 in the Backend's log."""
+    with pytest.raises(ValueError, match="JWT"):
+        bearer_token(not_a_jwt)
+
+
+def test_the_jwt_goes_out_on_both_calls():
+    """Both /api/v1/users and /api/v1/orders are authenticated."""
+    users, seen_users = recorder(responder({"users": []}))
+    fetch_accounts(users, bearer_token(JWT))
+
+    orders, seen_orders = recorder(responder({"message": "ok"}))
+    send_orders(orders, bearer_token(JWT), [FakeOrder(11, "005930", "buy", 1)])
+
+    assert seen_users[0].headers["authorization"] == f"Bearer {JWT}"
+    assert seen_orders[0].headers["authorization"] == f"Bearer {JWT}"
 
 
 def test_the_client_is_built_against_the_backend_url():

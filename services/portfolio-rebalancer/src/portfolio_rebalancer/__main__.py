@@ -11,7 +11,7 @@ import logging
 import sqlalchemy as sa
 from ktb_core.logging import setup_logging
 
-from portfolio_rebalancer.external.backend import acquire_token, build_client
+from portfolio_rebalancer.external.backend import bearer_token, build_client
 from portfolio_rebalancer.external.prices import connect
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.tick import tick
@@ -31,7 +31,7 @@ def main() -> None:
             connect(settings.questdb_conf) as db,
             build_client(settings.backend_url) as client,
         ):
-            token = acquire_token(client)
+            token = bearer_token(settings.backend_jwt.get_secret_value())
             # The tick owns its transactions: an order has to be committed before it is
             # sent, so one transaction cannot span the send.
             sent = tick(engine, db, client, token)

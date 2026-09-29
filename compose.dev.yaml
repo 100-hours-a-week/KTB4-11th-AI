@@ -110,6 +110,7 @@ services:
       - PORTFOLIO_REBALANCER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/ktb
       - PORTFOLIO_REBALANCER_QUESTDB_CONF=ws::addr=questdb:9000;
       - PORTFOLIO_REBALANCER_BACKEND_URL
+      - PORTFOLIO_REBALANCER_BACKEND_JWT
       - PORTFOLIO_REBALANCER_LOG_LEVEL=${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:

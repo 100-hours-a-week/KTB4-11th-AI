@@ -555,6 +555,7 @@ pydantic==2.13.5 \
     #   market-collector
     #   mcp
     #   mcp-types
+    #   portfolio-rebalancer
     #   pydantic-settings
 pydantic-core==2.46.5 \
     --hash=sha256:03b9666e41e35d8909852ba191a0607520f81b74eaf12ccf8737005dbb313821 \

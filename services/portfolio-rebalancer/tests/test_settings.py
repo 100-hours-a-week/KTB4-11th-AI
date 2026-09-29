@@ -2,10 +2,12 @@ import pytest
 from portfolio_rebalancer.settings import Settings
 from pydantic import ValidationError
 
+JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWJhbGFuY2VyIn0.c2lnbmF0dXJl"
 GIVEN = {
     "postgres_dsn": "postgresql+psycopg://ktb:ktb@postgres:5432/ktb",
     "questdb_conf": "ws::addr=localhost:9000;",
     "backend_url": "http://backend:8080",
+    "backend_jwt": JWT,
 }
 
 
@@ -30,7 +32,17 @@ def test_reads_the_prefixed_environment(monkeypatch):
 
     settings = Settings()
 
-    assert settings.model_dump() == GIVEN | {"log_level": "DEBUG"}
+    assert settings.backend_jwt.get_secret_value() == JWT
+    assert settings.postgres_dsn == GIVEN["postgres_dsn"]
+    assert settings.log_level == "DEBUG"
+
+
+def test_the_jwt_is_kept_out_of_logs_and_repr():
+    """It is a credential. A plain str would leak it the first time settings were logged."""
+    settings = Settings(**GIVEN)
+
+    assert JWT not in repr(settings)
+    assert JWT not in str(settings.backend_jwt)
 
 
 def test_no_host_or_port_is_carried():
