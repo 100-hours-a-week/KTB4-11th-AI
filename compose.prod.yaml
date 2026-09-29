@@ -17,6 +17,7 @@ x-postgres-environment: &postgres-environment
   NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
   NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
   PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
 
 services:
   postgres:
@@ -157,11 +158,14 @@ services:
     restart: on-failure
     stop_grace_period: 2m
     environment:
+      <<: *postgres-environment
       PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
       PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL}
       PORTFOLIO_REBALANCER_LOG_LEVEL: ${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
       PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS: ${PORTFOLIO_REBALANCER_POLL_INTERVAL_SECONDS:-3600}
     depends_on:
+      postgres:
+        condition: service_healthy
       questdb:
         condition: service_healthy
 

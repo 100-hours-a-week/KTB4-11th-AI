@@ -1082,16 +1082,20 @@ source = { editable = "services/portfolio-rebalancer" }
 dependencies = [
     { name = "httpx" },
     { name = "ktb-core" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic-settings" },
     { name = "questdb", extra = ["dataframe"] },
+    { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.28" },
     { name = "ktb-core", editable = "packages/core" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "questdb", extras = ["dataframe"], specifier = ">=5.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.54" },
 ]
 
 [[package]]

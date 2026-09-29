@@ -495,6 +495,7 @@ psycopg==3.3.6 \
     #   news-clusterer
     #   news-graph-builder
     #   news-preprocessor
+    #   portfolio-rebalancer
 psycopg-binary==3.3.6 ; implementation_name != 'pypy' \
     --hash=sha256:05a83ac9fd52b9bca7cb5ab04b3691163170bd16f53defa27216ea3aa07ee781 \
     --hash=sha256:0bf08b749cc144f33b44a91b78e3f71c60eb07963746a0df5a100b36ce3d7475 \
@@ -782,6 +783,7 @@ sqlalchemy==2.1.1 \
     #   news-clusterer
     #   news-graph-builder
     #   news-preprocessor
+    #   portfolio-rebalancer
 sse-starlette==3.4.11 \
     --hash=sha256:1bae716c02f3e6f294be41ff333220692dae7c3cbab077c900f159676719dade \
     --hash=sha256:c7b2244bdff016fe7f64e10075e89a3e6bbf899649cc89b0fe884b5545042453

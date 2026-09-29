@@ -8,5 +8,6 @@ class Settings(BaseSettings):
     )
 
     log_level: str = "INFO"
+    postgres_dsn: str
     questdb_conf: str
     backend_url: str

@@ -86,6 +86,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_ANALYZER_MCP_LOG_LEVEL` | market-analyzer-mcp | `INFO` |
 | `MARKET_ANALYZER_MCP_HOST` | market-analyzer-mcp | `0.0.0.0` |
 | `MARKET_ANALYZER_MCP_PORT` | market-analyzer-mcp | `8000` |
+| `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | portfolio-rebalancer | `INFO` |

@@ -48,7 +48,7 @@ def test_only_active_users_are_asked_for():
 
     fetch_accounts(client, TOKEN)
 
-    assert seen[0].url.path == "/users"
+    assert seen[0].url.path == "/api/v1/users"
     assert dict(seen[0].url.params) == {"state": "active"}
 
 

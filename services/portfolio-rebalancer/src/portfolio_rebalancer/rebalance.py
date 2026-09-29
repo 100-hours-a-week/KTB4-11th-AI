@@ -25,7 +25,7 @@ class Holding:
     company_id: str
     stock_code: str
     weight: float
-    reason: str
+    reason: str | None
 
 
 @dataclass(frozen=True)

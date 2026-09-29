@@ -195,6 +195,7 @@ erDiagram
 
 | 변수 | 필수 | 기본값 |
 |---|---|---|
+| `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` |
