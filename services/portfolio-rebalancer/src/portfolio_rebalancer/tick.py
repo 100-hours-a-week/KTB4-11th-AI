@@ -16,9 +16,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
-from portfolio_rebalancer.decide.outstanding import narrow, reached_the_backend
+from portfolio_rebalancer.decide.outstanding import at_market, narrow, reached_the_backend
 from portfolio_rebalancer.decide.rebalance import rebalance
-from portfolio_rebalancer.decide.reservations import find_pairs
+from portfolio_rebalancer.decide.reservations import outstanding_orders, trigger_hit
 from portfolio_rebalancer.decide.trading_days import days_left
 from portfolio_rebalancer.request.backend import fetch_accounts, send_orders
 from portfolio_rebalancer.request.prices import latest_prices
@@ -68,30 +68,30 @@ def tick(engine: Any, db: Any, client: Any, token: str, now: datetime | None = N
 
 def _account(engine, db, client, token, portfolio, account, now) -> int:
     state = apply_pending(account)
-    pairs = find_pairs(account.get("pending_orders") or ())
+    working = outstanding_orders(account.get("pending_orders") or ())
 
     with engine.begin() as conn:
         recorded = stored_orders(conn, portfolio.portfolio_id, state.account_id)
 
     if any(row["sent_at"] is None for row in recorded):
-        recorded = _settle_unsent(engine, portfolio, state, recorded, pairs)
+        recorded = _settle_unsent(engine, portfolio, state, recorded, working)
 
     if not recorded:
         return _open(engine, db, client, token, portfolio, state, now)
 
     started = min(row["created_at"] for row in recorded).astimezone(KST).date()
-    return _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, now)
+    return _continue(engine, db, client, token, portfolio, state, working, recorded, started, now)
 
 
-def _settle_unsent(engine, portfolio, state, recorded, pairs) -> Sequence[Mapping[str, Any]]:
+def _settle_unsent(engine, portfolio, state, recorded, working) -> Sequence[Mapping[str, Any]]:
     """Work out what happened to orders recorded but never stamped as sent.
 
-    All placeable orders go out in one request, so one outstanding pair means the request
-    arrived and only the reply was lost: stamp them. No pair at all means the Backend never
-    took them, so the record is discarded and the next pass decides again from current
-    prices, which is better than replaying a decision made at yesterday's.
+    All placeable orders go out in one request, so one order still working means the
+    request arrived and only the reply was lost: stamp them. Nothing working at all means
+    the Backend never took them, so the record is discarded and the next pass decides again
+    from current prices, which is better than replaying a decision made at yesterday's.
     """
-    arrived = reached_the_backend((row["stock_code"] for row in recorded), pairs)
+    arrived = reached_the_backend((row["stock_code"] for row in recorded), working)
     with engine.begin() as conn:
         if arrived:
             log.info("orders reached the Backend; stamping them sent")
@@ -107,7 +107,8 @@ def _open(engine, db, client, token, portfolio, state, now) -> int:
 
     That budget is the trading days left in this week, so a Chuseok week gives fewer.
     """
-    plan = _plan(db, portfolio, state, days_left(now.date(), now))
+    prices = _prices(db, portfolio, state)
+    plan = rebalance(portfolio, state, prices, days_left=days_left(now.date(), now))
     if not plan:
         return 0
 
@@ -118,7 +119,7 @@ def _open(engine, db, client, token, portfolio, state, now) -> int:
     return _send(engine, client, token, portfolio, state, [o for o in plan if o.action != SKIP])
 
 
-def _continue(engine, db, client, token, portfolio, state, pairs, recorded, started, now):
+def _continue(engine, db, client, token, portfolio, state, working, recorded, started, now):
     """Keep an open cycle moving: fund what the sells have freed, then re-quote the rest.
 
     Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
@@ -126,8 +127,14 @@ def _continue(engine, db, client, token, portfolio, state, pairs, recorded, star
     band is left alone, which is what makes the hourly poll idempotent within a day.
     """
     left = days_left(started, now)
-    plan = _plan(db, portfolio, state, left)
-    outstanding = {code: pair for (code, _), pair in pairs.items()}
+    prices = _prices(db, portfolio, state)
+    plan = rebalance(portfolio, state, prices, days_left=left)
+    references = {
+        row["stock_code"]: float(row["reference_price"])
+        for row in recorded
+        if row["reference_price"] is not None
+    }
+    placed = {code for code, _ in working}
     known = {row["stock_code"] for row in recorded}
 
     # An order already on the market keeps the quantity it was placed with; only its band
@@ -135,32 +142,65 @@ def _continue(engine, db, client, token, portfolio, state, pairs, recorded, star
     # against cash the order itself has committed, and it would wobble instead of settle.
     place, amend = [], []
     for order in (o for o in plan if o.action != SKIP):
-        if order.stock_code in outstanding:
+        if order.stock_code in placed:
             continue
         # Nothing is on the market for this stock, and the plan still asks for it: either
         # it was never placed, or it left the book without filling.
         (place if order.stock_code not in known else amend).append(order)
 
-    requote = narrow(portfolio, state, pairs, started, now)
+    # A working order whose trigger the market has reached stops waiting: crossing it is
+    # the signal that the limit is not going to fill on the terms it was placed on.
+    struck = _struck(portfolio, state, working, references, recorded, prices)
+    requote = narrow(portfolio, state, _without(working, struck), references, started, now)
 
     sent = 0
     if place:
         with engine.begin() as conn:
             record_orders(conn, portfolio.portfolio_id, place)
         sent += _send(engine, client, token, portfolio, state, place)
-    if amend or requote:
+    moved = [*amend, *struck, *requote]
+    if moved:
         with engine.begin() as conn:
-            amend_orders(conn, portfolio.portfolio_id, [*amend, *requote])
-        sent += _send(engine, client, token, portfolio, state, [*amend, *requote])
+            amend_orders(conn, portfolio.portfolio_id, moved)
+        sent += _send(engine, client, token, portfolio, state, moved)
     return sent
 
 
-def _plan(db, portfolio, state, left: int):
+def _prices(db, portfolio, state) -> dict[str, float]:
     codes = {name.stock_code for name in portfolio.holdings}
     codes |= {leaving.stock_code for leaving in portfolio.exits}
     codes |= set(state.held)
-    prices = {code: price.close for code, price in latest_prices(db, sorted(codes)).items()}
-    return rebalance(portfolio, state, prices, days_left=left)
+    return {code: price.close for code, price in latest_prices(db, sorted(codes)).items()}
+
+
+def _struck(portfolio, state, working, references, recorded, prices) -> list:
+    """Working orders whose trigger the market has reached, re-quoted at market.
+
+    The trigger is what the record kept, not something the poll reports: the Backend only
+    holds the limit side.
+    """
+    triggers = {
+        row["stock_code"]: float(row["trigger_price"])
+        for row in recorded
+        if row["trigger_price"] is not None
+    }
+    hit = {
+        code
+        for (code, side) in working
+        if code in triggers and code in prices and trigger_hit(side, triggers[code], prices[code])
+    }
+    named = {name.stock_code: name for name in portfolio.holdings}
+    named |= {leaving.stock_code: leaving for leaving in portfolio.exits}
+    return [
+        at_market(state, named[code], code, side, order.quantity, references[code])
+        for (code, side), order in working.items()
+        if code in hit and code in named and code in references
+    ]
+
+
+def _without(working, struck):
+    moved = {order.stock_code for order in struck}
+    return {key: order for key, order in working.items() if key[0] not in moved}
 
 
 def _send(engine, client, token, portfolio, state, orders) -> int:

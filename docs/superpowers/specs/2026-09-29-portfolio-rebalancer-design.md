@@ -20,6 +20,7 @@ read on its own.
 | `rebalance()` | `(portfolio, previous, account, prices)` | `(portfolio, account, prices, days_left)` | exits belong to the portfolio; the band comes from the deadline |
 | Ladder budget | three days each for selling and buying | **three trading days for both together** | a buy funded by a sell cannot start its own three days |
 | Band | from days elapsed | from days **left** | an order that starts late starts narrow rather than restarting |
+| Order shape | two limits, one either side | **one limit plus a trigger we watch** | a limit on the near side fills instantly |
 | Trading days | weekdays | `exchange-calendars` XKRX | 한글날 is not a weekend |
 | Budget | three days, fixed | the week's remaining sessions | the next judgement is the deadline |
 | Market rung | the morning after | 14:30 on the last session | KRX closes at 15:30 |
@@ -192,15 +193,22 @@ dead code.
 
 ## Order Ladder
 
-An order is not sent at market first. Each one goes out as **two reservations around a reference
-price**, both for the full quantity:
+An order is not sent at market first. **A limit order fills as soon as the market reaches it**,
+so only the far side can be left sitting: a sell above the market waits for a rise, a buy below
+it waits for a dip. The near side cannot be an order at all — a sell below the market fills
+instantly at the market price, which is the opposite of waiting.
+
+So each order is **one limit at the far side, and a trigger at the near side that this service
+watches in QuestDB**. Crossing the trigger replaces the limit with a market order.
 
 ```
-reference 78,000, step ± 5%   →   74,100 × 100 shares   and   81,900 × 100 shares
+reference 78,000, band ± 5%
+  sell    limit 81,900      market if the price falls to 74,100
+  buy     limit 74,100      market if the price rises to 81,900
 ```
 
-Whichever fills, fills, and **the Backend cancels the other**. The low side alone risks never
-filling; the high side is what makes the fill happen.
+A sell that has fallen to its trigger has lost the chance to sell high, so getting out at market
+beats holding the order. A buy that has risen to its trigger is not getting its dip.
 
 **Selling and buying share one three-day budget.** The band comes from the trading days that
 remain, not from the days an order has been alive, so a buy placed after two days of selling
@@ -260,32 +268,16 @@ the ratio no longer matches its band.
 The reference travels in the payload too, so it is quoted on a tick as well. A market order
 carries no price.
 
-### The Step Is Read Back From the Pair
+### What Is Outstanding
 
-Nothing has to be stored, and the Backend does not have to carry the reference on the order.
-Two prices determine both unknowns:
+**One order per stock and side.** More than one is a state this service did not create, so it is
+left alone rather than guessing which is ours. Nothing is double counted when pending orders are
+folded into cash and holdings, because the near side was never an order.
 
-```
-reference = (low + high) / 2
-ratio     = (high − low) / (high + low)
-```
-
-The bands are two percentage points apart, so nothing is ambiguous. Checked by brute force over
-**2,432,028** `(reference, day)` combinations from 500 to 3,000,000 won: the day comes back right
-every time and the reference within 0.2%. In **37,847** of those the low falls in one tick band
-and the high in the next, so the two are rounded by different amounts — the case most likely to
-break it, and it holds.
-
-Two pending orders for the same company and side are one pair **when their prices sit either
-side of a reference at one of the bands** — quantities cannot be the test, because a partial fill
-makes them differ. Two unrelated orders 33% apart are simply two orders. Measured over 656,826
-pairs: every real one is still recognised at a tolerance eight times what tick rounding needs.
-
-A reservation therefore counts **once** when pending orders are folded into cash and holdings,
-even though the poll reports it as two rows. Counting both committed twice the cash and twice
-the shares, which showed up as buying far less than the account could afford.
-
-A lone order means the other side already filled; three is a state this service did not create. Neither is narrowed, because a rung
+**The reference comes from the record, not from the prices.** One limit price cannot say what it
+was a band away from, so `rebalance_orders.reference_price` keeps it and
+`rebalance_orders.trigger_price` keeps the price to watch. The band still comes from the deadline
+rather than being stored. Neither is narrowed, because a rung
 placed against a position that has moved is worse than leaving it. A pair carries the **smaller**
 of the two outstanding quantities, which is what a partial fill left to buy.
 

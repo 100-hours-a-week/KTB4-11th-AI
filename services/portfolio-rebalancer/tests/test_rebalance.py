@@ -1,6 +1,6 @@
 from portfolio_rebalancer.decide.accounts import AccountState
 from portfolio_rebalancer.decide.rebalance import rebalance
-from portfolio_rebalancer.decide.reservations import PRICE_BANDS
+from portfolio_rebalancer.decide.reservations import PRICE_BANDS, limit_and_trigger, tick_size
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
 SAMSUNG = ("00126380", "005930")
@@ -73,7 +73,7 @@ def test_a_part_filled_sell_funds_a_part_of_the_buy():
     orders = rebalance(plan, account(cash=1_236_000.0, held={"000660": 7}), prices)
 
     buy = next(order for order in orders if order.action == "buy")
-    assert 0 < buy.shares * buy.high <= 1_236_000.0
+    assert 0 < buy.shares * buy.trigger <= 1_236_000.0
 
 
 def test_a_buy_is_never_costed_below_the_side_that_would_be_paid():
@@ -83,7 +83,7 @@ def test_a_buy_is_never_costed_below_the_side_that_would_be_paid():
     orders = rebalance(plan, account(cash=1_000_000.0), {"005930": 78_000.0})
 
     buy = orders[0]
-    assert buy.shares * buy.high <= 1_000_000.0
+    assert buy.shares * buy.trigger <= 1_000_000.0
 
 
 def test_holding_more_than_the_target_sells_the_difference():
@@ -138,8 +138,8 @@ def test_every_order_carries_the_account_it_belongs_to():
     assert {order.account_id for order in orders} == {11}
 
 
-def test_an_order_goes_out_as_the_widest_pair():
-    """A fresh order starts on day zero, so it gets the widest band."""
+def test_a_fresh_order_goes_out_on_the_widest_band():
+    """The whole ladder is still ahead of it."""
     orders = rebalance(
         portfolio(holdings=[holding(SAMSUNG, 1.0)]),
         account(cash=1_000_000.0),
@@ -149,11 +149,11 @@ def test_an_order_goes_out_as_the_widest_pair():
     order = orders[0]
     assert order.band == PRICE_BANDS[0]
     assert order.reference == 78_000.0
-    assert (order.low, order.high) == (78_000.0 * 0.95, 78_000.0 * 1.05)
+    assert (order.limit, order.trigger) == limit_and_trigger(78_000.0, 3, "buy")
 
 
-def test_both_sides_of_the_pair_carry_the_full_quantity():
-    """One quantity, quoted twice -- not split across the two sides."""
+def test_a_buy_waits_below_the_market():
+    """A buy limit above the market fills at once, which is the opposite of waiting."""
     orders = rebalance(
         portfolio(holdings=[holding(SAMSUNG, 1.0)]),
         account(cash=8_190_000.0),
@@ -161,6 +161,7 @@ def test_both_sides_of_the_pair_carry_the_full_quantity():
     )
 
     assert orders[0].shares == 100
+    assert orders[0].limit < 78_000.0 < orders[0].trigger
 
 
 def test_the_allocation_rules_apply_to_the_buy_side_only():
@@ -196,7 +197,7 @@ def test_a_skip_says_why_and_carries_no_pair():
     )
 
     skip = next(order for order in orders if order.action == "skip")
-    assert skip.low is None and skip.high is None
+    assert skip.limit is None and skip.trigger is None
     assert "budget" in skip.note
 
 
@@ -301,15 +302,14 @@ def test_a_name_with_no_price_that_is_held_is_never_sold():
 def test_every_price_on_an_order_lands_on_a_tick():
     """The Backend answers 400 for an off-tick price, so this has to hold for the low, the
     high and the reference that travels with them."""
-    from portfolio_rebalancer.decide.reservations import tick_size
 
     awkward = {"005930": 1_999.0, "000660": 49_999.0, "035420": 499_999.0}
     holdings = [holding(SAMSUNG, 0.4), holding(HYNIX, 0.3), holding(NAVER, 0.3)]
 
     orders = rebalance(portfolio(holdings=holdings), account(cash=500_000_000.0), awkward)
 
-    priced = [order for order in orders if order.low is not None]
+    priced = [order for order in orders if order.limit is not None]
     assert priced
     for order in priced:
-        for price in (order.low, order.high, order.reference):
+        for price in (order.limit, order.trigger, order.reference):
             assert price % tick_size(price) == 0, f"{order.stock_code} {price}"

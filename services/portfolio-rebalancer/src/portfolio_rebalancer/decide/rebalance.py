@@ -11,8 +11,8 @@ from portfolio_rebalancer.decide.accounts import AccountState
 from portfolio_rebalancer.decide.reservations import (
     PRICE_BANDS,
     band_for,
+    limit_and_trigger,
     on_tick,
-    prices_for,
 )
 from portfolio_rebalancer.decide.shares import whole_shares
 from portfolio_rebalancer.order import Order
@@ -103,7 +103,7 @@ def _affordable(buys: list[Order], cash: float) -> list[Order]:
     """
     placed = []
     for order in sorted(buys, key=lambda order: -(order.weight or 0.0)):
-        price = order.high or order.reference or 0.0
+        price = order.trigger or order.reference or 0.0
         if price <= 0:
             continue
         shares = min(order.shares, int(cash // price))
@@ -177,7 +177,7 @@ def _order(
     Both sides carry the full quantity: whichever fills, the other is cancelled.
     """
     reference = prices.get(name.stock_code, 0.0)
-    pair = prices_for(reference, days_left) if reference > 0 else None
+    quote = limit_and_trigger(reference, days_left, action) if reference > 0 else None
     return Order(
         account_id=account_id,
         company_id=name.company_id,
@@ -189,7 +189,7 @@ def _order(
         # Carried even at market: it is the price the decision was made on, and it is
         # what a market order is costed against when the cash is checked.
         reference=on_tick(reference) if reference > 0 else None,
-        band=band_for(days_left) if pair else None,
-        low=pair[0] if pair else None,
-        high=pair[1] if pair else None,
+        band=band_for(days_left) if quote else None,
+        limit=quote[0] if quote else None,
+        trigger=quote[1] if quote else None,
     )

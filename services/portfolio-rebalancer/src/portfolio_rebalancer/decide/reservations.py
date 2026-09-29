@@ -1,4 +1,14 @@
-"""An order's two reservation prices, and reading a pair back. Pure: no I/O."""
+"""An order's limit price, the price that sends it to market, and the KRX tick. Pure.
+
+A limit order fills as soon as the market reaches it, so only the far side can be left
+sitting: a sell above the market waits for a rise, a buy below it waits for a dip. The
+near side cannot be an order at all -- a sell below the market fills instantly at the
+market price, which is the opposite of waiting. So it becomes a **trigger** this service
+watches in QuestDB, and crossing it sends the order at market.
+
+    sell   limit at reference + band     market if the price falls to reference - band
+    buy    limit at reference - band     market if the price rises to reference + band
+"""
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -6,18 +16,23 @@ from dataclasses import dataclass
 __all__ = [
     "PRICE_BANDS",
     "TICK_SIZES",
-    "Pair",
+    "Outstanding",
     "band_for",
-    "days_left_of",
+    "limit_and_trigger",
     "on_tick",
-    "prices_for",
-    "find_pairs",
-    "next_rung",
-    "read_reservation",
-    "reservation_prices",
+    "outstanding_orders",
+    "tick_size",
+    "trigger_hit",
 ]
 
 PENDING = "pending"
+BUY = "buy"
+SELL = "sell"
+
+# Day three ends in a market order rather than a fourth band, so every order fills
+# within the week. Narrowing alone would not guarantee that: a 1% band is harder to
+# reach than a 5% one.
+PRICE_BANDS: tuple[float, ...] = (0.05, 0.03, 0.01)
 
 # KRX moves in these steps, and the Backend answers 400 for a price that is not on one.
 # (upper bound exclusive, step)
@@ -30,25 +45,14 @@ TICK_SIZES: tuple[tuple[float, int], ...] = (
     (500_000, 500),
 )
 TOP_TICK = 1_000
-# How far a pair's ratio may sit from its band and still be recognised. Tick rounding
-# moves it by at most 0.0006, so this is eight times the margin it needs -- and far
-# tighter than any two unrelated orders on the same stock would land.
-BAND_TOLERANCE = 0.005
 
 
 @dataclass(frozen=True)
-class Pair:
-    """An outstanding reservation: its two prices and the quantity still to fill."""
+class Outstanding:
+    """An order the poll says is still working: its limit price and what is left of it."""
 
-    low: float
-    high: float
+    price: float
     quantity: int
-
-
-# Day three ends in a market order rather than a fourth band, so every order fills
-# within three trading days. Narrowing alone would not guarantee that: a 1% band is
-# harder to reach than a 5% one.
-PRICE_BANDS: tuple[float, ...] = (0.05, 0.03, 0.01)
 
 
 def tick_size(price: float) -> int:
@@ -60,120 +64,59 @@ def tick_size(price: float) -> int:
 
 
 def on_tick(price: float) -> float:
-    """The nearest price KRX will accept.
-
-    Rounding to nearest rather than up or down keeps the pair symmetric about its
-    reference, which is what lets the day be read back out of it.
-    """
+    """The nearest price KRX will accept. An off-tick price is a 400, not a rounding."""
     tick = tick_size(price)
     return float(round(price / tick) * tick)
 
 
-def reservation_prices(reference: float, day: int) -> tuple[float, float] | None:
-    """The low and high price for a day, or None once the ladder is at market.
-
-    Both are placed on a KRX tick here rather than left to the Backend, which rejects an
-    off-tick price with a 400 instead of rounding it.
-    """
-    if day >= len(PRICE_BANDS):
+def band_for(days_left: int) -> float | None:
+    """The band to quote with this many sessions left, or None to go to market."""
+    if days_left <= 0:
         return None
-    band = PRICE_BANDS[day]
-    return on_tick(reference * (1 - band)), on_tick(reference * (1 + band))
+    return PRICE_BANDS[max(len(PRICE_BANDS) - days_left, 0)]
 
 
-def read_reservation(low: float, high: float) -> tuple[float, int]:
-    """The reference price and the day, recovered from an outstanding pair.
+def limit_and_trigger(reference: float, days_left: int, side: str) -> tuple[float, float] | None:
+    """The price to place and the price that sends the order to market.
 
-    Neither is stored. Two prices fix both, and the bands are two percentage points
-    apart, so the Backend's tick rounding cannot push one into another.
+    None once the sessions run out: then the order goes at market outright. Both prices
+    are put on a KRX tick, the limit because the Backend would reject it otherwise and
+    the trigger so the two stay a fixed distance apart.
     """
-    reference = (low + high) / 2
-    ratio = (high - low) / (high + low)
-    day = min(range(len(PRICE_BANDS)), key=lambda i: abs(PRICE_BANDS[i] - ratio))
-    return reference, day
+    band = band_for(days_left)
+    if band is None:
+        return None
+
+    below = on_tick(reference * (1 - band))
+    above = on_tick(reference * (1 + band))
+    return (above, below) if side == SELL else (below, above)
 
 
-def find_pairs(
+def trigger_hit(side: str, trigger: float, price: float) -> bool:
+    """Whether the market has moved to where waiting stops being worth it.
+
+    A sell is waiting for a rise, so a fall to the trigger means the chance is gone and
+    getting out at market beats holding the order. A buy is waiting for a dip, so a rise
+    means the dip is not coming.
+    """
+    return price <= trigger if side == SELL else price >= trigger
+
+
+def outstanding_orders(
     pending_orders: Iterable[Mapping[str, object]],
-) -> dict[tuple[str, str], Pair]:
-    """The outstanding reservation pairs, keyed by stock code and side.
+) -> dict[tuple[str, str], Outstanding]:
+    """What is still working at the Backend, keyed by stock code and side.
 
-    Two pending orders on the same stock and the same side are one pair. A lone order
-    means the other side already filled, and three means a state this service did not
-    create; neither is narrowed, because a rung placed against a moved position is worse
-    than leaving it to the current one.
+    One order per stock and side. More than one is a state this service did not create,
+    so it is left alone rather than guessing which is ours.
     """
-    sides: dict[tuple[str, str], list[tuple[float, int]]] = {}
+    sides: dict[tuple[str, str], list[Outstanding]] = {}
     for order in pending_orders:
         if order.get("status") != PENDING:
             continue
         key = (str(order["stock_code"]), str(order["order_type"]))
         sides.setdefault(key, []).append(
-            (float(order["price"]), int(order["amount"]))  # type: ignore[arg-type]
+            Outstanding(price=float(order["price"]), quantity=int(order["amount"]))  # type: ignore[arg-type]
         )
 
-    # Both sides go out with the full quantity, so the smaller outstanding amount is what
-    # a partial fill left behind: that is what still has to be filled. Quantities cannot
-    # be required to match for the same reason, so what identifies a pair is that its two
-    # prices sit either side of a reference at one of the bands.
-    found = {}
-    for key, side in sides.items():
-        if len(side) != 2:
-            continue
-        low = min(price for price, _ in side)
-        high = max(price for price, _ in side)
-        if not _matches_a_band(low, high):
-            continue
-        found[key] = Pair(low=low, high=high, quantity=min(quantity for _, quantity in side))
-    return found
-
-
-def _matches_a_band(low: float, high: float) -> bool:
-    """Whether two prices could be one reservation rather than two unrelated orders."""
-    if low <= 0 or high <= low:
-        return False
-    ratio = (high - low) / (high + low)
-    return min(abs(ratio - band) for band in PRICE_BANDS) <= BAND_TOLERANCE
-
-
-def next_rung(low: float, high: float) -> tuple[float, float] | None:
-    """The narrower pair to replace an outstanding one with, or None to go to market.
-
-    The day is recovered from the pair rather than stored, so the rung after the last
-    band is the market order that guarantees the fill.
-    """
-    reference, day = read_reservation(low, high)
-    return reservation_prices(reference, day + 1)
-
-
-def _day_index(days_left: int) -> int:
-    """Which band a given number of days left corresponds to.
-
-    Selling and buying share one deadline, so the band comes from what is left rather
-    than from what has been spent: an order that starts late starts narrow instead of
-    restarting the ladder.
-    """
-    return max(len(PRICE_BANDS) - days_left, 0)
-
-
-def band_for(days_left: int) -> float | None:
-    """The band to quote with this many trading days left, or None to go to market."""
-    if days_left <= 0:
-        return None
-    return PRICE_BANDS[_day_index(days_left)]
-
-
-def prices_for(reference: float, days_left: int) -> tuple[float, float] | None:
-    """The pair to place with this many trading days left, or None to go to market."""
-    if days_left <= 0:
-        return None
-    return reservation_prices(reference, _day_index(days_left))
-
-
-def days_left_of(low: float, high: float) -> int:
-    """How many trading days an outstanding pair still has.
-
-    Read back out of the pair, so the deadline never has to be stored.
-    """
-    _, day = read_reservation(low, high)
-    return len(PRICE_BANDS) - day
+    return {key: found[0] for key, found in sides.items() if len(found) == 1}

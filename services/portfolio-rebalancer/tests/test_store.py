@@ -53,8 +53,8 @@ def order(**changes):
         "shares": 10,
         "reason": "반도체 업황 반등",
         "reference": 78_000.0,
-        "low": 74_100.0,
-        "high": 81_900.0,
+        "limit": 74_100.0,
+        "trigger": 81_900.0,
     }
     return Order(**(values | changes))
 
@@ -166,20 +166,20 @@ def test_orders_are_recorded_unsent(conn, portfolio_id):
     recorded = rows(conn, rebalance_orders)[0]
     assert recorded["sent_at"] is None
     assert recorded["stock_code"] == "005930"
-    assert float(recorded["low_price"]) == 74_100.0
-    assert float(recorded["high_price"]) == 81_900.0
+    assert float(recorded["limit_price"]) == 74_100.0
+    assert float(recorded["trigger_price"]) == 81_900.0
     assert recorded["reason"] == "반도체 업황 반등"
 
 
-def test_a_skip_records_without_a_pair(conn, portfolio_id):
+def test_a_skip_records_without_a_limit_or_a_trigger(conn, portfolio_id):
     record_orders(
         conn,
         portfolio_id,
-        [order(action="skip", shares=0, reference=None, low=None, high=None)],
+        [order(action="skip", shares=0, reference=None, limit=None, trigger=None)],
     )
 
     recorded = rows(conn, rebalance_orders)[0]
-    assert (recorded["low_price"], recorded["high_price"]) == (None, None)
+    assert (recorded["limit_price"], recorded["trigger_price"]) == (None, None)
 
 
 def test_marking_sent_stamps_the_recorded_orders(conn, portfolio_id):
@@ -326,13 +326,13 @@ def test_a_recorded_pair_is_marked_reserved(conn, portfolio_id):
 
 
 def test_a_market_order_is_marked_market(conn, portfolio_id):
-    record_orders(conn, portfolio_id, [order(low=None, high=None)])
+    record_orders(conn, portfolio_id, [order(limit=None, trigger=None)])
 
     assert rows(conn, rebalance_orders)[0]["status"] == "market"
 
 
 def test_a_skip_is_marked_skip(conn, portfolio_id):
-    record_orders(conn, portfolio_id, [order(action="skip", shares=0, low=None, high=None)])
+    record_orders(conn, portfolio_id, [order(action="skip", shares=0, limit=None, trigger=None)])
 
     assert rows(conn, rebalance_orders)[0]["status"] == "skip"
 
@@ -342,13 +342,13 @@ def test_amending_replaces_the_pair_in_place(conn, portfolio_id):
     an insert here would raise instead."""
     record_orders(conn, portfolio_id, [order()])
 
-    amend_orders(conn, portfolio_id, [order(low=75_660.0, high=80_340.0)])
+    amend_orders(conn, portfolio_id, [order(limit=75_700.0, trigger=80_300.0)])
 
     recorded = rows(conn, rebalance_orders)
     assert len(recorded) == 1
-    assert (float(recorded[0]["low_price"]), float(recorded[0]["high_price"])) == (
-        75_660.0,
-        80_340.0,
+    assert (float(recorded[0]["limit_price"]), float(recorded[0]["trigger_price"])) == (
+        75_700.0,
+        80_300.0,
     )
 
 
@@ -357,7 +357,7 @@ def test_amending_puts_the_order_back_to_unsent(conn, portfolio_id):
     record_orders(conn, portfolio_id, [order()])
     mark_sent(conn, portfolio_id, account_id=11)
 
-    amend_orders(conn, portfolio_id, [order(low=75_660.0, high=80_340.0)])
+    amend_orders(conn, portfolio_id, [order(limit=75_700.0, trigger=80_300.0)])
 
     assert rows(conn, rebalance_orders)[0]["sent_at"] is None
 
@@ -365,17 +365,17 @@ def test_amending_puts_the_order_back_to_unsent(conn, portfolio_id):
 def test_amending_to_market_clears_the_pair(conn, portfolio_id):
     record_orders(conn, portfolio_id, [order()])
 
-    amend_orders(conn, portfolio_id, [order(low=None, high=None)])
+    amend_orders(conn, portfolio_id, [order(limit=None, trigger=None)])
 
     recorded = rows(conn, rebalance_orders)[0]
-    assert (recorded["low_price"], recorded["high_price"]) == (None, None)
+    assert (recorded["limit_price"], recorded["trigger_price"]) == (None, None)
     assert recorded["status"] == "market"
 
 
 def test_amending_carries_the_outstanding_quantity(conn, portfolio_id):
     record_orders(conn, portfolio_id, [order(shares=100)])
 
-    amend_orders(conn, portfolio_id, [order(shares=60, low=75_660.0, high=80_340.0)])
+    amend_orders(conn, portfolio_id, [order(shares=60, limit=75_700.0, trigger=80_300.0)])
 
     assert float(rows(conn, rebalance_orders)[0]["quantity"]) == 60.0
 
@@ -383,7 +383,7 @@ def test_amending_carries_the_outstanding_quantity(conn, portfolio_id):
 def test_amending_leaves_another_account_alone(conn, portfolio_id):
     record_orders(conn, portfolio_id, [order(account_id=11), order(account_id=12)])
 
-    amend_orders(conn, portfolio_id, [order(account_id=11, low=1.0, high=2.0)])
+    amend_orders(conn, portfolio_id, [order(account_id=11, limit=1.0, trigger=2.0)])
 
     untouched = next(r for r in rows(conn, rebalance_orders) if r["account_id"] == 12)
-    assert float(untouched["low_price"]) == 74_100.0
+    assert float(untouched["limit_price"]) == 74_100.0

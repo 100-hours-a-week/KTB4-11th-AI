@@ -9,7 +9,7 @@ __all__ = ["Order"]
 
 @dataclass(frozen=True)
 class Order:
-    """One decision, with the two reservation prices it goes out as."""
+    """One decision: what to do, at what limit, and what price ends the waiting."""
 
     account_id: int
     company_id: str
@@ -20,6 +20,9 @@ class Order:
     weight: float | None = None
     reference: float | None = None
     band: float | None = None
-    low: float | None = None
-    high: float | None = None
+    # The price placed at the Backend. None means the order goes at market.
+    limit: float | None = None
+    # The price at which waiting stops being worth it: watched in QuestDB, and crossing
+    # it replaces the order with a market one.
+    trigger: float | None = None
     note: str = ""

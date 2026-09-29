@@ -127,8 +127,10 @@ rebalance_orders = sa.Table(
     sa.Column("side", sa.Text, nullable=False),
     sa.Column("quantity", QUANTITY, nullable=False),
     sa.Column("reference_price", MONEY, nullable=True),
-    sa.Column("low_price", MONEY, nullable=True),
-    sa.Column("high_price", MONEY, nullable=True),
+    # The price placed at the Backend; null once the order goes at market.
+    sa.Column("limit_price", MONEY, nullable=True),
+    # The price that ends the waiting and sends it at market.
+    sa.Column("trigger_price", MONEY, nullable=True),
     # portfolio_holdings.reason is nullable upstream, so an order can carry none.
     sa.Column("reason", sa.Text, nullable=True),
     sa.Column(
@@ -285,7 +287,7 @@ def _rung(order: Any) -> str:
     """Which rung of the ladder the order sits on, which `side` does not say."""
     if order.action == "skip":
         return SKIPPED
-    return RESERVED if order.low is not None else AT_MARKET
+    return RESERVED if order.limit is not None else AT_MARKET
 
 
 def record_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
@@ -298,8 +300,8 @@ def record_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
             "side": order.action,
             "quantity": order.shares,
             "reference_price": order.reference,
-            "low_price": order.low,
-            "high_price": order.high,
+            "limit_price": order.limit,
+            "trigger_price": order.trigger,
             "reason": order.reason,
             "status": _rung(order),
         }
@@ -327,8 +329,8 @@ def amend_orders(conn: Any, portfolio_id: int, orders: Iterable[Any]) -> None:
             )
             .values(
                 quantity=order.shares,
-                low_price=order.low,
-                high_price=order.high,
+                limit_price=order.limit,
+                trigger_price=order.trigger,
                 status=_rung(order),
                 sent_at=None,
             )

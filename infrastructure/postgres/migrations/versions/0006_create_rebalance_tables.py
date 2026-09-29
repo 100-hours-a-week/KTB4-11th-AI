@@ -102,8 +102,10 @@ def upgrade() -> None:
         sa.Column("side", sa.Text, nullable=False),
         sa.Column("quantity", QUANTITY, nullable=False),
         sa.Column("reference_price", MONEY, nullable=True),
-        sa.Column("low_price", MONEY, nullable=True),
-        sa.Column("high_price", MONEY, nullable=True),
+        # The price placed at the Backend; null once the order goes at market.
+        sa.Column("limit_price", MONEY, nullable=True),
+        # The price that ends the waiting and sends it at market.
+        sa.Column("trigger_price", MONEY, nullable=True),
         # portfolio_holdings.reason is nullable upstream, so an order can carry none.
         sa.Column("reason", sa.Text, nullable=True),
         sa.Column(

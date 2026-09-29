@@ -1,6 +1,5 @@
 import pytest
 from portfolio_rebalancer.decide.accounts import apply_pending, managed_accounts
-from portfolio_rebalancer.decide.reservations import reservation_prices
 
 
 def account(**changes):
@@ -222,50 +221,12 @@ def test_a_user_with_no_accounts_yields_nothing():
     assert list(managed_accounts([])) == []
 
 
-def reserved(stock_code="005930", order_type="buy", low=74_100.0, high=81_900.0, amount=15):
-    """A reservation as the poll reports it: two orders, both for the full quantity."""
-    return [
-        order(order_type=order_type, stock_code=stock_code, price=low, amount=amount),
-        order(order_type=order_type, stock_code=stock_code, price=high, amount=amount),
-    ]
+def test_a_reservation_is_one_order_so_nothing_is_double_counted():
+    """Only the far side is an order at the Backend; the near side is a trigger this
+    service watches. So a 15-share reservation commits 15 shares, not 30."""
+    reservation = [order(price=74_100.0, amount=15)]
 
+    state = apply_pending(account(cash_balance=2_884_000.0, pending_orders=reservation))
 
-def test_a_reservation_commits_its_cash_once_not_twice():
-    """Only one side of a pair can fill. Counting both commits twice the cash, which shows
-    up as buying far less than the account can afford."""
-    state = apply_pending(account(cash_balance=2_884_000.0, pending_orders=reserved()))
-
-    assert state.cash == 2_884_000.0 - 15 * 81_900.0
-
-
-def test_a_reservation_commits_at_the_high_side():
-    """That is the side that would actually be paid."""
-    state = apply_pending(account(cash_balance=10_000_000.0, pending_orders=reserved()))
-
-    assert state.cash == 10_000_000.0 - 15 * 81_900.0
-
-
-def test_a_reservation_moves_the_quantity_once_not_twice():
-    state = apply_pending(account(stocks=[], pending_orders=reserved(amount=15)))
-
-    assert state.held == {"005930": 15}
-
-
-def test_a_sell_reservation_also_counts_once():
-    held = [{"stock_id": "000660", "total_price": 1, "amount": 10}]
-    low, high = reservation_prices(412_000.0, 0)
-    pending = reserved(stock_code="000660", order_type="sell", low=low, high=high, amount=4)
-
-    state = apply_pending(account(stocks=held, pending_orders=pending))
-
-    assert state.held == {"000660": 6}
-
-
-def test_a_lone_order_is_still_counted_on_its_own():
-    """Half a pair means the other side filled, so what is left is a single commitment."""
-    lone = [order(price=81_900.0, amount=15)]
-
-    state = apply_pending(account(cash_balance=2_884_000.0, pending_orders=lone))
-
-    assert state.cash == 2_884_000.0 - 15 * 81_900.0
+    assert state.cash == 2_884_000.0 - 15 * 74_100.0
     assert state.held["005930"] == 100 + 15

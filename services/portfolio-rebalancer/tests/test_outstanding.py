@@ -1,29 +1,31 @@
-from datetime import UTC, date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from portfolio_rebalancer.decide.accounts import AccountState
-from portfolio_rebalancer.decide.outstanding import narrow
-from portfolio_rebalancer.decide.reservations import PRICE_BANDS, Pair, reservation_prices
+from portfolio_rebalancer.decide.outstanding import at_market, narrow, reached_the_backend
+from portfolio_rebalancer.decide.reservations import (
+    PRICE_BANDS,
+    Outstanding,
+    limit_and_trigger,
+    tick_size,
+)
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 
 SAMSUNG = ("00126380", "005930")
 HYNIX = ("00164779", "000660")
+KST = timezone(timedelta(hours=9))
 
-# The 2026-09-28 week has five sessions, so a Monday cycle has five days: Monday 5,
-# Tuesday 4, Wednesday 3, Thursday 2, Friday 1.
+# The 2026-09-28 week has five sessions: Monday 5 days left, Tuesday 4, Wednesday 3,
+# Thursday 2, Friday 1.
 MONDAY = date(2026, 9, 28)
-TUESDAY = date(2026, 9, 29)
+WEDNESDAY = date(2026, 9, 30)
 THURSDAY = date(2026, 10, 1)
 FRIDAY = date(2026, 10, 2)
 SATURDAY = date(2026, 10, 3)
-SUNDAY = date(2026, 10, 4)
 
 
-KST = timezone(timedelta(hours=9))
-
-
-def noon(day):
-    """A KST datetime in the middle of the session, well before the 14:30 cutoff."""
+def noon(day: date) -> datetime:
+    """Well before the 14:30 cutoff on the last session."""
     return datetime(day.year, day.month, day.day, 11, 0, tzinfo=KST)
 
 
@@ -43,156 +45,160 @@ def account(held=None):
     return AccountState(account_id=11, cash=0.0, held=dict(held or {}))
 
 
-def at(day: date) -> datetime:
-    return datetime(day.year, day.month, day.day, 6, 0, tzinfo=UTC)
+def working_at(days_left, side="buy", code="005930", reference=78_000.0, quantity=100):
+    """An order sitting at the limit that many sessions would have quoted."""
+    limit, _ = limit_and_trigger(reference, days_left, side)
+    return {(code, side): Outstanding(price=limit, quantity=quantity)}
 
 
-def pair_for(day=0, reference=78_000.0, quantity=100):
-    low, high = reservation_prices(reference, day)
-    return Pair(low=low, high=high, quantity=quantity)
+REFERENCES = {"005930": 78_000.0, "000660": 412_000.0}
 
 
-def test_a_pair_narrows_as_the_week_runs_down():
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(THURSDAY))
-
-    assert len(orders) == 1
-    assert orders[0].band == PRICE_BANDS[1]
-    assert (orders[0].low, orders[0].high) == reservation_prices(78_000.0, 1)
-
-
-def test_a_pair_sent_today_is_left_alone():
-    """The rung advances once per trading day, and the poll runs hourly."""
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, TUESDAY, noon(TUESDAY))
-
-    assert orders == []
-
-
-@pytest.mark.parametrize("weekend", [SATURDAY, SUNDAY])
-def test_nothing_narrows_when_the_market_is_shut(weekend):
-    """A rung spent on a closed market is a rung wasted, and there are only three."""
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(weekend))
-
-    assert orders == []
-
-
-def test_the_band_tracks_the_sessions_left_not_the_calendar_days():
-    """Monday to Friday is four calendar days but one session left, which is the last
-    band."""
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(FRIDAY))
-
-    assert len(orders) == 1
-    assert orders[0].band == PRICE_BANDS[2]
-
-
-def test_the_deadline_falls_through_to_market():
-    """Narrowing does not guarantee a fill; the market rung does."""
-    pairs = {("005930", "buy"): pair_for(day=len(PRICE_BANDS) - 1)}
-    past_the_cutoff = datetime(2026, 10, 2, 15, 0, tzinfo=KST)
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, past_the_cutoff)
-
-    assert len(orders) == 1
-    assert (orders[0].low, orders[0].high, orders[0].band) == (None, None, None)
-    assert orders[0].note
-
-
-def test_the_quantity_carries_over_unchanged():
-    pairs = {("005930", "buy"): pair_for(day=0, quantity=73)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(THURSDAY))
-
-    assert orders[0].shares == 73
-
-
-def test_a_partly_filled_pair_narrows_only_what_is_left():
-    pairs = {("005930", "buy"): pair_for(day=0, quantity=60)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(THURSDAY))
-
-    assert orders[0].shares == 60
-
-
-def test_the_reference_is_the_one_the_first_pair_fixed():
-    """Every rung is measured from the original reference, not from wherever the price
-    has walked to since."""
-    pairs = {("005930", "buy"): pair_for(day=0, reference=78_000.0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(THURSDAY))
-
-    assert orders[0].reference == pytest.approx(78_000.0)
-
-
-def test_the_side_is_preserved():
-    pairs = {("000660", "sell"): pair_for(day=0, reference=412_000.0)}
-
-    orders = narrow(portfolio(exits=[exited()]), account(), pairs, MONDAY, noon(THURSDAY))
-
-    assert orders[0].action == "sell"
-
-
-def test_the_reason_still_travels_with_the_order():
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
+def test_an_order_moves_to_the_band_its_remaining_sessions_allow():
     orders = narrow(
-        portfolio(holdings=[holding(reason="반도체 업황 반등")]),
+        portfolio(holdings=[holding()]),
         account(),
-        pairs,
+        working_at(5),
+        REFERENCES,
         MONDAY,
         noon(THURSDAY),
     )
 
+    assert len(orders) == 1
+    assert orders[0].band == PRICE_BANDS[1]
+    assert orders[0].limit == limit_and_trigger(78_000.0, 2, "buy")[0]
+
+
+def test_an_order_already_at_the_right_limit_is_left_alone():
+    """The poll runs hourly; re-quoting the same price every hour would be noise."""
+    orders = narrow(
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(2),
+        REFERENCES,
+        MONDAY,
+        noon(THURSDAY),
+    )
+
+    assert orders == []
+
+
+def test_the_deadline_sends_the_order_to_market():
+    """Narrowing does not guarantee a fill; the market rung does."""
+    past_the_cutoff = datetime(2026, 10, 2, 15, 0, tzinfo=KST)
+
+    orders = narrow(
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(1),
+        REFERENCES,
+        MONDAY,
+        past_the_cutoff,
+    )
+
+    assert len(orders) == 1
+    assert (orders[0].limit, orders[0].trigger, orders[0].band) == (None, None, None)
+    assert orders[0].note
+
+
+@pytest.mark.parametrize("shut", [SATURDAY, date(2026, 10, 9)])
+def test_nothing_moves_on_a_day_the_exchange_is_shut(shut):
+    """Saturday and 한글날 alike: a band spent on a closed market is wasted."""
+    orders = narrow(
+        portfolio(holdings=[holding()]), account(), working_at(5), REFERENCES, MONDAY, noon(shut)
+    )
+
+    assert orders == []
+
+
+def test_a_missed_session_does_not_hand_the_order_a_day_back():
+    """The band comes from the deadline, not a counter."""
+    orders = narrow(
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(5),
+        REFERENCES,
+        MONDAY,
+        noon(FRIDAY),
+    )
+
+    assert orders[0].band == PRICE_BANDS[2]
+
+
+def test_the_reference_comes_from_the_record_not_the_price():
+    """One limit price cannot say what it was a band away from, so the record keeps it."""
+    orders = narrow(
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(5),
+        {"005930": 100_000.0},
+        MONDAY,
+        noon(THURSDAY),
+    )
+
+    assert orders[0].reference == 100_000.0
+    assert orders[0].limit == limit_and_trigger(100_000.0, 2, "buy")[0]
+
+
+def test_an_order_with_no_recorded_reference_is_left_alone():
+    orders = narrow(
+        portfolio(holdings=[holding()]), account(), working_at(5), {}, MONDAY, noon(THURSDAY)
+    )
+
+    assert orders == []
+
+
+def test_an_order_the_portfolio_does_not_name_is_left_alone():
+    """Someone else placed it."""
+    orders = narrow(
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(5, code="068270"),
+        {"068270": 200_000.0},
+        MONDAY,
+        noon(THURSDAY),
+    )
+
+    assert orders == []
+
+
+def test_the_side_is_preserved():
+    orders = narrow(
+        portfolio(exits=[exited()]),
+        account(),
+        working_at(5, side="sell", code="000660", reference=412_000.0),
+        REFERENCES,
+        MONDAY,
+        noon(THURSDAY),
+    )
+
+    assert orders[0].action == "sell"
+    assert orders[0].limit > 412_000.0
+
+
+def test_the_quantity_and_the_reason_carry_over():
+    orders = narrow(
+        portfolio(holdings=[holding(reason="반도체 업황 반등")]),
+        account(),
+        working_at(5, quantity=73),
+        REFERENCES,
+        MONDAY,
+        noon(THURSDAY),
+    )
+
+    assert orders[0].shares == 73
     assert orders[0].reason == "반도체 업황 반등"
     assert orders[0].account_id == 11
 
 
-def test_a_pair_the_portfolio_does_not_name_is_left_alone():
-    """Someone else placed it, so this service has no reason to move it."""
-    pairs = {("068270", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(THURSDAY))
-
-    assert orders == []
-
-
-def test_a_pair_with_no_recorded_send_is_left_alone():
-    """Without a send time there is no way to know a trading day has passed."""
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, TUESDAY, noon(TUESDAY))
-
-    assert orders == []
-
-
-def test_an_unsent_record_is_left_alone():
-    """sent_at is null between recording and sending, so the pair is not on the market
-    yet and nothing about it has aged."""
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, TUESDAY, noon(TUESDAY))
-
-    assert orders == []
-
-
-def test_every_pair_advances_on_the_one_shared_deadline():
-    """Selling and buying share three trading days, so the pairs move together rather than
-    each keeping its own count."""
-    pairs = {
-        ("005930", "buy"): pair_for(day=0),
-        ("000660", "sell"): pair_for(day=0, reference=412_000.0),
-    }
+def test_every_order_advances_on_the_one_shared_deadline():
+    both = working_at(5) | working_at(5, side="sell", code="000660", reference=412_000.0)
 
     orders = narrow(
         portfolio(holdings=[holding()], exits=[exited()]),
         account(),
-        pairs,
+        both,
+        REFERENCES,
         MONDAY,
         noon(THURSDAY),
     )
@@ -201,39 +207,60 @@ def test_every_pair_advances_on_the_one_shared_deadline():
     assert {order.band for order in orders} == {PRICE_BANDS[1]}
 
 
-def test_no_pairs_means_no_orders():
-    assert narrow(portfolio(holdings=[holding()]), account(), {}, TUESDAY, noon(TUESDAY)) == []
+def test_nothing_working_means_no_orders():
+    assert (
+        narrow(portfolio(holdings=[holding()]), account(), {}, REFERENCES, MONDAY, noon(WEDNESDAY))
+        == []
+    )
 
 
-def test_a_pair_already_at_the_right_band_is_left_alone():
-    """The poll runs hourly, so re-quoting the same band every hour would be noise."""
-    pairs = {("005930", "buy"): pair_for(day=1)}
+@pytest.mark.parametrize("reference", [1_999.0, 49_999.0, 499_999.0])
+def test_a_re_quoted_order_lands_on_a_tick(reference):
+    """Every rung goes to the Backend, not just the first."""
+    orders = narrow(
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(5, reference=reference),
+        {"005930": reference},
+        MONDAY,
+        noon(THURSDAY),
+    )
 
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(THURSDAY))
-
-    assert orders == []
-
-
-def test_a_missed_day_does_not_hand_the_order_a_day_back():
-    """The band comes from the deadline, not a counter, so a tick the service missed
-    cannot leave an order wider than its remaining days allow."""
-    pairs = {("005930", "buy"): pair_for(day=0)}
-
-    orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(FRIDAY))
-
-    assert orders[0].band == PRICE_BANDS[2]
+    order = orders[0]
+    for price in (order.limit, order.trigger, order.reference):
+        assert price % tick_size(price) == 0, f"{reference} → {price}"
 
 
-def test_a_narrowed_pair_also_lands_on_a_tick():
-    """Every rung goes to the Backend, not just the first, so every rung has to be
-    quotable."""
-    from portfolio_rebalancer.decide.reservations import tick_size
+# ---- at_market ----
 
-    for reference in (1_999.0, 49_999.0, 499_999.0):
-        pairs = {("005930", "buy"): pair_for(day=0, reference=reference)}
 
-        orders = narrow(portfolio(holdings=[holding()]), account(), pairs, MONDAY, noon(THURSDAY))
+def test_a_struck_order_carries_no_limit_and_no_trigger():
+    """Crossing the trigger is the signal that waiting has stopped being worth it."""
+    order = at_market(account(), holding(), "005930", "buy", 73, 78_000.0)
 
-        order = orders[0]
-        for price in (order.low, order.high, order.reference):
-            assert price % tick_size(price) == 0, f"{reference} → {price}"
+    assert (order.limit, order.trigger, order.band) == (None, None, None)
+    assert order.shares == 73
+    assert order.note
+
+
+def test_a_struck_order_keeps_its_reason_and_reference():
+    order = at_market(account(), holding(reason="반도체"), "005930", "buy", 10, 78_000.0)
+
+    assert order.reason == "반도체"
+    assert order.reference == 78_000.0
+
+
+# ---- reached_the_backend ----
+
+
+def test_an_order_still_working_means_the_request_arrived():
+    """Every placeable order goes out in one request, so one of them working is proof."""
+    assert reached_the_backend(["005930", "000660"], working_at(5)) is True
+
+
+def test_nothing_working_means_the_request_never_arrived():
+    assert reached_the_backend(["005930"], {}) is False
+
+
+def test_someone_elses_order_is_not_proof():
+    assert reached_the_backend(["005930"], working_at(5, code="068270")) is False
