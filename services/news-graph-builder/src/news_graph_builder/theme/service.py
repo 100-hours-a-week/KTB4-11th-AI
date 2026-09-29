@@ -1,8 +1,8 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 
-from news_graph_builder.common import normalize
 from news_graph_builder.theme.dto import Theme, ThemeMember
 from news_graph_builder.theme.repository import find_corp_codes_by_stock_code, replace_themes
 

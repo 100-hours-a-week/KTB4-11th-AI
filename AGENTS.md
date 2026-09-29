@@ -14,19 +14,22 @@ uv run pytest                               # all tests (packages/, services/, i
 uv run pytest services/news-clusterer       # one member
 uv run pytest packages/market-analyzer/tests/test_indicators.py::test_rsi_matches_the_input_length
 uv run news-clusterer                       # run a service by its console script
-KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news uv run alembic upgrade head
-KTB_QUESTDB_CONF='http::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
+KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb uv run alembic upgrade head
+KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 
 docker compose -f compose.dev.yaml up -d    # dev postgres/questdb/redis (the -f flag is required)
+# once, on a volume created before the rename:
+docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
+PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from OPENROUTER_API_KEY in .env
 docker compose -f compose.dev.yaml up -d market-analyzer-mcp portfolio-rebalancer-http   # MCP is reachable only inside the compose network
 
-# tests TRUNCATE tables: point them at a separate database, never at `news`
-docker compose -f compose.dev.yaml exec postgres createdb -U ktb news_test
-KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run alembic upgrade head
-KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/news_test uv run pytest
+# tests TRUNCATE tables: point them at a separate database, never at `ktb`
+docker compose -f compose.dev.yaml exec postgres createdb -U ktb ktb_test
+KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run alembic upgrade head
+KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest
 ```
 
 pytest runs with `--import-mode=importlib`, so test files with the same name (e.g. `test_settings.py`) can exist in several members without `__init__.py`.
@@ -52,7 +55,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `QUESTDB_DATABASE` | portfolio-builder QuestDB DSN | required |
 | `QUESTDB_PASSWORD` | compose, portfolio-builder QuestDB DSN | required |
 | `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
-| `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `news_test`, never `news` | — |
+| `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `ktb_test`, never `ktb` | — |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
 | `KTB_EMBEDDING_MODEL` | news-preprocessor | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` |
 | `KTB_EMBEDDING_DIMENSIONS` | news-preprocessor, news-clusterer; must equal the `vector(2000)` column | `2000` |
@@ -80,8 +83,12 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `NEWS_GRAPH_BUILDER_KIWOOM_REQUEST_INTERVAL` | news-graph-builder `kiwoom` (seconds between calls) | `0.2` |
 | `NEWS_GRAPH_BUILDER_DART_API_KEY` | news-graph-builder `company`; compose fills it from `OPENDART_API_KEY` in `.env` | required |
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder | required |
-| `PORTFOLIO_BUILDER_QUESTDB_DSN` | portfolio-builder | required |
-| `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | portfolio-builder | required |
+| `PORTFOLIO_BUILDER_QUESTDB_CONF` | portfolio-builder (official client config, e.g. `ws::addr=localhost:9000;`) | required |
+| `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | portfolio-builder | required |
+| `PORTFOLIO_BUILDER_LLM_MODEL` | portfolio-builder (OpenRouter model id) | required |
+| `PORTFOLIO_BUILDER_THINKING_LEVEL` | portfolio-builder (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`) | `medium` |
+| `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | portfolio-builder | `7` |
+| `PORTFOLIO_BUILDER_MAX_TURNS` | portfolio-builder | `150` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | portfolio-builder | `INFO` |
 | `MARKET_COLLECTOR_QUESTDB_CONF` | market-collector | required |
 | `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | market-collector | required |
@@ -106,18 +113,19 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-preprocessor` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-clusterer` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
-| `services/portfolio-builder` | service | work-queue consumer | `ktb-core`, `ktb-market-analyzer` |
+| `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/market-collector` | service | single-run archive job for current KOSPI 200 OHLCV | `ktb-core` |
 | `services/market-analyzer-mcp` | service | HTTP server: MCP streamable HTTP at `/mcp`, `GET /health` | `ktb-core` |
 | `services/portfolio-rebalancer-http` | service | HTTP server: FastAPI, `GET /health` | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate through datastores, except for two HTTP edges.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all. The only direct calls are portfolio-builder → market-analyzer-mcp (MCP over HTTP) and portfolio-builder → portfolio-rebalancer-http → Backend (design: `docs/superpowers/specs/2026-09-28-service-skeletons-design.md`). market-analyzer-mcp is never published outside the Docker network, so its DNS-rebinding protection is off.
+- **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, news-graph-builder reads those and writes `cluster_summaries`, the knowledge graph (`companies`, `company_aliases`, `entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`) and Kiwoom theme data (`themes`, `theme_companies`), and portfolio-builder reads them all plus QuestDB bars and writes `portfolios`, `portfolio_holdings`, `portfolio_exits` (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself and does not call market-analyzer-mcp. The planned direct call is portfolio-builder → portfolio-rebalancer-http → Backend (design: `docs/superpowers/specs/2026-09-28-service-skeletons-design.md`). market-analyzer-mcp is never published outside the Docker network, so its DNS-rebinding protection is off.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot.
-- **Work queue:** SQS in production, Redis in development. portfolio-builder is its only consumer.
+- **Work queue:** SQS in production, Redis in development. No consumer yet; portfolio-rebalancer-http consumes it after the MVP.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
+- **portfolio-builder runs a LangChain `create_agent` agent on OpenRouter** and computes technical evidence with TA-Lib directly (not `ktb-market-analyzer`). The OpenRouter key lives only in the environment.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.
 - **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `MARKET_ANALYZER_MCP_`, `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`, `PORTFOLIO_REBALANCER_HTTP_`). There is deliberately no shared base class in core.
 - Every service's `main()` calls `ktb_core.logging.setup_logging()` first, which emits JSON logs on stdout.

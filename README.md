@@ -4,7 +4,7 @@
 - `news-preprocessor`: 뉴스 수집과 임베딩
 - `news-clusterer`: 뉴스 이벤트 단위 클러스터링
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
-- `portfolio-builder`: 뉴스 데이터를 바탕으로 포트폴리오 생성
+- `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
 - `market-analyzer-mcp`: 시장 분석 도구를 제공하는 MCP 서버 (Docker 네트워크 내부 전용)
 - `portfolio-rebalancer-http`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 HTTP 서버
@@ -52,7 +52,7 @@ Portainer는 호스트의 Docker 소켓에 접근하므로 호스트의 컨테�
 QuestDB는 서비스 시작 전에 별도 작업으로 초기화합니다.
 
 ```bash
-KTB_QUESTDB_CONF='http::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
+KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 ```
 
 ```mermaid
@@ -174,7 +174,7 @@ GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이�
 | 변수 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
 | `KTB_POSTGRES_DSN` | 마이그레이션 시 | | `alembic upgrade`가 사용하는 DSN |
-| `KTB_TEST_POSTGRES_DSN` | | | DB 테스트용 DSN. 없으면 해당 테스트를 건너뜀. 테스트가 테이블을 비우므로 `news`가 아닌 `news_test`를 가리킬 것 |
+| `KTB_TEST_POSTGRES_DSN` | | | DB 테스트용 DSN. 없으면 해당 테스트를 건너뜀. 테스트가 테이블을 비우므로 `ktb`가 아닌 `ktb_test`를 가리킬 것 |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor | | OpenAI 호환 임베딩 서버 주소 (`/v1` 포함) |
 | `KTB_EMBEDDING_MODEL` | | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` | 임베딩 모델 |
 | `KTB_EMBEDDING_DIMENSIONS` | | `2000` | DB 컬럼 `vector(2000)`과 같아야 함 |
@@ -232,8 +232,12 @@ GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이�
 | 변수 | 필수 | 기본값 |
 |---|---|---|
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | |
-| `PORTFOLIO_BUILDER_QUESTDB_DSN` | 필수 | |
-| `PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL` | 필수 | |
+| `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | 예: `ws::addr=localhost:9000;` |
+| `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | 필수 | |
+| `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | OpenRouter 모델 ID |
+| `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` |
+| `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | | `7` |
+| `PORTFOLIO_BUILDER_MAX_TURNS` | | `150` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` |
 
 ### market-analyzer-mcp (`MARKET_ANALYZER_MCP_`)

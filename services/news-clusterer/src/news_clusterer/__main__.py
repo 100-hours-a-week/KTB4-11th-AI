@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, service_name="news-clusterer")
     logger.info("news-clusterer started")
     with ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)

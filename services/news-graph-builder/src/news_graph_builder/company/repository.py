@@ -1,9 +1,9 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 from sqlalchemy.dialects.postgresql import insert
 
-from news_graph_builder.common import normalize
 from news_graph_builder.company.dto import DartCompany
 from news_graph_builder.database import (
     cluster_entities,
