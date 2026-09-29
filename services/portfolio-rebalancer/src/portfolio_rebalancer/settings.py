@@ -13,4 +13,7 @@ class Settings(BaseSettings):
     questdb_conf: str
     backend_url: str
     # A credential: SecretStr keeps it out of logs and repr.
-    backend_jwt: SecretStr
+    backend_jwt_secret: SecretStr
+    # Who the token says it is. Deployment config rather than code, because the Backend
+    # decides which identity may read every user.
+    backend_jwt_subject: str = "portfolio-rebalancer"

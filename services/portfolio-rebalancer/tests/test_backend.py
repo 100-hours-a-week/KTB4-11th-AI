@@ -1,7 +1,9 @@
 import json
+import time
 from dataclasses import dataclass
 
 import httpx
+import jwt as pyjwt
 import pytest
 from portfolio_rebalancer.request.backend import (
     bearer_token,
@@ -10,8 +12,7 @@ from portfolio_rebalancer.request.backend import (
     send_orders,
 )
 
-JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWJhbGFuY2VyIn0.c2lnbmF0dXJl"
-TOKEN = JWT
+TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWJhbGFuY2VyIn0.c2lnbmF0dXJl"
 
 
 @dataclass(frozen=True)
@@ -115,43 +116,77 @@ def test_a_rejected_send_raises():
         send_orders(client, TOKEN, [FakeOrder(11, "005930", "buy", 1)])
 
 
-def test_a_configured_jwt_is_used_as_the_bearer_token():
-    assert bearer_token(JWT) == JWT
+# At least 32 bytes, or PyJWT warns that the key is shorter than the HMAC output.
+SECRET = "a-shared-secret-of-at-least-thirty-two-bytes"
+SUBJECT = "portfolio-rebalancer"
 
 
-def test_surrounding_whitespace_is_trimmed():
-    """An environment variable copied from a file often carries a trailing newline."""
-    assert bearer_token(f"  {JWT}\n") == JWT
+def test_the_token_is_signed_with_the_shared_secret():
+    """It must verify with the secret the Backend holds, or every call is a 401."""
+    token = bearer_token(SECRET, SUBJECT)
+
+    claims = pyjwt.decode(token, SECRET, algorithms=["HS256"])
+
+    assert claims["sub"] == SUBJECT
 
 
-def test_a_jwt_pasted_with_its_scheme_is_refused():
-    """It would go out as "Bearer Bearer ey..." and earn a 401 nobody could explain."""
-    with pytest.raises(ValueError, match="scheme"):
-        bearer_token(f"Bearer {JWT}")
+def test_a_token_signed_with_another_secret_does_not_verify():
+    """Proves the signature is real rather than a bare payload."""
+    token = bearer_token("another-secret-of-at-least-thirty-two-bytes", SUBJECT)
+
+    with pytest.raises(pyjwt.InvalidSignatureError):
+        pyjwt.decode(token, SECRET, algorithms=["HS256"])
 
 
-@pytest.mark.parametrize(
-    "not_a_jwt",
-    ["", "opaque-token", "two.segments", "four.seg.ments.here", "..", "a..c"],
-)
-def test_something_that_is_not_a_jwt_is_refused(not_a_jwt):
-    """Better at startup than as a 401 in the Backend's log."""
-    with pytest.raises(ValueError, match="JWT"):
-        bearer_token(not_a_jwt)
+def test_the_algorithm_is_declared_in_the_header():
+    token = bearer_token(SECRET, SUBJECT)
+
+    assert pyjwt.get_unverified_header(token)["alg"] == "HS256"
+
+
+def test_the_token_expires_after_it_was_issued():
+    claims = pyjwt.decode(bearer_token(SECRET, SUBJECT), SECRET, algorithms=["HS256"])
+
+    assert claims["exp"] > claims["iat"]
+
+
+def test_an_expired_token_is_recognised_as_expired():
+    """The lifetime has to be long enough for one tick, so a fresh token is never
+    already stale."""
+    claims = pyjwt.decode(bearer_token(SECRET, SUBJECT), SECRET, algorithms=["HS256"])
+
+    assert claims["exp"] - int(time.time()) > 60
+
+
+def test_the_subject_comes_from_configuration():
+    """The Backend decides which identity may read every user, so it is deployment
+    config rather than a constant."""
+    token = bearer_token(SECRET, "some-other-identity")
+
+    assert pyjwt.decode(token, SECRET, algorithms=["HS256"])["sub"] == "some-other-identity"
+
+
+@pytest.mark.parametrize("empty", ["", "   ", "\n"])
+def test_an_empty_secret_is_refused(empty):
+    """Signing with nothing would produce a token the Backend rejects, and the 401 would
+    look like a claim problem rather than a missing setting."""
+    with pytest.raises(ValueError, match="empty"):
+        bearer_token(empty, SUBJECT)
 
 
 def test_the_jwt_goes_out_on_both_calls():
     """Both /api/v1/users and /api/v1/orders are authenticated."""
+    token = bearer_token(SECRET, SUBJECT)
     users, seen_users = recorder(responder({"users": []}))
-    fetch_accounts(users, bearer_token(JWT))
+    fetch_accounts(users, token)
 
     orders, seen_orders = recorder(responder({"message": "ok"}))
-    send_orders(orders, bearer_token(JWT), [FakeOrder(11, "005930", "buy", 1)])
+    send_orders(orders, token, [FakeOrder(11, "005930", "buy", 1)])
 
     assert seen_users[0].url.path == "/api/v1/users"
-    assert seen_users[0].headers["authorization"] == f"Bearer {JWT}"
+    assert seen_users[0].headers["authorization"] == f"Bearer {token}"
     assert seen_orders[0].url.path == "/api/v1/accounts/11/orders"
-    assert seen_orders[0].headers["authorization"] == f"Bearer {JWT}"
+    assert seen_orders[0].headers["authorization"] == f"Bearer {token}"
 
 
 def test_the_client_is_built_against_the_backend_url():

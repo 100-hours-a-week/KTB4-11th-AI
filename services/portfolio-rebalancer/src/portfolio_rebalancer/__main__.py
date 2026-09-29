@@ -31,7 +31,10 @@ def main() -> None:
             connect(settings.questdb_conf) as db,
             build_client(settings.backend_url) as client,
         ):
-            token = bearer_token(settings.backend_jwt.get_secret_value())
+            token = bearer_token(
+                settings.backend_jwt_secret.get_secret_value(),
+                settings.backend_jwt_subject,
+            )
             # The tick owns its transactions: an order has to be committed before it is
             # sent, so one transaction cannot span the send.
             sent = tick(engine, db, client, token)

@@ -18,7 +18,7 @@ def wire(monkeypatch, recorder, sent=3):
     monkeypatch.setattr(__main__, "Settings", lambda: _settings())
     monkeypatch.setattr(__main__, "connect", lambda conf: _closing("db"))
     monkeypatch.setattr(__main__, "build_client", lambda url: _closing("client"))
-    monkeypatch.setattr(__main__, "bearer_token", lambda jwt: jwt)
+    monkeypatch.setattr(__main__, "bearer_token", lambda secret, subject: "a-token")
     monkeypatch.setattr(__main__.sa, "create_engine", lambda dsn: _engine(recorder))
     monkeypatch.setattr(
         __main__,
@@ -45,11 +45,7 @@ def test_the_tick_gets_the_engine_a_questdb_handle_a_client_and_a_token(monkeypa
     __main__.main()
 
     engine, db, client, token = recorder.ticks[0]
-    assert (db, client, token) == (
-        "db",
-        "client",
-        "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWJhbGFuY2VyIn0.c2lnbmF0dXJl",
-    )
+    assert (db, client, token) == ("db", "client", "a-token")
     assert hasattr(engine, "begin")
 
 
@@ -93,7 +89,8 @@ class _settings:
     questdb_conf = "ws::addr=questdb:9000;"
     backend_url = "http://backend:8080"
     postgres_dsn = "postgresql+psycopg://ktb:ktb@postgres:5432/ktb"
-    backend_jwt = _Secret("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWJhbGFuY2VyIn0.c2lnbmF0dXJl")
+    backend_jwt_secret = _Secret("a-shared-secret-of-at-least-thirty-two-bytes")
+    backend_jwt_subject = "portfolio-rebalancer"
 
 
 class _closing:

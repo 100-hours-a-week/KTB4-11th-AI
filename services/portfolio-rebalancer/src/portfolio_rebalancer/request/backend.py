@@ -1,15 +1,17 @@
 """The Backend's HTTP client. Every request to the Backend goes through here.
 
-Both calls carry a JWT as a bearer token. How that JWT is obtained lives in this module
-and nowhere else, so if the Backend later wants it exchanged for credentials rather than
-configured, one file changes. `market-collector`'s Kiwoom client is the precedent.
+Both calls carry a JWT signed with the shared secret. Signing lives in this module and
+nowhere else, so if the Backend later wants the token exchanged at a login endpoint
+instead, one file changes. `market-collector`'s Kiwoom client is the precedent.
 """
 
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
 import httpx
+import jwt
 
 __all__ = ["bearer_token", "build_client", "fetch_accounts", "send_orders"]
 
@@ -17,25 +19,33 @@ USERS_PATH = "/api/v1/users"
 # Orders are placed per account, so the account is part of the path, not just the body.
 ORDERS_PATH = "/api/v1/accounts/{account_id}/orders"
 TIMEOUT = 10.0
+ALGORITHM = "HS256"
+# A tick lives for seconds, so the token needs no more life than one run plus clock skew.
+TOKEN_LIFETIME = 300
 
 
 def build_client(backend_url: str) -> httpx.Client:
     return httpx.Client(base_url=backend_url, timeout=TIMEOUT)
 
 
-def bearer_token(backend_jwt: str) -> str:
-    """The JWT to send as a bearer token, checked for the two mistakes that cost a 401.
+def bearer_token(secret: str, subject: str) -> str:
+    """Sign a JWT with the shared secret.
 
-    A value pasted with its scheme still attached would go out as "Bearer Bearer ey...",
-    and anything without three dot-separated segments is not a JWT at all. Both are worth
-    catching at startup rather than in a Backend log.
+    The claim set is `sub`, `iat` and `exp`, and it is **unverified**. GET /api/v1/users
+    does not exist on the Backend yet, and its filter answers 401 for every path -- even
+    ones that do not exist -- so no response can tell a rejected token from a missing
+    route. If the Backend turns out to want more (a role, an audience, an issuer) they are
+    added here and nowhere else.
     """
-    jwt = backend_jwt.strip()
-    if jwt.lower().startswith("bearer "):
-        raise ValueError("backend_jwt holds the scheme too; store only the token itself")
-    if jwt.count(".") != 2 or not all(jwt.split(".")):
-        raise ValueError("backend_jwt is not a JWT: expected three dot-separated segments")
-    return jwt
+    if not secret.strip():
+        raise ValueError("backend_jwt_secret is empty; the Backend would answer 401")
+
+    issued = int(time.time())
+    return jwt.encode(
+        {"sub": subject, "iat": issued, "exp": issued + TOKEN_LIFETIME},
+        secret,
+        algorithm=ALGORITHM,
+    )
 
 
 def fetch_accounts(client: httpx.Client, token: str) -> list[Mapping[str, object]]:

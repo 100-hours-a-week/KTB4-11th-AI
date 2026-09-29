@@ -2,12 +2,12 @@ import pytest
 from portfolio_rebalancer.settings import Settings
 from pydantic import ValidationError
 
-JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyZWJhbGFuY2VyIn0.c2lnbmF0dXJl"
+SECRET = "a-shared-secret-of-at-least-thirty-two-bytes"
 GIVEN = {
     "postgres_dsn": "postgresql+psycopg://ktb:ktb@postgres:5432/ktb",
     "questdb_conf": "ws::addr=localhost:9000;",
     "backend_url": "http://backend:8080",
-    "backend_jwt": JWT,
+    "backend_jwt_secret": SECRET,
 }
 
 
@@ -32,17 +32,21 @@ def test_reads_the_prefixed_environment(monkeypatch):
 
     settings = Settings()
 
-    assert settings.backend_jwt.get_secret_value() == JWT
+    assert settings.backend_jwt_secret.get_secret_value() == SECRET
     assert settings.postgres_dsn == GIVEN["postgres_dsn"]
     assert settings.log_level == "DEBUG"
 
 
-def test_the_jwt_is_kept_out_of_logs_and_repr():
+def test_the_signing_secret_is_kept_out_of_logs_and_repr():
     """It is a credential. A plain str would leak it the first time settings were logged."""
     settings = Settings(**GIVEN)
 
-    assert JWT not in repr(settings)
-    assert JWT not in str(settings.backend_jwt)
+    assert SECRET not in repr(settings)
+    assert SECRET not in str(settings.backend_jwt_secret)
+
+
+def test_the_token_subject_defaults_to_the_service_name():
+    assert Settings(**GIVEN).backend_jwt_subject == "portfolio-rebalancer"
 
 
 def test_no_host_or_port_is_carried():
