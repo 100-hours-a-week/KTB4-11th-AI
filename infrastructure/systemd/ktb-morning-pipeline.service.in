@@ -12,6 +12,5 @@ User=@@DEPLOY_USER@@
 WorkingDirectory=@@DEPLOY_DIR@@
 ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.morning-pipeline.lock @@DEPLOY_DIR@@/scripts/run-morning-pipeline.sh
 TimeoutStartSec=2h50m
-Restart=on-failure
-RestartSec=5m
+Restart=no
 KillMode=mixed
