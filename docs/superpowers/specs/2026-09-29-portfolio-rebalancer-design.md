@@ -558,11 +558,6 @@ def reached_the_backend(stock_codes, working) -> bool:
 
 def tick(engine, db, client, *, log: BoundLogger) -> int:
     """One pass: poll, decide, send. Returns the number of orders sent.
-
-    The credentials ride on the client, and the clock is read here with `market_now()`
-    and passed inward, so the modules below stay free of one. Tests patch `market_now`,
-    which is how the rest of the repository makes a boundary deterministic.
-    """
 ```
 
 ## Migration
