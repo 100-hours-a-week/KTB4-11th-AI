@@ -109,6 +109,16 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
             },
         ),
         ("portfolio_builder.database", {"portfolios", "portfolio_holdings", "portfolio_exits"}),
+        (
+            "portfolio_rebalancer.database",
+            {
+                "users",
+                "accounts",
+                "account_holdings",
+                "account_pending_orders",
+                "rebalance_orders",
+            },
+        ),
     ],
 )
 def test_service_tables_match_the_migrated_schema(
@@ -246,6 +256,91 @@ def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypat
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None
+
+
+# Every key the hourly account poll carries, against the column it has to reach. Two are
+# renamed: `amount` to `quantity` and `total_price` to `principal`. `stock_code` comes
+# through as it is, on holdings as well as on pending orders.
+POLL_FIELDS = {
+    "users": {"user_id": "user_id", "nickname": "nickname", "state": "state"},
+    "accounts": {
+        "account_id": "account_id",
+        "account_name": "account_name",
+        "is_ai_managed": "is_ai_managed",
+        "is_duel_account": "is_duel_account",
+        "is_active": "is_active",
+        "cash_balance": "cash_balance",
+    },
+    "account_holdings": {
+        "stock_code": "stock_code",
+        "amount": "quantity",
+        "total_price": "principal",
+    },
+    "account_pending_orders": {
+        "order_type": "order_type",
+        "status": "status",
+        "stock_code": "stock_code",
+        "price": "price",
+        "amount": "quantity",
+    },
+}
+
+
+def test_no_field_the_poll_carries_is_dropped(pg_dsn, pg_engine, monkeypatch):
+    """A field with no column would be silently lost on every poll."""
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+
+    with pg_engine.connect() as conn:
+        missing = {
+            f"{table}.{payload_key} -> {column}"
+            for table, fields in POLL_FIELDS.items()
+            for payload_key, column in fields.items()
+            if column not in _columns(conn, table)
+        }
+
+    assert missing == set()
+
+
+def test_a_repeated_rebalance_of_the_same_account_cannot_be_recorded_twice(
+    pg_dsn, pg_engine, monkeypatch
+):
+    """The unique constraint is what makes a second rebalance a no-op rather than a
+    duplicate order."""
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+
+    with pg_engine.connect() as conn:
+        constraints = set(
+            conn.execute(
+                sa.text(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conrelid = to_regclass('rebalance_orders') AND contype = 'u'"
+                )
+            ).scalars()
+        )
+
+    assert "rebalance_orders_portfolio_account_stock_key" in constraints
+
+
+def test_downgrade_to_0006_removes_the_rebalance_tables(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+
+    command.downgrade(config, "0006")
+
+    with pg_engine.connect() as conn:
+        for table in (
+            "users",
+            "accounts",
+            "account_holdings",
+            "account_pending_orders",
+            "rebalance_orders",
+        ):
+            assert conn.execute(sa.text(f"SELECT to_regclass('{table}')")).scalar() is None
+
+    command.upgrade(config, "head")
 
 
 def _seed_0004(conn) -> None:
