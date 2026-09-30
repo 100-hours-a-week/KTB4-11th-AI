@@ -25,17 +25,17 @@ jobs:
         env:
           POSTGRES_USER: ktb
           POSTGRES_PASSWORD: ktb
-          POSTGRES_DB: news
+          POSTGRES_DB: ktb
         ports:
           - "5432:5432"
         options: >-
-          --health-cmd "pg_isready -U ktb -d news"
+          --health-cmd "pg_isready -U ktb -d ktb"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 12
     env:
-      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
-      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
 
     steps:
       - uses: actions/checkout@v7
@@ -87,19 +87,9 @@ jobs:
           done
           exit "$audit_status"
 
-  build-and-push-images:
+  build-and-push-image:
     needs: lint-and-test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        service:
-          - news-preprocessor
-          - news-clusterer
-          - news-graph-builder
-          - portfolio-builder
-          - market-collector
-          - market-analyzer-mcp
-          - portfolio-rebalancer-http
     steps:
       - uses: actions/checkout@v7
 
@@ -117,12 +107,13 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build and push ${{ matrix.service }}
+      - name: Build and push application image
         uses: docker/build-push-action@v7
         with:
           context: .
-          file: docker/${{ matrix.service }}.Dockerfile
+          file: docker/app.Dockerfile
+          platforms: linux/amd64
           push: true
-          tags: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ matrix.service }}-${{ github.sha }}
-          cache-from: type=gha,scope=${{ matrix.service }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+          tags: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.sha }}
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app

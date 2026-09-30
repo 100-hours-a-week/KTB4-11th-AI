@@ -1,0 +1,237 @@
+name: ktb4-ai
+
+x-app: &app
+  image: ${APP_IMAGE:?APP_IMAGE must be set}
+  init: true
+  restart: "no"
+  logging:
+    driver: awslogs
+    options:
+      awslogs-region: ap-northeast-2
+      awslogs-group: /stockspoon/ai/application
+      awslogs-create-group: "false"
+      tag: "{{.Name}}-{{.ID}}"
+
+x-postgres-environment: &postgres-environment
+  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  MARKET_SYNCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18-trixie
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=50"]
+    shm_size: 128m
+    mem_limit: 900m
+    restart: unless-stopped
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-northeast-2
+        awslogs-group: /stockspoon/ai/postgres
+        awslogs-create-group: "false"
+        tag: "{{.Name}}-{{.ID}}"
+
+  questdb:
+    image: questdb/questdb:10.0.1
+    environment:
+      QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
+      QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
+    mem_limit: 1200m
+    restart: unless-stopped
+    volumes:
+      - questdb-data:/var/lib/questdb
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9003/status || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ap-northeast-2
+        awslogs-group: /stockspoon/ai/questdb
+        awslogs-create-group: "false"
+        tag: "{{.Name}}-{{.ID}}"
+
+  postgres-migrate:
+    <<: *app
+    profiles: ["tools"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "postgres migration started"
+        alembic upgrade head
+        status=$$?
+        echo "postgres migration finished: status=$$status"
+        exit "$$status"
+    environment:
+      KTB_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  questdb-migrate:
+    <<: *app
+    profiles: ["tools"]
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "questdb migration started"
+        python infrastructure/questdb/migrate.py
+        status=$$?
+        echo "questdb migration finished: status=$$status"
+        exit "$$status"
+    environment:
+      KTB_QUESTDB_CONF: ws::addr=questdb:9000;
+    depends_on:
+      questdb:
+        condition: service_healthy
+
+  portfolio-rebalancer:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["portfolio-rebalancer"]
+    mem_limit: 384m
+    stop_grace_period: 2m
+    environment:
+      <<: *postgres-environment
+      PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER: ${PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT:-portfolio-rebalancer}
+      PORTFOLIO_REBALANCER_LOG_LEVEL: ${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+
+  news-preprocessor:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["news-preprocessor"]
+    mem_limit: 1200m
+    environment:
+      <<: *postgres-environment
+      NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT: ${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
+      NEWS_PREPROCESSOR_LOG_LEVEL: ${NEWS_PREPROCESSOR_LOG_LEVEL:-INFO}
+      KTB_EMBEDDING_BASE_URI: ${KTB_EMBEDDING_BASE_URI:-}
+      KTB_EMBEDDING_MODEL: ${KTB_EMBEDDING_MODEL:-mlx-community/Qwen3-Embedding-4B-4bit-DWQ}
+      KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
+      KTB_EMBEDDING_MAX_TOKENS: ${KTB_EMBEDDING_MAX_TOKENS:-16384}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  news-clusterer:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["news-clusterer"]
+    mem_limit: 1400m
+    environment:
+      <<: *postgres-environment
+      NEWS_CLUSTERER_EPS: ${NEWS_CLUSTERER_EPS:-0.2}
+      NEWS_CLUSTERER_MIN_SAMPLES: ${NEWS_CLUSTERER_MIN_SAMPLES:-3}
+      NEWS_CLUSTERER_LOG_LEVEL: ${NEWS_CLUSTERER_LOG_LEVEL:-INFO}
+      KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  market-syncer:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["market-syncer"]
+    # OpenDartReader writes docs_cache/ into the working directory; /app is not writable by app.
+    working_dir: /tmp
+    mem_limit: 512m
+    environment:
+      <<: *postgres-environment
+      MARKET_SYNCER_KIWOOM_APP_KEY: ${MARKET_SYNCER_KIWOOM_APP_KEY:-}
+      MARKET_SYNCER_KIWOOM_SECRET_KEY: ${MARKET_SYNCER_KIWOOM_SECRET_KEY:-}
+      MARKET_SYNCER_KIWOOM_MODE: ${MARKET_SYNCER_KIWOOM_MODE:-real}
+      MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL: ${MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL:-0.2}
+      MARKET_SYNCER_DART_API_KEY: ${MARKET_SYNCER_DART_API_KEY:-}
+      MARKET_SYNCER_LOG_LEVEL: ${MARKET_SYNCER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  news-graph-builder:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["news-graph-builder"]
+    mem_limit: 1200m
+    environment:
+      <<: *postgres-environment
+      NEWS_GRAPH_BUILDER_LLM_BASE_URI: ${NEWS_GRAPH_BUILDER_LLM_BASE_URI:-}
+      NEWS_GRAPH_BUILDER_LLM_MODEL: ${NEWS_GRAPH_BUILDER_LLM_MODEL:-}
+      NEWS_GRAPH_BUILDER_LLM_API_KEY: ${NEWS_GRAPH_BUILDER_LLM_API_KEY:-}
+      NEWS_GRAPH_BUILDER_LOG_LEVEL: ${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  market-collector:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["market-collector"]
+    mem_limit: 768m
+    stop_grace_period: 2m
+    environment:
+      <<: *postgres-environment
+      MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
+      MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
+      MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
+      MARKET_COLLECTOR_INDEX_NAME: ${MARKET_COLLECTOR_INDEX_NAME:-KOSPI200}
+      MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
+    depends_on:
+      questdb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  portfolio-builder:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["portfolio-builder"]
+    mem_limit: 768m
+    environment:
+      <<: *postgres-environment
+      PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_BUILDER_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
+      PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
+      PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
+      PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
+      PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  questdb-data:

@@ -1,0 +1,16 @@
+[Unit]
+Description=KTB pre-market portfolio pipeline
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=@@DEPLOY_USER@@
+WorkingDirectory=@@DEPLOY_DIR@@
+ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.morning-pipeline.lock @@DEPLOY_DIR@@/scripts/run-morning-pipeline.sh
+TimeoutStartSec=2h50m
+Restart=no
+KillMode=mixed

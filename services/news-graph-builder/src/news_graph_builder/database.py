@@ -26,13 +26,14 @@ article_clusters = sa.Table(
     sa.Column("cluster_id", sa.BigInteger, sa.ForeignKey("clusters.id"), nullable=False),
 )
 
-companies = sa.Table(
-    "companies",
+corporations = sa.Table(
+    "corporations",
     metadata,
-    sa.Column("corp_code", sa.Text, primary_key=True),
-    sa.Column("stock_code", sa.Text, nullable=False),
-    sa.Column("corp_name", sa.Text, nullable=False),
-    sa.Column("corp_eng_name", sa.Text, nullable=True),
+    sa.Column("stock_code", sa.Text, primary_key=True),
+    sa.Column("corp_code", sa.Text, nullable=False, unique=True),
+    sa.Column("name", sa.Text, nullable=False),
+    sa.Column("market", sa.Text, nullable=False, server_default="KOSPI"),
+    sa.Column("eng_name", sa.Text, nullable=True),
     sa.Column(
         "synced_at",
         sa.DateTime(timezone=True),
@@ -41,11 +42,11 @@ companies = sa.Table(
     ),
 )
 
-company_aliases = sa.Table(
-    "company_aliases",
+corporation_aliases = sa.Table(
+    "corporation_aliases",
     metadata,
     sa.Column("alias", sa.Text, primary_key=True),
-    sa.Column("corp_code", sa.Text, sa.ForeignKey("companies.corp_code"), nullable=False),
+    sa.Column("stock_code", sa.Text, sa.ForeignKey("corporations.stock_code"), nullable=False),
 )
 
 entities = sa.Table(
@@ -55,19 +56,19 @@ entities = sa.Table(
     sa.Column("raw_name", sa.Text, nullable=False),
     sa.Column("name", sa.Text, nullable=False),
     sa.Column("type", sa.Text, nullable=False),
-    sa.Column("corp_code", sa.Text, sa.ForeignKey("companies.corp_code"), nullable=True),
+    sa.Column("stock_code", sa.Text, sa.ForeignKey("corporations.stock_code"), nullable=True),
     sa.Index(
-        "entities_corp_code_key",
-        "corp_code",
+        "entities_stock_code_key",
+        "stock_code",
         unique=True,
-        postgresql_where=sa.text("corp_code IS NOT NULL"),
+        postgresql_where=sa.text("stock_code IS NOT NULL"),
     ),
     sa.Index(
         "entities_name_type_key",
         "name",
         "type",
         unique=True,
-        postgresql_where=sa.text("corp_code IS NULL"),
+        postgresql_where=sa.text("stock_code IS NULL"),
     ),
 )
 
@@ -121,36 +122,4 @@ relations = sa.Table(
     sa.Index("relations_cluster_id_idx", "cluster_id"),
     sa.Index("relations_source_entity_id_idx", "source_entity_id"),
     sa.Index("relations_target_entity_id_idx", "target_entity_id"),
-)
-
-themes = sa.Table(
-    "themes",
-    metadata,
-    sa.Column("theme_code", sa.Text, primary_key=True),
-    sa.Column("name", sa.Text, nullable=False),
-    sa.Column(
-        "synced_at",
-        sa.DateTime(timezone=True),
-        nullable=False,
-        server_default=sa.text("now()"),
-    ),
-)
-
-theme_companies = sa.Table(
-    "theme_companies",
-    metadata,
-    sa.Column(
-        "theme_code",
-        sa.Text,
-        sa.ForeignKey("themes.theme_code", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    sa.Column(
-        "corp_code",
-        sa.Text,
-        sa.ForeignKey("companies.corp_code", ondelete="CASCADE"),
-        primary_key=True,
-    ),
-    sa.Column("is_main", sa.Boolean, nullable=False, server_default=sa.false()),
-    sa.Index("theme_companies_corp_code_idx", "corp_code"),
 )

@@ -159,3 +159,11 @@ def test_market_data_migration_defines_archive_schema():
     assert "CREATE TABLE IF NOT EXISTS universe_members" in sql
     assert "theme_snapshot" not in sql
     assert "theme_members" not in sql
+
+
+def test_universe_members_is_dropped_by_the_second_migration():
+    migrate = _load_migrate()
+    migration_path = migrate.MIGRATIONS_DIR / "0002_drop_universe_members.sql"
+
+    assert migration_path in migrate.migration_files()
+    assert migrate._statements(migration_path) == ["DROP TABLE IF EXISTS universe_members"]

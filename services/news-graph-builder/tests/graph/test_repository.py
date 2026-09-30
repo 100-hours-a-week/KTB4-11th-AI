@@ -1,7 +1,6 @@
 import pytest
 import sqlalchemy as sa
 from news_graph_builder.cluster import find_stale_clusters, lock_cluster
-from news_graph_builder.company import DartCompany, sync_companies
 from news_graph_builder.graph import Entity, Extraction, Relation, resolve, write_graph
 
 EXTRACTION = Extraction(
@@ -85,13 +84,11 @@ def test_deleting_a_cluster_cascades_to_its_graph(engine, article, cluster, buil
         assert conn.execute(sa.text("SELECT count(*) FROM entities")).scalar_one() == 2
 
 
-def test_two_names_of_one_company_become_one_cluster_entity(engine, article, cluster, build):
+def test_two_names_of_one_company_become_one_cluster_entity(
+    engine, article, cluster, build, corporation
+):
     with engine.begin() as conn:
-        sync_companies(
-            conn,
-            [("005930", "삼성전자")],
-            [DartCompany("00126380", "삼성전자", "Samsung Electronics", "005930")],
-        )
+        corporation(conn, "005930", "삼성전자", "00126380", "Samsung Electronics")
         cluster_id = cluster(conn, [article(conn)])
     extraction = Extraction(
         "제목",
