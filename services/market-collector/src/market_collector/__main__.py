@@ -36,7 +36,10 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
     def worker(index: int, bucket: list[str]) -> int:
-        client = ChartClient(build_client(settings.kiwoom_accounts[index], settings.kiwoom_mode))
+        client = ChartClient(
+            build_client(settings.kiwoom_accounts[index], settings.kiwoom_mode),
+            settings.request_interval,
+        )
         with questdb.connect(settings.questdb_conf) as db:
             store = Store(db)
             written = 0

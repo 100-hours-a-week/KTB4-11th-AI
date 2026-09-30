@@ -1,3 +1,4 @@
+import time
 from typing import Literal, NamedTuple
 
 from kiwoom import KiwoomAuth, KiwoomClient
@@ -48,10 +49,13 @@ def fetch_page(
 
 
 class ChartClient:
-    def __init__(self, client: KiwoomClient) -> None:
+    def __init__(self, client: KiwoomClient, interval: float = 0.2) -> None:
         self._client = client
+        self._interval = max(interval, 0.2)
+        self._next_request_at = 0.0
 
     def minute_page(self, symbol: str, tic_scope: int, next_key: str | None = None) -> Page:
+        self._wait_for_request()
         return fetch_page(
             self._client,
             api_id="ka10080",
@@ -62,6 +66,7 @@ class ChartClient:
         )
 
     def daily_page(self, symbol: str, base_dt: str, next_key: str | None = None) -> Page:
+        self._wait_for_request()
         return fetch_page(
             self._client,
             api_id="ka10081",
@@ -70,3 +75,9 @@ class ChartClient:
             array_field="stk_dt_pole_chart_qry",
             next_key=next_key,
         )
+
+    def _wait_for_request(self) -> None:
+        delay = self._next_request_at - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        self._next_request_at = time.monotonic() + self._interval
