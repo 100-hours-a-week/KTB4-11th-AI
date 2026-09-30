@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import BoundLogger, bind_logger
+from ktb_core.logging import BoundLogger
 
 from portfolio_rebalancer.account import apply_pending, managed_accounts, polled_prices, write_poll
 from portfolio_rebalancer.backend import fetch_accounts, send_orders
@@ -32,10 +32,6 @@ from portfolio_rebalancer.trading_days import days_left
 # KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
 
-# The same name __main__ binds, so a tick logs under one logger whether main passed a
-# bound logger or the fallback below built one.
-logger = logging.getLogger("portfolio_rebalancer")
-
 
 def market_now() -> datetime:
     # The service may run anywhere; the market is in Seoul.
@@ -48,10 +44,12 @@ def tick(
     client: httpx.Client,
     token: str,
     now: datetime | None = None,
-    log: BoundLogger | None = None,
+    *,
+    log: BoundLogger,
 ) -> int:
+    # The logger is handed in rather than built here, so every line of one pass carries the
+    # run_id __main__ bound and there is only ever one logger in play.
     now = now or market_now()
-    log = log or bind_logger(logger)
     # Polling is hourly, so the gap between two tick_start lines is the cadence itself.
     log("tick_start", at=now.isoformat(), market_date=now.date().isoformat())
 

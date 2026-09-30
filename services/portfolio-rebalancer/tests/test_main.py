@@ -1,3 +1,5 @@
+import logging
+
 from portfolio_rebalancer import __main__
 
 
@@ -22,7 +24,7 @@ def wire(monkeypatch, recorder, sent=3):
     monkeypatch.setattr(
         __main__,
         "tick",
-        lambda engine, db, client, token, log: (
+        lambda engine, db, client, token, *, log: (
             recorder.ticks.append((engine, db, client, token, log)) or sent
         ),
     )
@@ -115,3 +117,20 @@ class _engine:
 
     def dispose(self):
         self._recorder.disposed += 1
+
+
+def test_the_tick_is_handed_a_logger_bound_to_a_run_id(monkeypatch, caplog):
+    """Every line of one pass shares a run_id, so two passes can never be read as one,
+    and the logger name is the service's rather than whichever module logged."""
+    recorder = Recorder()
+    wire(monkeypatch, recorder)
+
+    __main__.main()
+
+    log = recorder.ticks[0][4]
+    with caplog.at_level(logging.INFO):
+        log("probe")
+
+    record = caplog.records[-1]
+    assert record.name == "portfolio_rebalancer"
+    assert "run_id" in record.fields

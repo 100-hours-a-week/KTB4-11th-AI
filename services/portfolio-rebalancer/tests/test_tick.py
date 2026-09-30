@@ -4,6 +4,7 @@ elsewhere, so these fakes stand in for the datastores and the Backend."""
 import logging
 from datetime import UTC, date, datetime, timedelta, timezone
 
+from ktb_core.logging import bind_logger
 from portfolio_rebalancer import tick as tick_module
 from portfolio_rebalancer.market import Price
 from portfolio_rebalancer.order.reservations import PRICE_BANDS, limit_and_trigger
@@ -202,7 +203,14 @@ class Fakes:
     def run(self, now=None, log=None):
         now = now or noon(TUESDAY)
         self.today = now.date()
-        return tick(_Engine(), "db", "client", "a-token", now=now, log=log)
+        return tick(
+            _Engine(),
+            "db",
+            "client",
+            "a-token",
+            now=now,
+            log=log or bind_logger(logging.getLogger("portfolio_rebalancer")),
+        )
 
 
 class _Conn:
@@ -968,14 +976,3 @@ def test_a_record_that_never_reached_the_backend_is_reported(monkeypatch):
     reconciled = events.of("unsent_reconciled")[0]
     assert reconciled["outcome"] == "discarded"
     assert events.levels("unsent_reconciled") == [logging.WARNING]
-
-
-def test_the_fallback_logger_uses_the_name_main_binds(monkeypatch, caplog):
-    """A tick called without a bound logger still logs under the service's own name, so
-    the `logger` field reads the same in tests as it does in production."""
-    fakes = Fakes(monkeypatch)
-
-    with caplog.at_level(logging.INFO):
-        fakes.run()
-
-    assert {record.name for record in caplog.records} == {"portfolio_rebalancer"}
