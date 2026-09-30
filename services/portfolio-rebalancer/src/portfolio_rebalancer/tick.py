@@ -23,6 +23,7 @@ from portfolio_rebalancer.order import (
     trigger_hit,
 )
 from portfolio_rebalancer.order.dto import SKIP
+from portfolio_rebalancer.order.repository import AT_MARKET as MARKET_STATUS
 from portfolio_rebalancer.portfolio import find_latest_portfolio
 from portfolio_rebalancer.trading_days import days_left
 
@@ -137,7 +138,13 @@ def _continue(engine, client, token, portfolio, state, working, recorded, starte
     # A working order whose trigger the market has reached stops waiting: crossing it is
     # the signal that the limit is not going to fill on the terms it was placed on.
     struck = _struck(portfolio, state, working, references, recorded, prices)
-    requote = narrow(portfolio, state, _without(working, struck), references, started, now)
+    # An order the record already shows at market has no band left to move to, so narrowing
+    # it again would post the same market order on every later pass. Only an order that
+    # stayed on the book after going at market gets here, and that is exactly the state the
+    # hourly poll keeps finding.
+    settled = {row["stock_code"] for row in recorded if row["status"] == MARKET_STATUS}
+    settled |= {order.stock_code for order in struck}
+    requote = narrow(portfolio, state, _without(working, settled), references, started, now)
 
     sent = 0
     if place:
@@ -191,9 +198,8 @@ def _struck(portfolio, state, working, references, recorded, prices) -> list:
     ]
 
 
-def _without(working, struck):
-    moved = {order.stock_code for order in struck}
-    return {key: order for key, order in working.items() if key[0] not in moved}
+def _without(working, codes):
+    return {key: order for key, order in working.items() if key[0] not in codes}
 
 
 def _send(engine, client, token, portfolio, state, orders) -> int:

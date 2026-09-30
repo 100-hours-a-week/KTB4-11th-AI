@@ -22,7 +22,7 @@ KST = timezone(timedelta(hours=9))
 
 
 def noon(day):
-    """A KST datetime in the middle of the session, well before the 14:30 cutoff."""
+    """A KST datetime in the middle of the session, well before the 15:00 cutoff."""
     return datetime(day.year, day.month, day.day, 11, 0, tzinfo=KST)
 
 
@@ -56,7 +56,13 @@ def account(account_id=11, cash=10_000_000.0, stocks=(), pending_orders=()):
 
 
 def recorded_row(
-    stock_code, sent_at=None, created=MONDAY, reference=78_000.0, trigger=None, side="buy"
+    stock_code,
+    sent_at=None,
+    created=MONDAY,
+    reference=78_000.0,
+    trigger=None,
+    side="buy",
+    status="reserved",
 ):
     """A rebalance_orders row as find_orders returns it.
 
@@ -71,6 +77,7 @@ def recorded_row(
         "created_at": datetime(created.year, created.month, created.day, 1, tzinfo=UTC),
         "reference_price": reference,
         "trigger_price": trigger,
+        "status": status,
     }
 
 
@@ -774,3 +781,20 @@ def test_an_outstanding_buy_is_struck_from_the_quote_the_poll_gives_it(monkeypat
     fakes.run(now=noon(MONDAY))
 
     assert fakes.amended[0][0].limit is None
+
+
+def test_an_order_already_at_market_is_not_sent_again(monkeypatch):
+    """The market rung is the end of the ladder, not a band that keeps being re-quoted.
+
+    A market order that stayed on the book is still outstanding at the next poll, and it
+    has no band left to move to, so re-quoting it would post the same order again.
+    """
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC), status="market")]
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(cash=0.0, pending_orders=working_buy())),
+        recorded={11: already},
+    )
+
+    assert fakes.run(now=datetime(2026, 10, 2, 15, 0, tzinfo=KST)) == 0
+    assert fakes.amended == []
