@@ -557,7 +557,7 @@ def reached_the_backend(stock_codes, working) -> bool:
 
 
 def tick(engine, db, client, *, log: BoundLogger) -> int:
-    """One pass: poll, decide, send. Returns the number of orders sent.
+    """One pass: poll, decide, send. Returns the number of orders sent."""
 ```
 
 ## Migration
