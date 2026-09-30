@@ -968,3 +968,14 @@ def test_a_record_that_never_reached_the_backend_is_reported(monkeypatch):
     reconciled = events.of("unsent_reconciled")[0]
     assert reconciled["outcome"] == "discarded"
     assert events.levels("unsent_reconciled") == [logging.WARNING]
+
+
+def test_the_fallback_logger_uses_the_name_main_binds(monkeypatch, caplog):
+    """A tick called without a bound logger still logs under the service's own name, so
+    the `logger` field reads the same in tests as it does in production."""
+    fakes = Fakes(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        fakes.run()
+
+    assert {record.name for record in caplog.records} == {"portfolio_rebalancer"}

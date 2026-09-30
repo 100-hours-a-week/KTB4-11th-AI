@@ -32,7 +32,9 @@ from portfolio_rebalancer.trading_days import days_left
 # KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
 
-logger = logging.getLogger(__name__)
+# The same name __main__ binds, so a tick logs under one logger whether main passed a
+# bound logger or the fallback below built one.
+logger = logging.getLogger("portfolio_rebalancer")
 
 
 def market_now() -> datetime:
