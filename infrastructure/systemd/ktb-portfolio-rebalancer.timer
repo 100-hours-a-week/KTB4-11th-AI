@@ -1,0 +1,11 @@
+[Unit]
+Description=Run KTB portfolio rebalancer hourly on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* *:00:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=ktb-portfolio-rebalancer.service
+
+[Install]
+WantedBy=timers.target
