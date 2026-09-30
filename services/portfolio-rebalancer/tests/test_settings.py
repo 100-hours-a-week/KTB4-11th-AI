@@ -8,6 +8,7 @@ GIVEN = {
     "questdb_conf": "ws::addr=localhost:9000;",
     "backend_url": "http://backend:8080",
     "backend_jwt_secret": SECRET,
+    "backend_jwt_issuer": "https://stock-spoon.com",
 }
 
 

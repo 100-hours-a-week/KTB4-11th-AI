@@ -5,7 +5,7 @@ from contextlib import ExitStack
 import sqlalchemy as sa
 from ktb_core.logging import bind_logger, setup_logging
 
-from portfolio_rebalancer.backend import bearer_token, build_client
+from portfolio_rebalancer.backend import access_token, authenticate, build_client
 from portfolio_rebalancer.market import connect
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.tick import tick
@@ -25,12 +25,19 @@ def main() -> None:
         cleanup.callback(engine.dispose)
         db = cleanup.enter_context(connect(settings.questdb_conf))
         client = cleanup.enter_context(build_client(settings.backend_url))
-        token = bearer_token(
-            settings.backend_jwt_secret.get_secret_value(), settings.backend_jwt_subject
+        # The access token rides on a cookie and the CSRF token on a header, both set on
+        # the client once, because that is where the Backend looks for them.
+        authenticate(
+            client,
+            access_token(
+                settings.backend_jwt_secret.get_secret_value(),
+                settings.backend_jwt_subject,
+                settings.backend_jwt_issuer,
+            ),
         )
         # The tick owns its transactions: an order has to be committed before it is sent, so
         # one transaction cannot span the send.
-        sent = tick(engine, db, client, token, log=log)
+        sent = tick(engine, db, client, log=log)
     log("run_end", orders_sent=sent)
 
 

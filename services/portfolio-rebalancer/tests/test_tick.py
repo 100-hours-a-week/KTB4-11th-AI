@@ -138,7 +138,7 @@ class Fakes:
         monkeypatch.setattr(
             tick_module, "find_latest_portfolio", lambda conn: note("portfolio", model)
         )
-        monkeypatch.setattr(tick_module, "fetch_accounts", lambda c, t: note("fetch", users))
+        monkeypatch.setattr(tick_module, "fetch_accounts", lambda c: note("fetch", users))
         monkeypatch.setattr(
             tick_module, "write_poll", lambda conn, u: note("save") or self.saved.append(u)
         )
@@ -173,7 +173,7 @@ class Fakes:
         monkeypatch.setattr(
             tick_module,
             "send_orders",
-            lambda c, t, orders: note("send") or self.sent.append(list(orders)),
+            lambda c, orders: note("send") or self.sent.append(list(orders)),
         )
         monkeypatch.setattr(
             tick_module,
@@ -207,7 +207,6 @@ class Fakes:
             _Engine(),
             "db",
             "client",
-            "a-token",
             now=now,
             log=log or bind_logger(logging.getLogger("portfolio_rebalancer")),
         )

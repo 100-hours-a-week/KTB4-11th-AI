@@ -42,7 +42,6 @@ def tick(
     engine: sa.Engine,
     db: Any,
     client: httpx.Client,
-    token: str,
     now: datetime | None = None,
     *,
     log: BoundLogger,
@@ -61,7 +60,7 @@ def tick(
         return 0
     _log_portfolio(log, portfolio)
 
-    polled = fetch_accounts(client, token)
+    polled = fetch_accounts(client)
     _log_poll(log, polled)
     with engine.begin() as conn:
         write_poll(conn, polled)
@@ -69,7 +68,7 @@ def tick(
     accounts = list(managed_accounts(polled))
     sent = 0
     for account in accounts:
-        sent += _account(engine, db, client, token, portfolio, account, now, log)
+        sent += _account(engine, db, client, portfolio, account, now, log)
     log("tick_end", orders_sent=sent, accounts=len(accounts))
     return sent
 
@@ -131,7 +130,7 @@ def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
     )
 
 
-def _account(engine, db, client, token, portfolio, account, now, log) -> int:
+def _account(engine, db, client, portfolio, account, now, log) -> int:
     state = apply_pending(account)
     prices = _prices(db, portfolio, state, account, log)
     working = outstanding_orders(account.get("pending_orders") or ())
@@ -152,12 +151,10 @@ def _account(engine, db, client, token, portfolio, account, now, log) -> int:
         recorded = _settle_unsent(engine, portfolio, state, recorded, working, log)
 
     if not recorded:
-        return _open(engine, client, token, portfolio, state, prices, now, log)
+        return _open(engine, client, portfolio, state, prices, now, log)
 
     started = min(row["created_at"] for row in recorded).astimezone(KST).date()
-    return _continue(
-        engine, client, token, portfolio, state, working, recorded, started, now, prices, log
-    )
+    return _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log)
 
 
 def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence[Mapping[str, Any]]:
@@ -190,7 +187,7 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
         return find_orders(conn, portfolio.portfolio_id, state.account_id)
 
 
-def _open(engine, client, token, portfolio, state, prices, now, log) -> int:
+def _open(engine, client, portfolio, state, prices, now, log) -> int:
     # The cycle's whole budget is ahead: the trading days left in this week, so a Chuseok
     # week gives fewer.
     left = days_left(now.date(), now)
@@ -214,12 +211,10 @@ def _open(engine, client, token, portfolio, state, prices, now, log) -> int:
     # there is nothing to place for them.
     with engine.begin() as conn:
         record_orders(conn, portfolio.portfolio_id, plan)
-    return _send(engine, client, token, portfolio, state, placeable, log)
+    return _send(engine, client, portfolio, state, placeable, log)
 
 
-def _continue(
-    engine, client, token, portfolio, state, working, recorded, started, now, prices, log
-):
+def _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log):
     # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     # brought in line with it. A stock the plan has already placed at the right quantity and
     # band is left alone, which is what makes the hourly poll idempotent within a day.
@@ -278,12 +273,12 @@ def _continue(
     if place:
         with engine.begin() as conn:
             record_orders(conn, portfolio.portfolio_id, place)
-        sent += _send(engine, client, token, portfolio, state, place, log)
+        sent += _send(engine, client, portfolio, state, place, log)
     moved = [*amend, *struck, *requote]
     if moved:
         with engine.begin() as conn:
             amend_orders(conn, portfolio.portfolio_id, moved)
-        sent += _send(engine, client, token, portfolio, state, moved, log)
+        sent += _send(engine, client, portfolio, state, moved, log)
     return sent
 
 
@@ -444,7 +439,7 @@ def _without(working, codes):
     return {key: order for key, order in working.items() if key[0] not in codes}
 
 
-def _send(engine, client, token, portfolio, state, orders, log) -> int:
+def _send(engine, client, portfolio, state, orders, log) -> int:
     # Orders are committed before they are sent, in their own transaction: holding it open
     # across the send would roll the record back on a failed send, and if the request had
     # already reached the Backend there would be a live order nothing knows about.
@@ -462,7 +457,7 @@ def _send(engine, client, token, portfolio, state, orders, log) -> int:
         count=len(orders),
         orders=[_order_fields(order) for order in orders],
     )
-    send_orders(client, token, orders)
+    send_orders(client, orders)
     with engine.begin() as conn:
         mark_sent(conn, portfolio.portfolio_id, state.account_id)
     log("orders_sent", account_id=state.account_id, count=len(orders))

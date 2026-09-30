@@ -341,9 +341,11 @@ carries one.
 
 There is no HTTP interface. The service is one command, run on a schedule.
 
-Outbound, both carrying `Authorization: Bearer <jwt>`:
+Outbound, all three carrying the `access_token` cookie, and the `POST` the CSRF header
+as well:
 
 ```
+GET  /api/v1/auth/csrf                      (public; the CSRF handshake)
 GET  /api/v1/users?state=active
 POST /api/v1/accounts/{account_id}/orders
 ```
@@ -375,16 +377,34 @@ re-keyed it by `stock_code`, keeping `corp_code` unique).
 ### The JWT
 
 The Backend shares a `JWT_SECRET`, so this service **signs its own token** rather than being
-handed one: HS256 over `sub`, `iat` and `exp`, with a five-minute life because a tick lives for
-seconds. The subject is configuration, not a constant, because the Backend decides which identity
-may read every user. The secret is a `SecretStr`, kept out of logs and repr.
+handed one: HS256, with a five-minute life because a tick lives for seconds. The secret is a
+`SecretStr`, kept out of logs and repr.
 
-**The claim set is unverified.** `GET /api/v1/users` does not exist on the Backend yet, and its
-filter answers 401 for every path — including ones that do not exist — so no response
-distinguishes a rejected token from a missing route. Eight claim shapes, three HMAC algorithms
-and five ways of carrying the token were tried against the live tunnel; all identical. If the
-Backend wants a role, an audience or an issuer, they are added in `bearer_token` and nowhere
-else.
+**The claim set was guessed, and is now read from the Backend's own source.** The earlier
+version sent `sub`, `iat` and `exp` on an `Authorization: Bearer` header, and every call came
+back 401 with no way to tell a rejected token from a missing route. `SecurityConfig` and
+`JwtConfig` say why:
+
+| what | the Backend |
+|---|---|
+| where the token is read | a cookie named `access_token`. Its `BearerTokenResolver` replaces the default one and never reads the `Authorization` header |
+| `iss` | required, and compared against the Backend's own issuer (`JwtValidators.createDefaultWithIssuer`) |
+| `type` | must be `access`; `refresh` is a different decoder bean |
+| `actor` | must be `AI`, or `OrderController` answers 403 `AI_ORDER_ONLY` |
+| `sub` | read with `Long.parseLong`, so it is a **user id**, not a service name |
+
+So `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` joins the secret as required configuration, and
+`access_token()` carries `iss`, `sub`, `type`, `actor`, `iat` and `exp`.
+
+### CSRF
+
+The Backend keeps CSRF on for state-changing requests with a `CookieCsrfTokenRepository`, so a
+`POST` without it is 403 `INVALID_CSRF_TOKEN`. The cookie is `httpOnly`, which is why
+`GET /api/v1/auth/csrf` exists and is public: it answers with the token **and** the name of the
+header to put it in. `authenticate()` calls it once per run and leaves both credentials on the
+`httpx.Client` — the access token as a cookie, the CSRF token as that header — so no call site
+has to remember either. The repository compares the header against the cookie it set, so the two
+travel together or not at all.
 
 ## Failure Handling
 
