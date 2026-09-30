@@ -22,8 +22,8 @@ def wire(monkeypatch, recorder, sent=3):
     monkeypatch.setattr(
         __main__,
         "tick",
-        lambda engine, db, client, token: (
-            recorder.ticks.append((engine, db, client, token)) or sent
+        lambda engine, db, client, token, log: (
+            recorder.ticks.append((engine, db, client, token, log)) or sent
         ),
     )
 
@@ -43,16 +43,19 @@ def test_the_tick_gets_the_engine_both_datastores_and_a_token(monkeypatch):
 
     __main__.main()
 
-    engine, db, client, token = recorder.ticks[0]
+    engine, db, client, token, log = recorder.ticks[0]
     assert (db, client, token) == ("db", "client", "a-token")
     assert hasattr(engine, "begin")
+    assert callable(log)
 
 
 def test_the_engine_is_disposed_even_when_the_tick_raises(monkeypatch):
     """A tick that dies must not leak the connection pool; compose runs this every hour."""
     recorder = Recorder()
     wire(monkeypatch, recorder)
-    monkeypatch.setattr(__main__, "tick", lambda *args: (_ for _ in ()).throw(RuntimeError))
+    monkeypatch.setattr(
+        __main__, "tick", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError)
+    )
 
     try:
         __main__.main()

@@ -1,6 +1,7 @@
 """The tick calls the other modules in order. The modules themselves are tested
 elsewhere, so these fakes stand in for the datastores and the Backend."""
 
+import logging
 from datetime import UTC, date, datetime, timedelta, timezone
 
 from portfolio_rebalancer import tick as tick_module
@@ -198,10 +199,10 @@ class Fakes:
                     self.today.year, self.today.month, self.today.day, tzinfo=UTC
                 )
 
-    def run(self, now=None):
+    def run(self, now=None, log=None):
         now = now or noon(TUESDAY)
         self.today = now.date()
-        return tick(_Engine(), "db", "client", "a-token", now=now)
+        return tick(_Engine(), "db", "client", "a-token", now=now, log=log)
 
 
 class _Conn:
@@ -798,3 +799,172 @@ def test_an_order_already_at_market_is_not_sent_again(monkeypatch):
 
     assert fakes.run(now=datetime(2026, 10, 2, 15, 0, tzinfo=KST)) == 0
     assert fakes.amended == []
+
+
+# ---- structured logging: what an operator has to be able to see in CloudWatch ----
+
+
+class Events:
+    """Collects the structured events one tick emits, in order.
+
+    The signature mirrors ktb_core.logging.bind_logger's returned callable.
+    """
+
+    def __init__(self):
+        self.seen: list[tuple] = []
+
+    def __call__(self, event, level=logging.INFO, **fields):
+        self.seen.append((event, level, fields))
+
+    @property
+    def names(self):
+        return [event for event, _, _ in self.seen]
+
+    def of(self, name):
+        return [fields for event, _, fields in self.seen if event == name]
+
+    def levels(self, name):
+        return [level for event, level, _ in self.seen if event == name]
+
+
+def test_every_pass_brackets_itself_so_the_hourly_cadence_is_readable(monkeypatch):
+    """The gap between two tick_start lines is the polling cadence, so each pass has to
+    say when it began and how it ended."""
+    events = Events()
+    Fakes(monkeypatch).run(log=events)
+
+    assert events.names[0] == "tick_start"
+    assert events.names[-1] == "tick_end"
+    assert events.of("tick_start")[0]["at"].startswith("2026-09-29")
+
+
+def test_the_poll_reports_what_it_carried(monkeypatch):
+    events = Events()
+    Fakes(monkeypatch).run(log=events)
+
+    poll = events.of("backend_poll")[0]
+    assert (poll["users"], poll["accounts"], poll["managed_accounts"]) == (1, 1, 1)
+    assert poll["accounts_missing_id_or_cash"] == []
+
+
+def test_an_empty_poll_is_a_warning(monkeypatch):
+    """An empty poll must not pass silently: every later step would find nothing to do
+    and say nothing about why."""
+    events = Events()
+    fakes = Fakes(monkeypatch, users=[])
+
+    assert fakes.run(log=events) == 0
+    assert events.levels("backend_poll") == [logging.WARNING]
+    assert events.of("backend_poll")[0]["users"] == 0
+
+
+def test_a_holding_the_poll_does_not_quote_is_named(monkeypatch):
+    """A blank current_price is reported rather than silently falling back to QuestDB."""
+    events = Events()
+    held = [{"stock_code": "005930", "total_price": 7_800_000, "amount": 100}]
+    Fakes(monkeypatch, users=polled(account(stocks=held))).run(log=events)
+
+    assert events.of("backend_poll")[0]["holdings_without_quote"] == ["11:005930"]
+
+
+def test_the_portfolio_reports_its_reasons(monkeypatch):
+    """PostgreSQL hands over the portfolio, and a holding with no reason is named."""
+    events = Events()
+    plan = portfolio(holdings=[Holding(*SAMSUNG, weight=1.0, reason=None)])
+    Fakes(monkeypatch, model=plan).run(log=events)
+
+    loaded = events.of("portfolio_loaded")[0]
+    assert loaded["portfolio_id"] == 42
+    assert loaded["holding_codes"] == ["005930"]
+    assert loaded["holdings_missing_reason"] == ["005930"]
+
+
+def test_a_portfolio_that_never_arrives_is_a_warning(monkeypatch):
+    events = Events()
+    fakes = Fakes(monkeypatch)
+    monkeypatch.setattr(tick_module, "find_latest_portfolio", lambda conn: None)
+
+    assert fakes.run(log=events) == 0
+    assert events.levels("portfolio_missing") == [logging.WARNING]
+
+
+def test_an_order_that_goes_out_carries_its_numbers(monkeypatch):
+    """Orders actually go, and never with blank values."""
+    events = Events()
+    fakes = Fakes(monkeypatch)
+
+    assert fakes.run(log=events) > 0
+    sending = events.of("orders_sending")[0]
+    assert sending["count"] == len(fakes.sent[0])
+    order = sending["orders"][0]
+    assert order["shares"] > 0
+    assert order["reference"] > 0
+    assert order["has_reason"] is True
+    assert events.of("orders_sent")[0]["count"] == sending["count"]
+    assert "orders_incomplete" not in events.names
+
+
+def test_an_order_already_on_the_book_is_logged_as_suppressed(monkeypatch):
+    """No duplicate order: a poll that brings an unfilled order back does not place it a
+    second time, and the line says so."""
+    events = Events()
+    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(cash=10_000_000.0, pending_orders=[pending(price=limit, amount=52)])),
+        recorded={11: already},
+    )
+
+    fakes.run(now=noon(MONDAY), log=events)
+
+    assert events.of("duplicate_suppressed")[0]["codes"] == ["005930"]
+    assert events.of("recorded_orders")[0]["still_working"] == ["005930"]
+
+
+def test_the_ladder_step_records_the_band_it_moved_to(monkeypatch):
+    """As the sessions run out the order really does narrow, one rung per line."""
+    events = Events()
+    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(cash=0.0, pending_orders=[pending(price=limit, amount=52)])),
+        recorded={11: already},
+    )
+
+    fakes.run(now=noon(THURSDAY), log=events)
+
+    step = events.of("ladder_step")[0]
+    assert step["days_left"] == 2
+    assert step["steps"][0]["band"] == PRICE_BANDS[1]
+    assert step["steps"][0]["at_market"] is False
+
+
+def test_a_filled_order_is_reported_as_done_and_not_re_ordered(monkeypatch):
+    """An order that already filled has left pending_orders and become a holding, so the
+    plan asks for nothing and nothing is sent again."""
+    events = Events()
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    held = [{"stock_code": "005930", "total_price": 7_800_000, "amount": 100}]
+    fakes = Fakes(monkeypatch, users=polled(account(cash=0.0, stocks=held)), recorded={11: already})
+
+    assert fakes.run(now=noon(MONDAY), log=events) == 0
+    recorded = events.of("recorded_orders")[0]
+    assert recorded["filled_or_done"] == ["005930"]
+    assert recorded["re_placed"] == []
+    assert fakes.sent == []
+
+
+def test_a_record_that_never_reached_the_backend_is_reported(monkeypatch):
+    """Re-deciding after a lost reply must not duplicate; which way it went is on the
+    line."""
+    events = Events()
+    unsent = [recorded_row("005930", sent_at=None)]
+    fakes = Fakes(monkeypatch, users=polled(account(cash=0.0)), recorded={11: unsent})
+
+    fakes.run(now=noon(MONDAY), log=events)
+
+    reconciled = events.of("unsent_reconciled")[0]
+    assert reconciled["outcome"] == "discarded"
+    assert events.levels("unsent_reconciled") == [logging.WARNING]
