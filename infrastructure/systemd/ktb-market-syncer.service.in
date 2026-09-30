@@ -1,0 +1,17 @@
+[Unit]
+Description=KTB hourly market reference data synchronization job
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=@@DEPLOY_USER@@
+WorkingDirectory=@@DEPLOY_DIR@@
+ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.market-syncer.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T market-syncer
+TimeoutStartSec=50m
+Restart=on-failure
+RestartSec=5m
+KillMode=mixed
