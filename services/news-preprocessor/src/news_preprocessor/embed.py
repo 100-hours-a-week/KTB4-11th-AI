@@ -10,6 +10,7 @@ def embed(
 ) -> list[list[float]]:
     if not texts:
         return []
+    api_key = os.environ.get("KTB_EMBEDDING_API_KEY")
     response = (client or httpx).post(
         f"{os.environ['KTB_EMBEDDING_BASE_URI'].rstrip('/')}/embeddings",
         json={
@@ -17,6 +18,7 @@ def embed(
             "input": texts,
             "truncate_prompt_tokens": EMBEDDING_MAX_TOKENS,
         },
+        headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
         timeout=timeout,
     )
     data = response.raise_for_status().json()["data"]

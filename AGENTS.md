@@ -59,6 +59,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
 | `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `ktb_test`, never `ktb` | — |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
+| `KTB_EMBEDDING_API_KEY` | news-preprocessor; sent as `Authorization: Bearer` when set (e.g. OpenRouter at `https://openrouter.ai/api/v1`; leave unset for a keyless local server) | — |
 | `KTB_EMBEDDING_MODEL` | news-preprocessor | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` |
 | `KTB_EMBEDDING_DIMENSIONS` | news-preprocessor, news-clusterer; must equal the `vector(2000)` column | `2000` |
 | `KTB_EMBEDDING_MAX_TOKENS` | news-preprocessor | `16384` |
