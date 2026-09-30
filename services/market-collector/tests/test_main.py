@@ -52,7 +52,7 @@ def test_archive_run_reconciles_each_symbol_after_loading_symbols(monkeypatch):
         "build_client",
         lambda account, mode: events.append(("client", account.app_key)) or object(),
     )
-    monkeypatch.setattr(cli, "ChartClient", lambda client: client)
+    monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -114,7 +114,7 @@ def test_archive_run_shards_stably_and_skips_removed_symbols(monkeypatch):
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
     monkeypatch.setattr(cli, "build_client", lambda account, mode: account.app_key)
-    monkeypatch.setattr(cli, "ChartClient", lambda client: client)
+    monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
