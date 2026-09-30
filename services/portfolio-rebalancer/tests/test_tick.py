@@ -122,6 +122,7 @@ class Fakes:
         self.marked: list[tuple] = []
         self.saved: list[list] = []
         self._recorded = recorded if recorded is not None else {}
+        self._monkeypatch = monkeypatch
         self.discarded: list[tuple] = []
         self.today = TUESDAY
 
@@ -201,13 +202,15 @@ class Fakes:
                 )
 
     def run(self, now=None, log=None):
+        """`now` still reads as an argument at every call site, but it is applied by
+        patching the clock rather than by threading a parameter through `tick`."""
         now = now or noon(TUESDAY)
         self.today = now.date()
+        self._monkeypatch.setattr(tick_module, "market_now", lambda: now)
         return tick(
             _Engine(),
             "db",
             "client",
-            now=now,
             log=log or bind_logger(logging.getLogger("portfolio_rebalancer")),
         )
 
