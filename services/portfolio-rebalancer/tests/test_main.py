@@ -52,7 +52,7 @@ def test_the_tick_gets_the_engine_both_datastores_and_a_token(monkeypatch):
     engine, db, client, log = recorder.ticks[0]
     assert (db, client) == ("db", "client")
     assert hasattr(engine, "begin")
-    assert callable(log)
+    assert callable(log.info)
     # The credentials are put on the client rather than handed to the tick.
     assert recorder.authenticated == [("client", "a-token")]
 
@@ -136,8 +136,8 @@ def test_the_tick_is_handed_a_logger_bound_to_a_run_id(monkeypatch, caplog):
 
     log = recorder.ticks[0][3]
     with caplog.at_level(logging.INFO):
-        log("probe")
+        log.info("probe")
 
     record = caplog.records[-1]
-    assert record.name == "portfolio_rebalancer"
+    assert record.name == "portfolio_rebalancer.__main__"
     assert "run_id" in record.fields

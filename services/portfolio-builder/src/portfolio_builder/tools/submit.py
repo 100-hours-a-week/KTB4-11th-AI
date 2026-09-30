@@ -1,9 +1,8 @@
-import logging
 import threading
 from typing import Annotated
 
 import sqlalchemy as sa
-from ktb_core.logging import BoundLogger
+from ktb_core.logging import StructuredLogger
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langgraph.types import Command
@@ -41,7 +40,7 @@ def submit_portfolio(
     engine: sa.Engine,
     previous: frozenset[str],
     model: str,
-    log: BoundLogger,
+    log: StructuredLogger,
     lock: threading.Lock,
     saved: list[int],
 ) -> Command:
@@ -58,7 +57,7 @@ def submit_portfolio(
             except PortfolioRejected as rejected:
                 errors = rejected.errors
         if errors:
-            log("validation_failed", logging.WARNING, errors=errors)
+            log.warning("validation_failed", errors=errors)
             raise PortfolioRejected(errors)
     portfolio_id = saved[0]
     return Command(
@@ -72,7 +71,7 @@ def submit_portfolio(
 
 
 def submit_tool(
-    engine: sa.Engine, previous: frozenset[str], model: str, log: BoundLogger
+    engine: sa.Engine, previous: frozenset[str], model: str, log: StructuredLogger
 ) -> BaseTool:
     return StructuredTool.from_function(
         # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.

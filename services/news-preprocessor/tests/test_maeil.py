@@ -35,7 +35,7 @@ def test_entries_parse_valid_items_and_skip_one_with_a_broken_pubdate(caplog):
         "https://www.mk.co.kr/news/economy/10000001",
         "https://www.mk.co.kr/news/economy/10000002",
     ]
-    assert "skipping maeil_business_economy feed item" in caplog.text
+    assert "feed_item_skipped" in caplog.text
 
 
 def test_colon_offset_pubdate_is_timezone_aware():

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from ktb_core.logging import BoundLogger
+from ktb_core.logging import StructuredLogger
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelCallLimitMiddleware, ToolErrorMiddleware
 from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
@@ -36,7 +36,7 @@ def run_agent(
     system_prompt: str,
     briefing: str,
     max_turns: int,
-    log: BoundLogger,
+    log: StructuredLogger,
 ) -> RunResult:
     run_log = RunLog(log)
     agent = create_agent(

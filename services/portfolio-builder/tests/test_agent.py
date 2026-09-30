@@ -43,8 +43,14 @@ class Recorder:
     def __init__(self):
         self.events = []
 
-    def __call__(self, event, level=logging.INFO, **fields):
-        self.events.append((event, level, fields))
+    def info(self, event, **fields):
+        self.events.append((event, logging.INFO, fields))
+
+    def warning(self, event, **fields):
+        self.events.append((event, logging.WARNING, fields))
+
+    def error(self, event, **fields):
+        self.events.append((event, logging.ERROR, fields))
 
     def names(self):
         return [e[0] for e in self.events]
