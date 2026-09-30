@@ -14,8 +14,8 @@ def required_env(monkeypatch):
 def test_defaults(required_env):
     settings = Settings()
 
-    assert settings.eps == 0.2
-    assert settings.min_samples == 3
+    assert settings.eps == 0.34
+    assert settings.min_samples == 2
 
 
 def test_clustering_parameters_come_from_the_environment(required_env, monkeypatch):
