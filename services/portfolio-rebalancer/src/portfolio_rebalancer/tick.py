@@ -38,17 +38,12 @@ def market_now() -> datetime:
     return datetime.now(KST)
 
 
-def tick(
-    engine: sa.Engine,
-    db: Any,
-    client: httpx.Client,
-    now: datetime | None = None,
-    *,
-    log: BoundLogger,
-) -> int:
+def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: BoundLogger) -> int:
     # The logger is handed in rather than built here, so every line of one pass carries the
-    # run_id __main__ bound and there is only ever one logger in play.
-    now = now or market_now()
+    # run_id __main__ bound and there is only ever one logger in play. The clock is read
+    # here and passed inward, so the modules below stay free of one; tests patch
+    # `market_now`, which is how the rest of the repo makes a boundary deterministic.
+    now = market_now()
     # Polling is hourly, so the gap between two tick_start lines is the cadence itself.
     log("tick_start", at=now.isoformat(), market_date=now.date().isoformat())
 
