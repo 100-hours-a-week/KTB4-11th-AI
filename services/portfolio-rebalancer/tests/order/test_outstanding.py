@@ -25,7 +25,7 @@ SATURDAY = date(2026, 10, 3)
 
 
 def noon(day: date) -> datetime:
-    """Well before the 14:30 cutoff on the last session."""
+    """Well before the 15:00 cutoff on the last session."""
     return datetime(day.year, day.month, day.day, 11, 0, tzinfo=KST)
 
 

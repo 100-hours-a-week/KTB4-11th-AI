@@ -26,7 +26,7 @@ read on its own.
 | Last-session cutoff | 14:30 | **15:00** | polling is hourly from 09:00, so that is the last pass |
 | Trading days | weekdays | `exchange-calendars` XKRX | 한글날 is not a weekend |
 | Budget | three days, fixed | the week's remaining sessions | the next judgement is the deadline |
-| Market rung | the morning after | 14:30 on the last session | KRX closes at 15:30 |
+| Market rung | the morning after | 15:00 on the last session | KRX closes at 15:30 |
 | Buys | sized against the sells' expected proceeds | sized against **cash that exists** | the proceeds are not money until the sells fill |
 
 ## Purpose
@@ -478,24 +478,26 @@ def whole_shares(
     """Positions to hold, and the cash left un-invested."""
 
 
-def reservation_prices(reference: float, day: int) -> tuple[float, float] | None:
-    """The low and high price for a band, on a KRX tick, or None once at market."""
+def band_for(days_left: int) -> float | None:
+    """The band this many sessions allow, or None once the ladder is spent."""
 
 
-def prices_for(reference: float, days_left: int) -> tuple[float, float] | None:
-    """The pair to place with this many sessions left, or None to go to market."""
+def limit_and_trigger(
+    reference: float, days_left: int, side: str
+) -> tuple[float, float] | None:
+    """The limit to place and the trigger to watch, on a KRX tick, or None at market."""
 
 
-def days_left_of(low: float, high: float) -> int:
-    """How many sessions an outstanding pair still has, read back out of it."""
+def on_tick(price: float) -> float:
+    """The price rounded to the nearest KRX tick."""
 
 
-def read_reservation(low: float, high: float) -> tuple[float, int]:
-    """The reference price and the day, recovered from an outstanding pair."""
+def trigger_hit(side: str, trigger: float, price: float) -> bool:
+    """Whether the market has reached the point where waiting stops being worth it."""
 
 
-def find_pairs(pending_orders) -> dict[tuple[str, str], Pair]:
-    """The outstanding pairs, keyed by stock code and side."""
+def outstanding_orders(pending_orders) -> dict[tuple[str, str], Outstanding]:
+    """The orders still working, keyed by stock code and side."""
 
 
 def apply_pending(account: Mapping[str, object]) -> AccountState:
@@ -511,19 +513,26 @@ def rebalance(
     """Sells first, then as much of the buy side as the cash on hand covers."""
 
 
-def narrow(portfolio, account, pairs, started: date, now: datetime) -> list[Order]:
-    """Re-quote each outstanding pair at the band its remaining sessions allow."""
+def narrow(
+    portfolio, account, working, references, started: date, now: datetime
+) -> list[Order]:
+    """Re-quote each working order at the band its remaining sessions allow.
+
+    `references` comes from `rebalance_orders.reference_price`: one limit price cannot
+    say what it was a band away from. An order already at market is not passed in, since
+    the ladder has no rung left for it.
+    """
 
 
 def days_left(started: date, now: datetime) -> int:
-    """Sessions from now to the week's deadline, ending at 14:30 on the last one."""
+    """Sessions from now to the week's deadline, ending at 15:00 on the last one."""
 
 
 def is_open(day: date) -> bool:
     """Whether XKRX holds a session that day."""
 
 
-def reached_the_backend(stock_codes, pairs) -> bool:
+def reached_the_backend(stock_codes, working) -> bool:
     """Whether orders recorded but never stamped as sent actually got there."""
 
 
