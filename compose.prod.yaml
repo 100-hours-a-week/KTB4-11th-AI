@@ -19,6 +19,7 @@ x-postgres-environment: &postgres-environment
   NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
   MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
   PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 services:
   postgres:
@@ -106,25 +107,25 @@ services:
       questdb:
         condition: service_healthy
 
-  portfolio-rebalancer-http:
+  portfolio-rebalancer:
     <<: *app
-    command: ["portfolio-rebalancer-http"]
+    profiles: ["jobs"]
+    command: ["portfolio-rebalancer"]
     mem_limit: 384m
-    restart: unless-stopped
+    stop_grace_period: 2m
     environment:
-      PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL: ${PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL:-INFO}
-    ports:
-      - "${PUBLIC_HTTP_PORT:-8000}:8000"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      <<: *postgres-environment
+      PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER: ${PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT:-portfolio-rebalancer}
+      PORTFOLIO_REBALANCER_LOG_LEVEL: ${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
 
   news-preprocessor:
     <<: *app
@@ -195,39 +196,8 @@ services:
   market-collector:
     <<: *app
     profiles: ["jobs"]
-    # 애플리케이션은 단발 작업이므로 운영 시간 동안 같은 컨테이너에서 반복 실행합니다.
-    command:
-      - /bin/sh
-      - -c
-      - |
-        stop() {
-          if [ -n "$${child:-}" ]; then
-            kill -TERM "$$child" 2>/dev/null || true
-            wait "$$child" 2>/dev/null || true
-          fi
-          exit 0
-        }
-
-        trap stop TERM INT
-
-        while true; do
-          market-collector &
-          child=$$!
-          wait "$$child"
-          status=$$?
-          child=
-
-          if [ "$$status" -ne 0 ]; then
-            exit "$$status"
-          fi
-
-          sleep "$${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}" &
-          child=$$!
-          wait "$$child"
-          child=
-        done
+    command: ["market-collector"]
     mem_limit: 768m
-    restart: on-failure
     stop_grace_period: 2m
     environment:
       <<: *postgres-environment
@@ -236,7 +206,6 @@ services:
       MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
       MARKET_COLLECTOR_INDEX_NAME: ${MARKET_COLLECTOR_INDEX_NAME:-KOSPI200}
       MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
-      MARKET_COLLECTOR_POLL_INTERVAL_SECONDS: ${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}
     depends_on:
       questdb:
         condition: service_healthy

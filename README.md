@@ -7,7 +7,7 @@
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
-- `portfolio-rebalancer-http`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 HTTP 서버
+- `portfolio-rebalancer`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 주기 실행 작업
 - `portainer`: 컨테이너 상태와 CPU, 메모리, 네트워크, 디스크 I/O를 조회하고 노드 알림을 보내는 관리 UI
 
 ## 컨테이너 메트릭
@@ -176,6 +176,7 @@ erDiagram
 | `cluster_summaries`, `entities`, `cluster_entities`, `relations` | `news-graph-builder` | `0003` |
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | `market-syncer` | `0003`, `0004`, `0006` |
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
+| `users`, `accounts`, `account_holdings`, `account_pending_orders`, `rebalance_orders` | `portfolio-rebalancer` | `0007` |
 
 - `corporations` 는 DART 고유번호와 연결되는 KOSPI 종목만, `corporation_indices` 는 KOSPI 200 구성 종목만 저장합니다.
 - `themes` / `theme_companies` 는 `corporations` 에 있는 종목만 저장합니다.
@@ -284,10 +285,14 @@ GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이�
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` |
 
 
-### portfolio-rebalancer-http (`PORTFOLIO_REBALANCER_HTTP_`)
+### portfolio-rebalancer (`PORTFOLIO_REBALANCER_`)
 
 | 변수 | 필수 | 기본값 |
 |---|---|---|
-| `PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL` | | `INFO` |
-| `PORTFOLIO_REBALANCER_HTTP_HOST` | | `0.0.0.0` |
-| `PORTFOLIO_REBALANCER_HTTP_PORT` | | `8000` |
+| `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | |
+| `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | |
+| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT` | | `portfolio-rebalancer` |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | Backend 의 `JWT_ISSUER` 와 같아야 합니다 |
+| `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` |

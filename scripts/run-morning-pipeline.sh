@@ -16,9 +16,7 @@ run_job() {
   echo "completed scheduled job: $service"
 }
 
-run_job market-syncer
 run_job market-collector
-run_job news-preprocessor
 run_job news-clusterer
 run_job news-graph-builder
 run_job portfolio-builder
