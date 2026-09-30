@@ -16,7 +16,7 @@ def basis(index: int) -> list[float]:
 def env(monkeypatch, pg_dsn):
     monkeypatch.setenv("NEWS_CLUSTERER_POSTGRES_DSN", pg_dsn)
     # setup_logging replaces the root handlers, which would detach caplog.
-    monkeypatch.setattr(entry, "setup_logging", lambda level: None)
+    monkeypatch.setattr(entry, "setup_logging", lambda level, service_name: None)
 
 
 @pytest.fixture

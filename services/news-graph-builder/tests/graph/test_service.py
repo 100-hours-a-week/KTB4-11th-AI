@@ -1,8 +1,5 @@
 import sqlalchemy as sa
-from news_graph_builder.company import DartCompany, sync_companies
 from news_graph_builder.graph import Entity, resolve
-
-SAMSUNG = DartCompany("00126380", "삼성전자", None, "005930")
 
 
 def resolve_in(engine, *llm_entities):
@@ -10,17 +7,17 @@ def resolve_in(engine, *llm_entities):
         return resolve(conn, llm_entities)
 
 
-def test_an_alias_hit_ignores_the_llm_type(engine):
+def test_an_alias_hit_ignores_the_llm_type(engine, corporation):
     with engine.begin() as conn:
-        sync_companies(conn, [("005930", "삼성전자")], [SAMSUNG])
+        corporation(conn, "005930", "삼성전자", "00126380")
 
     first = resolve_in(engine, Entity("삼성전자(주)", "회사"))
     second = resolve_in(engine, Entity("삼성전자", "company"))
 
     assert first == second == {"삼성전자": first["삼성전자"]}
     with engine.connect() as conn:
-        row = conn.execute(sa.text("SELECT corp_code, type FROM entities")).one()
-    assert tuple(row) == ("00126380", "기업")
+        row = conn.execute(sa.text("SELECT stock_code, type FROM entities")).one()
+    assert tuple(row) == ("005930", "기업")
 
 
 def test_a_miss_creates_one_entity_per_name_and_type(engine):

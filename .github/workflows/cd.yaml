@@ -107,8 +107,7 @@ jobs:
               cp -p .image.env.rollback .image.env
 
               docker compose --env-file .env --env-file .image.env \
-                -f compose.prod.yaml up -d --wait \
-                market-analyzer-mcp portfolio-rebalancer-http
+                -f compose.prod.yaml up -d --wait portfolio-rebalancer-http
               rollback_status=$?
 
               if [[ "$rollback_status" -eq 0 ]]; then
@@ -150,8 +149,7 @@ jobs:
           compose up -d --wait postgres questdb
           compose run --rm -T postgres-migrate </dev/null
           compose run --rm -T questdb-migrate </dev/null
-          compose up -d --wait \
-            market-analyzer-mcp portfolio-rebalancer-http
+          compose up -d --wait portfolio-rebalancer-http
 
           # 모든 단계가 성공한 SHA만 이후 systemd 배치 작업에서도 사용합니다.
           mv .image.env.next .image.env

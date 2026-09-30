@@ -82,40 +82,6 @@ class Store:
             for record in records
         }
 
-    def write_universe_members(
-        self,
-        ts: datetime,
-        index_code: str,
-        index_name: str,
-        src: str,
-        members: Iterable[tuple[str, str]],
-    ) -> int:
-        written = 0
-        with self._db.sender() as sender:
-            for symbol, stock_name in members:
-                sender.row(
-                    "universe_members",
-                    symbols={
-                        "index_code": index_code,
-                        "index_name": index_name,
-                        "symbol": symbol,
-                        "stock_name": stock_name,
-                        "src": src,
-                    },
-                    columns={},
-                    at=ts,
-                )
-                written += 1
-            sender.flush()
-        return written
-
-    def latest_members(self, index_code: str) -> frozenset[str]:
-        sql = """SELECT symbol FROM universe_members
-        WHERE index_code = $1
-          AND ts = (SELECT max(ts) FROM universe_members WHERE index_code = $1)"""
-        with self._db.query(sql, [index_code]) as result:
-            return frozenset(result.to_pandas()["symbol"].tolist())
-
     def read_regular_candles(self, timeframe: str, symbol: str, limit: int = 300) -> list[Candle]:
         if timeframe not in TIMEFRAMES:
             raise KeyError(f"unknown timeframe: {timeframe}")
