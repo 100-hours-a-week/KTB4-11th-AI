@@ -39,8 +39,22 @@ def main() -> None:
             closes = last_closes(settings.questdb_conf, codes)
             if missing := sorted(codes - closes.keys()):
                 log.warning("no_close", stock_codes=missing)
+            named = {t.stock_code for t in portfolio.targets}
             for user in users:
                 for account in user.accounts:
+                    pending = {o.stock_code for o in account.pending_orders}
+                    if stranded := sorted(
+                        {s.stock_code for s in account.stocks if s.quantity > 0}
+                        - named
+                        - pending
+                        - portfolio.leftovers.keys()
+                    ):
+                        log.warning(
+                            "leftover_without_reason",
+                            user_id=user.user_id,
+                            account_id=account.account_id,
+                            stock_codes=stranded,
+                        )
                     for order in rebalance(
                         portfolio, account, closes, settings.band, settings.buy_buffer
                     ):

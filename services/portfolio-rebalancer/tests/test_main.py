@@ -100,24 +100,24 @@ def test_every_account_is_rebalanced_and_the_run_exits_zero(env, monkeypatch, ca
         entry.main()
 
     assert exit_.value.code == 0
-    assert backends[0].placed == [(1, 11, "005930", 4), (1, 12, "005930", 4)]
+    assert backends[0].placed == [(1, 12, "005930", 4)]
     assert env["codes"] == {"005930", "000660"}
     events = _events(capsys.readouterr().out)
-    assert events[-1]["sent"] == 2
+    assert events[-1]["sent"] == 1
     assert events[-1]["failed"] == 0
     assert any(e["message"] == "no_close" and e["stock_codes"] == ["000660"] for e in events)
 
 
 def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monkeypatch, capsys):
-    backends = _use(monkeypatch, fail_account=11)
+    backends = _use(monkeypatch, fail_account=12)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
 
     assert exit_.value.code == 1
-    assert backends[0].placed == [(1, 12, "005930", 4)]
+    assert backends[0].placed == []
     failed = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_failed")
-    assert failed["account_id"] == 11
+    assert failed["account_id"] == 12
     assert failed["status"] == 400
     assert failed["body"] == "bad"
 
@@ -141,3 +141,24 @@ def test_the_secret_never_reaches_the_log(env, monkeypatch, capsys):
         entry.main()
 
     assert "s" * 32 not in capsys.readouterr().out
+
+
+def test_a_stranded_holding_is_logged_as_leftover_without_reason(env, monkeypatch, capsys):
+    _use(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        entry.main()
+
+    events = _events(capsys.readouterr().out)
+    leftover_warn = next(
+        (e for e in events if e["message"] == "leftover_without_reason" and e["account_id"] == 11),
+        None,
+    )
+    assert leftover_warn is not None
+    assert leftover_warn["stock_codes"] == ["000660"]
+
+    leftover_warn_12 = next(
+        (e for e in events if e["message"] == "leftover_without_reason" and e["account_id"] == 12),
+        None,
+    )
+    assert leftover_warn_12 is None
