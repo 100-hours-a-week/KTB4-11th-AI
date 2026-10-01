@@ -6,7 +6,7 @@
 - `market-syncer`: 키움과 OpenDART에서 종목과 테마 동기화
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
-- `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
+- `market-collector`: 평일 09:55~14:55 KST와 15:35 KST에 실행되는 키움 OHLCV 보관 작업
 - `portfolio-rebalancer`:  포트폴리오를 매수·매도 요청으로 바꾸는 
 
 ```mermaid
