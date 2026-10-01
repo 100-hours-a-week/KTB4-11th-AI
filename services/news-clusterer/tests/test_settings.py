@@ -14,7 +14,7 @@ def required_env(monkeypatch):
 def test_defaults(required_env):
     settings = Settings()
 
-    assert settings.eps == 0.34
+    assert settings.eps == 0.36
     assert settings.min_samples == 2
 
 

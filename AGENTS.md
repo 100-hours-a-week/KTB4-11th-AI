@@ -68,7 +68,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `NEWS_PREPROCESSOR_USER_AGENT` | news-preprocessor | `ktb-ai/0.1` |
 | `NEWS_PREPROCESSOR_LOG_LEVEL` | news-preprocessor | `INFO` |
 | `NEWS_CLUSTERER_POSTGRES_DSN` | news-clusterer | required |
-| `NEWS_CLUSTERER_EPS` | news-clusterer (cosine distance, 0 < eps ≤ 2); tuned for Qwen3-Embedding-4B, recalibrate when the model changes | `0.34` |
+| `NEWS_CLUSTERER_EPS` | news-clusterer (cosine distance, 0 < eps ≤ 2); tuned for Qwen3-Embedding-4B, recalibrate when the model changes | `0.36` |
 | `NEWS_CLUSTERER_MIN_SAMPLES` | news-clusterer | `2` |
 | `NEWS_CLUSTERER_LOG_LEVEL` | news-clusterer | `INFO` |
 | `NEWS_GRAPH_BUILDER_POSTGRES_DSN` | news-graph-builder | required |

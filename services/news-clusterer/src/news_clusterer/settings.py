@@ -11,5 +11,5 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     postgres_dsn: str
     # Cosine distance lies in [0, 2].
-    eps: float = Field(default=0.34, gt=0, le=2)
+    eps: float = Field(default=0.36, gt=0, le=2)
     min_samples: int = Field(default=2, gt=0)

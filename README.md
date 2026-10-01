@@ -230,7 +230,7 @@ GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이�
 | 변수 | 필수 | 기본값 |
 |---|---|---|
 | `NEWS_CLUSTERER_POSTGRES_DSN` | 필수 | |
-| `NEWS_CLUSTERER_EPS` | | `0.34` (코사인 거리, 0 초과 2 이하). Qwen3-Embedding-4B 기준값이므로 모델을 바꾸면 다시 맞출 것 |
+| `NEWS_CLUSTERER_EPS` | | `0.36` (코사인 거리, 0 초과 2 이하). Qwen3-Embedding-4B 기준값이므로 모델을 바꾸면 다시 맞출 것 |
 | `NEWS_CLUSTERER_MIN_SAMPLES` | | `2` |
 | `NEWS_CLUSTERER_LOG_LEVEL` | | `INFO` |
 
