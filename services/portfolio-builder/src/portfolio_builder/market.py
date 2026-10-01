@@ -60,7 +60,7 @@ class QuestDBMarket(Market):
         closes: dict[str, list[float]] = defaultdict(list)
         for r in self._records(
             "SELECT symbol, ts, close FROM bars_1d WHERE session = 'regular'"
-            f" AND ts > dateadd('d', -{UNIVERSE_DAYS}, now()) ORDER BY symbol, ts"
+            f" AND ts > dateadd('d', -{UNIVERSE_DAYS}, now()) ORDER BY ts"
         ):
             if r["symbol"] in members:
                 closes[r["symbol"]].append(r["close"])
