@@ -14,8 +14,7 @@ class Settings(BaseSettings):
     backend_url: str
     # A credential: SecretStr keeps it out of logs and repr.
     backend_jwt_secret: SecretStr
-    # Who the token says it is. The Backend reads `sub` with Long.parseLong, so this is
-    # the numeric id of the user whose accounts are being rebalanced, not a service name.
-    backend_jwt_subject: str = "portfolio-rebalancer"
+    # There is no subject to configure: the snapshot route wants the literal `ai-server`
+    # and every order is signed for the user who owns the account it is placed on.
     # Must equal the Backend's JWT_ISSUER: its decoder validates the issuer claim.
     backend_jwt_issuer: str

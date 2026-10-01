@@ -142,6 +142,28 @@ would actually be paid at. Without it a stock sitting just inside its budget at
 yesterday's close is kept, and the share it cannot buy today leaves the weight stranded
 instead of shared out over the companies that remain.
 
+### Two Subjects, One Handshake
+
+`SecurityConfig` makes the two routes mutually exclusive. The snapshot wants
+`sub=ai-server`, and `anyRequest()` then refuses that very subject everywhere else, so a
+single token cannot do both jobs:
+
+```
+GET  /api/v1/users/ai-server       sub=ai-server, actor=AI
+POST /api/v1/accounts/{id}/orders  sub=<owning user id>, actor=AI
+```
+
+`__main__` builds a `token_for(subject)` factory from the shared secret and the issuer
+and hands it to the tick. The handshake signs the service subject once, and the tick
+signs a fresh token for each account's owner before it touches that account. Swapping
+the access cookie does not disturb the CSRF token -- the repository keeps its own cookie
+and the Backend is stateless -- so one handshake covers the whole pass.
+
+The owner therefore has to travel with the account: `managed_accounts` yields
+`(user_id, account)` rather than the account alone. `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT`
+is gone, because there is nothing left to configure -- one subject is a constant and the
+other comes from the payload.
+
 `reason` travels as the plain string portfolio-builder stored. The Backend's current
 record wants `{decision_id, summary}`, but this service has no decision id to give: a
 stock code carries exactly one reason within a portfolio, because the exits are removed

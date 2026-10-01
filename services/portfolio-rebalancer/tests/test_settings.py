@@ -46,8 +46,10 @@ def test_the_signing_secret_is_kept_out_of_logs_and_repr():
     assert SECRET not in str(settings.backend_jwt_secret)
 
 
-def test_the_token_subject_defaults_to_the_service_name():
-    assert Settings(**GIVEN).backend_jwt_subject == "portfolio-rebalancer"
+def test_there_is_no_token_subject_to_configure():
+    """The snapshot route wants the literal `ai-server`, and every order is signed for
+    the user who owns the account, so a configured subject could only be wrong."""
+    assert "backend_jwt_subject" not in Settings.model_fields
 
 
 def test_no_host_or_port_is_carried():

@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -8,7 +8,7 @@ import sqlalchemy as sa
 from ktb_core.logging import BoundLogger
 
 from portfolio_rebalancer.account import apply_pending, managed_accounts, polled_prices, write_poll
-from portfolio_rebalancer.backend import fetch_accounts, send_orders
+from portfolio_rebalancer.backend import fetch_accounts, send_orders, use_token
 from portfolio_rebalancer.market import latest_prices
 from portfolio_rebalancer.order import (
     amend_orders,
@@ -46,7 +46,14 @@ def market_now() -> datetime:
     return datetime.now(KST)
 
 
-def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: BoundLogger) -> int:
+def tick(
+    engine: sa.Engine,
+    db: Any,
+    client: httpx.Client,
+    *,
+    token_for: Callable[[str], str],
+    log: BoundLogger,
+) -> int:
     # The logger is handed in rather than built here, so every line of one pass carries the
     # run_id __main__ bound and there is only ever one logger in play. The clock is read
     now = market_now()
@@ -68,7 +75,11 @@ def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: BoundLogger) 
 
     accounts = list(managed_accounts(polled))
     sent = 0
-    for account in accounts:
+    for user_id, account in accounts:
+        # Every order on this account is signed for its owner. The Backend reads the
+        # subject as the user id and refuses an account that is not theirs, and the
+        # service token the snapshot needed is rejected on this route outright.
+        use_token(client, token_for(str(user_id)))
         sent += _account(engine, db, client, portfolio, account, now, log)
     log("tick_end", orders_sent=sent, accounts=len(accounts))
     return sent

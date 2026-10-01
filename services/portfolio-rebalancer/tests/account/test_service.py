@@ -158,13 +158,20 @@ def test_several_pending_orders_accumulate():
     assert state.held["005930"] == 100 + 10 + 5 - 3
 
 
+def test_the_owning_user_travels_with_the_account():
+    """An order is signed for the owner, so the account alone is not enough."""
+    assert list(managed_accounts([user(user_id=7, accounts=[account(account_id=11)])])) == [
+        (7, account(account_id=11))
+    ]
+
+
 def test_every_account_of_a_user_is_yielded_not_just_the_first():
     """A user has several accounts and each is decided on its own."""
     accounts = [account(account_id=11), account(account_id=12), account(account_id=13)]
 
     yielded = list(managed_accounts([user(accounts=accounts)]))
 
-    assert [a["account_id"] for a in yielded] == [11, 12, 13]
+    assert [a["account_id"] for _, a in yielded] == [11, 12, 13]
 
 
 def test_an_inactive_account_is_skipped():
@@ -172,7 +179,7 @@ def test_an_inactive_account_is_skipped():
 
     yielded = list(managed_accounts([user(accounts=accounts)]))
 
-    assert [a["account_id"] for a in yielded] == [12]
+    assert [a["account_id"] for _, a in yielded] == [12]
 
 
 def test_accounts_of_several_users_all_come_through():
@@ -183,14 +190,14 @@ def test_accounts_of_several_users_all_come_through():
 
     yielded = list(managed_accounts(users))
 
-    assert [a["account_id"] for a in yielded] == [11, 21, 22]
+    assert [a["account_id"] for _, a in yielded] == [11, 21, 22]
 
 
 def test_a_user_with_no_ai_accounts_is_listed_but_yields_nothing():
     """The endpoint returns every user, with an empty list for those it manages none of."""
     users = [user(user_id=1, accounts=[]), user(user_id=2, accounts=[account(account_id=21)])]
 
-    assert [a["account_id"] for a in managed_accounts(users)] == [21]
+    assert [a["account_id"] for _, a in managed_accounts(users)] == [21]
     assert list(managed_accounts([])) == []
 
 
@@ -209,7 +216,7 @@ def test_an_account_never_carries_a_siblings_numbers():
         pending_orders=[order(stock_code="000660", limit_price=100, quantity=1)],
     )
 
-    states = [apply_pending(a) for a in managed_accounts([user(accounts=[first, second])])]
+    states = [apply_pending(a) for _, a in managed_accounts([user(accounts=[first, second])])]
 
     assert states[0].cash == 1_000.0
     assert states[0].held == {"005930": 1}
