@@ -4,7 +4,6 @@ from dataclasses import replace
 from portfolio_rebalancer.account.dto import AccountState
 from portfolio_rebalancer.order.dto import BUY, SELL, SKIP, Order
 from portfolio_rebalancer.order.reservations import (
-    PRICE_BANDS,
     TRIGGER_BAND,
     band_for,
     limit_and_trigger,
@@ -13,7 +12,7 @@ from portfolio_rebalancer.order.reservations import (
 from portfolio_rebalancer.order.shares import whole_shares
 from portfolio_rebalancer.portfolio.dto import Exit, Holding, Portfolio
 
-LADDER_DAYS = len(PRICE_BANDS)
+FIRST_DAY = 1
 
 NO_PRICE = "no price for this stock code, so its weight was shared out equally"
 NO_BUDGET = "one share costs more than the budget; its weight was shared out equally"
@@ -24,11 +23,11 @@ def rebalance(
     portfolio: Portfolio,
     account: AccountState,
     prices: Mapping[str, float],
-    days_left: int = LADDER_DAYS,
+    day: int = FIRST_DAY,
 ) -> list[Order]:
-    # Selling and buying share one deadline, so `days_left` decides the band every order is
-    # quoted at. An order placed after the sells have taken a day starts narrow rather than
-    # restarting the ladder.
+    # Selling and buying share one ladder, so `day` -- the session the cycle is on, not the
+    # age of any one order -- decides the band everything is quoted at. A buy placed after
+    # the sells have taken a day starts narrow rather than restarting the ladder.
     #
     # Buys are limited to cash that exists. The targets are computed against the whole
     # portfolio, including what the exits are worth, but their proceeds are not money until
@@ -40,9 +39,7 @@ def rebalance(
     # not block the sells that fund it. A held company that is in neither the portfolio nor
     # the exits is left alone, because no reason exists to act on it.
     sells = [
-        _order(
-            account.account_id, leaving, SELL, account.held[leaving.stock_code], prices, days_left
-        )
+        _order(account.account_id, leaving, SELL, account.held[leaving.stock_code], prices, day)
         for leaving in portfolio.exits
         if account.held.get(leaving.stock_code, 0) > 0
     ]
@@ -71,9 +68,9 @@ def rebalance(
             continue
         delta = shares[company.stock_code] - account.held.get(company.stock_code, 0)
         if delta > 0:
-            buys.append(_order(account.account_id, company, BUY, delta, prices, days_left))
+            buys.append(_order(account.account_id, company, BUY, delta, prices, day))
         elif delta < 0:
-            more_sells.append(_order(account.account_id, company, SELL, -delta, prices, days_left))
+            more_sells.append(_order(account.account_id, company, SELL, -delta, prices, day))
 
     skips = [
         *(
@@ -164,11 +161,11 @@ def _order(
     action: str,
     shares: int,
     prices: Mapping[str, float],
-    days_left: int,
+    day: int,
 ) -> Order:
     # Both sides carry the full quantity: whichever fills, the other is cancelled.
     reference = prices.get(company.stock_code, 0.0)
-    quote = limit_and_trigger(reference, days_left, action) if reference > 0 else None
+    quote = limit_and_trigger(reference, day, action) if reference > 0 else None
     return Order(
         account_id=account_id,
         company_id=company.company_id,
@@ -180,7 +177,7 @@ def _order(
         # Carried even at market: it is the price the decision was made on, and it is
         # what a market order is costed against when the cash is checked.
         reference=on_tick(reference) if reference > 0 else None,
-        band=band_for(days_left) if quote else None,
+        band=band_for(day) if quote else None,
         limit=quote[0] if quote else None,
         trigger=quote[1] if quote else None,
     )

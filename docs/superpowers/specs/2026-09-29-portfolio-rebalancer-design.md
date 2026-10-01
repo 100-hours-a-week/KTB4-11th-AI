@@ -65,6 +65,28 @@ back rather than sent, logged as `orders_blocked`, and the narrowest limit alrea
 the book keeps standing. **So the fill is not guaranteed in v1**, and the "market rung is
 what guarantees the fill" sentence below does not hold until v2.
 
+### The Ladder Is Three Sessions Counted Forward
+
+The sections below take the band from the sessions **left** until the end of the week the
+cycle began. That is wrong, and this is the rule:
+
+| session | band | 78,000 reference (buy) |
+|---|---|---|
+| day 1 -- the new portfolio's first orders | ± 5% | 74,100 |
+| day 2 -- whatever is still unfilled | ± 3% | 75,700 |
+| day 3 -- whatever is still unfilled | ± 1% | 77,200 |
+| day 3, 15:00 | **blocked** | — |
+
+**Counted forward from the day the cycle began, in sessions.** A holiday is skipped
+rather than spent: if the Monday is shut the cycle's first day is the Tuesday and its
+third is the Thursday. A cycle that starts on a Wednesday has its third day on the
+Friday. `ladder_day()` reads XKRX for this, and `week_deadline()` is gone -- the week's
+last session has nothing to do with it.
+
+So the ladder is always three sessions, not "whatever is left of this week". Under the
+old rule a Monday cycle held the widest band through Wednesday and only narrowed on the
+Thursday and Friday; it now narrows every session.
+
 ### New Orders Are Placed on the Opening Pass
 
 A stock this service holds no order on has no quote in the snapshot, so its reference is
@@ -618,8 +640,12 @@ def narrow(
     """
 
 
-def days_left(started: date, now: datetime) -> int:
-    """Sessions from now to the week's deadline, ending at 15:00 on the last one."""
+def ladder_day(started: date, now: datetime) -> int:
+    """Which rung the cycle is on: 1, 2, 3, or 0 once spent.
+
+    Counted forward in sessions from the day it began, so a shut day is skipped rather
+    than consumed. The third rung ends at 15:00, the last pass before the close.
+    """
 
 
 def is_open(day: date) -> bool:

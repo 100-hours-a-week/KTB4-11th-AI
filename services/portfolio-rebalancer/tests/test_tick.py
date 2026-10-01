@@ -85,7 +85,7 @@ def recorded_row(
     and reference_price is what a single limit price cannot say for itself.
     """
     if trigger is None and reference:
-        trigger = limit_and_trigger(reference, 3, side)[1]
+        trigger = limit_and_trigger(reference, 1, side)[1]
     return {
         "stock_code": stock_code,
         "sent_at": sent_at,
@@ -312,7 +312,7 @@ def test_an_account_whose_plan_is_already_met_emits_nothing(monkeypatch):
 
 def test_an_outstanding_pair_is_amended_rather_than_recorded_again(monkeypatch):
     """A narrowing is one amended order; the unique constraint forbids a second."""
-    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     fakes = Fakes(
         monkeypatch,
@@ -320,7 +320,7 @@ def test_an_outstanding_pair_is_amended_rather_than_recorded_again(monkeypatch):
         recorded={11: already},
     )
 
-    assert fakes.run(now=noon(THURSDAY)) == 1
+    assert fakes.run(now=noon(TUESDAY)) == 1
     assert fakes.recorded_rows == []
     assert [order.band for order in fakes.amended[0]] == [PRICE_BANDS[1]]
     assert fakes.calls.index("amend") < fakes.calls.index("send")
@@ -329,7 +329,7 @@ def test_an_outstanding_pair_is_amended_rather_than_recorded_again(monkeypatch):
 def test_a_pair_already_matching_the_plan_is_left_alone(monkeypatch):
     """The poll runs hourly. A pair at the planned quantity and today's band is re-quoted
     by nothing, or the Backend would see the same order every hour."""
-    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     outstanding = [pending(price=limit, amount=52)]
     fakes = Fakes(
@@ -508,7 +508,7 @@ def test_the_record_is_committed_before_the_send(monkeypatch):
 def test_an_unsent_record_whose_pair_is_outstanding_is_stamped_sent(monkeypatch):
     """All placeable orders go out in one request, so an outstanding pair means the
     request arrived and only the reply was lost."""
-    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
     unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(
         monkeypatch,
@@ -537,7 +537,7 @@ def test_an_unsent_record_with_no_pair_is_discarded_and_decided_again(monkeypatc
 
 def test_a_stamped_record_is_not_discarded(monkeypatch):
     """Nothing that reached the Backend is ever dropped from the history."""
-    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
     mixed = [
         recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC)),
         recorded_row("000660", sent_at=None),
@@ -632,9 +632,9 @@ def test_the_buy_arrives_once_the_sell_has_freed_the_cash(monkeypatch):
     assert buys[0].shares * buys[0].trigger <= 4_120_000.0
 
 
-def test_an_order_placed_late_in_the_week_starts_narrow(monkeypatch):
-    """Selling and buying share the week's five sessions. Placed on the Thursday there are
-    two left, and two days is the 3% band -- the ladder does not restart."""
+def test_an_order_placed_late_in_the_cycle_starts_narrow(monkeypatch):
+    """Selling and buying share one ladder. A buy first placed on the cycle's second
+    session goes out on the second rung rather than restarting on the widest."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -645,7 +645,7 @@ def test_an_order_placed_late_in_the_week_starts_narrow(monkeypatch):
     users = polled(account(cash=4_120_000.0))
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
-    fakes.run(now=opening(THURSDAY))
+    fakes.run(now=opening(TUESDAY))
 
     buys = [order for order in fakes.sent[0] if order.action == "buy"]
     assert buys[0].band == PRICE_BANDS[1]
@@ -693,13 +693,13 @@ def test_the_opening_pass_does_place(monkeypatch):
     assert events.of("placing_deferred") == []
 
 
-def working_buy(reference=78_000.0, days_left=5, amount=52, quote=None):
+def working_buy(reference=78_000.0, day=1, amount=52, quote=None):
     """What the poll reports for a buy reservation: one order, at the limit.
 
     `quote` is the Backend's live price, which decides the trigger and rides on the
     order itself.
     """
-    limit, _ = limit_and_trigger(reference, days_left, "buy")
+    limit, _ = limit_and_trigger(reference, day, "buy")
     return [pending(price=limit, amount=amount, quote=quote)]
 
 
@@ -708,7 +708,7 @@ def test_a_buy_struck_at_its_trigger_is_blocked_rather_than_sent_at_market(monke
     only limit orders, so the order is held back and the block is logged."""
     events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
-    _, trigger = limit_and_trigger(78_000.0, 3, "buy")
+    _, trigger = limit_and_trigger(78_000.0, 1, "buy")
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, pending_orders=working_buy(quote=trigger))),
@@ -742,13 +742,13 @@ def test_a_sell_goes_to_market_when_the_price_falls_to_its_trigger(monkeypatch):
         holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
         exits=[Exit(*HYNIX, reason="퇴출")],
     )
-    limit, trigger = limit_and_trigger(412_000.0, 5, "sell")
+    limit, trigger = limit_and_trigger(412_000.0, 1, "sell")
     already = [
         recorded_row(
             "000660",
             sent_at=datetime(2026, 9, 28, tzinfo=UTC),
             reference=412_000.0,
-            trigger=limit_and_trigger(412_000.0, 3, "sell")[1],
+            trigger=limit_and_trigger(412_000.0, 1, "sell")[1],
             side="sell",
         )
     ]
@@ -774,7 +774,7 @@ def test_a_sell_goes_to_market_when_the_price_falls_to_its_trigger(monkeypatch):
 def test_a_blocked_order_is_neither_recorded_nor_amended(monkeypatch):
     """Half a state is worse than none: the rung already on the book keeps standing."""
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
-    _, trigger = limit_and_trigger(78_000.0, 3, "buy")
+    _, trigger = limit_and_trigger(78_000.0, 1, "buy")
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, pending_orders=working_buy(quote=trigger))),
@@ -793,7 +793,7 @@ def test_a_block_names_the_stock_it_held_back(monkeypatch):
     """So an operator can see which order stopped moving, and why."""
     events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
-    _, trigger = limit_and_trigger(78_000.0, 3, "buy")
+    _, trigger = limit_and_trigger(78_000.0, 1, "buy")
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, pending_orders=working_buy(amount=21, quote=trigger))),
@@ -817,7 +817,7 @@ def test_the_trigger_uses_the_price_the_poll_reports(monkeypatch):
         holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
         exits=[Exit(*HYNIX, reason="퇴출")],
     )
-    limit, trigger = limit_and_trigger(412_000.0, 5, "sell")
+    limit, trigger = limit_and_trigger(412_000.0, 1, "sell")
     already = [
         recorded_row(
             "000660",
@@ -853,7 +853,7 @@ def test_an_outstanding_buy_is_watched_from_the_quote_on_its_own_order(monkeypat
     so the quote on the pending order is the only way to watch it at all."""
     events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
-    _, trigger = limit_and_trigger(78_000.0, 3, "buy")
+    _, trigger = limit_and_trigger(78_000.0, 1, "buy")
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, stocks=[], pending_orders=working_buy(quote=trigger))),
@@ -994,7 +994,7 @@ def test_an_order_already_on_the_book_is_logged_as_suppressed(monkeypatch):
     """No duplicate order: a poll that brings an unfilled order back does not place it a
     second time, and the line says so."""
     events = Events()
-    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     fakes = Fakes(
         monkeypatch,
@@ -1011,7 +1011,7 @@ def test_an_order_already_on_the_book_is_logged_as_suppressed(monkeypatch):
 def test_the_ladder_step_records_the_band_it_moved_to(monkeypatch):
     """As the sessions run out the order really does narrow, one rung per line."""
     events = Events()
-    limit, _ = limit_and_trigger(78_000.0, 5, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     fakes = Fakes(
         monkeypatch,
@@ -1019,10 +1019,10 @@ def test_the_ladder_step_records_the_band_it_moved_to(monkeypatch):
         recorded={11: already},
     )
 
-    fakes.run(now=noon(THURSDAY), log=events)
+    fakes.run(now=noon(TUESDAY), log=events)
 
     step = events.of("ladder_step")[0]
-    assert step["days_left"] == 2
+    assert step["ladder_day"] == 2
     assert step["steps"][0]["band"] == PRICE_BANDS[1]
     assert step["steps"][0]["at_market"] is False
 

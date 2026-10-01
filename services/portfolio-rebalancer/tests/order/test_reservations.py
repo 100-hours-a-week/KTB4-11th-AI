@@ -80,26 +80,28 @@ def test_rounding_goes_to_the_nearest_tick_not_up_or_down():
 
 
 @pytest.mark.parametrize(
-    ("days_left", "expected"),
-    [(3, PRICE_BANDS[0]), (2, PRICE_BANDS[1]), (1, PRICE_BANDS[2])],
+    ("day", "expected"),
+    [(1, PRICE_BANDS[0]), (2, PRICE_BANDS[1]), (3, PRICE_BANDS[2])],
 )
-def test_the_band_comes_from_the_days_left(days_left, expected):
-    """Selling and buying share one deadline, so an order that starts late starts on a
-    narrower band rather than restarting the ladder."""
-    assert band_for(days_left) == expected
+def test_the_band_comes_from_the_session_the_cycle_is_on(day, expected):
+    """Day one is the widest. Selling and buying share one ladder, so a buy placed on day
+    two starts on day two's band rather than restarting."""
+    assert band_for(day) == expected
 
 
-@pytest.mark.parametrize("days_left", [0, -1, -5])
-def test_no_days_left_means_market(days_left):
-    assert band_for(days_left) is None
+@pytest.mark.parametrize("day", [0, -1, -5])
+def test_no_rung_before_the_cycle_starts(day):
+    assert band_for(day) is None
 
 
-def test_more_days_than_the_ladder_has_is_the_widest_band():
-    assert band_for(LADDER_DAYS + 5) == PRICE_BANDS[0]
+@pytest.mark.parametrize("day", [LADDER_DAYS + 1, LADDER_DAYS + 5])
+def test_past_the_last_rung_there_is_no_band(day):
+    """There is no fourth band: the order stops being moved rather than widening again."""
+    assert band_for(day) is None
 
 
 def test_the_bands_narrow():
-    widths = [band_for(days) for days in range(LADDER_DAYS, 0, -1)]
+    widths = [band_for(day) for day in range(1, LADDER_DAYS + 1)]
 
     assert widths == sorted(widths, reverse=True)
 
@@ -110,7 +112,7 @@ def test_the_bands_narrow():
 def test_a_sell_waits_above_the_market_and_triggers_below_it():
     """A sell limit below the market fills at once, which is the opposite of waiting. So
     the order goes above, and a fall to the other side sends it at market."""
-    limit, trigger = limit_and_trigger(78_000.0, 3, "sell")
+    limit, trigger = limit_and_trigger(78_000.0, 1, "sell")
 
     assert limit == 81_900.0
     assert trigger == 74_100.0
@@ -119,7 +121,7 @@ def test_a_sell_waits_above_the_market_and_triggers_below_it():
 
 def test_a_buy_waits_below_the_market_and_triggers_above_it():
     """A buy limit above the market fills at once for the same reason."""
-    limit, trigger = limit_and_trigger(78_000.0, 3, "buy")
+    limit, trigger = limit_and_trigger(78_000.0, 1, "buy")
 
     assert limit == 74_100.0
     assert trigger == 81_900.0
@@ -128,8 +130,8 @@ def test_a_buy_waits_below_the_market_and_triggers_above_it():
 
 def test_the_two_sides_are_mirror_images_of_each_other():
     """Mirrored about the reference: the sell's limit is where the buy's trigger is."""
-    sell_limit, sell_trigger = limit_and_trigger(78_000.0, 3, "sell")
-    buy_limit, buy_trigger = limit_and_trigger(78_000.0, 3, "buy")
+    sell_limit, sell_trigger = limit_and_trigger(78_000.0, 1, "sell")
+    buy_limit, buy_trigger = limit_and_trigger(78_000.0, 1, "buy")
 
     assert (sell_limit, sell_trigger) == (buy_trigger, buy_limit)
 
@@ -138,8 +140,8 @@ def test_the_trigger_does_not_narrow_with_the_limit():
     """Waiting stops being worth it at the same price whatever day it is. Tightening the
     trigger would send an order at market on a move the limit was still willing to wait
     out."""
-    triggers = {limit_and_trigger(78_000.0, days, "sell")[1] for days in (3, 2, 1)}
-    limits = {limit_and_trigger(78_000.0, days, "sell")[0] for days in (3, 2, 1)}
+    triggers = {limit_and_trigger(78_000.0, day, "sell")[1] for day in (1, 2, 3)}
+    limits = {limit_and_trigger(78_000.0, day, "sell")[0] for day in (1, 2, 3)}
 
     assert len(triggers) == 1
     assert len(limits) == 3
@@ -157,15 +159,16 @@ def test_the_trigger_stays_at_the_widest_band(side):
 
 
 @pytest.mark.parametrize("side", ["buy", "sell"])
-def test_no_days_left_has_no_limit_and_no_trigger(side):
-    assert limit_and_trigger(78_000.0, 0, side) is None
+@pytest.mark.parametrize("day", [0, LADDER_DAYS + 1])
+def test_a_spent_ladder_has_no_limit_and_no_trigger(side, day):
+    assert limit_and_trigger(78_000.0, day, side) is None
 
 
 @pytest.mark.parametrize("side", ["buy", "sell"])
 @pytest.mark.parametrize("reference", [*REFERENCES, *BOUNDARIES])
 def test_both_prices_land_on_a_tick(side, reference):
-    for days in range(1, LADDER_DAYS + 1):
-        limit, trigger = limit_and_trigger(reference, days, side)
+    for day in range(1, LADDER_DAYS + 1):
+        limit, trigger = limit_and_trigger(reference, day, side)
 
         assert limit % tick_size(limit) == 0
         assert trigger % tick_size(trigger) == 0
@@ -174,8 +177,8 @@ def test_both_prices_land_on_a_tick(side, reference):
 @pytest.mark.parametrize("side", ["buy", "sell"])
 def test_the_limit_narrows_towards_the_reference(side):
     distances = [
-        abs(limit_and_trigger(78_000.0, days, side)[0] - 78_000.0)
-        for days in range(LADDER_DAYS, 0, -1)
+        abs(limit_and_trigger(78_000.0, day, side)[0] - 78_000.0)
+        for day in range(1, LADDER_DAYS + 1)
     ]
 
     assert distances == sorted(distances, reverse=True)
@@ -210,7 +213,7 @@ def test_the_sides_trigger_in_opposite_directions():
 
 
 def test_one_pending_order_is_what_is_working():
-    limit, _ = limit_and_trigger(78_000.0, 3, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
 
     working = outstanding_orders([pending(price=limit, amount=100)])
 

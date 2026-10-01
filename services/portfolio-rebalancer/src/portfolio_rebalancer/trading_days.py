@@ -5,11 +5,13 @@ from typing import Any
 # Sessions come from exchange-calendars, so public holidays such as Chuseok are real rather
 # than approximated by weekdays.
 EXCHANGE = "XKRX"
-# KRX closes at 15:30, and polling starts at 09:00 on the hour, so 15:00 is the last pass
-# before the close. The final band's order goes at market there rather than the morning
-# after.
+# KRX closes at 15:30, and polling runs on the hour, so 15:00 is the last pass before the
+# close. That is where the ladder's final rung stops rather than running on.
 CLOSE = time(15, 30)
 MARKET_CUTOFF = time(15, 0)
+# One rung per session, counted forward from the day the cycle began. The bands themselves
+# live in order/reservations.py, which imports this module and so cannot be imported back.
+LADDER_DAYS = 3
 
 
 # Built once: constructing the calendar walks decades of holidays.
@@ -24,28 +26,28 @@ def is_open(day: date) -> bool:
     return bool(_calendar().is_session(day.isoformat()))
 
 
-def week_deadline(started: date) -> date:
-    # The next judgement lands the following week, so an order still working then would be
-    # acting on a portfolio that has been replaced.
-    monday = started.fromordinal(started.toordinal() - started.weekday())
-    sunday = monday.fromordinal(monday.toordinal() + 6)
-    sessions = _sessions(monday, sunday)
-    return sessions[-1] if sessions else started
+def ladder_day(started: date, now: datetime) -> int:
+    """Which rung this pass is on: 1, 2, 3, or 0 once the ladder is spent.
 
+    Counted forward in sessions from the day the cycle began, so a shut day is skipped
+    rather than consumed. A cycle that starts on the Tuesday because the Monday was a
+    holiday has its third day on the Thursday, and one that starts on a Wednesday has its
+    third day on the Friday.
 
-def days_left(started: date, now: datetime) -> int:
-    # Selling and buying share the sessions left in the week the cycle began, counting today.
-    # A cycle past its deadline has none, which is the market rung, and on the last day the
-    # budget runs out at MARKET_CUTOFF so the market order goes in before the close.
+    The last rung ends at `MARKET_CUTOFF` rather than at midnight, because that is the
+    last pass before the close. After it, and after the third session, there is no rung
+    left: the order that is still outstanding stops being moved.
+    """
     today = now.date()
-    deadline = week_deadline(started)
-    if today > deadline:
+    if today < started:
         return 0
 
-    left = len(_sessions(max(today, started), deadline))
-    if left == 1 and now.timetz().replace(tzinfo=None) >= MARKET_CUTOFF:
+    day = len(_sessions(started, today))
+    if not 1 <= day <= LADDER_DAYS:
         return 0
-    return left
+    if day == LADDER_DAYS and now.timetz().replace(tzinfo=None) >= MARKET_CUTOFF:
+        return 0
+    return day
 
 
 def _sessions(start: date, end: date) -> list[date]:

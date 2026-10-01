@@ -27,7 +27,7 @@ from portfolio_rebalancer.order.dto import SKIP
 from portfolio_rebalancer.order.repository import AT_MARKET as MARKET_STATUS
 from portfolio_rebalancer.order.repository import SKIPPED as SKIP_STATUS
 from portfolio_rebalancer.portfolio import find_latest_portfolio
-from portfolio_rebalancer.trading_days import days_left
+from portfolio_rebalancer.trading_days import ladder_day
 
 # KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
@@ -198,12 +198,12 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
         )
         return 0
 
-    # The cycle's whole budget is ahead: the trading days left in this week, so a Chuseok
-    # week gives fewer.
-    left = days_left(now.date(), now)
-    plan = rebalance(portfolio, state, prices, days_left=left)
+    # A fresh cycle starts on rung one, which is today: the ladder counts forward in
+    # sessions from here rather than back from a deadline.
+    day = ladder_day(now.date(), now)
+    plan = rebalance(portfolio, state, prices, day=day)
     if not plan:
-        log("orders_none", logging.WARNING, account_id=state.account_id, days_left=left)
+        log("orders_none", logging.WARNING, account_id=state.account_id, ladder_day=day)
         return 0
 
     placeable = _sendable([o for o in plan if o.action != SKIP], state, log)
@@ -211,7 +211,7 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
         "orders_planned",
         account_id=state.account_id,
         cycle="open",
-        days_left=left,
+        ladder_day=day,
         planned=len(plan),
         placeable=len(placeable),
         no_order=_no_order(portfolio, plan),
@@ -230,8 +230,8 @@ def _continue(
     # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     # brought in line with it. A stock the plan has already placed at the right quantity and
     # band is left alone, which is what makes the hourly poll idempotent within a day.
-    left = days_left(started, now)
-    plan = rebalance(portfolio, state, prices, days_left=left)
+    day = ladder_day(started, now)
+    plan = rebalance(portfolio, state, prices, day=day)
     references = {
         row["stock_code"]: float(row["reference_price"])
         for row in recorded
@@ -270,7 +270,7 @@ def _continue(
         portfolio,
         state,
         started,
-        left,
+        day,
         recorded,
         plan,
         placed,
@@ -322,7 +322,7 @@ def _log_continue(
     portfolio,
     state,
     started,
-    left,
+    day,
     recorded,
     plan,
     placed,
@@ -337,7 +337,7 @@ def _log_continue(
         "orders_planned",
         account_id=state.account_id,
         cycle="continue",
-        days_left=left,
+        ladder_day=day,
         planned=len(plan),
         placeable=len(placeable),
         no_order=_no_order(portfolio, plan),
@@ -367,7 +367,7 @@ def _log_continue(
         "recorded_orders",
         account_id=state.account_id,
         started=started.isoformat(),
-        days_left=left,
+        ladder_day=day,
         recorded=len(recorded),
         still_working=sorted(ordered & placed),
         filled_or_done=sorted(ordered - placed - wanted),
@@ -380,7 +380,7 @@ def _log_continue(
         log(
             "ladder_step",
             account_id=state.account_id,
-            days_left=left,
+            ladder_day=day,
             steps=[
                 {
                     "stock_code": order.stock_code,

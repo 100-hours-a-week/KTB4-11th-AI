@@ -149,7 +149,7 @@ def test_a_fresh_order_goes_out_on_the_widest_band():
     order = orders[0]
     assert order.band == PRICE_BANDS[0]
     assert order.reference == 78_000.0
-    assert (order.limit, order.trigger) == limit_and_trigger(78_000.0, 3, "buy")
+    assert (order.limit, order.trigger) == limit_and_trigger(78_000.0, 1, "buy")
 
 
 def test_a_buy_waits_below_the_market():

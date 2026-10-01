@@ -9,9 +9,9 @@ from portfolio_rebalancer.order.dto import PENDING, SELL, Outstanding
 #     sell   limit at reference + band     market if the price falls to reference - 5%
 #     buy    limit at reference - band     market if the price rises to reference + 5%
 #
-# Day three ends in a market order rather than a fourth band, so every order fills within
-# the week. Narrowing alone would not guarantee that: a 1% band is harder to reach than a
-# 5% one.
+# One band per session, counted forward from the day the cycle began: the first day is
+# wide, and each session that leaves the order unfilled narrows it. After the third there
+# is no fourth band -- the order stops being moved.
 PRICE_BANDS: tuple[float, ...] = (0.05, 0.03, 0.01)
 
 # The trigger does not narrow with the limit. It is the point where waiting stops being
@@ -44,17 +44,18 @@ def on_tick(price: float) -> float:
     return float(round(price / tick) * tick)
 
 
-def band_for(days_left: int) -> float | None:
-    if days_left <= 0:
+def band_for(day: int) -> float | None:
+    # Day one is the widest band and day three the narrowest. Outside that range the
+    # ladder is spent and there is nothing left to quote.
+    if not 1 <= day <= len(PRICE_BANDS):
         return None
-    return PRICE_BANDS[max(len(PRICE_BANDS) - days_left, 0)]
+    return PRICE_BANDS[day - 1]
 
 
-def limit_and_trigger(reference: float, days_left: int, side: str) -> tuple[float, float] | None:
-    # None once the sessions run out: the order then goes at market outright. Both prices
-    # sit on a KRX tick, the limit because the Backend rejects it otherwise and the trigger
-    # so it is comparable with a quoted price.
-    band = band_for(days_left)
+def limit_and_trigger(reference: float, day: int, side: str) -> tuple[float, float] | None:
+    # None once the ladder is spent. Both prices sit on a KRX tick, the limit because the
+    # Backend rejects it otherwise and the trigger so it is comparable with a quoted price.
+    band = band_for(day)
     if band is None:
         return None
 

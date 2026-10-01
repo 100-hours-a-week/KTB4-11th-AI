@@ -5,7 +5,7 @@ from portfolio_rebalancer.account.dto import AccountState
 from portfolio_rebalancer.order.dto import Order, Outstanding
 from portfolio_rebalancer.order.reservations import band_for, limit_and_trigger, on_tick
 from portfolio_rebalancer.portfolio.dto import Exit, Holding, Portfolio
-from portfolio_rebalancer.trading_days import days_left, is_open
+from portfolio_rebalancer.trading_days import is_open, ladder_day
 
 AT_MARKET = "the bands are spent; sent at market, which is what guarantees the fill"
 
@@ -35,7 +35,7 @@ def narrow(
     if not is_open(now.date()):
         return []
 
-    left = days_left(started, now)
+    day = ladder_day(started, now)
     companies: dict[str, Holding | Exit] = {
         company.stock_code: company for company in portfolio.holdings
     }
@@ -50,12 +50,12 @@ def narrow(
         if company is None or reference is None:
             continue
 
-        quote = limit_and_trigger(reference, left, side)
+        quote = limit_and_trigger(reference, day, side)
         if quote is not None and quote[0] == order.price:
             continue
 
         orders.append(
-            _order(account.account_id, company, code, side, order.quantity, reference, left)
+            _order(account.account_id, company, code, side, order.quantity, reference, day)
         )
     return orders
 
@@ -70,7 +70,7 @@ def at_market(
 ) -> Order:
     # No band and no limit: crossing the trigger means waiting on the limit has stopped
     # being worth it.
-    return _order(account.account_id, company, code, side, quantity, reference, left=0)
+    return _order(account.account_id, company, code, side, quantity, reference, day=0)
 
 
 def _order(
@@ -80,9 +80,9 @@ def _order(
     side: str,
     quantity: int,
     reference: float,
-    left: int,
+    day: int,
 ) -> Order:
-    quote = limit_and_trigger(reference, left, side)
+    quote = limit_and_trigger(reference, day, side)
     return Order(
         account_id=account_id,
         company_id=company.company_id,
@@ -92,7 +92,7 @@ def _order(
         reason=company.reason,
         weight=getattr(company, "weight", None),
         reference=on_tick(reference),
-        band=band_for(left),
+        band=band_for(day),
         limit=quote[0] if quote else None,
         trigger=quote[1] if quote else None,
         note="" if quote else AT_MARKET,
