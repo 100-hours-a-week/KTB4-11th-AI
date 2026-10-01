@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from datetime import datetime
 from typing import Any
@@ -9,21 +10,25 @@ import sqlalchemy as sa
 from portfolio_builder.measurement import Array, Bars
 
 VIEWS = {"1m": "bars_1m", "15m": "bars_15m", "1h": "bars_1h", "1d": "bars_1d"}
-# bars_15m and bars_1h are materialized views without a session column (see issue #47).
 SESSION_FILTERED = {"1m", "1d"}
 LIMIT = 300
 KOSPI200 = "KOSPI200"
-# 400 calendar days hold more than the 253 trading days that 12-month momentum needs.
 UNIVERSE_DAYS = 400
 
 
-class QuestDBMarket:
+class Market(ABC):
+    @abstractmethod
+    def bars(self, symbol: str, timeframe: str) -> tuple[Bars, datetime | None]: ...
+
+    @abstractmethod
+    def universe_closes(self) -> dict[str, Array]: ...
+
+
+class QuestDBMarket(Market):
     def __init__(self, conf: str, engine: sa.Engine) -> None:
         self._conf = conf
         self._engine = engine
 
-    # A new connection per call: tools run on ToolNode worker threads and a QuestDB query result
-    # is bound to the thread that created it.
     def _records(self, sql: str, binds: list[Any] | None = None) -> list[dict[str, Any]]:
         with questdb.connect(self._conf) as db, db.query(sql, binds) as result:
             return result.to_pandas().to_dict("records")
