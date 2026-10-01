@@ -76,11 +76,18 @@ def outstanding_orders(
     # did not create, so it is left alone rather than guessing which is ours.
     sides: dict[tuple[str, str], list[Outstanding]] = {}
     for order in pending_orders:
-        if order.get("status") != PENDING:
+        if order.get("order_status") != PENDING:
             continue
-        key = (str(order["stock_code"]), str(order["order_type"]))
+        # Keyed by side, which the Backend spells `order_side`. Its `order_type` is limit
+        # or market, and reading one for the other would file every order under the wrong
+        # key without failing.
+        key = (str(order["stock_code"]), str(order["order_side"]))
+        price = order.get("limit_price")
         sides.setdefault(key, []).append(
-            Outstanding(price=float(order["price"]), quantity=int(order["amount"]))  # type: ignore[arg-type]
+            Outstanding(
+                price=None if price is None else float(price),  # type: ignore[arg-type]
+                quantity=int(order["quantity"]),  # type: ignore[arg-type]
+            )
         )
 
     return {key: found[0] for key, found in sides.items() if len(found) == 1}

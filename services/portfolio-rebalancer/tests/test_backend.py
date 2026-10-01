@@ -25,6 +25,8 @@ class FakeOrder:
     stock_code: str
     action: str
     shares: int
+    limit: float | None = 74_100.0
+    reason: str | None = "반도체 업황 반등"
 
 
 def recorder(handler):
@@ -157,13 +159,15 @@ def test_the_active_users_come_back():
     assert fetch_accounts(client) == users
 
 
-def test_only_active_users_are_asked_for():
+def test_the_ai_server_endpoint_is_the_one_asked():
+    """The Backend selects the active AI-managed accounts itself, so there is no filter
+    to pass and no other route a service token may read."""
     client, seen = recorder(responder({"users": []}))
 
     fetch_accounts(client)
 
-    assert seen[0].url.path == "/api/v1/users"
-    assert dict(seen[0].url.params) == {"state": "active"}
+    assert seen[0].url.path == "/api/v1/users/ai-server"
+    assert dict(seen[0].url.params) == {}
 
 
 def test_a_payload_without_users_reads_as_none_rather_than_raising():
@@ -183,20 +187,57 @@ def test_a_failed_poll_raises():
 # ---- orders ----
 
 
-def test_orders_go_out_as_sent():
+def test_each_order_is_its_own_request():
+    """The Backend takes one OrderCreateRequest per POST, not a list of them."""
     orders = [
         FakeOrder(account_id=11, stock_code="005930", action="buy", shares=10),
-        FakeOrder(account_id=11, stock_code="000660", action="sell", shares=2),
+        FakeOrder(account_id=11, stock_code="000660", action="sell", shares=2, limit=412_000.0),
     ]
     client, seen = recorder(responder({"message": "ok"}))
 
     send_orders(client, orders)
 
-    body = json.loads(seen[0].content)
-    assert body["orders"] == [
-        {"account_id": 11, "stock_code": "005930", "action": "buy", "shares": 10},
-        {"account_id": 11, "stock_code": "000660", "action": "sell", "shares": 2},
+    assert len(seen) == 2
+    assert [json.loads(request.content) for request in seen] == [
+        {
+            "stock_code": "005930",
+            "order_side": "buy",
+            "order_type": "limit",
+            "limit_price": 74_100,
+            "quantity": 10,
+            "reason": "반도체 업황 반등",
+        },
+        {
+            "stock_code": "000660",
+            "order_side": "sell",
+            "order_type": "limit",
+            "limit_price": 412_000,
+            "quantity": 2,
+            "reason": "반도체 업황 반등",
+        },
     ]
+
+
+def test_a_market_order_is_refused_rather_than_sent():
+    """The Backend answers 400 for anything that is not a limit order, and a 400 on the
+    wire says far less than refusing here does."""
+    client, seen = recorder(responder({"message": "ok"}))
+
+    with pytest.raises(ValueError, match="only limit orders"):
+        send_orders(client, [FakeOrder(11, "005930", "buy", 1, limit=None)])
+
+    assert seen == []
+
+
+def test_an_order_with_no_reason_is_refused():
+    """The Backend requires one, and a stock code carries one reason per portfolio, so
+    there is nothing to put in its place."""
+    client, seen = recorder(responder({"message": "ok"}))
+
+    with pytest.raises(ValueError, match="requires a reason"):
+        send_orders(client, [FakeOrder(11, "005930", "buy", 1, reason=None)])
+
+    assert seen == []
 
 
 def test_sending_nothing_makes_no_request():
@@ -235,13 +276,14 @@ def test_orders_spanning_two_accounts_are_refused():
     assert seen == []
 
 
-def test_the_account_still_travels_in_the_body_as_well():
-    """The path is authoritative; the body keeps it so the Backend can cross-check."""
+def test_the_account_travels_only_in_the_path():
+    """OrderCreateRequest has no account field: the Backend takes it from the path and
+    checks that the token's subject owns it."""
     client, seen = recorder(responder({"message": "ok"}))
 
     send_orders(client, [FakeOrder(11, "005930", "buy", 1)])
 
-    assert json.loads(seen[0].content)["orders"][0]["account_id"] == 11
+    assert "account_id" not in json.loads(seen[0].content)
 
 
 def test_the_client_is_built_against_the_backend_url():

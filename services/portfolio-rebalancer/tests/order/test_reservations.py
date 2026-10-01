@@ -20,14 +20,22 @@ BOUNDARIES = tuple(
 LADDER_DAYS = len(PRICE_BANDS)
 
 
-def pending(stock_code="005930", order_type="buy", price=74_100.0, amount=100):
+def pending(stock_code="005930", order_side="buy", limit_price=74_100, quantity=100, **extra):
+    """A pending order as `GET /api/v1/users/ai-server` spells it.
+
+    `order_side` is buy or sell; `order_type` is limit or market. They are different
+    fields, and reading one for the other files every order under the wrong key.
+    """
     return {
-        "order_type": order_type,
-        "status": "pending",
+        "order_id": 1,
         "stock_code": stock_code,
-        "price": price,
-        "amount": amount,
-    }
+        "order_side": order_side,
+        "order_status": "pending",
+        "order_type": "limit",
+        "limit_price": limit_price,
+        "quantity": quantity,
+        "current_stock_price": 78_000,
+    } | extra
 
 
 # ---- the KRX tick ----
@@ -217,26 +225,26 @@ def test_two_orders_on_one_side_are_left_alone():
 
 
 def test_the_two_sides_of_a_stock_are_separate():
-    orders = [pending(order_type="buy"), pending(order_type="sell")]
+    orders = [pending(order_side="buy"), pending(order_side="sell")]
 
     assert set(outstanding_orders(orders)) == {("005930", "buy"), ("005930", "sell")}
 
 
 def test_two_stocks_each_have_their_own():
-    orders = [pending(stock_code="005930"), pending(stock_code="000660", price=412_000.0)]
+    orders = [pending(stock_code="005930"), pending(stock_code="000660", limit_price=412_000)]
 
     assert set(outstanding_orders(orders)) == {("005930", "buy"), ("000660", "buy")}
 
 
 def test_an_order_that_is_not_pending_is_ignored():
-    settled = pending() | {"status": "filled"}
+    settled = pending() | {"order_status": "filled"}
 
     assert outstanding_orders([settled]) == {}
 
 
 def test_the_outstanding_quantity_is_what_is_left():
     """A partial fill leaves less, and that is what a market order has to ask for."""
-    working = outstanding_orders([pending(amount=60)])
+    working = outstanding_orders([pending(quantity=60)])
 
     assert working[("005930", "buy")].quantity == 60
 

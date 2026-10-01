@@ -115,17 +115,16 @@ def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
         logging.WARNING if not polled or blank else logging.INFO,
         users=len(polled),
         accounts=len(accounts),
-        managed_accounts=sum(
-            1 for account in accounts if account.get("is_ai_managed") and account.get("is_active")
-        ),
+        managed_accounts=sum(1 for account in accounts if account.get("is_active")),
         accounts_missing_id_or_cash=blank,
-        holdings_without_quote=unquoted,
+        orders_without_quote=unquoted,
     )
 
 
 def _account(engine, db, client, portfolio, account, now, log) -> int:
     state = apply_pending(account)
-    prices = _prices(db, portfolio, state, account, log)
+    quoted = polled_prices(account)
+    prices = _prices(db, portfolio, state, quoted, log)
     working = outstanding_orders(account.get("pending_orders") or ())
 
     log(
@@ -147,7 +146,9 @@ def _account(engine, db, client, portfolio, account, now, log) -> int:
         return _open(engine, client, portfolio, state, prices, now, log)
 
     started = min(row["created_at"] for row in recorded).astimezone(KST).date()
-    return _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log)
+    return _continue(
+        engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
+    )
 
 
 def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence[Mapping[str, Any]]:
@@ -189,7 +190,7 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
         log("orders_none", logging.WARNING, account_id=state.account_id, days_left=left)
         return 0
 
-    placeable = [o for o in plan if o.action != SKIP]
+    placeable = _sendable([o for o in plan if o.action != SKIP], state, log)
     log(
         "orders_planned",
         account_id=state.account_id,
@@ -207,7 +208,9 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
     return _send(engine, client, portfolio, state, placeable, log)
 
 
-def _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log):
+def _continue(
+    engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
+):
     # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     # brought in line with it. A stock the plan has already placed at the right quantity and
     # band is left alone, which is what makes the hourly poll idempotent within a day.
@@ -262,12 +265,13 @@ def _continue(engine, client, portfolio, state, working, recorded, started, now,
         settled,
     )
 
+    place = _sendable(place, state, log)
     sent = 0
     if place:
         with engine.begin() as conn:
             record_orders(conn, portfolio.portfolio_id, place)
         sent += _send(engine, client, portfolio, state, place, log)
-    moved = [*amend, *struck, *requote]
+    moved = _sendable([*amend, *struck, *requote], state, log)
     if moved:
         with engine.begin() as conn:
             amend_orders(conn, portfolio.portfolio_id, moved)
@@ -363,12 +367,11 @@ def _log_continue(
         )
 
 
-def _prices(db, portfolio, state, account, log) -> dict[str, float]:
-    # The poll's live quote takes precedence. QuestDB is asked only for what the poll did not
-    # quote -- a stock the account does not hold yet -- so a first purchase has a reference and
-    # everything else is priced at what the Backend is actually trading on. The precedence is
-    # that omission rather than the merge below: the two never carry the same code.
-    quoted = polled_prices(account)
+def _prices(db, portfolio, state, quoted, log) -> dict[str, float]:
+    # The poll's live quote takes precedence, but it now rides on pending orders rather
+    # than on holdings, so it covers only what is still outstanding. QuestDB's close
+    # answers for everything else, which is most of the portfolio on a quiet pass. The
+    # precedence is the omission below rather than the merge: the two never share a code.
     wanted = {company.stock_code for company in portfolio.holdings}
     wanted |= {leaving.stock_code for leaving in portfolio.exits}
     wanted |= set(state.held)
@@ -390,7 +393,7 @@ def _prices(db, portfolio, state, account, log) -> dict[str, float]:
     return prices
 
 
-def _struck(portfolio, state, working, references, recorded, prices, log) -> list:
+def _struck(portfolio, state, working, references, recorded, quoted, log) -> list:
     # The trigger is what the record kept, not something the poll reports: the Backend only
     # holds the limit side.
     triggers = {
@@ -401,7 +404,7 @@ def _struck(portfolio, state, working, references, recorded, prices, log) -> lis
     hit = {
         code
         for (code, side) in working
-        if code in triggers and code in prices and trigger_hit(side, triggers[code], prices[code])
+        if code in triggers and code in quoted and trigger_hit(side, triggers[code], quoted[code])
     }
     companies = {company.stock_code: company for company in portfolio.holdings}
     companies |= {leaving.stock_code: leaving for leaving in portfolio.exits}
@@ -419,7 +422,7 @@ def _struck(portfolio, state, working, references, recorded, prices, log) -> lis
                     "stock_code": order.stock_code,
                     "side": order.action,
                     "trigger": triggers.get(order.stock_code),
-                    "price": prices.get(order.stock_code),
+                    "price": quoted.get(order.stock_code),
                     "shares": order.shares,
                 }
                 for order in struck
@@ -430,6 +433,24 @@ def _struck(portfolio, state, working, references, recorded, prices, log) -> lis
 
 def _without(working, codes):
     return {key: order for key, order in working.items() if key[0] not in codes}
+
+
+def _sendable(orders, state, log) -> list:
+    # v1 of the Backend has no market order at all -- it arrives in v2 -- so the ladder's
+    # last rung has nowhere to go. A blocked order is neither recorded nor sent, which
+    # leaves the narrowest limit already on the book standing rather than replacing it
+    # with nothing. The fill the market rung was there to guarantee is not guaranteed.
+    blocked = [order for order in orders if order.limit is None]
+    if blocked:
+        log(
+            "orders_blocked",
+            logging.WARNING,
+            account_id=state.account_id,
+            codes=[order.stock_code for order in blocked],
+            reason="v1 of the Backend has no market order, so the ladder stops at its"
+            " narrowest limit; market arrives in v2",
+        )
+    return [order for order in orders if order.limit is not None]
 
 
 def _send(engine, client, portfolio, state, orders, log) -> int:

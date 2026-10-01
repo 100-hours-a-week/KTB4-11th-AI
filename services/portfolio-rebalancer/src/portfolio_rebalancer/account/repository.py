@@ -15,23 +15,14 @@ def write_poll(conn: sa.Connection, polled_users: Sequence[Mapping[str, object]]
     # The mirror holds only the latest poll: holdings and pending orders are replaced, so a
     # stock sold since the last poll disappears instead of lingering.
     for user in polled_users:
-        statement = insert(users).values(
-            user_id=user["user_id"],
-            nickname=user["nickname"],
-            state=user["state"],
-            polled_at=sa.func.now(),
-        )
+        statement = insert(users).values(user_id=user["user_id"], polled_at=sa.func.now())
         conn.execute(
             statement.on_conflict_do_update(
                 index_elements=[users.c.user_id],
-                set_={
-                    "nickname": statement.excluded.nickname,
-                    "state": statement.excluded.state,
-                    "polled_at": sa.func.now(),
-                },
+                set_={"polled_at": sa.func.now()},
             )
         )
-        for account in _as_list(user.get("accounts")):
+        for account in user.get("accounts") or ():  # type: ignore[union-attr]
             _write_account(conn, int(user["user_id"]), account)  # type: ignore[arg-type]
 
 
@@ -40,8 +31,6 @@ def _write_account(conn: sa.Connection, user_id: int, account: Mapping[str, obje
     values = {
         "user_id": user_id,
         "account_name": account["account_name"],
-        "is_ai_managed": account["is_ai_managed"],
-        "is_duel_account": account["is_duel_account"],
         "is_active": account["is_active"],
         "cash_balance": account["cash_balance"],
         "polled_at": sa.func.now(),
@@ -57,10 +46,10 @@ def _write_account(conn: sa.Connection, user_id: int, account: Mapping[str, obje
         {
             "account_id": account_id,
             "stock_code": str(holding["stock_code"]),
-            "quantity": holding["amount"],
-            "principal": holding["total_price"],
+            "quantity": holding["quantity"],
+            "total_cost": holding["total_cost"],
         }
-        for holding in _as_list(account.get("stocks"))
+        for holding in account.get("stocks") or ()  # type: ignore[union-attr]
     ]
     if holdings:
         conn.execute(insert(account_holdings), holdings)
@@ -70,23 +59,17 @@ def _write_account(conn: sa.Connection, user_id: int, account: Mapping[str, obje
     )
     pending = [
         {
+            "order_id": order["order_id"],
             "account_id": account_id,
+            "order_side": order["order_side"],
             "order_type": order["order_type"],
-            "status": order["status"],
+            "order_status": order["order_status"],
             "stock_code": str(order["stock_code"]),
-            "price": order["price"],
-            "quantity": order["amount"],
+            "limit_price": order.get("limit_price"),
+            "quantity": order["quantity"],
+            "current_stock_price": order.get("current_stock_price"),
         }
-        for order in _as_list(account.get("pending_orders"))
+        for order in account.get("pending_orders") or ()  # type: ignore[union-attr]
     ]
     if pending:
         conn.execute(insert(account_pending_orders), pending)
-
-
-def _as_list(value: object) -> list[Mapping[str, object]]:
-    # The example payload spells `accounts` as one object where the Backend sends a list.
-    if value is None:
-        return []
-    if isinstance(value, Mapping):
-        return [value]
-    return list(value)  # type: ignore[arg-type]

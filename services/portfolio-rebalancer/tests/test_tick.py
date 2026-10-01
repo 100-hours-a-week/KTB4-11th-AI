@@ -34,13 +34,20 @@ def portfolio(holdings=None, exits=()):
     return Portfolio(portfolio_id=42, cash_weight=0.0, holdings=holdings, exits=list(exits))
 
 
-def pending(stock_code="005930", order_type="buy", price=74_100.0, amount=100):
+def pending(stock_code="005930", order_side="buy", price=74_100.0, amount=100, quote=None):
+    """A pending order as the snapshot spells it.
+
+    `quote` is the Backend's live price, which rides here rather than on the holding.
+    """
     return {
-        "order_type": order_type,
-        "status": "pending",
+        "order_id": abs(hash((stock_code, order_side, price, amount))) % 10**9,
         "stock_code": stock_code,
-        "price": price,
-        "amount": amount,
+        "order_side": order_side,
+        "order_status": "pending",
+        "order_type": "limit",
+        "limit_price": price,
+        "quantity": amount,
+        "current_stock_price": quote,
     }
 
 
@@ -48,8 +55,6 @@ def account(account_id=11, cash=10_000_000.0, stocks=(), pending_orders=()):
     return {
         "account_id": account_id,
         "account_name": "계좌",
-        "is_ai_managed": True,
-        "is_duel_account": False,
         "is_active": True,
         "cash_balance": cash,
         "stocks": list(stocks),
@@ -84,17 +89,17 @@ def recorded_row(
 
 
 def _quote(users, quoted):
-    """Put the poll's current_price on the stocks it reports.
+    """Put the Backend's live price on the pending orders it reports.
 
-    Only stocks the account holds get one, which is what makes QuestDB necessary for a
-    first purchase.
+    The snapshot quotes a stock only while an order on it is outstanding, so a holding
+    with nothing pending has none and QuestDB's close stands in.
     """
     for user in users:
         for account_ in user["accounts"]:
-            for entry in account_["stocks"]:
+            for entry in account_["pending_orders"]:
                 price = quoted.get(str(entry["stock_code"]))
                 if price is not None:
-                    entry["current_price"] = price
+                    entry["current_stock_price"] = price
     return users
 
 
@@ -102,8 +107,6 @@ def polled(*accounts):
     return [
         {
             "user_id": 1,
-            "nickname": "스톡스푼",
-            "state": "active",
             "accounts": list(accounts) or [account()],
         }
     ]
@@ -287,7 +290,7 @@ def test_an_account_whose_plan_is_already_met_emits_nothing(monkeypatch):
     """A cycle keeps working until the plan is satisfied, and a satisfied plan asks for
     nothing: the account holds its target and has no cash left to spend."""
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
-    held = [{"stock_code": "005930", "total_price": 7_800_000, "amount": 100}]
+    held = [{"stock_code": "005930", "total_cost": 7_800_000, "quantity": 100}]
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, stocks=held)),
@@ -332,7 +335,7 @@ def test_a_pair_already_matching_the_plan_is_left_alone(monkeypatch):
 
 
 def test_an_unmanaged_account_is_skipped_entirely(monkeypatch):
-    fakes = Fakes(monkeypatch, users=polled(account() | {"is_ai_managed": False}))
+    fakes = Fakes(monkeypatch, users=polled(account() | {"is_active": False}))
 
     assert fakes.run() == 0
     assert "stored" not in fakes.calls
@@ -377,27 +380,27 @@ def test_a_first_purchase_is_priced_from_questdb(monkeypatch):
     assert fakes.sent[0][0].reference == 412_000.0
 
 
-def test_a_held_stock_is_priced_at_what_the_poll_quotes(monkeypatch):
-    """It is what the Backend is trading on, so it is the number to decide against --
-    and QuestDB is never consulted for it, which is what makes the precedence hold
+def test_a_stock_with_an_order_outstanding_is_priced_at_what_the_backend_quotes(monkeypatch):
+    """The quote rides on the pending order now, and it is what the Backend is trading
+    on, so QuestDB is never consulted for that code. The precedence is the omission
     rather than a merge order."""
-    held = [{"stock_code": "005930", "total_price": 1, "amount": 1}]
+    held = [{"stock_code": "005930", "total_cost": 1, "quantity": 1}]
+    outstanding = [pending(quote=90_000.0)]
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(cash=10_000_000.0, stocks=held)),
+        users=polled(account(cash=10_000_000.0, stocks=held, pending_orders=outstanding)),
         prices={"005930": 78_000.0},
         quoted={"005930": 90_000.0},
     )
 
     fakes.run()
 
-    assert fakes.sent[0][0].reference == 90_000.0
     assert fakes.asked == []
 
 
 def test_questdb_is_only_asked_for_what_the_poll_did_not_quote(monkeypatch):
     """Two round trips for a price we already have would be waste."""
-    held = [{"stock_code": "005930", "total_price": 1, "amount": 1}]
+    held = [{"stock_code": "005930", "total_cost": 1, "quantity": 1}]
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -410,7 +413,9 @@ def test_questdb_is_only_asked_for_what_the_poll_did_not_quote(monkeypatch):
     fakes = Fakes(
         monkeypatch,
         model=plan,
-        users=polled(account(cash=10_000_000.0, stocks=held)),
+        users=polled(
+            account(cash=10_000_000.0, stocks=held, pending_orders=[pending(quote=78_000.0)])
+        ),
         prices={"000660": 412_000.0},
         quoted={"005930": 78_000.0},
     )
@@ -422,12 +427,16 @@ def test_questdb_is_only_asked_for_what_the_poll_did_not_quote(monkeypatch):
 
 def test_questdb_is_not_asked_at_all_when_the_poll_quotes_everything(monkeypatch):
     held = [
-        {"stock_code": "005930", "total_price": 1, "amount": 1},
-        {"stock_code": "000660", "total_price": 1, "amount": 1},
+        {"stock_code": "005930", "total_cost": 1, "quantity": 1},
+        {"stock_code": "000660", "total_cost": 1, "quantity": 1},
+    ]
+    outstanding = [
+        pending(stock_code="005930", quote=78_000.0),
+        pending(stock_code="000660", price=412_000.0, quote=412_000.0),
     ]
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(cash=10_000_000.0, stocks=held)),
+        users=polled(account(cash=10_000_000.0, stocks=held, pending_orders=outstanding)),
         quoted={"005930": 78_000.0, "000660": 412_000.0},
     )
 
@@ -571,7 +580,7 @@ def test_a_cycle_with_no_cash_places_only_the_sell(monkeypatch):
         exits=[Exit(*HYNIX, reason="퇴출")],
     )
     users = polled(
-        account(cash=0.0, stocks=[{"stock_code": "000660", "total_price": 1, "amount": 10}])
+        account(cash=0.0, stocks=[{"stock_code": "000660", "total_cost": 1, "quantity": 10}])
     )
     fakes = Fakes(monkeypatch, model=plan, users=users)
 
@@ -631,34 +640,41 @@ def test_a_buy_placed_after_the_cutoff_goes_straight_to_market(monkeypatch):
     users = polled(account(cash=4_120_000.0))
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
-    fakes.run(now=datetime(2026, 10, 2, 15, 0, tzinfo=KST))
+    events = Events()
+    fakes.run(now=datetime(2026, 10, 2, 15, 0, tzinfo=KST), log=events)
 
-    buys = [order for order in fakes.sent[0] if order.action == "buy"]
-    assert (buys[0].limit, buys[0].trigger, buys[0].band) == (None, None, None)
+    # The Backend takes only limit orders, so the market rung has nowhere to go. Nothing
+    # is sent, and the block is named rather than failing silently on the wire.
+    assert fakes.sent == []
+    assert "005930" in events.of("orders_blocked")[0]["codes"]
 
 
-def working_buy(reference=78_000.0, days_left=5, amount=52):
-    """What the poll reports for a buy reservation: one order, at the limit."""
+def working_buy(reference=78_000.0, days_left=5, amount=52, quote=None):
+    """What the poll reports for a buy reservation: one order, at the limit.
+
+    `quote` is the Backend's live price, which decides the trigger and rides on the
+    order itself.
+    """
     limit, _ = limit_and_trigger(reference, days_left, "buy")
-    return [pending(price=limit, amount=amount)]
+    return [pending(price=limit, amount=amount, quote=quote)]
 
 
-def test_a_buy_goes_to_market_when_the_price_rises_to_its_trigger(monkeypatch):
-    """The dip is not coming. Waiting on a limit below the market stops being worth it."""
+def test_a_buy_struck_at_its_trigger_is_blocked_rather_than_sent_at_market(monkeypatch):
+    """The dip is not coming, so waiting stops being worth it -- but the Backend takes
+    only limit orders, so the order is held back and the block is logged."""
+    events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     _, trigger = limit_and_trigger(78_000.0, 3, "buy")
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(cash=0.0, pending_orders=working_buy())),
-        prices={"005930": trigger},
+        users=polled(account(cash=0.0, pending_orders=working_buy(quote=trigger))),
+        quoted={"005930": trigger},
         recorded={11: already},
     )
 
-    fakes.run(now=noon(MONDAY))
-
-    struck = fakes.amended[0][0]
-    assert (struck.limit, struck.trigger, struck.band) == (None, None, None)
-    assert struck.action == "buy"
+    assert fakes.run(now=noon(MONDAY), log=events) == 0
+    assert fakes.amended == []
+    assert events.of("orders_blocked")[0]["codes"] == ["005930"]
 
 
 def test_a_buy_below_its_trigger_keeps_waiting(monkeypatch):
@@ -692,54 +708,60 @@ def test_a_sell_goes_to_market_when_the_price_falls_to_its_trigger(monkeypatch):
             side="sell",
         )
     ]
-    outstanding = [pending(stock_code="000660", order_type="sell", price=limit, amount=10)]
+    outstanding = [
+        pending(stock_code="000660", order_side="sell", price=limit, amount=10, quote=trigger)
+    ]
+    events = Events()
     fakes = Fakes(
         monkeypatch,
         model=plan,
         users=polled(account(cash=0.0, pending_orders=outstanding)),
-        prices={"005930": 78_000.0, "000660": trigger},
+        prices={"005930": 78_000.0},
+        quoted={"000660": trigger},
         recorded={11: already},
     )
 
-    fakes.run(now=noon(MONDAY))
+    fakes.run(now=noon(MONDAY), log=events)
 
-    struck = next(o for batch in fakes.amended for o in batch if o.stock_code == "000660")
-    assert (struck.limit, struck.trigger, struck.band) == (None, None, None)
-    assert struck.action == "sell"
+    assert not any(o.stock_code == "000660" for batch in fakes.amended for o in batch)
+    assert "000660" in events.of("orders_blocked")[0]["codes"]
 
 
-def test_a_struck_order_is_amended_not_recorded_again(monkeypatch):
-    """One row per stock: the unique constraint forbids a second."""
+def test_a_blocked_order_is_neither_recorded_nor_amended(monkeypatch):
+    """Half a state is worse than none: the rung already on the book keeps standing."""
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     _, trigger = limit_and_trigger(78_000.0, 3, "buy")
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(cash=0.0, pending_orders=working_buy())),
-        prices={"005930": trigger},
+        users=polled(account(cash=0.0, pending_orders=working_buy(quote=trigger))),
+        quoted={"005930": trigger},
         recorded={11: already},
     )
 
     fakes.run(now=noon(MONDAY))
 
     assert fakes.recorded_rows == []
-    assert fakes.amended
-    assert fakes.calls.index("amend") < fakes.calls.index("send")
+    assert fakes.amended == []
+    assert fakes.sent == []
 
 
-def test_a_struck_order_keeps_the_outstanding_quantity(monkeypatch):
-    """A partial fill left less, and that is what the market order asks for."""
+def test_a_block_names_the_stock_it_held_back(monkeypatch):
+    """So an operator can see which order stopped moving, and why."""
+    events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     _, trigger = limit_and_trigger(78_000.0, 3, "buy")
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(cash=0.0, pending_orders=working_buy(amount=21))),
-        prices={"005930": trigger},
+        users=polled(account(cash=0.0, pending_orders=working_buy(amount=21, quote=trigger))),
+        quoted={"005930": trigger},
         recorded={11: already},
     )
 
-    fakes.run(now=noon(MONDAY))
+    fakes.run(now=noon(MONDAY), log=events)
 
-    assert fakes.amended[0][0].shares == 21
+    blocked = events.of("orders_blocked")[0]
+    assert blocked["codes"] == ["005930"]
+    assert "limit" in blocked["reason"]
 
 
 def test_the_trigger_uses_the_price_the_poll_reports(monkeypatch):
@@ -761,37 +783,43 @@ def test_the_trigger_uses_the_price_the_poll_reports(monkeypatch):
             side="sell",
         )
     ]
-    held = [{"stock_code": "000660", "total_price": 1, "amount": 10, "current_price": trigger}]
-    outstanding = [pending(stock_code="000660", order_type="sell", price=limit, amount=10)]
+    held = [{"stock_code": "000660", "total_cost": 1, "quantity": 10}]
+    outstanding = [
+        pending(stock_code="000660", order_side="sell", price=limit, amount=10, quote=trigger)
+    ]
+    events = Events()
     fakes = Fakes(
         monkeypatch,
         model=plan,
         users=polled(account(cash=0.0, stocks=held, pending_orders=outstanding)),
-        prices={"005930": 78_000.0},
+        prices={"005930": 78_000.0, "000660": 999_999.0},
+        quoted={"000660": trigger},
         recorded={11: already},
     )
 
-    fakes.run(now=noon(MONDAY))
+    fakes.run(now=noon(MONDAY), log=events)
 
-    struck = next(o for batch in fakes.amended for o in batch if o.stock_code == "000660")
-    assert (struck.limit, struck.trigger) == (None, None)
+    # QuestDB's 999,999 would never reach a sell trigger. The Backend's quote does, and
+    # it is the only price the trigger is judged against.
+    assert "000660" in events.of("orders_blocked")[0]["codes"]
 
 
-def test_an_outstanding_buy_is_struck_from_the_quote_the_poll_gives_it(monkeypatch):
-    """The Backend quotes it even at a quantity of zero, which is the only way a buy on a
-    stock not yet held can be watched at all."""
+def test_an_outstanding_buy_is_watched_from_the_quote_on_its_own_order(monkeypatch):
+    """A buy on a stock the account does not hold yet has no holding to carry a price,
+    so the quote on the pending order is the only way to watch it at all."""
+    events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     _, trigger = limit_and_trigger(78_000.0, 3, "buy")
     fakes = Fakes(
         monkeypatch,
-        users=polled(account(cash=0.0, stocks=[], pending_orders=working_buy())),
-        prices={"005930": trigger},
+        users=polled(account(cash=0.0, stocks=[], pending_orders=working_buy(quote=trigger))),
+        quoted={"005930": trigger},
         recorded={11: already},
     )
 
-    fakes.run(now=noon(MONDAY))
+    fakes.run(now=noon(MONDAY), log=events)
 
-    assert fakes.amended[0][0].limit is None
+    assert events.of("orders_blocked")[0]["codes"] == ["005930"]
 
 
 def test_an_order_already_at_market_is_not_sent_again(monkeypatch):
@@ -868,13 +896,17 @@ def test_an_empty_poll_is_a_warning(monkeypatch):
     assert events.of("backend_poll")[0]["users"] == 0
 
 
-def test_a_holding_the_poll_does_not_quote_is_named(monkeypatch):
-    """A blank current_price is reported rather than silently falling back to QuestDB."""
+def test_an_outstanding_order_the_backend_does_not_quote_is_named(monkeypatch):
+    """Without a quote the trigger cannot be judged and the order waits another hour, so
+    the gap is reported rather than passed over."""
     events = Events()
-    held = [{"stock_code": "005930", "total_price": 7_800_000, "amount": 100}]
-    Fakes(monkeypatch, users=polled(account(stocks=held))).run(log=events)
+    held = [{"stock_code": "005930", "total_cost": 7_800_000, "quantity": 100}]
+    outstanding = [pending(quote=None)]
+    Fakes(monkeypatch, users=polled(account(stocks=held, pending_orders=outstanding))).run(
+        log=events
+    )
 
-    assert events.of("backend_poll")[0]["holdings_without_quote"] == ["11:005930"]
+    assert events.of("backend_poll")[0]["orders_without_quote"] == ["11:005930"]
 
 
 def test_the_portfolio_reports_its_reasons(monkeypatch):
@@ -956,7 +988,7 @@ def test_a_filled_order_is_reported_as_done_and_not_re_ordered(monkeypatch):
     plan asks for nothing and nothing is sent again."""
     events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
-    held = [{"stock_code": "005930", "total_price": 7_800_000, "amount": 100}]
+    held = [{"stock_code": "005930", "total_cost": 7_800_000, "quantity": 100}]
     fakes = Fakes(monkeypatch, users=polled(account(cash=0.0, stocks=held)), recorded={11: already})
 
     assert fakes.run(now=noon(MONDAY), log=events) == 0

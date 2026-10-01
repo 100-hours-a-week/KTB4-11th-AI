@@ -27,7 +27,8 @@ class Order:
 
 @dataclass(frozen=True)
 class Outstanding:
-    price: float
+    # None on a market order, which carries no price.
+    price: float | None
     quantity: int
 
 

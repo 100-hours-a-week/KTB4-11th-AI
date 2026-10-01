@@ -16,6 +16,7 @@ LADDER_DAYS = len(PRICE_BANDS)
 
 NO_PRICE = "no price for this stock code, so its weight was shared out equally"
 NO_BUDGET = "one share costs more than the budget; its weight was shared out equally"
+NO_REASON = "the model portfolio gave no reason, and the Backend requires one on an order"
 
 
 def rebalance(
@@ -50,7 +51,13 @@ def rebalance(
         if account.held.get(leaving.stock_code, 0) > 0
     )
     exited = {leaving.stock_code for leaving in portfolio.exits}
-    kept = [company for company in portfolio.holdings if company.stock_code not in exited]
+    named = [company for company in portfolio.holdings if company.stock_code not in exited]
+
+    # The Backend requires a reason on every order, and portfolio-builder leaves it null
+    # on real data. Inventing one would put words in the portfolio's mouth, so the company
+    # is skipped the same way an unaffordable one is and its weight is shared out.
+    kept = [company for company in named if company.reason]
+    unreasoned = [company for company in named if not company.reason]
 
     priced = [company for company in kept if prices.get(company.stock_code, 0.0) > 0]
     unpriced = [company for company in kept if prices.get(company.stock_code, 0.0) <= 0]
@@ -74,6 +81,7 @@ def rebalance(
             if company.stock_code in dropped
         ),
         *(_skip(account.account_id, company, NO_PRICE) for company in unpriced),
+        *(_skip(account.account_id, company, NO_REASON) for company in unreasoned),
     ]
 
     return [*sells, *more_sells, *_affordable(buys, account.cash), *skips]

@@ -3,10 +3,8 @@ import sqlalchemy as sa
 # Mirrors infrastructure/postgres/migrations for queries only; the migrations own the schema.
 metadata = sa.MetaData()
 
-# The poll types a holding's amount as an integer and a pending order's as a decimal, so
-# both are stored as decimals and the rounding to whole shares happens where orders are
-# decided, not here.
-QUANTITY = sa.Numeric(18, 4)
+# The Backend types every quantity as a whole number of shares, so the mirror does too.
+QUANTITY = sa.BigInteger
 MONEY = sa.Numeric(18, 2)
 
 # Owned by market-syncer and portfolio-builder: only the columns read here are mirrored.
@@ -56,8 +54,6 @@ users = sa.Table(
     "users",
     metadata,
     sa.Column("user_id", sa.BigInteger, primary_key=True),
-    sa.Column("nickname", sa.Text, nullable=False),
-    sa.Column("state", sa.Text, nullable=False),
     sa.Column(
         "polled_at",
         sa.DateTime(timezone=True),
@@ -77,8 +73,6 @@ accounts = sa.Table(
         nullable=False,
     ),
     sa.Column("account_name", sa.Text, nullable=False),
-    sa.Column("is_ai_managed", sa.Boolean, nullable=False),
-    sa.Column("is_duel_account", sa.Boolean, nullable=False),
     sa.Column("is_active", sa.Boolean, nullable=False),
     sa.Column("cash_balance", MONEY, nullable=False),
     sa.Column(
@@ -101,25 +95,28 @@ account_holdings = sa.Table(
     ),
     sa.Column("stock_code", sa.Text, primary_key=True),
     sa.Column("quantity", QUANTITY, nullable=False),
-    sa.Column("principal", MONEY, nullable=False),
+    sa.Column("total_cost", MONEY, nullable=False),
 )
 
 account_pending_orders = sa.Table(
     "account_pending_orders",
     metadata,
-    # The same stock can carry several pending orders, so the key is surrogate.
-    sa.Column("id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
+    # The Backend's own order id, so a mirrored row matches the order it came from.
+    sa.Column("order_id", sa.BigInteger, primary_key=True),
     sa.Column(
         "account_id",
         sa.BigInteger,
         sa.ForeignKey("accounts.account_id", ondelete="CASCADE"),
         nullable=False,
     ),
+    # buy or sell. Distinct from order_type, which is limit or market.
+    sa.Column("order_side", sa.Text, nullable=False),
     sa.Column("order_type", sa.Text, nullable=False),
-    sa.Column("status", sa.Text, nullable=False),
+    sa.Column("order_status", sa.Text, nullable=False),
     sa.Column("stock_code", sa.Text, nullable=False),
-    sa.Column("price", MONEY, nullable=False),
+    sa.Column("limit_price", MONEY, nullable=True),
     sa.Column("quantity", QUANTITY, nullable=False),
+    sa.Column("current_stock_price", MONEY, nullable=True),
     sa.Index("account_pending_orders_account_id_idx", "account_id"),
 )
 

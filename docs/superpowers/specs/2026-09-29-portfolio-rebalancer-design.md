@@ -29,6 +29,48 @@ read on its own.
 | Market rung | the morning after | 15:00 on the last session | KRX closes at 15:30 |
 | Buys | sized against the sells' expected proceeds | sized against **cash that exists** | the proceeds are not money until the sells fill |
 
+## What the Backend Actually Sends (2026-10-01)
+
+Everything above was written against an example payload. `GET /api/v1/users/ai-server`
+now exists, and reading `AiUserSnapshotResponse` and `SecurityConfig` settled what had
+been guessed. The rules below are the contract; where this document still says otherwise,
+this section wins.
+
+| | guessed | the Backend |
+|---|---|---|
+| endpoint | `GET /api/v1/users?state=active` | `GET /api/v1/users/ai-server`, no filter to pass |
+| who may ask | one token | a **service token**, `sub=ai-server`; `anyRequest()` refuses it everywhere else, and the order endpoint wants `sub=<user id>` |
+| user fields | `user_id`, `nickname`, `state` | `user_id` and `accounts`, nothing more. Every user is listed, with an empty list when none of their accounts are managed |
+| account flags | `is_ai_managed`, `is_duel_account` | gone. `findActiveAiManaged()` selects them, so the service filters on nothing but `is_active` |
+| holdings | `amount`, `total_price`, `current_price` | `quantity`, `total_cost`. **No price at all** |
+| pending orders | `order_type` = buy/sell, `status`, `price`, `amount` | `order_side` = buy/sell, `order_type` = limit/market, `order_status`, `limit_price` (null at market), `quantity`, `order_id`, `current_stock_price` |
+| order request | one batch, `{"orders": [...]}` | **one order per POST**, `{stock_code, order_side, order_type, limit_price, quantity, reason}` |
+| order types | limit and market | **limit only in v1.** Market arrives in v2 |
+
+Three of these change behaviour rather than spelling.
+
+**`order_side` is not `order_type`.** The Backend puts the side in one and limit-or-market
+in the other. Reading the wrong one files every outstanding order under a key that never
+matches, silently, so the service would re-place orders it already has on the book.
+
+**The live quote moved from the holding to the pending order.** A stock with nothing
+outstanding has no quote, so QuestDB's close now prices most of a quiet pass. The
+trigger is judged against the Backend's quote **only** — a close is yesterday's, and
+striking an order at market on it would act on a price the Backend never saw. A holding
+with no outstanding order needs no trigger anyway: there is no order to strike.
+
+**The ladder has no market rung in v1.** The last rung is where the design put the
+guarantee of a fill, and v1 cannot express it. An order that reaches the end is held
+back rather than sent, logged as `orders_blocked`, and the narrowest limit already on
+the book keeps standing. **So the fill is not guaranteed in v1**, and the "market rung is
+what guarantees the fill" sentence below does not hold until v2.
+
+`reason` travels as the plain string portfolio-builder stored. The Backend's current
+record wants `{decision_id, summary}`, but this service has no decision id to give: a
+stock code carries exactly one reason within a portfolio, because the exits are removed
+from the holdings before either is read. The API sheet agrees, and the Backend's own
+record is the odd one out.
+
 ## Purpose
 
 A model portfolio is relative weights. A user has an amount of money and can only buy whole
@@ -346,8 +388,8 @@ as well:
 
 ```
 GET  /api/v1/auth/csrf                      (public; the CSRF handshake)
-GET  /api/v1/users?state=active
-POST /api/v1/accounts/{account_id}/orders
+GET  /api/v1/users/ai-server                (service token, sub=ai-server)
+POST /api/v1/accounts/{account_id}/orders   (user token, sub=<user id>, one per order)
 ```
 
 **The account is part of the order path, not only the body.** `send_orders` takes the account
@@ -562,7 +604,11 @@ def tick(engine, db, client, *, log: BoundLogger) -> int:
 
 ## Migration
 
-`0007_create_rebalance_tables.py`, `down_revision = "0006"`. It chains after `#54`'s
+`0007_create_rebalance_tables.py`, `down_revision = "0006"`, and
+`0008_reshape_account_mirror.py` after it, which alters the four mirror tables in place
+to the names and types the snapshot actually sends. `0007` had already run in
+production, so `0008` uses `ALTER` rather than being folded back into it:
+`rebalance_orders` keeps every row and only its quantity type changes. It chains after `#54`'s
 `0005_create_portfolios.py` and `#69`'s `0006_reshape_reference_tables.py`, both on `dev`.
 `rebalance_orders.portfolio_id` references `portfolios.id` from `0005`, and the holdings are
 read through `corporations`, which `0006` created by renaming `companies`.

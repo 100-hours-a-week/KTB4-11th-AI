@@ -1,12 +1,13 @@
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, is_dataclass
 from typing import Any
 
 import httpx
 import jwt
 
-USERS_PATH = "/api/v1/users"
+# Every active AI-managed account in one answer: the Backend selects them, not this
+# service, and a service token is the only thing allowed to ask.
+USERS_PATH = "/api/v1/users/ai-server"
 # Orders are placed per account, so the account is part of the path, not just the body.
 ORDERS_PATH = "/api/v1/accounts/{account_id}/orders"
 # Public, and the only way to read the CSRF token: the repository keeps it in a cookie
@@ -25,6 +26,9 @@ TOKEN_LIFETIME = 300
 # OrderController answers 403 AI_ORDER_ONLY unless `actor` says AI.
 TOKEN_TYPE = "access"
 ACTOR = "AI"
+# The only order type v1 of the Backend has. Market arrives in v2; until then anything
+# else is a 400.
+LIMIT = "limit"
 
 
 def build_client(backend_url: str) -> httpx.Client:
@@ -69,15 +73,16 @@ def authenticate(client: httpx.Client, token: str) -> None:
 
 
 def fetch_accounts(client: httpx.Client) -> list[Mapping[str, object]]:
-    response = client.get(USERS_PATH, params={"state": "active"})
+    response = client.get(USERS_PATH)
     response.raise_for_status()
     return response.json().get("users") or []
 
 
 def send_orders(client: httpx.Client, orders: Sequence[Any]) -> None:
-    # The account comes from the orders rather than the caller, so one account's orders can
-    # never be posted to another account's endpoint. Mixing accounts in one call is refused
-    # for the same reason: the path can only name one.
+    # The Backend takes one order per request, so a batch is a loop rather than a list in
+    # the body. The account comes from the orders rather than the caller, so one account's
+    # orders can never be posted to another account's endpoint, and a batch spanning two
+    # is refused for the same reason: the path can only name one.
     if not orders:
         return
 
@@ -85,11 +90,28 @@ def send_orders(client: httpx.Client, orders: Sequence[Any]) -> None:
     if len(accounts) > 1:
         raise ValueError(f"orders span several accounts, which one path cannot name: {accounts}")
 
-    account_id = accounts.pop()
-    body = {"orders": [_as_payload(order) for order in orders]}
-    response = client.post(ORDERS_PATH.format(account_id=account_id), json=body)
-    response.raise_for_status()
+    path = ORDERS_PATH.format(account_id=accounts.pop())
+    for order in orders:
+        response = client.post(path, json=_as_payload(order))
+        response.raise_for_status()
 
 
 def _as_payload(order: Any) -> Mapping[str, object]:
-    return asdict(order) if is_dataclass(order) and not isinstance(order, type) else dict(order)
+    # The Backend's OrderCreateRequest. `reason` is the text portfolio-builder stored on
+    # the holding or the exit: a stock code carries one reason within a portfolio, so
+    # there is nothing else for this service to identify the decision by.
+    if order.limit is None:
+        raise ValueError(
+            f"{order.stock_code}: v1 of the Backend has only limit orders, and this has no price"
+        )
+    if not order.reason:
+        raise ValueError(f"{order.stock_code}: the Backend requires a reason, and this has none")
+
+    return {
+        "stock_code": order.stock_code,
+        "order_side": order.action,
+        "order_type": LIMIT,
+        "limit_price": int(order.limit),
+        "quantity": int(order.shares),
+        "reason": order.reason,
+    }
