@@ -64,14 +64,15 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
 
-      # Compose 파일과 배포할 이미지 SHA를 EC2에 전송합니다.
+      # Compose, 이미지 SHA, 배치 스케줄 파일을 EC2에 전송합니다.
       - name: Upload deployment files
         if: steps.freshness.outputs.deploy == 'true'
         run: |
           set -euo pipefail
 
-          # EC2 사용자 홈 아래에 배포 디렉터리가 없으면 생성합니다.
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'mkdir -p ~/ai'
+          # systemd 설치에 필요한 비대화형 sudo 권한을 운영 파일 변경 전에 확인합니다.
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            'sudo -n true && mkdir -p ~/ai && rm -rf ~/ai/.schedule.next && mkdir -p ~/ai/.schedule.next'
 
           # 시크릿 .env와 분리해 CD가 APP_IMAGE만 안전하게 갱신합니다.
           umask 077
@@ -82,6 +83,11 @@ jobs:
           # 임시 이름으로 전송해 불완전한 파일을 배포 과정에서 읽지 않게 합니다.
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"
           scp "$image_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.image.env.next"
+          scp scripts/run-morning-pipeline.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/run-morning-pipeline.sh"
+          scp infrastructure/systemd/ktb-*.service.in \
+            infrastructure/systemd/ktb-*.timer \
+            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 ~/ai/.image.env.next'
 
       # EC2에서 이미지 갱신, DB 마이그레이션, 상시 서비스 교체를 수행합니다.
@@ -92,6 +98,9 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
           cd ~/ai
           test -f .env || { echo "~/ai/.env must exist" >&2; exit 1; }
+
+          schedule_stage="$PWD/.schedule.next"
+          schedule_render_dir=""
 
           rollback() {
             local status=$?
@@ -120,6 +129,10 @@ jobs:
             fi
 
             rm -f compose.prod.yaml.next .image.env.next
+            rm -rf "$schedule_stage"
+            if [[ -n "$schedule_render_dir" ]]; then
+              rm -rf "$schedule_render_dir"
+            fi
             exit "$status"
           }
 
@@ -130,6 +143,24 @@ jobs:
           # 운영 파일을 건드리기 전에 새 Compose와 환경 변수 조합부터 검증합니다.
           docker compose --env-file .env --env-file .image.env.next \
             -f compose.prod.yaml.next config --quiet
+
+          # systemd 파일도 운영 경로에 설치하기 전에 렌더링하고 구문을 확인합니다.
+          test -f "$schedule_stage/run-morning-pipeline.sh"
+          bash -n "$schedule_stage/run-morning-pipeline.sh"
+
+          deploy_user="$(id -un)"
+          deploy_dir="$(pwd -P)"
+          schedule_render_dir="$(mktemp -d)"
+
+          for template in "$schedule_stage"/ktb-*.service.in; do
+            unit="$(basename "$template" .in)"
+            sed \
+              -e "s|@@DEPLOY_USER@@|$deploy_user|g" \
+              -e "s|@@DEPLOY_DIR@@|$deploy_dir|g" \
+              "$template" > "$schedule_render_dir/$unit"
+          done
+
+          cp "$schedule_stage"/ktb-*.timer "$schedule_render_dir/"
 
           # 직전 성공 배포 파일은 새 배포 실패 시 복구할 수 있도록 보관합니다.
           if [[ -f compose.prod.yaml && -f .image.env ]]; then
@@ -152,5 +183,38 @@ jobs:
 
           # 모든 단계가 성공한 SHA만 이후 systemd 배치 작업에서도 사용합니다.
           mv .image.env.next .image.env
+
+          # ExecStart 경로를 만든 뒤 렌더링한 unit 전체를 함께 검증하고 설치합니다.
+          install -D -m 0755 \
+            "$schedule_stage/run-morning-pipeline.sh" \
+            "$deploy_dir/scripts/run-morning-pipeline.sh"
+          sudo -n systemd-analyze verify \
+            "$schedule_render_dir"/ktb-*.service \
+            "$schedule_render_dir"/ktb-*.timer
+          sudo -n install -m 0644 \
+            "$schedule_render_dir"/ktb-*.service \
+            "$schedule_render_dir"/ktb-*.timer \
+            /etc/systemd/system/
+          sudo -n systemctl daemon-reload
+
+          # 실제 주문을 보낼 수 있는 portfolio-rebalancer timer는 설치만 하고 활성화하지 않습니다.
+          sudo -n systemctl enable --now \
+            ktb-market-syncer.timer \
+            ktb-news-preprocessor.timer \
+            ktb-morning-pipeline.timer
+
+          for timer in \
+            ktb-market-syncer.timer \
+            ktb-news-preprocessor.timer \
+            ktb-morning-pipeline.timer; do
+            systemctl is-enabled --quiet "$timer"
+            systemctl is-active --quiet "$timer"
+          done
+
+          test -x "$deploy_dir/scripts/run-morning-pipeline.sh"
+          systemctl list-timers --all --no-pager | grep 'ktb-'
+
+          rm -rf "$schedule_stage" "$schedule_render_dir"
+          schedule_render_dir=""
           trap - ERR
           REMOTE
