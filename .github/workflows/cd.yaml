@@ -197,16 +197,18 @@ jobs:
             /etc/systemd/system/
           sudo -n systemctl daemon-reload
 
-          # 실제 주문을 보낼 수 있는 portfolio-rebalancer timer는 설치만 하고 활성화하지 않습니다.
+          # 모든 운영 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
             ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
-            ktb-morning-pipeline.timer
+            ktb-morning-pipeline.timer \
+            ktb-portfolio-rebalancer.timer
 
           for timer in \
             ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
-            ktb-morning-pipeline.timer; do
+            ktb-morning-pipeline.timer \
+            ktb-portfolio-rebalancer.timer; do
             systemctl is-enabled --quiet "$timer"
             systemctl is-active --quiet "$timer"
           done
