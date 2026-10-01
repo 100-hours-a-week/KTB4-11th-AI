@@ -1,10 +1,17 @@
 import json
-from typing import Any, Self
+from typing import Annotated, Any, Self
 
 import sqlalchemy as sa
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable
-from pydantic import BaseModel, Field, ValidationError, ValidationInfo, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    StringConstraints,
+    ValidationError,
+    ValidationInfo,
+    model_validator,
+)
 
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.database import portfolio_reasons
@@ -41,12 +48,12 @@ class ExplanationRejected(Exception):
 
 
 class Reasoning(BaseModel):
-    label: str = Field(min_length=1, max_length=255)
-    body: str = Field(min_length=1, max_length=16000)
+    label: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=255)]
+    body: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=16000)]
 
 
 class SideExplanation(BaseModel):
-    reason: str = Field(min_length=1, max_length=200)
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     reasonings: list[Reasoning] = Field(min_length=1)
 
 

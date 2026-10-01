@@ -76,6 +76,14 @@ def test_an_empty_label_is_rejected():
         )
 
 
+def test_a_whitespace_only_label_is_rejected():
+    bad = {"reason": "r", "reasonings": [{"label": "   ", "body": "b"}]}
+    with pytest.raises(ValidationError):
+        _validate(
+            {"stocks": [{"company_id": SAMSUNG, "buy": bad, "sell": SIDE}, VALID["stocks"][1]]}
+        )
+
+
 def _scripted(*answers):
     seen = []
     answers = iter(answers)
