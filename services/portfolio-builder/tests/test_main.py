@@ -115,6 +115,28 @@ def test_a_rejected_explanation_still_exits_zero(env, monkeypatch, capsys):
     assert events[-1]["outcome"] == "saved"
     assert "HYNIX: missing" in events[-1]["error"]
     assert "saved" not in env
+    assert env["trace"] == 7
+
+
+def test_provider_error_during_explain_still_exits_zero(env, monkeypatch, capsys):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 3, {}))
+
+    def provider_error(*args):
+        raise RuntimeError("502 from provider")
+
+    monkeypatch.setattr(entry, "explain", provider_error)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    events = _events(capsys.readouterr().out)
+    failed = next(e for e in events if e["message"] == "explain_failed")
+    assert failed["level"] == "ERROR"
+    assert events[-1]["outcome"] == "saved"
+    assert "502 from provider" in events[-1]["error"]
+    assert "saved" not in env
+    assert env["trace"] == 7
 
 
 def test_no_explanation_without_a_saved_portfolio(env, monkeypatch, capsys):

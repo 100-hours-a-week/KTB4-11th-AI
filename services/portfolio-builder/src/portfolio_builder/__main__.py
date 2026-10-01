@@ -8,7 +8,6 @@ from portfolio_builder.agent.run import run_agent
 from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
 from portfolio_builder.briefing import load_briefing
 from portfolio_builder.explain import (
-    ExplanationRejected,
     Explanations,
     explain,
     load_targets,
@@ -76,13 +75,14 @@ def main() -> None:
             )
             error = result.error
             if result.outcome == "saved":
-                save_trace(engine, result.portfolio_id, result.trace)
-                explainer = ChatOpenRouter(
-                    model=settings.llm_model,
-                    api_key=settings.openrouter_api_key,
-                    max_tokens=settings.explain_max_tokens,
-                ).with_structured_output(Explanations, include_raw=True)
                 try:
+                    save_trace(engine, result.portfolio_id, result.trace)
+                    explainer = ChatOpenRouter(
+                        model=settings.llm_model,
+                        api_key=settings.openrouter_api_key,
+                        max_tokens=settings.explain_max_tokens,
+                        reasoning={"effort": "none"},
+                    ).with_structured_output(Explanations, include_raw=True)
                     explanations = explain(
                         explainer,
                         load_targets(engine, result.portfolio_id),
@@ -95,12 +95,12 @@ def main() -> None:
                         portfolio_id=result.portfolio_id,
                         stocks=len(explanations.stocks),
                     )
-                except ExplanationRejected as rejected:
-                    error = f"explain: {rejected}"
-                    log.error(
+                except Exception as failure:
+                    error = f"explain: {failure}"
+                    log.exception(
                         "explain_failed",
                         portfolio_id=result.portfolio_id,
-                        error=str(rejected),
+                        error=str(failure),
                     )
         finally:
             engine.dispose()
