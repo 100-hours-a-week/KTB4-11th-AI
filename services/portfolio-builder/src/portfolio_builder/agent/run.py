@@ -25,10 +25,6 @@ class RunResult:
     error: str | None = None
 
 
-def _recoverable(error: Exception, request: Any) -> str | None:
-    return str(error) if isinstance(error, ToolError) else None
-
-
 def run_agent(
     *,
     model: BaseChatModel,
@@ -46,14 +42,14 @@ def run_agent(
         state_schema=PortfolioState,
         middleware=[
             run_log,
-            ToolErrorMiddleware(_recoverable),
+            ToolErrorMiddleware(
+                lambda error, _: str(error) if isinstance(error, ToolError) else None
+            ),
             StopOnSave(),
             Nudge(),
             ModelCallLimitMiddleware(run_limit=max_turns, exit_behavior="error"),
         ],
     )
-    # Every middleware hook is its own graph node, so a turn costs up to one step per node.
-    # Doubling that keeps GraphRecursionError from ever firing before the turn limit.
     steps_per_turn = len(agent.get_graph().nodes) - 2
     try:
         final = agent.invoke(
@@ -64,8 +60,6 @@ def run_agent(
         return RunResult("max_turns", None, run_log.turns, run_log.usage)
     except Exception as error:
         message = f"{type(error).__name__}: {error}"
-        # submit_portfolio may have committed while a sibling tool call in the same message
-        # crashed; reporting error would make a retrying scheduler write a second portfolio.
         if run_log.portfolio_id is not None:
             return RunResult("saved", run_log.portfolio_id, run_log.turns, run_log.usage, message)
         return RunResult("error", None, run_log.turns, run_log.usage, message)
