@@ -7,7 +7,7 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import BoundLogger
 
-from portfolio_rebalancer.account import apply_pending, managed_accounts, polled_prices, write_poll
+from portfolio_rebalancer.account import apply_pending, managed_accounts, write_poll
 from portfolio_rebalancer.backend import fetch_accounts, send_orders
 from portfolio_rebalancer.market import latest_prices
 from portfolio_rebalancer.order import (
@@ -67,9 +67,12 @@ def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: BoundLogger) 
         write_poll(conn, polled)
 
     accounts = list(managed_accounts(polled))
+    # Every price comes from QuestDB, read once per tick for every stock any account or the
+    # portfolio names; the Backend's own quote is not used.
+    prices = _prices(db, portfolio, accounts, log)
     sent = 0
     for account in accounts:
-        sent += _account(engine, db, client, portfolio, account, now, log)
+        sent += _account(engine, client, portfolio, account, prices, now, log)
     log("tick_end", orders_sent=sent, accounts=len(accounts))
     return sent
 
@@ -112,12 +115,6 @@ def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
         for account in accounts
         if account.get("account_id") is None or account.get("cash_balance") is None
     ]
-    unquoted = [
-        f"{account.get('account_id')}:{holding.get('stock_code')}"
-        for account in accounts
-        for holding in (account.get("stocks") or ())  # type: ignore[union-attr]
-        if holding.get("current_price") is None
-    ]
     log(
         "backend_poll",
         logging.WARNING if not polled or blank else logging.INFO,
@@ -125,14 +122,13 @@ def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
         accounts=len(accounts),
         managed_accounts=sum(1 for account in accounts if account.get("is_active")),
         accounts_missing_id_or_cash=blank,
-        orders_without_quote=unquoted,
+        holdings=sum(len(account.get("stocks") or ()) for account in accounts),  # type: ignore[arg-type]
+        pending_orders=sum(len(account.get("pending_orders") or ()) for account in accounts),  # type: ignore[arg-type]
     )
 
 
-def _account(engine, db, client, portfolio, account, now, log) -> int:
-    state = apply_pending(account)
-    quoted = polled_prices(account)
-    prices = _prices(db, portfolio, state, quoted, log)
+def _account(engine, client, portfolio, account, prices, now, log) -> int:
+    state = apply_pending(account, prices)
     working = outstanding_orders(account.get("pending_orders") or ())
 
     log(
@@ -159,9 +155,7 @@ def _account(engine, db, client, portfolio, account, now, log) -> int:
         side: min(row["created_at"] for row in rows).astimezone(KST).date()
         for side, rows in _by_side(recorded).items()
     }
-    return _continue(
-        engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
-    )
+    return _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log)
 
 
 def _by_side(recorded) -> dict[str, list]:
@@ -238,9 +232,7 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
     return _send(engine, client, portfolio, state, placeable, log)
 
 
-def _continue(
-    engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
-):
+def _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log):
     # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     # brought in line with it. A stock the plan has already placed at the right quantity and
     # band is left alone, which is what makes the hourly poll idempotent within a day.
@@ -410,33 +402,29 @@ def _log_continue(
         )
 
 
-def _prices(db, portfolio, state, quoted, log) -> dict[str, float]:
-    # The poll's live quote takes precedence, but it now rides on pending orders rather
-    # than on holdings, so it covers only what is still outstanding. QuestDB's close
-    # answers for everything else, which is most of the portfolio on a quiet pass. The
-    # precedence is the omission below rather than the merge: the two never share a code.
+def _prices(db, portfolio, accounts, log) -> dict[str, float]:
+    # The latest regular-session close QuestDB holds for every stock the tick can touch: the
+    # portfolio's names, and whatever any account holds or has pending.
     wanted = {company.stock_code for company in portfolio.holdings}
     wanted |= {leaving.stock_code for leaving in portfolio.exits}
-    wanted |= set(state.held)
-    missing = sorted(wanted - quoted.keys())
+    for account in accounts:
+        wanted |= {str(h["stock_code"]) for h in account.get("stocks") or ()}  # type: ignore[union-attr]
+        wanted |= {str(o["stock_code"]) for o in account.get("pending_orders") or ()}  # type: ignore[union-attr]
 
-    closes = (
-        {code: price.close for code, price in latest_prices(db, missing).items()} if missing else {}
-    )
-    prices = closes | quoted
+    closes = latest_prices(db, sorted(wanted)) if wanted else {}
+    prices = {code: price.close for code, price in closes.items()}
     unpriced = sorted(wanted - prices.keys())
     log(
         "prices_resolved",
         logging.WARNING if unpriced else logging.INFO,
-        account_id=state.account_id,
-        from_poll=sorted(quoted),
-        from_questdb=sorted(closes),
+        from_questdb=sorted(prices),
         unpriced=unpriced,
+        closed_at={code: price.ts.isoformat() for code, price in closes.items()},
     )
     return prices
 
 
-def _struck(portfolio, state, working, references, recorded, quoted, log) -> list:
+def _struck(portfolio, state, working, references, recorded, prices, log) -> list:
     # The trigger is what the record kept, not something the poll reports: the Backend only
     # holds the limit side.
     triggers = {
@@ -447,7 +435,7 @@ def _struck(portfolio, state, working, references, recorded, quoted, log) -> lis
     hit = {
         code
         for (code, side) in working
-        if code in triggers and code in quoted and trigger_hit(side, triggers[code], quoted[code])
+        if code in triggers and code in prices and trigger_hit(side, triggers[code], prices[code])
     }
     companies = {company.stock_code: company for company in portfolio.holdings}
     companies |= {leaving.stock_code: leaving for leaving in portfolio.exits}
@@ -465,7 +453,7 @@ def _struck(portfolio, state, working, references, recorded, quoted, log) -> lis
                     "stock_code": order.stock_code,
                     "side": order.action,
                     "trigger": triggers.get(order.stock_code),
-                    "price": quoted.get(order.stock_code),
+                    "price": prices.get(order.stock_code),
                     "shares": order.shares,
                 }
                 for order in struck

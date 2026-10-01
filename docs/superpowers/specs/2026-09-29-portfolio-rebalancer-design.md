@@ -53,11 +53,13 @@ Three of these change behaviour rather than spelling.
 in the other. Reading the wrong one files every outstanding order under a key that never
 matches, silently, so the service would re-place orders it already has on the book.
 
-**The live quote moved from the holding to the pending order.** A stock with nothing
-outstanding has no quote, so QuestDB's close now prices most of a quiet pass. The
-trigger is judged against the Backend's quote **only** — a close is yesterday's, and
-striking an order at market on it would act on a price the Backend never saw. A holding
-with no outstanding order needs no trigger anyway: there is no order to strike.
+**Every price comes from QuestDB; the Backend's quote is not used.** The snapshot still
+carries `current_stock_price` on pending orders, and the mirror keeps it, but nothing
+decides on it. Each tick -- hourly -- reads the latest regular-session close from QuestDB
+once, for every stock the portfolio names or any account holds or has pending, and that
+close sizes the orders, sets their reference, costs a pending market order against the
+cash, and is what a trigger is judged against. The poll itself is the whole snapshot:
+every user's accounts, cash, holdings and pending orders.
 
 **The ladder has no market rung in v1.** The last rung is where the design put the
 guarantee of a fill, and v1 cannot express it. An order that reaches the end is held
@@ -593,7 +595,7 @@ clients sit at the top level, as `llm.py` and `market.py` do in those services.
 | `order/outstanding.py` | pure | an order already at the Backend: did it arrive, should it narrow |
 | `order/repository.py` | I/O | the order history in `rebalance_orders` |
 | `trading_days.py` | pure | which days XKRX opens, and how many a cycle has left |
-| `market.py` | I/O | the last close from QuestDB, for a stock the poll does not quote |
+| `market.py` | I/O | the last close from QuestDB, the only price the service uses |
 | `backend.py` | I/O | the JWT, the account poll, the order send |
 | `database.py` | schema | the SQLAlchemy tables, mirroring the migrations |
 | `tick.py` | orchestration | calls the above in order, and decides nothing |
