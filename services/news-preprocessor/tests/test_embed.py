@@ -5,6 +5,7 @@ import httpx
 import pytest
 from ktb_core.embedding import config
 from news_preprocessor.embed import embed
+from pydantic import SecretStr
 
 NATIVE_DIMENSIONS = 2560
 BASE_URI = "http://embedder:8000/v1"
@@ -39,11 +40,21 @@ def test_posts_the_contract_to_the_openai_embeddings_route(server, monkeypatch):
     assert str(request.url) == "http://embedder:8000/v1/embeddings"
     assert request.method == "POST"
     assert request.headers["content-type"] == "application/json"
+    assert "authorization" not in request.headers
     assert json.loads(request.content) == {
         "model": config.EMBEDDING_MODEL,
         "input": ["기준금리 동결"],
         "truncate_prompt_tokens": config.EMBEDDING_MAX_TOKENS,
     }
+
+
+def test_sends_the_api_key_as_a_bearer_token(server):
+    requests, responses, client = server
+    responses.append({"data": [{"index": 0, "embedding": _vector(3.0, 4.0)}]})
+
+    embed(["x"], api_key=SecretStr("secret"), client=client)
+
+    assert requests[0].headers["authorization"] == "Bearer secret"
 
 
 def test_requires_the_base_uri(monkeypatch):

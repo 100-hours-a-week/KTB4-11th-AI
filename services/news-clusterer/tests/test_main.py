@@ -40,10 +40,14 @@ def test_clusters_and_logs_the_cost(env, engine, two_events_and_noise, caplog):
     entry.main()
 
     assert len(cluster_rows(engine)) == 2
-    cost = [r.getMessage() for r in caplog.records if r.getMessage().startswith("clustering cost:")]
+    cost = [r for r in caplog.records if r.getMessage() == "clustering cost:"]
     assert len(cost) == 1
-    assert "articles=7 clusters=2 noise=1 " in cost[0]
-    assert "dbscan_seconds=" in cost[0] and "peak_rss_mib=" in cost[0]
+    assert {key: cost[0].fields[key] for key in ("articles", "clusters", "noise")} == {
+        "articles": 7,
+        "clusters": 2,
+        "noise": 1,
+    }
+    assert "dbscan_seconds" in cost[0].fields and "peak_rss_mib" in cost[0].fields
 
 
 def test_a_second_run_without_new_articles_changes_nothing(env, engine, two_events_and_noise):
