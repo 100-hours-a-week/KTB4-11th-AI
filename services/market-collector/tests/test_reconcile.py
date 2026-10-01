@@ -155,3 +155,59 @@ def test_reconcile_propagates_write_failure_without_side_checkpoint():
         )
 
     assert store.calls == 1
+
+
+@pytest.mark.parametrize("timeframe,limit", [("1m", 3000), ("1d", 300)])
+@pytest.mark.parametrize("has_more", [False, True])
+@pytest.mark.parametrize("overflow", [0, 5])
+def test_reconcile_limits_writes_to_latest_candles(timeframe, limit, has_more, overflow):
+    if timeframe == "1m":
+        rows = [_minute_row(100 + i, i) for i in range(limit + overflow)]
+        newest = ANCHOR.astimezone(UTC)
+        oldest = newest - timedelta(minutes=limit - 1)
+    else:
+        newest = datetime(2026, 9, 22, tzinfo=UTC)
+        oldest = newest - timedelta(days=limit - 1)
+        rows = [
+            _daily_row((newest - timedelta(days=i)).strftime("%Y%m%d"), 100 + i)
+            for i in range(limit + overflow)
+        ]
+    client = FakeClient([Page(rows, "NEXT" if has_more else None, has_more), Page([], None, False)])
+    sink = FakeSink()
+
+    written = reconcile_candles(client, Store(sink), "005930", timeframe, BASE_DT, None)
+
+    assert written == limit
+    assert len(client.minute_calls or client.daily_calls) == 1
+    assert len(sink.rows) == limit
+    assert sink.rows[0][3] == oldest
+    assert sink.rows[-1][3] == newest
+    assert [row[3] for row in sink.rows] == sorted(row[3] for row in sink.rows)
+
+
+@pytest.mark.parametrize("timeframe,limit", [("1m", 3000), ("1d", 300)])
+def test_reconcile_counts_unique_candles_across_overlapping_pages(timeframe, limit):
+    if timeframe == "1m":
+        rows = [_minute_row(100 + i, i) for i in range(limit + 5)]
+    else:
+        rows = [
+            _daily_row((ANCHOR - timedelta(days=i)).strftime("%Y%m%d"), 100 + i)
+            for i in range(limit + 5)
+        ]
+    client = FakeClient(
+        [
+            Page(rows[: limit - 1], "FIRST", True),
+            Page(rows[:2], "SECOND", True),
+            Page(rows[limit - 2 :], "THIRD", True),
+            Page([], None, False),
+        ]
+    )
+    sink = FakeSink()
+
+    written = reconcile_candles(client, Store(sink), "005930", timeframe, BASE_DT, None)
+
+    assert written == limit
+    assert len(client.minute_calls or client.daily_calls) == 3
+    assert len({row[3] for row in sink.rows}) == limit
+    assert sink.rows[0][2]["close"] == 100 + limit - 1
+    assert sink.rows[-1][2]["close"] == 100

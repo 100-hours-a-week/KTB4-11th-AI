@@ -10,6 +10,8 @@ from market_collector.store import CandleRow, Store
 
 __all__ = ["ChartSource", "reconcile_candles", "to_candle_rows"]
 
+LIMITS = {"1m": 3000, "1d": 300}
+
 log = get_logger(__name__)
 
 Bar = MinuteBar | DailyBar
@@ -66,7 +68,7 @@ def reconcile_candles(
         page_bars = [parse(row) for row in page.rows]
         bars_by_ts.update({bar.ts: bar for bar in page_bars})
 
-        if not page.has_more:
+        if not page.has_more or len(bars_by_ts) >= LIMITS[timeframe]:
             break
 
         continuation = page.next_key
@@ -82,7 +84,7 @@ def reconcile_candles(
     bars = sorted(
         (bar for bar in bars_by_ts.values() if latest is None or bar.ts > latest),
         key=lambda bar: bar.ts,
-    )
+    )[-LIMITS[timeframe] :]
     rows = to_candle_rows(bars, symbol)
     written = store.write_candles(timeframe, rows)
     log.info("candles_reconciled", count=written, timeframe=timeframe, symbol=symbol)
