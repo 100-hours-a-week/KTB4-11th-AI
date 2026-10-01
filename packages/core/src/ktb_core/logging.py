@@ -3,8 +3,10 @@
 import json
 import logging
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from types import TracebackType
 from typing import Any
 
 BoundLogger = Callable[..., None]
@@ -36,6 +38,45 @@ class StructuredLogger:
 
 def get_logger(name: str, **bound: Any) -> StructuredLogger:
     return StructuredLogger(logging.getLogger(name), **bound)
+
+
+class start_logging:
+    def __init__(self, log: StructuredLogger, **fields: Any) -> None:
+        self.log = log
+        self.fields = fields
+        self.end: dict[str, Any] = {}
+
+    def __enter__(self) -> dict[str, Any]:
+        self.started = time.perf_counter()
+        self.log.info("run_start", **self.fields)
+        return self.end
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        elapsed_ms = round((time.perf_counter() - self.started) * 1000)
+        if error is None:
+            self.log.info(
+                "run_end", **{"outcome": "ok", **self.end}, exit_code=0, elapsed_ms=elapsed_ms
+            )
+        elif isinstance(error, SystemExit):
+            failed = error.code not in (None, 0)
+            (self.log.error if failed else self.log.info)(
+                "run_end",
+                **{"outcome": "error" if failed else "ok", **self.end},
+                exit_code=error.code or 0,
+                elapsed_ms=elapsed_ms,
+            )
+        else:
+            self.log.exception(
+                "run_end",
+                **{**self.end, "outcome": "error", "error": f"{type(error).__name__}: {error}"},
+                exit_code=1,
+                elapsed_ms=elapsed_ms,
+            )
 
 
 def set_logger_level(name: str, level: str) -> None:

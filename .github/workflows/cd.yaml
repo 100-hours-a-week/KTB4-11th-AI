@@ -197,14 +197,34 @@ jobs:
             /etc/systemd/system/
           sudo -n systemctl daemon-reload
 
+          # 예전 상시 실행 방식의 timer가 남아 있어도 새 단발 스케줄과 중복되지 않게 합니다.
+          for legacy_timer in \
+            ktb-market-collector-start.timer \
+            ktb-market-collector-stop.timer; do
+            if systemctl cat "$legacy_timer" >/dev/null 2>&1; then
+              sudo -n systemctl disable --now "$legacy_timer"
+            fi
+          done
+
+          legacy_collector_id="$(docker compose --env-file .env --env-file .image.env \
+            -f compose.prod.yaml ps -q market-collector)"
+          if [[ -n "$legacy_collector_id" ]]; then
+            docker compose --env-file .env --env-file .image.env \
+              -f compose.prod.yaml stop market-collector
+            docker compose --env-file .env --env-file .image.env \
+              -f compose.prod.yaml rm -f market-collector
+          fi
+
           # 모든 운영 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
+            ktb-market-collector.timer \
             ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer
 
           for timer in \
+            ktb-market-collector.timer \
             ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \

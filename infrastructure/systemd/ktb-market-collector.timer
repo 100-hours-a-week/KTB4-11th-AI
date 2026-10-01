@@ -1,0 +1,12 @@
+[Unit]
+Description=Run KTB market OHLCV collection hourly on weekday market sessions
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09..14:55:00 Asia/Seoul
+OnCalendar=Mon..Fri *-*-* 15:35:00 Asia/Seoul
+AccuracySec=1s
+Persistent=false
+Unit=ktb-market-collector.service
+
+[Install]
+WantedBy=timers.target
