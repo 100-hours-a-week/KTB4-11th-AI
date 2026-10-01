@@ -8,13 +8,11 @@ import pytest
 from portfolio_rebalancer.backend import (
     ACCESS_COOKIE,
     DEFAULT_CSRF_HEADER,
-    SNAPSHOT_SUBJECT,
     access_token,
     authenticate,
     build_client,
     fetch_accounts,
     send_orders,
-    use_token,
 )
 
 TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMSJ9.c2lnbmF0dXJl"
@@ -383,32 +381,3 @@ def test_an_empty_secret_is_refused(empty):
 def test_an_empty_issuer_is_refused(empty):
     with pytest.raises(ValueError, match="empty"):
         access_token(SECRET, SUBJECT, empty)
-
-
-# ---- two subjects ----
-
-
-def test_the_snapshot_subject_is_the_service_name():
-    """`GET /api/v1/users/ai-server` demands this literal subject, and `anyRequest()`
-    refuses it on every other route."""
-    assert SNAPSHOT_SUBJECT == "ai-server"
-
-
-def test_swapping_the_token_leaves_the_csrf_header_alone():
-    """The repository keeps its own cookie and the Backend is stateless, so an account
-    change needs no second handshake."""
-    client, seen = recorder(backend())
-    authenticate(client, TOKEN)
-
-    use_token(client, "a-user-token")
-    send_orders(client, [FakeOrder(11, "005930", "buy", 1)])
-
-    assert f"{ACCESS_COOKIE}=a-user-token" in seen[-1].headers["cookie"]
-    assert seen[-1].headers[DEFAULT_CSRF_HEADER] == CSRF
-
-
-def test_a_user_token_carries_the_user_id_as_its_subject():
-    token = access_token(SECRET, "4242", ISSUER)
-
-    assert claims(token)["sub"] == "4242"
-    assert claims(token)["actor"] == "AI"

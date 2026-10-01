@@ -26,10 +26,6 @@ TOKEN_LIFETIME = 300
 # OrderController answers 403 AI_ORDER_ONLY unless `actor` says AI.
 TOKEN_TYPE = "access"
 ACTOR = "AI"
-# Two subjects, and the Backend refuses each on the other's route. The snapshot wants
-# this literal one; `anyRequest()` then rejects it everywhere else, so an order is signed
-# for the user who owns the account instead.
-SNAPSHOT_SUBJECT = "ai-server"
 # The only order type v1 of the Backend has. Market arrives in v2; until then anything
 # else is a 400.
 LIMIT = "limit"
@@ -43,8 +39,7 @@ def access_token(secret: str, subject: str, issuer: str) -> str:
     # The claim set the Backend actually validates: `iss` has to equal its own issuer
     # (JwtValidators.createDefaultWithIssuer), `type` has to be access rather than
     # refresh, and `actor` has to be AI before OrderController will place anything.
-    # `sub` is the service name on the snapshot route and the owning user's id -- read
-    # with Long.parseLong -- on every other.
+    # `sub` is read with Long.parseLong, so it is a user id and not a service name.
     if not secret.strip():
         raise ValueError("backend_jwt_secret is empty; the Backend would answer 401")
     if not issuer.strip():
@@ -65,22 +60,12 @@ def access_token(secret: str, subject: str, issuer: str) -> str:
     )
 
 
-def use_token(client: httpx.Client, token: str) -> None:
-    """Carry this token on the client until another replaces it.
-
-    The CSRF token is not disturbed: its repository keeps its own cookie and the server
-    is stateless, so the access cookie can be swapped between accounts without a second
-    handshake.
-    """
-    client.cookies.set(ACCESS_COOKIE, token)
-
-
 def authenticate(client: httpx.Client, token: str) -> None:
     # Both credentials go on the client rather than on each call: the access token as the
     # cookie the Backend reads, and the CSRF token as the header its repository matches
     # against the cookie set on this very response. Without the pair a POST is a 403
     # INVALID_CSRF_TOKEN, which reads nothing like a missing cookie.
-    use_token(client, token)
+    client.cookies.set(ACCESS_COOKIE, token)
     response = client.get(CSRF_PATH)
     response.raise_for_status()
     payload = response.json()

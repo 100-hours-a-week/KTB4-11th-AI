@@ -107,6 +107,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | portfolio-rebalancer (HS256 secret shared with the Backend) | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | portfolio-rebalancer; must equal the Backend's `JWT_ISSUER`, which its decoder validates | required |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT` | portfolio-rebalancer; numeric Backend user ID | required |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | portfolio-rebalancer | `INFO` |
 
 Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.

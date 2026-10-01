@@ -137,8 +137,6 @@ class Fakes:
         self.saved: list[list] = []
         self._recorded = recorded if recorded is not None else {}
         self._monkeypatch = monkeypatch
-        self.tokens: list[str] = []
-        self.used: list[str] = []
         self.discarded: list[tuple] = []
         self.today = TUESDAY
 
@@ -194,11 +192,6 @@ class Fakes:
         )
         monkeypatch.setattr(
             tick_module,
-            "use_token",
-            lambda c, token: note("token") or self.used.append(token),
-        )
-        monkeypatch.setattr(
-            tick_module,
             "mark_sent",
             lambda conn, pid, aid: (
                 note("mark") or self.marked.append((pid, aid)) or self._stamp(aid)
@@ -232,7 +225,6 @@ class Fakes:
             _Engine(),
             "db",
             "client",
-            token_for=lambda subject: self.tokens.append(subject) or f"token-{subject}",
             log=log or get_logger("portfolio_rebalancer"),
         )
 
@@ -1116,42 +1108,3 @@ def test_a_sell_that_takes_two_sessions_does_not_cost_the_buy_two(monkeypatch):
     # Wednesday, Thursday, Friday: the buy's own third rung, not a spent ladder.
     assert events.of("recorded_orders")[0]["ladder_day"] == {"buy": 3}
     assert events.of("ladder_step")[0]["steps"][0]["band"] == PRICE_BANDS[2]
-
-
-# ---- the per-user token ----
-
-
-def test_each_account_is_signed_for_the_user_who_owns_it(monkeypatch):
-    """The Backend reads the subject as a user id and refuses an account that is not
-    theirs, so one token cannot serve two owners."""
-    users = [
-        {"user_id": 7, "accounts": [account(account_id=11)]},
-        {"user_id": 9, "accounts": [account(account_id=12)]},
-    ]
-    fakes = Fakes(monkeypatch, users=_quote(users, {}))
-
-    fakes.run()
-
-    assert fakes.tokens == ["7", "9"]
-    assert fakes.used == ["token-7", "token-9"]
-
-
-def test_the_token_is_swapped_before_the_account_is_touched(monkeypatch):
-    """A send on the previous owner's cookie would be a 403, so the swap comes first."""
-    fakes = Fakes(monkeypatch)
-
-    fakes.run()
-
-    assert fakes.calls.index("token") < fakes.calls.index("send")
-
-
-def test_a_user_with_no_managed_account_is_never_signed_for(monkeypatch):
-    users = [
-        {"user_id": 7, "accounts": []},
-        {"user_id": 9, "accounts": [account(account_id=12)]},
-    ]
-    fakes = Fakes(monkeypatch, users=_quote(users, {}))
-
-    fakes.run()
-
-    assert fakes.tokens == ["9"]
