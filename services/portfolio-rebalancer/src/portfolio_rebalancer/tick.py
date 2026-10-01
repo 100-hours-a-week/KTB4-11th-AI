@@ -182,7 +182,7 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
         log.warning("orders_none", account_id=state.account_id, days_left=left)
         return 0
 
-    placeable = _sendable([o for o in plan if o.action != SKIP], state, log)
+    placeable = [o for o in plan if o.action != SKIP]
     log.info(
         "orders_planned",
         account_id=state.account_id,
@@ -257,13 +257,12 @@ def _continue(
         settled,
     )
 
-    place = _sendable(place, state, log)
     sent = 0
     if place:
         with engine.begin() as conn:
             record_orders(conn, portfolio.portfolio_id, place)
         sent += _send(engine, client, portfolio, state, place, log)
-    moved = _sendable([*amend, *struck, *requote], state, log)
+    moved = [*amend, *struck, *requote]
     if moved:
         with engine.begin() as conn:
             amend_orders(conn, portfolio.portfolio_id, moved)
@@ -424,24 +423,6 @@ def _struck(portfolio, state, working, references, recorded, quoted, log) -> lis
 
 def _without(working, codes):
     return {key: order for key, order in working.items() if key[0] not in codes}
-
-
-def _sendable(orders, state, log) -> list:
-    # v1 of the Backend has no market order at all -- it arrives in v2 -- so the ladder's
-    # last rung has nowhere to go. A blocked order is neither recorded nor sent, which
-    # leaves the narrowest limit already on the book standing rather than replacing it
-    # with nothing. The fill the market rung was there to guarantee is not guaranteed.
-    blocked = [order for order in orders if order.limit is None]
-    if blocked:
-        log.warning(
-            "orders_blocked",
-            account_id=state.account_id,
-            codes=[order.stock_code for order in blocked],
-            reason="v1 of the Backend has no market order, so the ladder stops at its"
-            " narrowest limit; market arrives in v2",
-        )
-    return [order for order in orders if order.limit is not None]
-
 
 def _send(engine, client, portfolio, state, orders, log) -> int:
     # Orders are committed before they are sent, in their own transaction: holding it open
