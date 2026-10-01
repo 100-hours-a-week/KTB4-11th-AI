@@ -2,7 +2,7 @@ import sys
 from contextlib import ExitStack
 
 import sqlalchemy as sa
-from ktb_core.logging import get_logger, set_logger_level, setup_logging
+from ktb_core.logging import get_logger, log_run, set_logger_level, setup_logging
 
 from market_syncer.corporations import has_corporations, replace_index, sync_corporations
 from market_syncer.dart import fetch_corp_codes
@@ -27,10 +27,9 @@ def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="market-syncer")
     set_logger_level("urllib3", "INFO")
-    log.info("run_start")
     interval = settings.kiwoom_request_interval
     failed = False
-    with ExitStack() as cleanup:
+    with log_run(log), ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         run_lock = cleanup.enter_context(engine.connect())
@@ -83,7 +82,7 @@ def main() -> None:
         except Exception:
             log.exception("theme_sync_failed")
             failed = True
-    sys.exit(1 if failed else 0)
+        sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

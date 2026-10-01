@@ -3,7 +3,7 @@ from contextlib import ExitStack
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import get_logger, setup_logging
+from ktb_core.logging import get_logger, log_run, setup_logging
 
 from news_graph_builder.cluster import find_cluster_articles, find_stale_clusters, lock_cluster
 from news_graph_builder.graph import (
@@ -24,9 +24,8 @@ RUN_LOCK = int.from_bytes(b"ngrb")
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="news-graph-builder")
-    log.info("run_start")
     failed = 0
-    with httpx.Client() as client, ExitStack() as cleanup:
+    with log_run(log), httpx.Client() as client, ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         run_lock = cleanup.enter_context(engine.connect())
@@ -69,7 +68,7 @@ def main() -> None:
             if dropped:
                 log.info("dangling_relations_dropped", cluster_id=cluster_id, count=dropped)
         log.info("graphs_built", count=len(clusters) - failed, failed=failed)
-    sys.exit(1 if failed else 0)
+        sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

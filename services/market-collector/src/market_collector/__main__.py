@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import questdb
-from ktb_core.logging import get_logger, setup_logging
+from ktb_core.logging import get_logger, log_run, setup_logging
 
 from market_collector.kiwoom.official import ChartClient, build_client
 from market_collector.kiwoom.parse import KST
@@ -66,7 +66,8 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="market-collector")
-    archive_ohlcv(settings, datetime.now(UTC))
+    with log_run(log):
+        archive_ohlcv(settings, datetime.now(UTC))
 
 
 if __name__ == "__main__":

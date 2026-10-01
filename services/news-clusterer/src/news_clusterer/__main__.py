@@ -3,7 +3,7 @@ import time
 from contextlib import ExitStack
 
 import sqlalchemy as sa
-from ktb_core.logging import get_logger, setup_logging
+from ktb_core.logging import get_logger, log_run, setup_logging
 
 from news_clusterer.dbscan import NOISE, dbscan
 from news_clusterer.match import match
@@ -16,8 +16,7 @@ log = get_logger(__name__)
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="news-clusterer")
-    log.info("run_start")
-    with ExitStack() as cleanup:
+    with log_run(log), ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         started = time.perf_counter()

@@ -3,7 +3,9 @@
 import json
 import logging
 import sys
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -36,6 +38,47 @@ class StructuredLogger:
 
 def get_logger(name: str, **bound: Any) -> StructuredLogger:
     return StructuredLogger(logging.getLogger(name), **bound)
+
+
+@contextmanager
+def log_run(log: StructuredLogger, **fields: Any) -> Iterator[dict[str, Any]]:
+    """Log `run_start`, then exactly one `run_end` however the block exits.
+
+    Fields put in the yielded dict go on `run_end`. A non-zero `SystemExit` or an
+    exception logs it at ERROR; an exception always forces `outcome="error"`.
+    """
+    started = time.perf_counter()
+    end: dict[str, Any] = {}
+    log.info("run_start", **fields)
+
+    def elapsed_ms() -> int:
+        return round((time.perf_counter() - started) * 1000)
+
+    try:
+        yield end
+    except SystemExit as exit_:
+        code = exit_.code
+        failed = code not in (None, 0)
+        (log.error if failed else log.info)(
+            "run_end",
+            **{"outcome": "error" if failed else "ok", **end},
+            exit_code=code or 0,
+            elapsed_ms=elapsed_ms(),
+        )
+        raise
+    except BaseException as error:
+        log.exception(
+            "run_end",
+            **{
+                **end,
+                "outcome": "error",
+                "error": f"{type(error).__name__}: {error}",
+            },
+            exit_code=1,
+            elapsed_ms=elapsed_ms(),
+        )
+        raise
+    log.info("run_end", **{"outcome": "ok", **end}, exit_code=0, elapsed_ms=elapsed_ms())
 
 
 def set_logger_level(name: str, level: str) -> None:

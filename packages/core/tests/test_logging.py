@@ -1,7 +1,8 @@
 import json
 import logging
 
-from ktb_core.logging import bind_logger, get_logger, setup_logging
+import pytest
+from ktb_core.logging import bind_logger, get_logger, log_run, setup_logging
 
 
 def test_emits_one_json_object_per_record(capsys):
@@ -105,3 +106,42 @@ def test_get_logger_binds_fields_and_preserves_exception(capsys):
     assert payload["run_id"] == "run-1"
     assert payload["corp_code"] == "42"
     assert "ValueError: bad" in payload["exception"]
+
+
+def _run_events(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_log_run_brackets_a_clean_run(capsys):
+    setup_logging("INFO", service_name="svc")
+    with log_run(get_logger("svc"), mode="batch") as end:
+        end["count"] = 2
+
+    start, finish = _run_events(capsys)
+    assert (start["message"], start["mode"]) == ("run_start", "batch")
+    assert finish["message"] == "run_end"
+    assert (finish["level"], finish["outcome"], finish["exit_code"]) == ("INFO", "ok", 0)
+    assert finish["count"] == 2
+    assert "elapsed_ms" in finish
+
+
+@pytest.mark.parametrize(("code", "level", "outcome"), [(0, "INFO", "ok"), (1, "ERROR", "error")])
+def test_log_run_reports_a_sys_exit(capsys, code, level, outcome):
+    setup_logging("INFO", service_name="svc")
+    with pytest.raises(SystemExit), log_run(get_logger("svc")):
+        raise SystemExit(code)
+
+    finish = _run_events(capsys)[-1]
+    assert (finish["level"], finish["outcome"], finish["exit_code"]) == (level, outcome, code)
+
+
+def test_log_run_reports_an_exception_over_fields_already_set(capsys):
+    setup_logging("INFO", service_name="svc")
+    with pytest.raises(ValueError), log_run(get_logger("svc")) as end:
+        end["outcome"] = "saved"
+        raise ValueError("boom")
+
+    finish = _run_events(capsys)[-1]
+    assert (finish["level"], finish["outcome"]) == ("ERROR", "error")
+    assert finish["error"] == "ValueError: boom"
+    assert "ValueError: boom" in finish["exception"]
