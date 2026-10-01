@@ -144,7 +144,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 
 ## Conventions
 
-- Don't add comments or docstrings that restate names. Keep comments only for a non-obvious *why*.
+- Don't add comments or docstrings that restate names. NEVER WRITE COMMENTS
 - Keep functions plain and don't pile logic into `__main__.py`. Don't create thin wrappers or tiny helpers that have only one caller.
 - Use BeautifulSoup for HTML/XML parsing.
 - Configure through environment variables with sensible defaults. Only truly required values have no default.
