@@ -12,7 +12,8 @@ class Holding:
 
 @dataclass(frozen=True)
 class Exit:
-    company_id: str
+    # None for a held stock with no corporations row, which is still sold.
+    company_id: str | None
     stock_code: str
     reason: str | None
 

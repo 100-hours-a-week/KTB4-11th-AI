@@ -4,6 +4,7 @@ from portfolio_rebalancer.database import rebalance_orders
 from portfolio_rebalancer.order import (
     Order,
     amend_orders,
+    block_orders,
     find_orders,
     mark_sent,
     record_orders,
@@ -167,3 +168,35 @@ def test_amending_leaves_another_account_alone(conn, portfolio_id):
 
     untouched = next(r for r in rows(conn, rebalance_orders) if r["account_id"] == 12)
     assert float(untouched["limit_price"]) == 74_100.0
+
+
+def test_blocking_marks_only_the_named_unfilled_orders(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order(), order(stock_code="000660")])
+
+    block_orders(conn, portfolio_id, 11, ["005930"])
+
+    statuses = {row["stock_code"]: row["status"] for row in rows(conn, rebalance_orders)}
+    assert statuses == {"005930": "blocked", "000660": "reserved"}
+
+
+def test_blocking_leaves_another_account_alone(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order(), order(account_id=12)])
+
+    block_orders(conn, portfolio_id, 11, ["005930"])
+
+    statuses = {row["account_id"]: row["status"] for row in rows(conn, rebalance_orders)}
+    assert statuses == {11: "blocked", 12: "reserved"}
+
+
+def test_blocking_nothing_changes_nothing(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order()])
+
+    block_orders(conn, portfolio_id, 11, [])
+
+    assert rows(conn, rebalance_orders)[0]["status"] == "reserved"
+
+
+def test_a_held_stock_with_no_corporation_is_recorded_with_no_company(conn, portfolio_id):
+    record_orders(conn, portfolio_id, [order(company_id=None, action="sell", reason=None)])
+
+    assert rows(conn, rebalance_orders)[0]["side"] == "sell"

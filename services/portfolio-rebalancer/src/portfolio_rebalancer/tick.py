@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -12,6 +13,7 @@ from portfolio_rebalancer.market import latest_prices
 from portfolio_rebalancer.order import (
     amend_orders,
     at_market,
+    block_orders,
     discard_unsent,
     find_orders,
     mark_sent,
@@ -24,9 +26,10 @@ from portfolio_rebalancer.order import (
 )
 from portfolio_rebalancer.order.dto import SKIP
 from portfolio_rebalancer.order.repository import AT_MARKET as MARKET_STATUS
+from portfolio_rebalancer.order.repository import BLOCKED as BLOCKED_STATUS
 from portfolio_rebalancer.order.repository import SKIPPED as SKIP_STATUS
-from portfolio_rebalancer.portfolio import find_latest_portfolio
-from portfolio_rebalancer.trading_days import days_left
+from portfolio_rebalancer.portfolio import Exit, find_corp_codes, find_latest_portfolio
+from portfolio_rebalancer.trading_days import cycle_day, is_blocked, is_open
 
 # KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
@@ -121,6 +124,7 @@ def _log_poll(log: StructuredLogger, polled: Sequence[Mapping[str, object]]) -> 
 
 def _account(engine, db, client, portfolio, account, now, log) -> int:
     state = apply_pending(account)
+    portfolio = _with_unlisted(engine, portfolio, state.account_id, account, log)
     prices = _prices(db, portfolio, state, account, log)
     working = outstanding_orders(account.get("pending_orders") or ())
 
@@ -139,11 +143,46 @@ def _account(engine, db, client, portfolio, account, now, log) -> int:
     if any(row["sent_at"] is None for row in recorded):
         recorded = _settle_unsent(engine, portfolio, state, recorded, working, log)
 
+    # Cycle days are sessions, so a closed day neither starts a cycle nor tightens one.
+    if not is_open(now.date()):
+        log.info("market_closed", account_id=state.account_id, date=now.date().isoformat())
+        return 0
+
     if not recorded:
         return _open(engine, client, portfolio, state, prices, now, log)
 
     started = min(row["created_at"] for row in recorded).astimezone(KST).date()
     return _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log)
+
+
+def _with_unlisted(engine, portfolio, account_id, account, log):
+    # A held stock the model portfolio neither holds nor exits -- one bought before the account
+    # was AI-managed, say -- is sold like an exit. Read from the poll's holdings rather than
+    # from the pending-adjusted state, so a stock whose sell is already working stays named
+    # and its order keeps being tightened.
+    named = {company.stock_code for company in portfolio.holdings}
+    named |= {leaving.stock_code for leaving in portfolio.exits}
+    held = {
+        str(holding["stock_code"])
+        for holding in account.get("stocks") or ()
+        if int(holding.get("amount") or 0) > 0
+    }
+    unlisted = sorted(held - named)
+    if not unlisted:
+        return portfolio
+    with engine.begin() as conn:
+        corp_codes = find_corp_codes(conn, unlisted)
+    log.info("unlisted_holdings", account_id=account_id, codes=unlisted)
+    return replace(
+        portfolio,
+        exits=[
+            *portfolio.exits,
+            *(
+                Exit(company_id=corp_codes.get(code), stock_code=code, reason=None)
+                for code in unlisted
+            ),
+        ],
+    )
 
 
 def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence[Mapping[str, Any]]:
@@ -173,12 +212,11 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
 
 
 def _open(engine, client, portfolio, state, prices, now, log) -> int:
-    # The cycle's whole budget is ahead: the trading days left in this week, so a Chuseok
-    # week gives fewer.
-    left = days_left(now.date(), now)
-    plan = rebalance(portfolio, state, prices, days_left=left)
+    # Today is day 1 of this account's cycle, whatever the weekday: the first session it sees
+    # this model portfolio.
+    plan = rebalance(portfolio, state, prices, day=1)
     if not plan:
-        log.warning("orders_none", account_id=state.account_id, days_left=left)
+        log.warning("orders_none", account_id=state.account_id, cycle_day=1)
         return 0
 
     placeable = [o for o in plan if o.action != SKIP]
@@ -186,7 +224,7 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
         "orders_planned",
         account_id=state.account_id,
         cycle="open",
-        days_left=left,
+        cycle_day=1,
         planned=len(plan),
         placeable=len(placeable),
         no_order=_no_order(portfolio, plan),
@@ -203,8 +241,11 @@ def _continue(engine, client, portfolio, state, working, recorded, started, now,
     # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     # brought in line with it. A stock the plan has already placed at the right quantity and
     # band is left alone, which is what makes the hourly poll idempotent within a day.
-    left = days_left(started, now)
-    plan = rebalance(portfolio, state, prices, days_left=left)
+    day = cycle_day(started, now.date())
+    if is_blocked(day, now):
+        return _block(engine, portfolio, state, working, recorded, day, log)
+
+    plan = rebalance(portfolio, state, prices, day=day)
     references = {
         row["stock_code"]: float(row["reference_price"])
         for row in recorded
@@ -243,7 +284,7 @@ def _continue(engine, client, portfolio, state, working, recorded, started, now,
         portfolio,
         state,
         started,
-        left,
+        day,
         recorded,
         plan,
         placed,
@@ -267,6 +308,24 @@ def _continue(engine, client, portfolio, state, working, recorded, started, now,
     return sent
 
 
+def _block(engine, portfolio, state, working, recorded, day, log) -> int:
+    # The cycle is over: what is still unfilled is blocked in the record and left alone, and
+    # nothing new is placed until the next model portfolio starts a new cycle.
+    placed = {code for code, _ in working}
+    unfilled = sorted(
+        {
+            row["stock_code"]
+            for row in recorded
+            if row["status"] not in (SKIP_STATUS, BLOCKED_STATUS) and row["stock_code"] in placed
+        }
+    )
+    if unfilled:
+        with engine.begin() as conn:
+            block_orders(conn, portfolio.portfolio_id, state.account_id, unfilled)
+        log.info("orders_blocked", account_id=state.account_id, cycle_day=day, codes=unfilled)
+    return 0
+
+
 def _no_order(portfolio, plan) -> list[str]:
     # A company the model portfolio names that produced no line at all this pass: either it
     # already sits at its target, or the cash on hand could not reach it and a later pass
@@ -281,7 +340,7 @@ def _log_continue(
     portfolio,
     state,
     started,
-    left,
+    day,
     recorded,
     plan,
     placed,
@@ -296,7 +355,7 @@ def _log_continue(
         "orders_planned",
         account_id=state.account_id,
         cycle="continue",
-        days_left=left,
+        cycle_day=day,
         planned=len(plan),
         placeable=len(placeable),
         no_order=_no_order(portfolio, plan),
@@ -326,7 +385,7 @@ def _log_continue(
         "recorded_orders",
         account_id=state.account_id,
         started=started.isoformat(),
-        days_left=left,
+        cycle_day=day,
         recorded=len(recorded),
         still_working=sorted(ordered & placed),
         filled_or_done=sorted(ordered - placed - wanted),
@@ -335,11 +394,11 @@ def _log_continue(
     )
 
     if requote:
-        # The ladder narrowing, rung by rung: band 0.05 -> 0.03 -> 0.01 -> at_market.
+        # The ladder narrowing, one rung a day: band 0.05 -> 0.03 -> 0.01, then blocked.
         log.info(
             "ladder_step",
             account_id=state.account_id,
-            days_left=left,
+            cycle_day=day,
             steps=[
                 {
                     "stock_code": order.stock_code,

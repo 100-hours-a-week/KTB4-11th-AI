@@ -5,9 +5,9 @@ from portfolio_rebalancer.account.dto import AccountState
 from portfolio_rebalancer.order.dto import Order, Outstanding
 from portfolio_rebalancer.order.reservations import band_for, limit_and_trigger, on_tick
 from portfolio_rebalancer.portfolio.dto import Exit, Holding, Portfolio
-from portfolio_rebalancer.trading_days import days_left, is_open
+from portfolio_rebalancer.trading_days import cycle_day, is_open
 
-AT_MARKET = "the bands are spent; sent at market, which is what guarantees the fill"
+AT_MARKET = "the trigger was reached; sent at market rather than waiting on the limit"
 
 
 def reached_the_backend(
@@ -29,13 +29,17 @@ def narrow(
     started: date,
     now: datetime,
 ) -> list[Order]:
-    # The band comes from the deadline rather than from a counter, so a tick the service
-    # missed cannot hand an order back a day it no longer has. A pair already at the right
-    # band is left alone, which is what makes the hourly poll idempotent within a day.
+    # The band comes from the cycle day, counted in sessions, rather than from a counter, so
+    # a tick the service missed cannot hand an order back a day it no longer has. A pair
+    # already at the right band is left alone, which is what makes the hourly poll idempotent
+    # within a day. Past the last band there is nothing to tighten to: the cycle is blocked,
+    # not sent at market.
     if not is_open(now.date()):
         return []
 
-    left = days_left(started, now)
+    day = cycle_day(started, now.date())
+    if band_for(day) is None:
+        return []
     companies: dict[str, Holding | Exit] = {
         company.stock_code: company for company in portfolio.holdings
     }
@@ -50,12 +54,12 @@ def narrow(
         if company is None or reference is None:
             continue
 
-        quote = limit_and_trigger(reference, left, side)
+        quote = limit_and_trigger(reference, day, side)
         if quote is not None and quote[0] == order.price:
             continue
 
         orders.append(
-            _order(account.account_id, company, code, side, order.quantity, reference, left)
+            _order(account.account_id, company, code, side, order.quantity, reference, day)
         )
     return orders
 
@@ -70,7 +74,7 @@ def at_market(
 ) -> Order:
     # No band and no limit: crossing the trigger means waiting on the limit has stopped
     # being worth it.
-    return _order(account.account_id, company, code, side, quantity, reference, left=0)
+    return _order(account.account_id, company, code, side, quantity, reference, day=0)
 
 
 def _order(
@@ -80,9 +84,9 @@ def _order(
     side: str,
     quantity: int,
     reference: float,
-    left: int,
+    day: int,
 ) -> Order:
-    quote = limit_and_trigger(reference, left, side)
+    quote = limit_and_trigger(reference, day, side)
     return Order(
         account_id=account_id,
         company_id=company.company_id,
@@ -92,7 +96,7 @@ def _order(
         reason=company.reason,
         weight=getattr(company, "weight", None),
         reference=on_tick(reference),
-        band=band_for(left),
+        band=band_for(day),
         limit=quote[0] if quote else None,
         trigger=quote[1] if quote else None,
         note="" if quote else AT_MARKET,

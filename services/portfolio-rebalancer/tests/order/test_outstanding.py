@@ -15,9 +15,10 @@ SAMSUNG = ("00126380", "005930")
 HYNIX = ("00164779", "000660")
 KST = timezone(timedelta(hours=9))
 
-# The 2026-09-28 week has five sessions: Monday 5 days left, Tuesday 4, Wednesday 3,
-# Thursday 2, Friday 1.
+# A cycle started on Monday 2026-09-28: Monday is day 1, Tuesday day 2, Wednesday day 3, and
+# Thursday is past the ladder.
 MONDAY = date(2026, 9, 28)
+TUESDAY = date(2026, 9, 29)
 WEDNESDAY = date(2026, 9, 30)
 THURSDAY = date(2026, 10, 1)
 FRIDAY = date(2026, 10, 2)
@@ -25,7 +26,7 @@ SATURDAY = date(2026, 10, 3)
 
 
 def noon(day: date) -> datetime:
-    """Well before the 15:00 cutoff on the last session."""
+    """Well before the 15:00 cutoff on day 3."""
     return datetime(day.year, day.month, day.day, 11, 0, tzinfo=KST)
 
 
@@ -45,23 +46,23 @@ def account(held=None):
     return AccountState(account_id=11, cash=0.0, held=dict(held or {}))
 
 
-def working_at(days_left, side="buy", code="005930", reference=78_000.0, quantity=100):
-    """An order sitting at the limit that many sessions would have quoted."""
-    limit, _ = limit_and_trigger(reference, days_left, side)
+def working_at(day, side="buy", code="005930", reference=78_000.0, quantity=100):
+    """An order sitting at the limit that cycle day would have quoted."""
+    limit, _ = limit_and_trigger(reference, day, side)
     return {(code, side): Outstanding(price=limit, quantity=quantity)}
 
 
 REFERENCES = {"005930": 78_000.0, "000660": 412_000.0}
 
 
-def test_an_order_moves_to_the_band_its_remaining_sessions_allow():
+def test_an_unfilled_order_tightens_to_the_next_days_band():
     orders = narrow(
         portfolio(holdings=[holding()]),
         account(),
-        working_at(5),
+        working_at(1),
         REFERENCES,
         MONDAY,
-        noon(THURSDAY),
+        noon(TUESDAY),
     )
 
     assert len(orders) == 1
@@ -77,49 +78,46 @@ def test_an_order_already_at_the_right_limit_is_left_alone():
         working_at(2),
         REFERENCES,
         MONDAY,
+        noon(TUESDAY),
+    )
+
+    assert orders == []
+
+
+def test_past_day_3_nothing_is_tightened_or_sent_at_market():
+    """The cycle ends in a block, not a market order."""
+    orders = narrow(
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(3),
+        REFERENCES,
+        MONDAY,
         noon(THURSDAY),
     )
 
     assert orders == []
 
 
-def test_the_deadline_sends_the_order_to_market():
-    """Narrowing does not guarantee a fill; the market rung does."""
-    past_the_cutoff = datetime(2026, 10, 2, 15, 0, tzinfo=KST)
-
-    orders = narrow(
-        portfolio(holdings=[holding()]),
-        account(),
-        working_at(1),
-        REFERENCES,
-        MONDAY,
-        past_the_cutoff,
-    )
-
-    assert len(orders) == 1
-    assert (orders[0].limit, orders[0].trigger, orders[0].band) == (None, None, None)
-    assert orders[0].note
-
-
 @pytest.mark.parametrize("shut", [SATURDAY, date(2026, 10, 9)])
 def test_nothing_moves_on_a_day_the_exchange_is_shut(shut):
     """Saturday and 한글날 alike: a band spent on a closed market is wasted."""
     orders = narrow(
-        portfolio(holdings=[holding()]), account(), working_at(5), REFERENCES, MONDAY, noon(shut)
+        portfolio(holdings=[holding()]), account(), working_at(1), REFERENCES, MONDAY, noon(shut)
     )
 
     assert orders == []
 
 
 def test_a_missed_session_does_not_hand_the_order_a_day_back():
-    """The band comes from the deadline, not a counter."""
+    """The band comes from the cycle day, not a counter: a day 1 order seen first on day 3
+    goes straight to day 3's band."""
     orders = narrow(
         portfolio(holdings=[holding()]),
         account(),
-        working_at(5),
+        working_at(1),
         REFERENCES,
         MONDAY,
-        noon(FRIDAY),
+        noon(WEDNESDAY),
     )
 
     assert orders[0].band == PRICE_BANDS[2]
@@ -130,10 +128,10 @@ def test_the_reference_comes_from_the_record_not_the_price():
     orders = narrow(
         portfolio(holdings=[holding()]),
         account(),
-        working_at(5),
+        working_at(1),
         {"005930": 100_000.0},
         MONDAY,
-        noon(THURSDAY),
+        noon(TUESDAY),
     )
 
     assert orders[0].reference == 100_000.0
@@ -142,7 +140,7 @@ def test_the_reference_comes_from_the_record_not_the_price():
 
 def test_an_order_with_no_recorded_reference_is_left_alone():
     orders = narrow(
-        portfolio(holdings=[holding()]), account(), working_at(5), {}, MONDAY, noon(THURSDAY)
+        portfolio(holdings=[holding()]), account(), working_at(1), {}, MONDAY, noon(TUESDAY)
     )
 
     assert orders == []
@@ -153,10 +151,10 @@ def test_an_order_the_portfolio_does_not_name_is_left_alone():
     orders = narrow(
         portfolio(holdings=[holding()]),
         account(),
-        working_at(5, code="068270"),
+        working_at(1, code="068270"),
         {"068270": 200_000.0},
         MONDAY,
-        noon(THURSDAY),
+        noon(TUESDAY),
     )
 
     assert orders == []
@@ -166,10 +164,10 @@ def test_the_side_is_preserved():
     orders = narrow(
         portfolio(exits=[exited()]),
         account(),
-        working_at(5, side="sell", code="000660", reference=412_000.0),
+        working_at(1, side="sell", code="000660", reference=412_000.0),
         REFERENCES,
         MONDAY,
-        noon(THURSDAY),
+        noon(TUESDAY),
     )
 
     assert orders[0].action == "sell"
@@ -180,10 +178,10 @@ def test_the_quantity_and_the_reason_carry_over():
     orders = narrow(
         portfolio(holdings=[holding(reason="반도체 업황 반등")]),
         account(),
-        working_at(5, quantity=73),
+        working_at(1, quantity=73),
         REFERENCES,
         MONDAY,
-        noon(THURSDAY),
+        noon(TUESDAY),
     )
 
     assert orders[0].shares == 73
@@ -191,8 +189,8 @@ def test_the_quantity_and_the_reason_carry_over():
     assert orders[0].account_id == 11
 
 
-def test_every_order_advances_on_the_one_shared_deadline():
-    both = working_at(5) | working_at(5, side="sell", code="000660", reference=412_000.0)
+def test_every_order_advances_on_the_one_shared_cycle():
+    both = working_at(1) | working_at(1, side="sell", code="000660", reference=412_000.0)
 
     orders = narrow(
         portfolio(holdings=[holding()], exits=[exited()]),
@@ -200,7 +198,7 @@ def test_every_order_advances_on_the_one_shared_deadline():
         both,
         REFERENCES,
         MONDAY,
-        noon(THURSDAY),
+        noon(TUESDAY),
     )
 
     assert sorted(order.stock_code for order in orders) == ["000660", "005930"]
@@ -220,10 +218,10 @@ def test_a_re_quoted_order_lands_on_a_tick(reference):
     orders = narrow(
         portfolio(holdings=[holding()]),
         account(),
-        working_at(5, reference=reference),
+        working_at(1, reference=reference),
         {"005930": reference},
         MONDAY,
-        noon(THURSDAY),
+        noon(TUESDAY),
     )
 
     order = orders[0]
@@ -255,7 +253,7 @@ def test_a_struck_order_keeps_its_reason_and_reference():
 
 def test_an_order_still_working_means_the_request_arrived():
     """Every placeable order goes out in one request, so one of them working is proof."""
-    assert reached_the_backend(["005930", "000660"], working_at(5)) is True
+    assert reached_the_backend(["005930", "000660"], working_at(1)) is True
 
 
 def test_nothing_working_means_the_request_never_arrived():
@@ -263,4 +261,4 @@ def test_nothing_working_means_the_request_never_arrived():
 
 
 def test_someone_elses_order_is_not_proof():
-    assert reached_the_backend(["005930"], working_at(5, code="068270")) is False
+    assert reached_the_backend(["005930"], working_at(1, code="068270")) is False

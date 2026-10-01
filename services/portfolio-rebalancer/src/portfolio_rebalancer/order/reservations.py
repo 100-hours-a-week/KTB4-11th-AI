@@ -9,9 +9,8 @@ from portfolio_rebalancer.order.dto import PENDING, SELL, Outstanding
 #     sell   limit at reference + band     market if the price falls to reference - 5%
 #     buy    limit at reference - band     market if the price rises to reference + 5%
 #
-# Day three ends in a market order rather than a fourth band, so every order fills within
-# the week. Narrowing alone would not guarantee that: a 1% band is harder to reach than a
-# 5% one.
+# One band per cycle day: day 1 places at 5%, and each later day tightens what has not
+# filled. After day 3 nothing moves again; trading_days.is_blocked ends the cycle.
 PRICE_BANDS: tuple[float, ...] = (0.05, 0.03, 0.01)
 
 # The trigger does not narrow with the limit. It is the point where waiting stops being
@@ -44,17 +43,18 @@ def on_tick(price: float) -> float:
     return float(round(price / tick) * tick)
 
 
-def band_for(days_left: int) -> float | None:
-    if days_left <= 0:
+def band_for(day: int) -> float | None:
+    # None outside the ladder: an order then goes at market, which only a struck trigger asks
+    # for.
+    if not 1 <= day <= len(PRICE_BANDS):
         return None
-    return PRICE_BANDS[max(len(PRICE_BANDS) - days_left, 0)]
+    return PRICE_BANDS[day - 1]
 
 
-def limit_and_trigger(reference: float, days_left: int, side: str) -> tuple[float, float] | None:
-    # None once the sessions run out: the order then goes at market outright. Both prices
-    # sit on a KRX tick, the limit because the Backend rejects it otherwise and the trigger
-    # so it is comparable with a quoted price.
-    band = band_for(days_left)
+def limit_and_trigger(reference: float, day: int, side: str) -> tuple[float, float] | None:
+    # Both prices sit on a KRX tick, the limit because the Backend rejects it otherwise and
+    # the trigger so it is comparable with a quoted price.
+    band = band_for(day)
     if band is None:
         return None
 

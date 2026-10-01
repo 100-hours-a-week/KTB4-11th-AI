@@ -29,6 +29,16 @@ read on its own.
 | Market rung | the morning after | 15:00 on the last session | KRX closes at 15:30 |
 | Buys | sized against the sells' expected proceeds | sized against **cash that exists** | the proceeds are not money until the sells fill |
 
+Revised on 2026-10-01, superseding the budget, cutoff and market-rung rows above:
+
+| | before | now | why |
+|---|---|---|---|
+| Band | from the sessions left in the week | **from the cycle day**: day 1 ± 5%, day 2 ± 3%, day 3 ± 1% | a five-session week held ± 5% for three days and only narrowed on Thursday |
+| Cycle | the sessions left in the week the cycle began | **three sessions from the account's first day**, holidays skipped | an account first seen on Wednesday runs Wednesday to Friday |
+| End of the cycle | at market at 15:00 on the last session | **blocked** at 15:00 on day 3, in the record only | the Backend has no cancel; nothing more is tightened or sent |
+| Holdings outside the portfolio | left alone | **sold like an exit** | the model portfolio is what an AI-managed account holds |
+| Closed days | a cycle could open on one | **nothing opens or moves** | cycle days are sessions |
+
 ## Purpose
 
 A model portfolio is relative weights. A user has an amount of money and can only buy whole
@@ -221,24 +231,34 @@ at market on a move the limit was still willing to wait out.
 A sell that has fallen to its trigger has lost the chance to sell high, so getting out at market
 beats holding the order. A buy that has risen to its trigger is not getting its dip.
 
-**Selling and buying share one three-day budget.** The band comes from the trading days that
-remain, not from the days an order has been alive, so a buy placed after two days of selling
-starts on the 1% band and goes to market with everyone else rather than starting a fresh ladder.
-Two days spent selling leaves one for buying.
+**A cycle is three sessions, and every session tightens what has not filled.** Day 1 is the
+first session on which an account sees a new model portfolio: its orders go out at ± 5%. Day 2
+re-quotes whatever is still unfilled at ± 3%, and day 3 at ± 1%. At 15:00 on day 3 whatever is
+still unfilled is **blocked**.
 
-| days left | band | 78,000 reference |
+| cycle day | band | 78,000 reference |
 |---|---|---|
-| 3 | reference ± 5% | 74,100 / 81,900 |
+| 1 | reference ± 5% | 74,100 / 81,900 |
 | 2 | reference ± 3% | 75,700 / 80,300 |
-| 1 | reference ± 1% | 77,200 / 78,800 |
-| 0 | **market** | — |
+| 3 | reference ± 1% | 77,200 / 78,800 |
+| 3, from 15:00 | **blocked** | — |
 
-The deadline is read out of the record, not stored: the earliest `created_at` for this
-portfolio and account is when the cycle began. Weekends consume none of it.
+**Selling and buying share the cycle.** The band comes from the cycle day, not from the days an
+order has been alive, so a buy placed on day 2 with the cash the sells freed starts at ± 3%
+rather than restarting the ladder.
 
-The market rung is what guarantees the fill; narrowing does not. A ± 1% band is *harder* to
-reach than ± 5%, so a price that has walked away from the reference is less likely to come back
-inside the narrow band than the wide one.
+**Days are sessions.** The cycle start is read out of the record, not stored: the earliest
+`created_at` for this portfolio and account. The cycle day is the number of XKRX sessions from
+that date to today, so a holiday is skipped rather than spent. A Monday holiday makes Tuesday
+day 1 and Thursday day 3; an account first seen on a Wednesday has its day 3 on Friday; one
+first seen on a Thursday has its day 3 on the next session after the weekend. On a closed day
+nothing opens or moves.
+
+**Blocked lives in the record only.** The Backend has no cancel, so a blocked order is marked
+`status = 'blocked'` in `rebalance_orders` and is never tightened or re-sent again; nothing is
+sent to the Backend to block it. Once a cycle is blocked nothing new is placed for that
+portfolio and account, even if a late fill frees cash, until the next model portfolio starts a
+new cycle.
 
 The reference is fixed when the first pair is placed and every later step is measured from that
 same number, not from whatever the close has become since.
@@ -247,15 +267,12 @@ same number, not from whatever the close has become since.
 approximated. A Chuseok week really is three sessions, and 한글날 on a Friday really does end
 the week on the Thursday.
 
-**The budget is the sessions left in the week the cycle began**, not a fixed three, because the
-next judgement lands the week after and an order still working then would be acting on a
-portfolio that has been replaced. Five sessions means two days of selling leaves three for
-buying; a short week leaves less. With more sessions than bands the widest band simply holds
-until the narrowing has somewhere to go.
+**Day 3 ends at 15:00, not at midnight.** Polling runs on the hour from 09:00 and KRX closes
+at 15:30, so 15:00 is the last pass before the close and the block happens there.
 
-**The last session ends at 15:00, not at midnight.** Polling starts at 09:00 on the hour and
-KRX closes at 15:30, so 15:00 is the last pass before the close and the final band's order goes
-at market there rather than the morning after.
+**The trigger still sends an order at market.** It is independent of the cycle day: a sell that
+falls to its trigger, or a buy that rises to its trigger, goes at market on whichever day it
+happens, until the cycle is blocked.
 
 ### Prices Are Quoted on a KRX Tick
 
@@ -291,8 +308,8 @@ missing quote is not read as zero: that would fire every sell trigger at once.
 
 **The reference comes from the record, not from the prices.** One limit price cannot say what it
 was a band away from, so `rebalance_orders.reference_price` keeps it and
-`rebalance_orders.trigger_price` keeps the price to watch. The band still comes from the deadline
-rather than being stored. Neither is narrowed, because a rung
+`rebalance_orders.trigger_price` keeps the price to watch. The band still comes from the cycle
+day rather than being stored. Neither is narrowed, because a rung
 placed against a position that has moved is worse than leaving it. A pair carries the **smaller**
 of the two outstanding quantities, which is what a partial fill left to buy.
 
@@ -323,8 +340,8 @@ flowchart TD
 including what the exits are worth, but their proceeds are not money until the sells fill. So
 the first pass with no cash places only the sells; a pass that finds the sells part filled buys
 what that cash covers, largest weight first, costed at the high side because that is the side
-that would be paid. A sell that only fills at the deadline leaves the buy no days, and the buy
-goes straight to market.
+that would be paid. A sell that only fills on day 3 leaves the buy day 3's band, and a sell
+that has not filled by the block leaves the buy unplaced until the next cycle.
 
 **An order already on the market keeps the quantity it was placed with.** Only its band moves.
 Re-deriving its quantity every pass would size it against cash the order itself has committed,
@@ -333,9 +350,16 @@ and the quantity would wobble between passes instead of settling.
 The allocation rules apply to the buy side only. A sell is always possible, so a target weight
 that cannot be reached by buying does not block the sells that fund it. A name too dear to buy,
 or one the poll does not quote, is **skipped** with a note rather than sold: being unaffordable
-is a buy-side outcome and the model portfolio still names it. A held name in neither the
-portfolio nor the exits is left alone, because no reason exists to act on it and every order
-carries one.
+is a buy-side outcome and the model portfolio still names it.
+
+**A held name in neither the portfolio nor the exits is sold like an exit.** A new account holds
+nothing, so its cycle only buys. An account that already holds stocks sells first -- the exits,
+anything held that the model portfolio does not name, and the excess of a name it holds too
+much of -- and then buys the new names and the shortfall of the names it holds too little of.
+Such a name has no reason from portfolio-builder, so its order carries none, and its
+`company_id` is looked up in `corporations` (none if the stock has no row there). It is named
+from the poll's `stocks[]`, not from the pending-adjusted holdings, so a stock whose sell is
+already working stays named and keeps being tightened.
 
 ## Interface
 
@@ -435,20 +459,13 @@ also why a narrowing is an **amendment in place** rather than a second row.
 
 ## Deferred
 
-**An outstanding pair when the next weekly judgement lands.** Three daily steps need three
-trading days, so the ladder finishes inside any week with three or more of them:
+**A new model portfolio while a cycle's orders are still working.** A cycle is keyed by
+portfolio and account, so a new portfolio starts a new cycle on its first session. The old
+cycle's orders are left at the Backend as they are, because the Backend has no cancel.
+`apply_pending` already counts them, so the new cycle does not buy the same shares twice.
 
-| holidays | trading days | finishes |
-|---|---|---|
-| 0 | 5 | Wednesday |
-| 1 | 4 | Thursday |
-| 2 | 3 | Friday |
-| 3 or more | 2 or fewer | runs into the next week |
-
-Only a week cut to two trading days overflows, which in practice means a Seollal or Chuseok
-week. **The intended behaviour is to cancel the outstanding pair** and let the new portfolio's
-order replace it. It is not implemented in this version, because the case is rare enough that
-the handling can wait.
+**A blocked order is still live at the Backend.** It is blocked only in the record. If the
+Backend gains a cancel, blocking is where it would be called.
 
 **The work queue.** `#54` records that this service consumes it after the MVP. Not implemented.
 
@@ -498,12 +515,12 @@ def whole_shares(
     """Positions to hold, and the cash left un-invested."""
 
 
-def band_for(days_left: int) -> float | None:
-    """The band this many sessions allow, or None once the ladder is spent."""
+def band_for(day: int) -> float | None:
+    """The band of this cycle day (1, 2 or 3), or None outside the cycle."""
 
 
 def limit_and_trigger(
-    reference: float, days_left: int, side: str
+    reference: float, day: int, side: str
 ) -> tuple[float, float] | None:
     """The limit to place and the trigger to watch, on a KRX tick, or None at market."""
 
@@ -528,7 +545,7 @@ def rebalance(
     portfolio: Portfolio,
     account: AccountState,
     prices: Mapping[str, float],
-    days_left: int = LADDER_DAYS,
+    day: int = 1,
 ) -> list[Order]:
     """Sells first, then as much of the buy side as the cash on hand covers."""
 
@@ -536,7 +553,7 @@ def rebalance(
 def narrow(
     portfolio, account, working, references, started: date, now: datetime
 ) -> list[Order]:
-    """Re-quote each working order at the band its remaining sessions allow.
+    """Re-quote each working order at the band of today's cycle day.
 
     `references` comes from `rebalance_orders.reference_price`: one limit price cannot
     say what it was a band away from. An order already at market is not passed in, since
@@ -544,8 +561,12 @@ def narrow(
     """
 
 
-def days_left(started: date, now: datetime) -> int:
-    """Sessions from now to the week's deadline, ending at 15:00 on the last one."""
+def cycle_day(started: date, today: date) -> int:
+    """Sessions from the cycle start to today, counting both: day 1, 2 or 3."""
+
+
+def is_blocked(day: int, now: datetime) -> bool:
+    """Past day 3, or day 3 from 15:00."""
 
 
 def is_open(day: date) -> bool:

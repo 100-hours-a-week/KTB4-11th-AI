@@ -3,6 +3,7 @@ from portfolio_rebalancer.order.outstanding import at_market, narrow, reached_th
 from portfolio_rebalancer.order.rebalance import rebalance
 from portfolio_rebalancer.order.repository import (
     amend_orders,
+    block_orders,
     discard_unsent,
     find_orders,
     mark_sent,
@@ -15,6 +16,7 @@ __all__ = [
     "Outstanding",
     "Position",
     "amend_orders",
+    "block_orders",
     "at_market",
     "discard_unsent",
     "find_orders",

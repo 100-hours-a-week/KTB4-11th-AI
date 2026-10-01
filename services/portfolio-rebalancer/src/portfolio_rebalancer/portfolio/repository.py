@@ -1,3 +1,5 @@
+from collections.abc import Iterable
+
 import sqlalchemy as sa
 
 from portfolio_rebalancer.database import (
@@ -49,3 +51,13 @@ def find_latest_portfolio(conn: sa.Connection) -> Portfolio | None:
             for row in conn.execute(exits.where(portfolio_exits.c.portfolio_id == portfolio.id))
         ],
     )
+
+
+def find_corp_codes(conn: sa.Connection, stock_codes: Iterable[str]) -> dict[str, str]:
+    codes = list(stock_codes)
+    if not codes:
+        return {}
+    query = sa.select(corporations.c.stock_code, corporations.c.corp_code).where(
+        corporations.c.stock_code.in_(codes)
+    )
+    return {row.stock_code: row.corp_code for row in conn.execute(query)}

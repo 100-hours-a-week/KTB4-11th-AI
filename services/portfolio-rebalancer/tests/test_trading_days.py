@@ -5,18 +5,23 @@ from datetime import date, datetime, time, timedelta, timezone
 import pytest
 from portfolio_rebalancer.order.reservations import PRICE_BANDS, band_for
 from portfolio_rebalancer.trading_days import (
-    MARKET_CUTOFF,
-    days_left,
+    BLOCK_CUTOFF,
+    CLOSE,
+    CYCLE_DAYS,
+    cycle_day,
+    is_blocked,
     is_open,
-    week_deadline,
 )
 
 KST = timezone(timedelta(hours=9))
 
-# 2026-09-28 is a full week. 2026-10-05 has only three sessions: Chuseok on the Monday
-# and 한글날 on the Friday.
-FULL_WEEK = date(2026, 9, 28)
-SHORT_WEEK = date(2026, 10, 5)
+# 2026-09-28 is a full week. 2026-10-05 is a holiday Monday (the substitute for 개천절),
+# and 2026-10-09 is 한글날 on the Friday.
+MONDAY = date(2026, 9, 28)
+WEDNESDAY = date(2026, 9, 30)
+THURSDAY = date(2026, 10, 1)
+FRIDAY = date(2026, 10, 2)
+HOLIDAY_MONDAY = date(2026, 10, 5)
 
 
 def at(day: date, hour=11, minute=0) -> datetime:
@@ -38,77 +43,66 @@ def test_the_calendar_knows_korean_holidays(day, expected):
     assert is_open(day) is expected
 
 
-def test_a_full_week_gives_five_days():
-    assert days_left(FULL_WEEK, at(FULL_WEEK)) == 5
+def test_a_cycle_started_on_monday_runs_monday_to_wednesday():
+    days = [cycle_day(MONDAY, MONDAY + timedelta(days=n)) for n in range(3)]
+
+    assert days == [1, 2, 3]
 
 
-def test_a_holiday_week_gives_what_is_left_of_it():
-    """A Chuseok week is three sessions, so the whole cycle has three."""
-    assert days_left(SHORT_WEEK, at(SHORT_WEEK)) == 3
+def test_a_cycle_after_a_holiday_monday_runs_tuesday_to_thursday():
+    """The holiday is skipped, not spent: day 1 is Tuesday and day 3 is Thursday."""
+    tuesday = HOLIDAY_MONDAY + timedelta(days=1)
+
+    assert cycle_day(tuesday, tuesday) == 1
+    assert cycle_day(tuesday, tuesday + timedelta(days=1)) == 2
+    assert cycle_day(tuesday, tuesday + timedelta(days=2)) == 3
 
 
-def test_each_session_spends_one_day():
-    spent = [days_left(FULL_WEEK, at(FULL_WEEK + timedelta(days=n))) for n in range(5)]
-
-    assert spent == [5, 4, 3, 2, 1]
-
-
-def test_a_weekend_consumes_nothing():
-    friday, saturday = date(2026, 10, 2), date(2026, 10, 3)
-
-    assert days_left(FULL_WEEK, at(friday)) == 1
-    assert days_left(FULL_WEEK, at(saturday)) == 0
+def test_an_account_first_seen_on_wednesday_has_its_day_3_on_friday():
+    assert cycle_day(WEDNESDAY, WEDNESDAY) == 1
+    assert cycle_day(WEDNESDAY, THURSDAY) == 2
+    assert cycle_day(WEDNESDAY, FRIDAY) == 3
 
 
-def test_a_holiday_consumes_nothing():
-    """한글날 is a Friday. Thursday is the last session, so Friday has none left."""
-    assert days_left(SHORT_WEEK, at(date(2026, 10, 8))) == 1
-    assert days_left(SHORT_WEEK, at(date(2026, 10, 9))) == 0
+def test_a_weekend_and_a_holiday_are_both_skipped():
+    """Started on Thursday: Friday is day 2, and the next session after the weekend and the
+    holiday Monday is day 3."""
+    tuesday = HOLIDAY_MONDAY + timedelta(days=1)
+
+    assert cycle_day(THURSDAY, FRIDAY) == 2
+    assert cycle_day(THURSDAY, HOLIDAY_MONDAY) == 2
+    assert cycle_day(THURSDAY, tuesday) == 3
 
 
-def test_the_deadline_is_the_last_session_of_the_week():
-    """The next judgement lands the week after, so an order still working then would act
-    on a portfolio that has been replaced."""
-    assert week_deadline(FULL_WEEK) == date(2026, 10, 2)
-    assert week_deadline(SHORT_WEEK) == date(2026, 10, 8)
+def test_each_day_has_its_own_band():
+    assert [band_for(day) for day in range(1, CYCLE_DAYS + 1)] == [0.05, 0.03, 0.01]
+    assert list(PRICE_BANDS) == [0.05, 0.03, 0.01]
 
 
-def test_the_last_day_runs_out_at_the_cutoff_not_at_midnight():
-    """KRX closes at 15:30, so the market order has to be in before that rather than the
-    morning after."""
-    friday = date(2026, 10, 2)
+def test_there_is_no_band_outside_the_cycle():
+    assert band_for(0) is None
+    assert band_for(CYCLE_DAYS + 1) is None
 
-    assert days_left(FULL_WEEK, at(friday, 14, 0)) == 1
-    assert days_left(FULL_WEEK, at(friday, 14, 59)) == 1
-    assert days_left(FULL_WEEK, at(friday, 15, 0)) == 0
-    assert days_left(FULL_WEEK, at(friday, 15, 29)) == 0
+
+def test_day_3_is_blocked_from_15_00():
+    """KRX closes at 15:30, so 15:00 is the last pass before the close."""
+    assert not is_blocked(3, at(WEDNESDAY, 14, 0))
+    assert not is_blocked(3, at(WEDNESDAY, 14, 59))
+    assert is_blocked(3, at(WEDNESDAY, 15, 0))
+    assert is_blocked(3, at(WEDNESDAY, 15, 29))
+
+
+def test_the_cutoff_does_not_block_an_earlier_day():
+    assert not is_blocked(1, at(MONDAY, 15, 29))
+    assert not is_blocked(2, at(MONDAY, 15, 29))
+
+
+def test_past_day_3_everything_is_blocked():
+    assert is_blocked(4, at(THURSDAY, 9, 0))
+    assert is_blocked(10, at(THURSDAY, 9, 0))
 
 
 def test_the_cutoff_is_the_last_poll_before_the_close():
-    """Polling starts at 09:00 on the hour, so 15:00 is the last pass before 15:30."""
-    from portfolio_rebalancer.trading_days import CLOSE
-
-    assert MARKET_CUTOFF == time(15, 0)
+    assert BLOCK_CUTOFF == time(15, 0)
     assert CLOSE == time(15, 30)
-    assert MARKET_CUTOFF < CLOSE
-
-
-def test_the_cutoff_does_not_shorten_an_earlier_day():
-    """Only the last day ends at the cutoff; the others end at midnight."""
-    thursday = date(2026, 10, 1)
-
-    assert days_left(FULL_WEEK, at(thursday, 15, 29)) == 2
-
-
-def test_two_days_of_selling_leaves_three_for_buying():
-    """Five sessions shared: the example the deadline exists for."""
-    wednesday = date(2026, 9, 30)
-
-    left = days_left(FULL_WEEK, at(wednesday))
-
-    assert left == 3
-    assert band_for(left) == PRICE_BANDS[0]
-
-
-def test_past_the_deadline_there_is_nothing_left():
-    assert days_left(FULL_WEEK, at(FULL_WEEK + timedelta(days=14))) == 0
+    assert BLOCK_CUTOFF < CLOSE

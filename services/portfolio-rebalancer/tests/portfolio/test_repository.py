@@ -1,6 +1,6 @@
 import pytest
 import sqlalchemy as sa
-from portfolio_rebalancer.portfolio import find_latest_portfolio
+from portfolio_rebalancer.portfolio import find_corp_codes, find_latest_portfolio
 
 pytestmark = pytest.mark.usefixtures("migrated")
 
@@ -86,3 +86,15 @@ def test_an_exit_carries_its_reason(conn, portfolio_id):
     left = find_latest_portfolio(conn).exits[0]
 
     assert (left.stock_code, left.reason) == ("000660", "비중 축소")
+
+
+def test_corp_codes_are_found_for_held_stocks_and_unknown_ones_are_left_out(conn):
+    conn.execute(
+        sa.text(
+            "INSERT INTO corporations (stock_code, corp_code, name)"
+            " VALUES ('005930', '00126380', '삼성전자')"
+        )
+    )
+
+    assert find_corp_codes(conn, ["005930", "999999"]) == {"005930": "00126380"}
+    assert find_corp_codes(conn, []) == {}

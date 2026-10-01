@@ -9,6 +9,9 @@ from portfolio_rebalancer.order.dto import SKIP, Order
 RESERVED = "reserved"
 AT_MARKET = "market"
 SKIPPED = "skip"
+# Still unfilled when the cycle ended. Only the record says so: the Backend has no cancel, so
+# the order is no longer tightened or re-sent, and nothing further is asked of it.
+BLOCKED = "blocked"
 
 
 def _rung(order: Order) -> str:
@@ -69,6 +72,24 @@ def mark_sent(conn: sa.Connection, portfolio_id: int, account_id: int) -> None:
             rebalance_orders.c.sent_at.is_(None),
         )
         .values(sent_at=sa.func.now())
+    )
+
+
+def block_orders(
+    conn: sa.Connection, portfolio_id: int, account_id: int, stock_codes: Iterable[str]
+) -> None:
+    codes = list(stock_codes)
+    if not codes:
+        return
+    conn.execute(
+        sa.update(rebalance_orders)
+        .where(
+            rebalance_orders.c.portfolio_id == portfolio_id,
+            rebalance_orders.c.account_id == account_id,
+            rebalance_orders.c.stock_code.in_(codes),
+            rebalance_orders.c.status != BLOCKED,
+        )
+        .values(status=BLOCKED)
     )
 
 

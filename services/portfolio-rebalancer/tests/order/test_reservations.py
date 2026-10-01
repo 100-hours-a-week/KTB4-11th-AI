@@ -72,26 +72,22 @@ def test_rounding_goes_to_the_nearest_tick_not_up_or_down():
 
 
 @pytest.mark.parametrize(
-    ("days_left", "expected"),
-    [(3, PRICE_BANDS[0]), (2, PRICE_BANDS[1]), (1, PRICE_BANDS[2])],
+    ("day", "expected"),
+    [(1, PRICE_BANDS[0]), (2, PRICE_BANDS[1]), (3, PRICE_BANDS[2])],
 )
-def test_the_band_comes_from_the_days_left(days_left, expected):
-    """Selling and buying share one deadline, so an order that starts late starts on a
+def test_the_band_comes_from_the_cycle_day(day, expected):
+    """Selling and buying share one cycle, so an order that starts late starts on a
     narrower band rather than restarting the ladder."""
-    assert band_for(days_left) == expected
+    assert band_for(day) == expected
 
 
-@pytest.mark.parametrize("days_left", [0, -1, -5])
-def test_no_days_left_means_market(days_left):
-    assert band_for(days_left) is None
+@pytest.mark.parametrize("day", [0, -1, LADDER_DAYS + 1, LADDER_DAYS + 5])
+def test_outside_the_cycle_there_is_no_band(day):
+    assert band_for(day) is None
 
 
-def test_more_days_than_the_ladder_has_is_the_widest_band():
-    assert band_for(LADDER_DAYS + 5) == PRICE_BANDS[0]
-
-
-def test_the_bands_narrow():
-    widths = [band_for(days) for days in range(LADDER_DAYS, 0, -1)]
+def test_the_bands_narrow_day_by_day():
+    widths = [band_for(day) for day in range(1, LADDER_DAYS + 1)]
 
     assert widths == sorted(widths, reverse=True)
 
@@ -102,7 +98,7 @@ def test_the_bands_narrow():
 def test_a_sell_waits_above_the_market_and_triggers_below_it():
     """A sell limit below the market fills at once, which is the opposite of waiting. So
     the order goes above, and a fall to the other side sends it at market."""
-    limit, trigger = limit_and_trigger(78_000.0, 3, "sell")
+    limit, trigger = limit_and_trigger(78_000.0, 1, "sell")
 
     assert limit == 81_900.0
     assert trigger == 74_100.0
@@ -111,7 +107,7 @@ def test_a_sell_waits_above_the_market_and_triggers_below_it():
 
 def test_a_buy_waits_below_the_market_and_triggers_above_it():
     """A buy limit above the market fills at once for the same reason."""
-    limit, trigger = limit_and_trigger(78_000.0, 3, "buy")
+    limit, trigger = limit_and_trigger(78_000.0, 1, "buy")
 
     assert limit == 74_100.0
     assert trigger == 81_900.0
@@ -120,8 +116,8 @@ def test_a_buy_waits_below_the_market_and_triggers_above_it():
 
 def test_the_two_sides_are_mirror_images_of_each_other():
     """Mirrored about the reference: the sell's limit is where the buy's trigger is."""
-    sell_limit, sell_trigger = limit_and_trigger(78_000.0, 3, "sell")
-    buy_limit, buy_trigger = limit_and_trigger(78_000.0, 3, "buy")
+    sell_limit, sell_trigger = limit_and_trigger(78_000.0, 1, "sell")
+    buy_limit, buy_trigger = limit_and_trigger(78_000.0, 1, "buy")
 
     assert (sell_limit, sell_trigger) == (buy_trigger, buy_limit)
 
@@ -141,7 +137,7 @@ def test_the_trigger_does_not_narrow_with_the_limit():
 def test_the_trigger_stays_at_the_widest_band(side):
     from portfolio_rebalancer.order.reservations import TRIGGER_BAND
 
-    _, trigger = limit_and_trigger(78_000.0, 1, side)
+    _, trigger = limit_and_trigger(78_000.0, 3, side)
     away = abs(trigger - 78_000.0) / 78_000.0
 
     assert away == pytest.approx(TRIGGER_BAND, abs=0.001)
@@ -149,7 +145,7 @@ def test_the_trigger_stays_at_the_widest_band(side):
 
 
 @pytest.mark.parametrize("side", ["buy", "sell"])
-def test_no_days_left_has_no_limit_and_no_trigger(side):
+def test_outside_the_cycle_there_is_no_limit_and_no_trigger(side):
     assert limit_and_trigger(78_000.0, 0, side) is None
 
 
@@ -166,8 +162,8 @@ def test_both_prices_land_on_a_tick(side, reference):
 @pytest.mark.parametrize("side", ["buy", "sell"])
 def test_the_limit_narrows_towards_the_reference(side):
     distances = [
-        abs(limit_and_trigger(78_000.0, days, side)[0] - 78_000.0)
-        for days in range(LADDER_DAYS, 0, -1)
+        abs(limit_and_trigger(78_000.0, day, side)[0] - 78_000.0)
+        for day in range(1, LADDER_DAYS + 1)
     ]
 
     assert distances == sorted(distances, reverse=True)
@@ -202,7 +198,7 @@ def test_the_sides_trigger_in_opposite_directions():
 
 
 def test_one_pending_order_is_what_is_working():
-    limit, _ = limit_and_trigger(78_000.0, 3, "buy")
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
 
     working = outstanding_orders([pending(price=limit, amount=100)])
 

@@ -149,7 +149,21 @@ def test_a_fresh_order_goes_out_on_the_widest_band():
     order = orders[0]
     assert order.band == PRICE_BANDS[0]
     assert order.reference == 78_000.0
-    assert (order.limit, order.trigger) == limit_and_trigger(78_000.0, 3, "buy")
+    assert (order.limit, order.trigger) == limit_and_trigger(78_000.0, 1, "buy")
+
+
+def test_a_buy_placed_on_day_2_starts_at_day_2s_band():
+    """The cash the sells freed arrives on day 2, and the buy it funds joins the ladder
+    there rather than restarting it."""
+    orders = rebalance(
+        portfolio(holdings=[holding(SAMSUNG, 1.0)]),
+        account(cash=1_000_000.0),
+        {"005930": 78_000.0},
+        day=2,
+    )
+
+    assert orders[0].band == PRICE_BANDS[1]
+    assert (orders[0].limit, orders[0].trigger) == limit_and_trigger(78_000.0, 2, "buy")
 
 
 def test_a_buy_waits_below_the_market():
@@ -261,15 +275,21 @@ def test_an_exit_of_something_not_held_emits_nothing():
     assert orders == []
 
 
-def test_a_held_name_in_neither_the_portfolio_nor_the_exits_is_left_alone():
-    """No reason exists for it, and every order has to carry one."""
+def test_a_held_name_outside_the_portfolio_is_sold_in_full_without_a_reason():
+    """The tick hands such a name over as an exit with no reason; it is sold like any other
+    exit, and the sell comes before the buys."""
     orders = rebalance(
-        portfolio(holdings=[holding(SAMSUNG, 1.0)]),
-        account(cash=0.0, held={"068270": 30}),
+        portfolio(
+            holdings=[holding(SAMSUNG, 1.0)],
+            exits=[Exit(company_id=None, stock_code="068270", reason=None)],
+        ),
+        account(cash=1_000_000.0, held={"068270": 30}),
         {"005930": 78_000.0, "068270": 200_000.0},
     )
 
-    assert "068270" not in {order.stock_code for order in orders}
+    assert (orders[0].stock_code, orders[0].action, orders[0].shares) == ("068270", "sell", 30)
+    assert orders[0].reason is None
+    assert orders[1].action == "buy"
 
 
 def test_an_empty_portfolio_emits_nothing():

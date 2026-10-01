@@ -9,7 +9,7 @@ SKIP = "skip"
 @dataclass(frozen=True)
 class Order:
     account_id: int
-    company_id: str
+    company_id: str | None
     stock_code: str
     action: str
     shares: int
