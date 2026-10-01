@@ -193,7 +193,7 @@ erDiagram
 서비스별 설정은 각 서비스의 접두사가 붙은 환경 변수로 읽습니다.
 
 Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다. 로컬에서는 Git에서 제외된
-`.env`에 다음 여섯 값을 설정합니다. 비밀번호는 DSN에 그대로 들어가므로 영문 대소문자,
+`.env.example`을 `.env`로 복사하고 다음 다섯 값을 설정합니다. 비밀번호는 DSN에 그대로 들어가므로 영문 대소문자,
 숫자, `_`, `-`만 사용한 32자 이상의 값을 사용합니다.
 
 | 변수 | 필수 | 설명 |
@@ -202,18 +202,23 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `POSTGRES_DB` | 필수 | PostgreSQL 데이터베이스 |
 | `POSTGRES_PASSWORD` | 필수 | PostgreSQL 비밀번호 |
 | `QUESTDB_USER` | 필수 | QuestDB PGWire 사용자 |
-| `QUESTDB_DATABASE` | 필수 | QuestDB PGWire DSN의 데이터베이스 이름 |
 | `QUESTDB_PASSWORD` | 필수 | QuestDB PGWire 비밀번호 |
 
-운영 배포는 EC2의 `~/ai/.env`에서 이 여섯 값을 읽습니다. CD는 이 파일을 수정하거나
+운영 배포는 EC2의 `~/ai/.env`에서 이 다섯 값을 읽습니다. CD는 이 파일을 수정하거나
 GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이미 생성된 환경에서는
 `.env`만 바꾸지 말고 실제 DB 역할의 비밀번호도 같은 값으로 변경해야 합니다.
+
+QuestDB 서비스 연결은 `KTB_QUESTDB_CONF` 및 각 서비스의 `*_QUESTDB_CONF`에
+`ws::addr=questdb:9000;`를 사용합니다. `QUESTDB_USER`와 `QUESTDB_PASSWORD`는
+QuestDB의 PGWire 설정이며 이 WebSocket 연결 문자열에는 사용되지 않습니다.
+`QUESTDB_DATABASE`는 사용하지 않습니다.
 
 ### 공통 · 도구
 
 | 변수 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
 | `KTB_POSTGRES_DSN` | 마이그레이션 시 | | `alembic upgrade`가 사용하는 DSN |
+| `KTB_QUESTDB_CONF` | QuestDB 마이그레이션 시 | | 공식 클라이언트 연결 문자열 |
 | `KTB_TEST_POSTGRES_DSN` | | | DB 테스트용 DSN. 없으면 해당 테스트를 건너뜀. 테스트가 테이블을 비우므로 `ktb`가 아닌 `ktb_test`를 가리킬 것 |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor | | OpenAI 호환 임베딩 서버 주소 (`/v1` 포함) |
 | `KTB_EMBEDDING_API_KEY` | | | 설정하면 `Authorization: Bearer`로 전송 (예: OpenRouter `https://openrouter.ai/api/v1`). 키가 없는 로컬 서버면 비워 둠 |
@@ -262,7 +267,7 @@ GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이�
 | `MARKET_SYNCER_KIWOOM_SECRET_KEY` | 필수 | | 키움 REST API 시크릿 키 |
 | `MARKET_SYNCER_KIWOOM_MODE` | | `real` | `real` 또는 `demo`(모의투자) |
 | `MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL` | | `0.2` | 키움 요청 사이 대기 시간(초) |
-| `MARKET_SYNCER_DART_API_KEY` | 필수 | | OpenDART API 키. `compose.dev.yaml`은 `.env`의 `OPENDART_API_KEY`에서 채움 |
+| `MARKET_SYNCER_DART_API_KEY` | 필수 | | OpenDART API 키. Compose도 같은 이름을 사용 |
 | `MARKET_SYNCER_LOG_LEVEL` | | `INFO` | |
 
 ### market-collector (`MARKET_COLLECTOR_`)
@@ -299,6 +304,12 @@ GitHub Secrets의 DB 값을 전달하지 않습니다. PostgreSQL 볼륨이 이�
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT` | | `portfolio-rebalancer` |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT` | 필수 | | Backend의 숫자 사용자 ID (`sub` claim) |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | Backend 의 `JWT_ISSUER` 와 같아야 합니다 |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` |
+
+환경변수 변경 시 서비스의 `settings.py`를 기준으로 필수 여부와 기본값을 확인하고,
+`.env.example`, 이 표, `compose.dev.yaml`, `compose.prod.yaml`을 함께 갱신합니다.
+검증은 `docker compose -f compose.dev.yaml --profile jobs config --quiet`,
+`docker compose -f compose.prod.yaml --profile jobs config --quiet` 및
+`uv run --group migrations pytest services/portfolio-rebalancer/tests/test_settings.py`로 합니다.
