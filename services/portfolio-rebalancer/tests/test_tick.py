@@ -4,7 +4,7 @@ elsewhere, so these fakes stand in for the datastores and the Backend."""
 import logging
 from datetime import UTC, date, datetime, timedelta, timezone
 
-from ktb_core.logging import bind_logger
+from ktb_core.logging import get_logger
 from portfolio_rebalancer import tick as tick_module
 from portfolio_rebalancer.market import Price
 from portfolio_rebalancer.order.reservations import PRICE_BANDS, limit_and_trigger
@@ -233,7 +233,7 @@ class Fakes:
             "db",
             "client",
             token_for=lambda subject: self.tokens.append(subject) or f"token-{subject}",
-            log=log or bind_logger(logging.getLogger("portfolio_rebalancer")),
+            log=log or get_logger("portfolio_rebalancer"),
         )
 
 
@@ -399,27 +399,9 @@ def test_a_first_purchase_is_priced_from_questdb(monkeypatch):
     assert fakes.sent[0][0].reference == 412_000.0
 
 
-def test_a_stock_with_an_order_outstanding_is_priced_at_what_the_backend_quotes(monkeypatch):
-    """The quote rides on the pending order now, and it is what the Backend is trading
-    on, so QuestDB is never consulted for that code. The precedence is the omission
-    rather than a merge order."""
-    held = [{"stock_code": "005930", "total_cost": 1, "quantity": 1}]
-    outstanding = [pending(quote=90_000.0)]
-    fakes = Fakes(
-        monkeypatch,
-        users=polled(account(cash=10_000_000.0, stocks=held, pending_orders=outstanding)),
-        prices={"005930": 78_000.0},
-        quoted={"005930": 90_000.0},
-    )
-
-    fakes.run()
-
-    assert fakes.asked == []
-
-
-def test_questdb_is_only_asked_for_what_the_poll_did_not_quote(monkeypatch):
-    """Two round trips for a price we already have would be waste."""
-    held = [{"stock_code": "005930", "total_cost": 1, "quantity": 1}]
+def test_every_price_comes_from_questdb_even_when_the_backend_quotes(monkeypatch):
+    """The Backend's `current_stock_price` is not used: an order is placed from the close
+    QuestDB holds, whatever the poll carries."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -432,36 +414,33 @@ def test_questdb_is_only_asked_for_what_the_poll_did_not_quote(monkeypatch):
     fakes = Fakes(
         monkeypatch,
         model=plan,
-        users=polled(
-            account(cash=10_000_000.0, stocks=held, pending_orders=[pending(quote=78_000.0)])
-        ),
-        prices={"000660": 412_000.0},
-        quoted={"005930": 78_000.0},
+        users=polled(account(cash=10_000_000.0)),
+        prices={"005930": 78_000.0, "000660": 412_000.0},
     )
+    fakes.users[0]["accounts"][0]["pending_orders"] = []
+
+    fakes.run(now=opening(TUESDAY))
+
+    assert {order.stock_code: order.reference for order in fakes.sent[0]} == {
+        "005930": 78_000.0,
+        "000660": 412_000.0,
+    }
+
+
+def test_questdb_is_read_once_per_tick_for_every_account(monkeypatch):
+    """One read covers the portfolio and every stock any account holds or has pending."""
+    first = account(
+        account_id=11, stocks=[{"stock_code": "035420", "total_cost": 1, "quantity": 1}]
+    )
+    second = account(
+        account_id=12,
+        pending_orders=[pending(stock_code="068270", quote=200_000.0)],
+    )
+    fakes = Fakes(monkeypatch, users=polled(first, second))
 
     fakes.run()
 
-    assert fakes.asked == [["000660"]]
-
-
-def test_questdb_is_not_asked_at_all_when_the_poll_quotes_everything(monkeypatch):
-    held = [
-        {"stock_code": "005930", "total_cost": 1, "quantity": 1},
-        {"stock_code": "000660", "total_cost": 1, "quantity": 1},
-    ]
-    outstanding = [
-        pending(stock_code="005930", quote=78_000.0),
-        pending(stock_code="000660", price=412_000.0, quote=412_000.0),
-    ]
-    fakes = Fakes(
-        monkeypatch,
-        users=polled(account(cash=10_000_000.0, stocks=held, pending_orders=outstanding)),
-        quoted={"005930": 78_000.0, "000660": 412_000.0},
-    )
-
-    fakes.run()
-
-    assert fakes.asked == []
+    assert fakes.asked == [["005930", "035420", "068270"]]
 
 
 def test_market_now_is_on_the_exchanges_clock():
@@ -720,7 +699,7 @@ def test_a_buy_struck_at_its_trigger_is_blocked_rather_than_sent_at_market(monke
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, pending_orders=working_buy(quote=trigger))),
-        quoted={"005930": trigger},
+        prices={"005930": trigger},
         recorded={11: already},
     )
 
@@ -768,8 +747,7 @@ def test_a_sell_goes_to_market_when_the_price_falls_to_its_trigger(monkeypatch):
         monkeypatch,
         model=plan,
         users=polled(account(cash=0.0, pending_orders=outstanding)),
-        prices={"005930": 78_000.0},
-        quoted={"000660": trigger},
+        prices={"005930": 78_000.0, "000660": trigger},
         recorded={11: already},
     )
 
@@ -805,7 +783,7 @@ def test_a_block_names_the_stock_it_held_back(monkeypatch):
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, pending_orders=working_buy(amount=21, quote=trigger))),
-        quoted={"005930": trigger},
+        prices={"005930": trigger},
         recorded={11: already},
     )
 
@@ -816,9 +794,9 @@ def test_a_block_names_the_stock_it_held_back(monkeypatch):
     assert "limit" in blocked["reason"]
 
 
-def test_the_trigger_uses_the_price_the_poll_reports(monkeypatch):
-    """The Backend's own quote is the only price there is, so it is what the trigger is
-    compared with."""
+def test_the_trigger_is_judged_on_the_questdb_close_not_the_backends_quote(monkeypatch):
+    """The close has reached the trigger while the Backend still quotes far above it: the
+    close is what decides."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -837,15 +815,14 @@ def test_the_trigger_uses_the_price_the_poll_reports(monkeypatch):
     ]
     held = [{"stock_code": "000660", "total_cost": 1, "quantity": 10}]
     outstanding = [
-        pending(stock_code="000660", order_side="sell", price=limit, amount=10, quote=trigger)
+        pending(stock_code="000660", order_side="sell", price=limit, amount=10, quote=999_999.0)
     ]
     events = Events()
     fakes = Fakes(
         monkeypatch,
         model=plan,
         users=polled(account(cash=0.0, stocks=held, pending_orders=outstanding)),
-        prices={"005930": 78_000.0, "000660": 999_999.0},
-        quoted={"000660": trigger},
+        prices={"005930": 78_000.0, "000660": trigger},
         recorded={11: already},
     )
 
@@ -856,16 +833,16 @@ def test_the_trigger_uses_the_price_the_poll_reports(monkeypatch):
     assert "000660" in events.of("orders_blocked")[0]["codes"]
 
 
-def test_an_outstanding_buy_is_watched_from_the_quote_on_its_own_order(monkeypatch):
-    """A buy on a stock the account does not hold yet has no holding to carry a price,
-    so the quote on the pending order is the only way to watch it at all."""
+def test_an_outstanding_buy_on_a_stock_not_held_is_watched_from_the_close(monkeypatch):
+    """QuestDB is asked for every pending order's stock, so a buy on a stock the account
+    does not hold yet is still watched."""
     events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     _, trigger = limit_and_trigger(78_000.0, 1, "buy")
     fakes = Fakes(
         monkeypatch,
         users=polled(account(cash=0.0, stocks=[], pending_orders=working_buy(quote=trigger))),
-        quoted={"005930": trigger},
+        prices={"005930": trigger},
         recorded={11: already},
     )
 
@@ -897,14 +874,20 @@ def test_an_order_already_at_market_is_not_sent_again(monkeypatch):
 class Events:
     """Collects the structured events one tick emits, in order.
 
-    The signature mirrors ktb_core.logging.bind_logger's returned callable.
+    The methods mirror ktb_core.logging.StructuredLogger.
     """
 
     def __init__(self):
         self.seen: list[tuple] = []
 
-    def __call__(self, event, level=logging.INFO, **fields):
-        self.seen.append((event, level, fields))
+    def info(self, event, **fields):
+        self.seen.append((event, logging.INFO, fields))
+
+    def warning(self, event, **fields):
+        self.seen.append((event, logging.WARNING, fields))
+
+    def error(self, event, **fields):
+        self.seen.append((event, logging.ERROR, fields))
 
     @property
     def names(self):
@@ -948,17 +931,22 @@ def test_an_empty_poll_is_a_warning(monkeypatch):
     assert events.of("backend_poll")[0]["users"] == 0
 
 
-def test_an_outstanding_order_the_backend_does_not_quote_is_named(monkeypatch):
-    """Without a quote the trigger cannot be judged and the order waits another hour, so
-    the gap is reported rather than passed over."""
+def test_the_poll_reports_the_whole_snapshot(monkeypatch):
+    """The poll is every user's accounts, holdings and pending orders, not a price feed."""
     events = Events()
     held = [{"stock_code": "005930", "total_cost": 7_800_000, "quantity": 100}]
-    outstanding = [pending(quote=None)]
+    outstanding = [pending(), pending(stock_code="000660", price=400_000.0)]
     Fakes(monkeypatch, users=polled(account(stocks=held, pending_orders=outstanding))).run(
         log=events
     )
 
-    assert events.of("backend_poll")[0]["orders_without_quote"] == ["11:005930"]
+    poll = events.of("backend_poll")[0]
+    assert (poll["users"], poll["accounts"], poll["holdings"], poll["pending_orders"]) == (
+        1,
+        1,
+        1,
+        2,
+    )
 
 
 def test_the_portfolio_reports_its_reasons(monkeypatch):

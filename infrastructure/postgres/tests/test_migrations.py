@@ -258,30 +258,30 @@ def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypat
         assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None
 
 
-# Every key the hourly account poll carries, against the column it has to reach. Two are
-# renamed: `amount` to `quantity` and `total_price` to `principal`. `stock_code` comes
-# through as it is, on holdings as well as on pending orders.
+# Every key GET /api/v1/users/ai-server carries, against the column it has to reach. Since
+# 0008 each one lands under its own name.
 POLL_FIELDS = {
-    "users": {"user_id": "user_id", "nickname": "nickname", "state": "state"},
+    "users": {"user_id": "user_id"},
     "accounts": {
         "account_id": "account_id",
         "account_name": "account_name",
-        "is_ai_managed": "is_ai_managed",
-        "is_duel_account": "is_duel_account",
         "is_active": "is_active",
         "cash_balance": "cash_balance",
     },
     "account_holdings": {
         "stock_code": "stock_code",
-        "amount": "quantity",
-        "total_price": "principal",
+        "quantity": "quantity",
+        "total_cost": "total_cost",
     },
     "account_pending_orders": {
+        "order_id": "order_id",
+        "order_side": "order_side",
         "order_type": "order_type",
-        "status": "status",
+        "order_status": "order_status",
         "stock_code": "stock_code",
-        "price": "price",
-        "amount": "quantity",
+        "limit_price": "limit_price",
+        "quantity": "quantity",
+        "current_stock_price": "current_stock_price",
     },
 }
 

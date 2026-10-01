@@ -56,7 +56,7 @@ def test_the_tick_gets_the_engine_both_datastores_and_a_token(monkeypatch):
     engine, db, client, token_for, log = recorder.ticks[0]
     assert (db, client) == ("db", "client")
     assert hasattr(engine, "begin")
-    assert callable(log)
+    assert callable(log.info)
     # The handshake uses the service subject; the tick signs per user with the factory.
     assert recorder.authenticated == [("client", "token-ai-server")]
     assert token_for("4242") == "token-4242"
@@ -140,8 +140,8 @@ def test_the_tick_is_handed_a_logger_bound_to_a_run_id(monkeypatch, caplog):
 
     log = recorder.ticks[0][4]
     with caplog.at_level(logging.INFO):
-        log("probe")
+        log.info("probe")
 
     record = caplog.records[-1]
-    assert record.name == "portfolio_rebalancer"
+    assert record.name == "portfolio_rebalancer.__main__"
     assert "run_id" in record.fields

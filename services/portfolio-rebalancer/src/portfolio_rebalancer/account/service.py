@@ -4,7 +4,7 @@ from portfolio_rebalancer.account.dto import AccountState
 from portfolio_rebalancer.order.dto import BUY, PENDING, SELL
 
 
-def apply_pending(account: Mapping[str, object]) -> AccountState:
+def apply_pending(account: Mapping[str, object], prices: Mapping[str, float]) -> AccountState:
     cash = float(account["cash_balance"])  # type: ignore[arg-type]
     held = {
         str(holding["stock_code"]): int(holding["quantity"])
@@ -18,7 +18,7 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
         code = str(order["stock_code"])
         quantity = int(order["quantity"])
         if order.get("order_side") == BUY:
-            cash -= _committed(order) * quantity
+            cash -= _committed(order, prices) * quantity
             held[code] = held.get(code, 0) + quantity
         elif order.get("order_side") == SELL:
             held[code] = max(held.get(code, 0) - quantity, 0)
@@ -26,24 +26,13 @@ def apply_pending(account: Mapping[str, object]) -> AccountState:
     return AccountState(account_id=int(account["account_id"]), cash=cash, held=held)  # type: ignore[arg-type]
 
 
-def _committed(order: Mapping[str, object]) -> float:
-    # A limit order commits its own price. A market order carries none, so the Backend's
-    # quote is the closest estimate of what it takes out of the cash.
-    for key in ("limit_price", "current_stock_price"):
-        price = order.get(key)
-        if price is not None:
-            return float(price)  # type: ignore[arg-type]
-    return 0.0
-
-
-def polled_prices(account: Mapping[str, object]) -> dict[str, float]:
-    # The Backend quotes a stock only while an order on it is outstanding, so a holding
-    # with nothing pending has no live price here and QuestDB's close stands in.
-    return {
-        str(order["stock_code"]): float(order["current_stock_price"])  # type: ignore[arg-type]
-        for order in account.get("pending_orders") or ()  # type: ignore[union-attr]
-        if order.get("current_stock_price") is not None
-    }
+def _committed(order: Mapping[str, object], prices: Mapping[str, float]) -> float:
+    # A limit order commits its own price. A market order carries none, so the close the
+    # rest of the tick prices with is the estimate of what it takes out of the cash.
+    price = order.get("limit_price")
+    if price is not None:
+        return float(price)  # type: ignore[arg-type]
+    return prices.get(str(order["stock_code"]), 0.0)
 
 
 def managed_accounts(

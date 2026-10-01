@@ -1,13 +1,12 @@
-import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import BoundLogger
+from ktb_core.logging import StructuredLogger
 
-from portfolio_rebalancer.account import apply_pending, managed_accounts, polled_prices, write_poll
+from portfolio_rebalancer.account import apply_pending, managed_accounts, write_poll
 from portfolio_rebalancer.backend import fetch_accounts, send_orders, use_token
 from portfolio_rebalancer.market import latest_prices
 from portfolio_rebalancer.order import (
@@ -52,19 +51,18 @@ def tick(
     client: httpx.Client,
     *,
     token_for: Callable[[str], str],
-    log: BoundLogger,
+    log: StructuredLogger,
 ) -> int:
-    # The logger is handed in rather than built here, so every line of one pass carries the
-    # run_id __main__ bound and there is only ever one logger in play. The clock is read
+    # The logger carries the run_id bound in __main__. The clock is read
     now = market_now()
     # Polling is hourly, so the gap between two tick_start lines is the cadence itself.
-    log("tick_start", at=now.isoformat(), market_date=now.date().isoformat())
+    log.info("tick_start", at=now.isoformat(), market_date=now.date().isoformat())
 
     with engine.begin() as conn:
         portfolio = find_latest_portfolio(conn)
     if portfolio is None:
         # Nothing can be rebalanced without one, so this is louder than a note.
-        log("portfolio_missing", logging.WARNING)
+        log.warning("portfolio_missing")
         return 0
     _log_portfolio(log, portfolio)
 
@@ -74,14 +72,17 @@ def tick(
         write_poll(conn, polled)
 
     accounts = list(managed_accounts(polled))
+    # Every price comes from QuestDB, read once per tick for every stock any account or the
+    # portfolio names; the Backend's own quote is not used.
+    prices = _prices(db, portfolio, [account for _, account in accounts], log)
     sent = 0
     for user_id, account in accounts:
         # Every order on this account is signed for its owner. The Backend reads the
         # subject as the user id and refuses an account that is not theirs, and the
         # service token the snapshot needed is rejected on this route outright.
         use_token(client, token_for(str(user_id)))
-        sent += _account(engine, db, client, portfolio, account, now, log)
-    log("tick_end", orders_sent=sent, accounts=len(accounts))
+        sent += _account(engine, client, portfolio, account, prices, now, log)
+    log.info("tick_end", orders_sent=sent, accounts=len(accounts))
     return sent
 
 
@@ -93,12 +94,11 @@ def _accounts_of(user: Mapping[str, object]) -> list[Mapping[str, object]]:
     return list(accounts)  # type: ignore[arg-type]
 
 
-def _log_portfolio(log: BoundLogger, portfolio: Any) -> None:
+def _log_portfolio(log: StructuredLogger, portfolio: Any) -> None:
     # What the rest of the tick actually sees: a holding whose company_id has no
     # corporations row is dropped by the join, so these counts are the ones that matter.
-    log(
+    (log.info if portfolio.holdings else log.warning)(
         "portfolio_loaded",
-        logging.INFO if portfolio.holdings else logging.WARNING,
         portfolio_id=portfolio.portfolio_id,
         cash_weight=portfolio.cash_weight,
         holdings=len(portfolio.holdings),
@@ -114,7 +114,7 @@ def _log_portfolio(log: BoundLogger, portfolio: Any) -> None:
     )
 
 
-def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
+def _log_poll(log: StructuredLogger, polled: Sequence[Mapping[str, object]]) -> None:
     # An empty or half-filled poll is reported here rather than passed on, because every
     # later step would simply find nothing to do and say nothing about why.
     accounts = [account for user in polled for account in _accounts_of(user)]
@@ -123,36 +123,28 @@ def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
         for account in accounts
         if account.get("account_id") is None or account.get("cash_balance") is None
     ]
-    unquoted = [
-        f"{account.get('account_id')}:{holding.get('stock_code')}"
-        for account in accounts
-        for holding in (account.get("stocks") or ())  # type: ignore[union-attr]
-        if holding.get("current_price") is None
-    ]
-    log(
+    (log.warning if not polled or blank else log.info)(
         "backend_poll",
-        logging.WARNING if not polled or blank else logging.INFO,
         users=len(polled),
         accounts=len(accounts),
         managed_accounts=sum(1 for account in accounts if account.get("is_active")),
         accounts_missing_id_or_cash=blank,
-        orders_without_quote=unquoted,
+        holdings=sum(len(account.get("stocks") or ()) for account in accounts),  # type: ignore[arg-type]
+        pending_orders=sum(len(account.get("pending_orders") or ()) for account in accounts),  # type: ignore[arg-type]
     )
 
 
-def _account(engine, db, client, portfolio, account, now, log) -> int:
-    state = apply_pending(account)
-    quoted = polled_prices(account)
-    prices = _prices(db, portfolio, state, quoted, log)
+def _account(engine, client, portfolio, account, prices, now, log) -> int:
+    state = apply_pending(account, prices)
     working = outstanding_orders(account.get("pending_orders") or ())
 
-    log(
+    log.info(
         "account_state",
         account_id=state.account_id,
         cash=state.cash,
         held=state.held,
         pending_orders=len(account.get("pending_orders") or ()),
-        working_orders=sorted(f"{code}:{side}" for code, side in working),
+        working_orders=sorted((f"{code}:{side}" for code, side in working)),
     )
 
     with engine.begin() as conn:
@@ -170,9 +162,7 @@ def _account(engine, db, client, portfolio, account, now, log) -> int:
         side: min(row["created_at"] for row in rows).astimezone(KST).date()
         for side, rows in _by_side(recorded).items()
     }
-    return _continue(
-        engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
-    )
+    return _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log)
 
 
 def _by_side(recorded) -> dict[str, list]:
@@ -194,7 +184,7 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
     with engine.begin() as conn:
         if arrived:
             # Stamped, not re-sent: the Backend already holds these.
-            log(
+            log.info(
                 "unsent_reconciled",
                 account_id=state.account_id,
                 outcome="stamped_sent",
@@ -202,12 +192,8 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
             )
             mark_sent(conn, portfolio.portfolio_id, state.account_id)
             return find_orders(conn, portfolio.portfolio_id, state.account_id)
-        log(
-            "unsent_reconciled",
-            logging.WARNING,
-            account_id=state.account_id,
-            outcome="discarded",
-            codes=unsent,
+        log.warning(
+            "unsent_reconciled", account_id=state.account_id, outcome="discarded", codes=unsent
         )
         discard_unsent(conn, portfolio.portfolio_id, state.account_id)
         return find_orders(conn, portfolio.portfolio_id, state.account_id)
@@ -215,7 +201,7 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
 
 def _open(engine, client, portfolio, state, prices, now, log) -> int:
     if now.hour != PLACING_HOUR:
-        log(
+        log.info(
             "placing_deferred",
             account_id=state.account_id,
             cycle="open",
@@ -228,11 +214,11 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
     day = ladder_day(now.date(), now)
     plan = rebalance(portfolio, state, prices, sell_day=day, buy_day=day)
     if not plan:
-        log("orders_none", logging.WARNING, account_id=state.account_id, ladder_day=day)
+        log.warning("orders_none", account_id=state.account_id, ladder_day=day)
         return 0
 
     placeable = _sendable([o for o in plan if o.action != SKIP], state, log)
-    log(
+    log.info(
         "orders_planned",
         account_id=state.account_id,
         cycle="open",
@@ -249,9 +235,7 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
     return _send(engine, client, portfolio, state, placeable, log)
 
 
-def _continue(
-    engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
-):
+def _continue(engine, client, portfolio, state, working, recorded, started, now, prices, log):
     # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     # brought in line with it. A stock the plan has already placed at the right quantity and
     # band is left alone, which is what makes the hourly poll idempotent within a day.
@@ -358,7 +342,7 @@ def _log_continue(
     settled,
 ) -> None:
     placeable = [order for order in plan if order.action != SKIP]
-    log(
+    log.info(
         "orders_planned",
         account_id=state.account_id,
         cycle="continue",
@@ -369,14 +353,14 @@ def _log_continue(
         orders=[_order_fields(order) for order in plan],
     )
     if suppressed:
-        log(
+        log.info(
             "duplicate_suppressed",
             account_id=state.account_id,
             codes=sorted(set(suppressed)),
             reason="already outstanding at the Backend",
         )
     if settled:
-        log(
+        log.info(
             "ladder_spent",
             account_id=state.account_id,
             codes=sorted(settled),
@@ -388,7 +372,7 @@ def _log_continue(
     # went to the Backend, so they are not counted as fills.
     ordered = {row["stock_code"] for row in recorded if row["status"] != SKIP_STATUS}
     wanted = {order.stock_code for order in plan if order.action != SKIP}
-    log(
+    log.info(
         "recorded_orders",
         account_id=state.account_id,
         started={side: began.isoformat() for side, began in started.items()},
@@ -402,7 +386,7 @@ def _log_continue(
 
     if requote:
         # The ladder narrowing, rung by rung: band 0.05 -> 0.03 -> 0.01 -> at_market.
-        log(
+        log.info(
             "ladder_step",
             account_id=state.account_id,
             ladder_day=days,
@@ -421,33 +405,28 @@ def _log_continue(
         )
 
 
-def _prices(db, portfolio, state, quoted, log) -> dict[str, float]:
-    # The poll's live quote takes precedence, but it now rides on pending orders rather
-    # than on holdings, so it covers only what is still outstanding. QuestDB's close
-    # answers for everything else, which is most of the portfolio on a quiet pass. The
-    # precedence is the omission below rather than the merge: the two never share a code.
+def _prices(db, portfolio, accounts, log) -> dict[str, float]:
+    # The latest regular-session close QuestDB holds for every stock the tick can touch: the
+    # portfolio's names, and whatever any account holds or has pending.
     wanted = {company.stock_code for company in portfolio.holdings}
     wanted |= {leaving.stock_code for leaving in portfolio.exits}
-    wanted |= set(state.held)
-    missing = sorted(wanted - quoted.keys())
+    for account in accounts:
+        wanted |= {str(h["stock_code"]) for h in account.get("stocks") or ()}  # type: ignore[union-attr]
+        wanted |= {str(o["stock_code"]) for o in account.get("pending_orders") or ()}  # type: ignore[union-attr]
 
-    closes = (
-        {code: price.close for code, price in latest_prices(db, missing).items()} if missing else {}
-    )
-    prices = closes | quoted
+    closes = latest_prices(db, sorted(wanted)) if wanted else {}
+    prices = {code: price.close for code, price in closes.items()}
     unpriced = sorted(wanted - prices.keys())
-    log(
+    (log.warning if unpriced else log.info)(
         "prices_resolved",
-        logging.WARNING if unpriced else logging.INFO,
-        account_id=state.account_id,
-        from_poll=sorted(quoted),
-        from_questdb=sorted(closes),
+        from_questdb=sorted(prices),
         unpriced=unpriced,
+        closed_at={code: price.ts.isoformat() for code, price in closes.items()},
     )
     return prices
 
 
-def _struck(portfolio, state, working, references, recorded, quoted, log) -> list:
+def _struck(portfolio, state, working, references, recorded, prices, log) -> list:
     # The trigger is what the record kept, not something the poll reports: the Backend only
     # holds the limit side.
     triggers = {
@@ -458,7 +437,7 @@ def _struck(portfolio, state, working, references, recorded, quoted, log) -> lis
     hit = {
         code
         for (code, side) in working
-        if code in triggers and code in quoted and trigger_hit(side, triggers[code], quoted[code])
+        if code in triggers and code in prices and trigger_hit(side, triggers[code], prices[code])
     }
     companies = {company.stock_code: company for company in portfolio.holdings}
     companies |= {leaving.stock_code: leaving for leaving in portfolio.exits}
@@ -468,7 +447,7 @@ def _struck(portfolio, state, working, references, recorded, quoted, log) -> lis
         if code in hit and code in companies and code in references
     ]
     if struck:
-        log(
+        log.info(
             "trigger_struck",
             account_id=state.account_id,
             orders=[
@@ -476,7 +455,7 @@ def _struck(portfolio, state, working, references, recorded, quoted, log) -> lis
                     "stock_code": order.stock_code,
                     "side": order.action,
                     "trigger": triggers.get(order.stock_code),
-                    "price": quoted.get(order.stock_code),
+                    "price": prices.get(order.stock_code),
                     "shares": order.shares,
                 }
                 for order in struck
@@ -496,9 +475,8 @@ def _sendable(orders, state, log) -> list:
     # with nothing. The fill the market rung was there to guarantee is not guaranteed.
     blocked = [order for order in orders if order.limit is None]
     if blocked:
-        log(
+        log.warning(
             "orders_blocked",
-            logging.WARNING,
             account_id=state.account_id,
             codes=[order.stock_code for order in blocked],
             reason="v1 of the Backend has no market order, so the ladder stops at its"
@@ -516,10 +494,10 @@ def _send(engine, client, portfolio, state, orders, log) -> int:
 
     hollow = [order.stock_code for order in orders if order.shares <= 0 or order.reference is None]
     if hollow:
-        log("orders_incomplete", logging.WARNING, account_id=state.account_id, codes=hollow)
+        log.warning("orders_incomplete", account_id=state.account_id, codes=hollow)
     # Logged before the send and again after it, so a request that never came back leaves
     # an orders_sending line with no orders_sent line to match it.
-    log(
+    log.info(
         "orders_sending",
         account_id=state.account_id,
         count=len(orders),
@@ -528,7 +506,7 @@ def _send(engine, client, portfolio, state, orders, log) -> int:
     send_orders(client, orders)
     with engine.begin() as conn:
         mark_sent(conn, portfolio.portfolio_id, state.account_id)
-    log("orders_sent", account_id=state.account_id, count=len(orders))
+    log.info("orders_sent", account_id=state.account_id, count=len(orders))
     return len(orders)
 
 

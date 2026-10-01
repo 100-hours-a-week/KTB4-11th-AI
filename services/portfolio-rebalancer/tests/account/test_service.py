@@ -8,7 +8,6 @@ different field from `order_type`, where the Backend puts limit or market.
 from portfolio_rebalancer.account import (
     apply_pending,
     managed_accounts,
-    polled_prices,
 )
 
 
@@ -43,7 +42,7 @@ def order(**changes):
 
 
 def test_cash_and_holdings_come_through_when_nothing_is_pending():
-    state = apply_pending(account())
+    state = apply_pending(account(), {})
 
     assert state.account_id == 11
     assert state.cash == 10_000_000.0
@@ -51,36 +50,36 @@ def test_cash_and_holdings_come_through_when_nothing_is_pending():
 
 
 def test_a_pending_buy_is_not_cash_this_service_may_spend():
-    state = apply_pending(account(pending_orders=[order(limit_price=78_000, quantity=10)]))
+    state = apply_pending(account(pending_orders=[order(limit_price=78_000, quantity=10)]), {})
 
     assert state.cash == 10_000_000.0 - 780_000.0
 
 
 def test_a_pending_sell_does_not_add_cash_before_it_fills():
     """Proceeds are not spendable until the order actually fills."""
-    state = apply_pending(account(pending_orders=[order(order_side="sell", quantity=10)]))
+    state = apply_pending(account(pending_orders=[order(order_side="sell", quantity=10)]), {})
 
     assert state.cash == 10_000_000.0
 
 
-def test_a_market_buy_is_costed_at_the_quote_since_it_carries_no_limit():
+def test_a_market_buy_is_costed_at_the_close_since_it_carries_no_limit():
     """`limit_price` is null on a market order, and treating that as free would let the
     buys spend money the order has already committed."""
-    pending = [order(order_type="market", limit_price=None, current_stock_price=80_000)]
+    pending = [order(order_type="market", limit_price=None)]
 
-    state = apply_pending(account(pending_orders=pending))
+    state = apply_pending(account(pending_orders=pending), {"005930": 80_000.0})
 
     assert state.cash == 10_000_000.0 - 10 * 80_000.0
 
 
 def test_a_pending_buy_raises_the_quantity_the_account_is_on_its_way_to_holding():
-    state = apply_pending(account(pending_orders=[order(quantity=10)]))
+    state = apply_pending(account(pending_orders=[order(quantity=10)]), {})
 
     assert state.held["005930"] == 110
 
 
 def test_a_pending_sell_lowers_it():
-    state = apply_pending(account(pending_orders=[order(order_side="sell", quantity=30)]))
+    state = apply_pending(account(pending_orders=[order(order_side="sell", quantity=30)]), {})
 
     assert state.held["005930"] == 70
 
@@ -90,25 +89,26 @@ def test_a_holding_with_no_pending_order_is_untouched():
         {"stock_code": "005930", "total_cost": 7_800_000, "quantity": 100},
         {"stock_code": "000660", "total_cost": 4_120_000, "quantity": 10},
     ]
-    state = apply_pending(account(stocks=holdings, pending_orders=[order(quantity=5)]))
+    state = apply_pending(account(stocks=holdings, pending_orders=[order(quantity=5)]), {})
 
     assert state.held == {"005930": 105, "000660": 10}
 
 
 def test_a_pending_buy_for_something_not_held_yet_becomes_a_holding():
-    state = apply_pending(account(pending_orders=[order(stock_code="035420", quantity=7)]))
+    state = apply_pending(account(pending_orders=[order(stock_code="035420", quantity=7)]), {})
 
     assert state.held["035420"] == 7
 
 
 def test_total_cost_is_principal_and_never_reaches_the_state():
-    """It is the money put in, not what the position is worth, so pricing comes from the
-    quote or from QuestDB instead."""
+    """It is the money put in, not what the position is worth, so pricing comes from
+    QuestDB's close instead."""
     cheap = apply_pending(
-        account(stocks=[{"stock_code": "005930", "total_cost": 1, "quantity": 100}])
+        account(stocks=[{"stock_code": "005930", "total_cost": 1, "quantity": 100}]), {}
     )
     dear = apply_pending(
-        account(stocks=[{"stock_code": "005930", "total_cost": 999_999_999, "quantity": 100}])
+        account(stocks=[{"stock_code": "005930", "total_cost": 999_999_999, "quantity": 100}]),
+        {},
     )
 
     assert cheap == dear
@@ -116,7 +116,7 @@ def test_total_cost_is_principal_and_never_reaches_the_state():
 
 def test_a_holding_and_a_pending_order_name_the_same_thing_alike():
     """Both spell it `stock_code`, so nothing has to be converted."""
-    state = apply_pending(account(pending_orders=[order(stock_code="005930", quantity=1)]))
+    state = apply_pending(account(pending_orders=[order(stock_code="005930", quantity=1)]), {})
 
     assert state.held == {"005930": 101}
 
@@ -124,7 +124,7 @@ def test_a_holding_and_a_pending_order_name_the_same_thing_alike():
 def test_an_order_that_is_not_pending_is_ignored():
     filled = order(order_status="filled", quantity=50)
 
-    state = apply_pending(account(pending_orders=[filled]))
+    state = apply_pending(account(pending_orders=[filled]), {})
 
     assert state.held == {"005930": 100}
     assert state.cash == 10_000_000.0
@@ -134,14 +134,14 @@ def test_the_side_is_read_from_order_side_not_order_type():
     """`order_type` is limit or market. Reading it for the side would file a sell as
     neither a buy nor a sell and leave the holding untouched."""
     state = apply_pending(
-        account(pending_orders=[order(order_side="sell", order_type="limit", quantity=30)])
+        account(pending_orders=[order(order_side="sell", order_type="limit", quantity=30)]), {}
     )
 
     assert state.held["005930"] == 70
 
 
 def test_a_holding_can_never_go_negative():
-    state = apply_pending(account(pending_orders=[order(order_side="sell", quantity=500)]))
+    state = apply_pending(account(pending_orders=[order(order_side="sell", quantity=500)]), {})
 
     assert state.held["005930"] == 0
 
@@ -152,7 +152,7 @@ def test_several_pending_orders_accumulate():
         order(order_id=2, limit_price=2_000, quantity=5),
         order(order_id=3, order_side="sell", quantity=3),
     ]
-    state = apply_pending(account(pending_orders=orders))
+    state = apply_pending(account(pending_orders=orders), {})
 
     assert state.cash == 10_000_000.0 - 10_000.0 - 10_000.0
     assert state.held["005930"] == 100 + 10 + 5 - 3
@@ -216,7 +216,9 @@ def test_an_account_never_carries_a_siblings_numbers():
         pending_orders=[order(stock_code="000660", limit_price=100, quantity=1)],
     )
 
-    states = [apply_pending(a) for _, a in managed_accounts([user(accounts=[first, second])])]
+    states = [
+        apply_pending(a, {}) for _, a in managed_accounts([user(accounts=[first, second])])
+    ]
 
     assert states[0].cash == 1_000.0
     assert states[0].held == {"005930": 1}
@@ -229,37 +231,17 @@ def test_a_reservation_is_one_order_so_nothing_is_double_counted():
     service watches. So a 15-share reservation commits 15 shares, not 30."""
     reservation = [order(limit_price=74_100, quantity=15)]
 
-    state = apply_pending(account(cash_balance=2_884_000, pending_orders=reservation))
+    state = apply_pending(account(cash_balance=2_884_000, pending_orders=reservation), {})
 
     assert state.cash == 2_884_000.0 - 15 * 74_100.0
     assert state.held["005930"] == 100 + 15
 
 
-def test_the_quote_comes_from_the_pending_order():
-    """`current_stock_price` rides on the pending order, which is the only place the
-    Backend puts a live price."""
-    pending = [
-        order(order_id=1, stock_code="005930", current_stock_price=79_500),
-        order(order_id=2, stock_code="000660", current_stock_price=410_000),
-    ]
+def test_the_backends_quote_is_never_used():
+    """Every price comes from QuestDB's close, so a market order is costed at the close
+    even when the Backend's `current_stock_price` rides on it."""
+    pending = [order(order_type="market", limit_price=None, current_stock_price=99_000)]
 
-    assert polled_prices(account(pending_orders=pending)) == {
-        "005930": 79_500.0,
-        "000660": 410_000.0,
-    }
+    state = apply_pending(account(pending_orders=pending), {"005930": 80_000.0})
 
-
-def test_a_holding_with_nothing_outstanding_has_no_quote():
-    """Which is why QuestDB's close still has to stand in. Treating the absence as zero
-    would fire every sell trigger at once."""
-    held = [{"stock_code": "005930", "total_cost": 1, "quantity": 10}]
-
-    assert polled_prices(account(stocks=held, pending_orders=[])) == {}
-
-
-def test_a_pending_order_without_a_quote_is_left_out():
-    assert polled_prices(account(pending_orders=[order(current_stock_price=None)])) == {}
-
-
-def test_no_pending_orders_means_no_quotes():
-    assert polled_prices(account(pending_orders=[])) == {}
+    assert state.cash == 10_000_000.0 - 10 * 80_000.0
