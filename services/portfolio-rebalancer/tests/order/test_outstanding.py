@@ -61,7 +61,7 @@ def test_an_order_moves_to_the_band_the_session_it_is_on_allows():
         account(),
         working_at(1),
         REFERENCES,
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 
@@ -77,7 +77,7 @@ def test_an_order_already_at_the_right_limit_is_left_alone():
         account(),
         working_at(2),
         REFERENCES,
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 
@@ -94,7 +94,7 @@ def test_the_last_rung_ends_at_the_cutoff():
         account(),
         working_at(1),
         REFERENCES,
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         past_the_cutoff,
     )
 
@@ -120,7 +120,7 @@ def test_a_missed_session_does_not_hand_the_order_a_day_back():
         account(),
         working_at(1),
         REFERENCES,
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(WEDNESDAY),
     )
 
@@ -134,7 +134,7 @@ def test_the_reference_comes_from_the_record_not_the_price():
         account(),
         working_at(1),
         {"005930": 100_000.0},
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 
@@ -144,7 +144,12 @@ def test_the_reference_comes_from_the_record_not_the_price():
 
 def test_an_order_with_no_recorded_reference_is_left_alone():
     orders = narrow(
-        portfolio(holdings=[holding()]), account(), working_at(1), {}, MONDAY, noon(TUESDAY)
+        portfolio(holdings=[holding()]),
+        account(),
+        working_at(1),
+        {},
+        {"buy": MONDAY, "sell": MONDAY},
+        noon(TUESDAY),
     )
 
     assert orders == []
@@ -157,7 +162,7 @@ def test_an_order_the_portfolio_does_not_name_is_left_alone():
         account(),
         working_at(1, code="068270"),
         {"068270": 200_000.0},
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 
@@ -170,7 +175,7 @@ def test_the_side_is_preserved():
         account(),
         working_at(1, side="sell", code="000660", reference=412_000.0),
         REFERENCES,
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 
@@ -184,7 +189,7 @@ def test_the_quantity_and_the_reason_carry_over():
         account(),
         working_at(1, quantity=73),
         REFERENCES,
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 
@@ -201,7 +206,7 @@ def test_every_order_advances_on_the_one_shared_ladder():
         account(),
         both,
         REFERENCES,
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 
@@ -224,7 +229,7 @@ def test_a_re_quoted_order_lands_on_a_tick(reference):
         account(),
         working_at(1, reference=reference),
         {"005930": reference},
-        MONDAY,
+        {"buy": MONDAY, "sell": MONDAY},
         noon(TUESDAY),
     )
 

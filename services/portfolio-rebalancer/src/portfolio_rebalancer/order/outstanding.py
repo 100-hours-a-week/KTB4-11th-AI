@@ -26,16 +26,19 @@ def narrow(
     account: AccountState,
     working: Mapping[tuple[str, str], Outstanding],
     references: Mapping[str, float],
-    started: date,
+    started: Mapping[str, date],
     now: datetime,
 ) -> list[Order]:
-    # The band comes from the deadline rather than from a counter, so a tick the service
-    # missed cannot hand an order back a day it no longer has. A pair already at the right
-    # band is left alone, which is what makes the hourly poll idempotent within a day.
+    # Each side runs its own ladder, so `started` is keyed by side: the sells begin when
+    # the cycle does, and the buys begin on the day the first of them was placed, which is
+    # the pass after the sells freed the cash.
+    #
+    # The band comes from that start rather than from a counter, so a tick the service
+    # missed cannot hand an order back a day it no longer has. An order already at the
+    # right band is left alone, which is what makes the hourly poll idempotent within a day.
     if not is_open(now.date()):
         return []
 
-    day = ladder_day(started, now)
     companies: dict[str, Holding | Exit] = {
         company.stock_code: company for company in portfolio.holdings
     }
@@ -45,11 +48,13 @@ def narrow(
     for (code, side), order in working.items():
         company = companies.get(code)
         reference = references.get(code)
-        # Not a company the model portfolio names: this service never moves someone else's
-        # order.
-        if company is None or reference is None:
+        began = started.get(side)
+        # Not a company the model portfolio names, or a side with no ladder of its own:
+        # this service never moves someone else's order.
+        if company is None or reference is None or began is None:
             continue
 
+        day = ladder_day(began, now)
         quote = limit_and_trigger(reference, day, side)
         if quote is not None and quote[0] == order.price:
             continue

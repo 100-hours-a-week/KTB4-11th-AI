@@ -23,7 +23,8 @@ from portfolio_rebalancer.order import (
     record_orders,
     trigger_hit,
 )
-from portfolio_rebalancer.order.dto import SKIP
+from portfolio_rebalancer.order.dto import BUY, SELL, SKIP
+from portfolio_rebalancer.order.rebalance import FIRST_DAY
 from portfolio_rebalancer.order.repository import AT_MARKET as MARKET_STATUS
 from portfolio_rebalancer.order.repository import SKIPPED as SKIP_STATUS
 from portfolio_rebalancer.portfolio import find_latest_portfolio
@@ -152,10 +153,23 @@ def _account(engine, db, client, portfolio, account, now, log) -> int:
     if not recorded:
         return _open(engine, client, portfolio, state, prices, now, log)
 
-    started = min(row["created_at"] for row in recorded).astimezone(KST).date()
+    # Each side's ladder begins when the first of its orders was recorded: the sells
+    # when the cycle did, the buys on the pass that saw the sells fill.
+    started = {
+        side: min(row["created_at"] for row in rows).astimezone(KST).date()
+        for side, rows in _by_side(recorded).items()
+    }
     return _continue(
         engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
     )
+
+
+def _by_side(recorded) -> dict[str, list]:
+    sides: dict[str, list] = {}
+    for row in recorded:
+        if row["side"] in (BUY, SELL):
+            sides.setdefault(row["side"], []).append(row)
+    return sides
 
 
 def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence[Mapping[str, Any]]:
@@ -198,10 +212,10 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
         )
         return 0
 
-    # A fresh cycle starts on rung one, which is today: the ladder counts forward in
-    # sessions from here rather than back from a deadline.
+    # A fresh cycle starts on rung one, which is today: both sides begin here, and the
+    # ladder counts forward in sessions rather than back from a deadline.
     day = ladder_day(now.date(), now)
-    plan = rebalance(portfolio, state, prices, day=day)
+    plan = rebalance(portfolio, state, prices, sell_day=day, buy_day=day)
     if not plan:
         log("orders_none", logging.WARNING, account_id=state.account_id, ladder_day=day)
         return 0
@@ -230,8 +244,18 @@ def _continue(
     # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
     # brought in line with it. A stock the plan has already placed at the right quantity and
     # band is left alone, which is what makes the hourly poll idempotent within a day.
-    day = ladder_day(started, now)
-    plan = rebalance(portfolio, state, prices, day=day)
+    #
+    # Each side is on its own rung. Anything placed for the first time starts that side's
+    # ladder, so it is quoted at day one; everything already on the book is moved by
+    # `narrow` at the rung its own side has reached.
+    days = {side: ladder_day(began, now) for side, began in started.items()}
+    plan = rebalance(
+        portfolio,
+        state,
+        prices,
+        sell_day=days.get(SELL, FIRST_DAY),
+        buy_day=days.get(BUY, FIRST_DAY),
+    )
     references = {
         row["stock_code"]: float(row["reference_price"])
         for row in recorded
@@ -270,7 +294,7 @@ def _continue(
         portfolio,
         state,
         started,
-        day,
+        days,
         recorded,
         plan,
         placed,
@@ -281,19 +305,9 @@ def _continue(
         settled,
     )
 
-    # A buy the sells have just funded waits for the opening pass rather than going out
-    # against a close the market has had all day to leave behind. `amend` is held back for
-    # the same reason: a recorded order that has left the book without filling is priced
-    # again from scratch, which makes it a new order in all but the row it reuses.
-    if (place or amend) and now.hour != PLACING_HOUR:
-        log(
-            "placing_deferred",
-            account_id=state.account_id,
-            cycle="continue",
-            codes=[order.stock_code for order in (*place, *amend)],
-            until=f"{PLACING_HOUR:02d}:00",
-        )
-        place, amend = [], []
+    # No opening gate here. The sells freeing the cash is the signal the buy was waiting
+    # for, and holding it to the next morning would spend a session of the buy's own ladder
+    # on nothing. Only a fresh cycle waits for 09:00, where the new portfolio lands.
     place = _sendable(place, state, log)
     sent = 0
     if place:
@@ -322,7 +336,7 @@ def _log_continue(
     portfolio,
     state,
     started,
-    day,
+    days,
     recorded,
     plan,
     placed,
@@ -337,7 +351,7 @@ def _log_continue(
         "orders_planned",
         account_id=state.account_id,
         cycle="continue",
-        ladder_day=day,
+        ladder_day=days,
         planned=len(plan),
         placeable=len(placeable),
         no_order=_no_order(portfolio, plan),
@@ -366,8 +380,8 @@ def _log_continue(
     log(
         "recorded_orders",
         account_id=state.account_id,
-        started=started.isoformat(),
-        ladder_day=day,
+        started={side: began.isoformat() for side, began in started.items()},
+        ladder_day=days,
         recorded=len(recorded),
         still_working=sorted(ordered & placed),
         filled_or_done=sorted(ordered - placed - wanted),
@@ -380,7 +394,7 @@ def _log_continue(
         log(
             "ladder_step",
             account_id=state.account_id,
-            ladder_day=day,
+            ladder_day=days,
             steps=[
                 {
                     "stock_code": order.stock_code,

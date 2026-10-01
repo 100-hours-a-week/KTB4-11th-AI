@@ -77,6 +77,29 @@ cycle began. That is wrong, and this is the rule:
 | day 3 -- whatever is still unfilled | ± 1% | 77,200 |
 | day 3, 15:00 | **blocked** | — |
 
+**Each side runs its own ladder.** The sells begin when the cycle does; the buys begin on
+the day the first of them is placed, which is the pass that saw the sells fill. So a sell
+that takes two sessions does not cost the buy two of its own:
+
+```
+월 09:00   sell day 1  ± 5%
+화 09:00   sell day 2  ± 3%
+화 13:00   the sells fill  ->  buy day 1  ± 5%   placed on that pass
+수 09:00   buy day 2   ± 3%
+목 09:00   buy day 3   ± 1%
+목 15:00   blocked
+```
+
+`ladder_day` is asked once per side, from `min(created_at)` over that side's rows, which
+is why `rebalance_orders.side` carries the ladder as much as the record does. This
+reverses the 29th's "three trading days for both together": a buy funded by a sell does
+start its own three days.
+
+**The buy goes out on the pass that sees the fill, not at the next 09:00.** Only a fresh
+cycle waits for the opening -- that is where the new portfolio lands. Holding a funded buy
+to the next morning would spend a session of its own ladder on nothing, which costs more
+than the extra hours of drift away from the previous close.
+
 **Counted forward from the day the cycle began, in sessions.** A holiday is skipped
 rather than spent: if the Monday is shut the cycle's first day is the Tuesday and its
 third is the Thursday. A cycle that starts on a Wednesday has its third day on the

@@ -11,9 +11,11 @@ from portfolio_rebalancer.order.reservations import PRICE_BANDS, limit_and_trigg
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
 from portfolio_rebalancer.tick import market_now, tick
 
-# 2026-09-28 週 has five sessions, so a Monday cycle starts with five days.
+# Each side's ladder runs three sessions forward from the day its first order was
+# recorded, so a cycle that begins on the Monday is on rung three by the Wednesday.
 MONDAY = date(2026, 9, 28)
 TUESDAY = date(2026, 9, 29)
+WEDNESDAY = date(2026, 9, 30)
 THURSDAY = date(2026, 10, 1)
 FRIDAY = date(2026, 10, 2)
 SAMSUNG = ("00126380", "005930")
@@ -81,13 +83,14 @@ def recorded_row(
 ):
     """A rebalance_orders row as find_orders returns it.
 
-    created_at is what the cycle start -- and so the remaining days -- is derived from,
-    and reference_price is what a single limit price cannot say for itself.
+    `side` and `created_at` together are where that side's ladder starts, and
+    reference_price is what a single limit price cannot say for itself.
     """
     if trigger is None and reference:
         trigger = limit_and_trigger(reference, 1, side)[1]
     return {
         "stock_code": stock_code,
+        "side": side,
         "sent_at": sent_at,
         "created_at": datetime(created.year, created.month, created.day, 1, tzinfo=UTC),
         "reference_price": reference,
@@ -478,9 +481,9 @@ def test_a_recorded_order_that_is_no_longer_on_the_market_is_put_back(monkeypatc
     assert fakes.recorded_rows == []
 
 
-def test_a_recorded_order_off_the_book_also_waits_for_the_opening_pass(monkeypatch):
-    """Putting it back prices it again from scratch, which makes it a new order in all
-    but the row it reuses."""
+def test_a_recorded_order_off_the_book_goes_back_at_once(monkeypatch):
+    """Only a fresh cycle waits for the opening pass; a cycle already under way reacts on
+    the pass that sees the change."""
     events = Events()
     already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
     fakes = Fakes(
@@ -489,9 +492,9 @@ def test_a_recorded_order_off_the_book_also_waits_for_the_opening_pass(monkeypat
         recorded={11: already},
     )
 
-    assert fakes.run(now=noon(MONDAY), log=events) == 0
-    assert fakes.amended == []
-    assert events.of("placing_deferred")[0]["codes"] == ["005930"]
+    assert fakes.run(now=noon(MONDAY), log=events) > 0
+    assert fakes.amended
+    assert events.of("placing_deferred") == []
 
 
 def test_the_record_is_committed_before_the_send(monkeypatch):
@@ -651,10 +654,9 @@ def test_an_order_placed_late_in_the_cycle_starts_narrow(monkeypatch):
     assert buys[0].band == PRICE_BANDS[1]
 
 
-def test_a_buy_the_sells_funded_waits_for_the_opening_pass(monkeypatch):
-    """The only reference for a stock with no order on it is QuestDB's previous close,
-    and market-collector writes that once at 06:00. It does not get fresher as the day
-    goes on -- the market just walks away from it -- so the buy waits for 09:00."""
+def test_a_buy_the_sells_funded_goes_out_at_once(monkeypatch):
+    """The sells freeing the cash is the signal the buy was waiting for. Holding it to
+    the next morning would spend a session of the buy's own ladder on nothing."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -668,10 +670,8 @@ def test_a_buy_the_sells_funded_waits_for_the_opening_pass(monkeypatch):
     events = Events()
     fakes.run(now=noon(TUESDAY), log=events)
 
-    assert fakes.sent == []
-    deferred = events.of("placing_deferred")[0]
-    assert deferred["codes"] == ["005930"]
-    assert deferred["until"] == "09:00"
+    assert [order.stock_code for order in fakes.sent[0]] == ["005930"]
+    assert events.of("placing_deferred") == []
 
 
 def test_a_fresh_cycle_waits_for_the_opening_pass_too(monkeypatch):
@@ -1022,7 +1022,7 @@ def test_the_ladder_step_records_the_band_it_moved_to(monkeypatch):
     fakes.run(now=noon(TUESDAY), log=events)
 
     step = events.of("ladder_step")[0]
-    assert step["ladder_day"] == 2
+    assert step["ladder_day"]["buy"] == 2
     assert step["steps"][0]["band"] == PRICE_BANDS[1]
     assert step["steps"][0]["at_market"] is False
 
@@ -1054,3 +1054,69 @@ def test_a_record_that_never_reached_the_backend_is_reported(monkeypatch):
     reconciled = events.of("unsent_reconciled")[0]
     assert reconciled["outcome"] == "discarded"
     assert events.levels("unsent_reconciled") == [logging.WARNING]
+
+
+# ---- one ladder per side ----
+
+
+def test_each_side_is_on_its_own_rung(monkeypatch):
+    """The sells began with the cycle; the buy was placed a session later and is on its
+    own first rung, not on the sell's second."""
+    events = Events()
+    plan = Portfolio(
+        portfolio_id=42,
+        cash_weight=0.0,
+        holdings=[Holding(*SAMSUNG, weight=1.0, reason="사유")],
+        exits=[Exit(*HYNIX, reason="퇴출")],
+    )
+    recorded = [
+        recorded_row(
+            "000660",
+            side="sell",
+            created=MONDAY,
+            reference=412_000.0,
+            sent_at=datetime(2026, 9, 28, tzinfo=UTC),
+        ),
+        recorded_row(
+            "005930", side="buy", created=TUESDAY, sent_at=datetime(2026, 9, 29, tzinfo=UTC)
+        ),
+    ]
+    sell_limit, _ = limit_and_trigger(412_000.0, 2, "sell")
+    buy_limit, _ = limit_and_trigger(78_000.0, 1, "buy")
+    outstanding = [
+        pending(stock_code="000660", order_side="sell", price=sell_limit, amount=10),
+        pending(stock_code="005930", price=buy_limit, amount=52),
+    ]
+    fakes = Fakes(
+        monkeypatch,
+        model=plan,
+        users=polled(account(cash=0.0, pending_orders=outstanding)),
+        recorded={11: recorded},
+    )
+
+    fakes.run(now=noon(TUESDAY), log=events)
+
+    # Tuesday is the sell ladder's second session and the buy ladder's first.
+    assert events.of("recorded_orders")[0]["ladder_day"] == {"sell": 2, "buy": 1}
+
+
+def test_a_sell_that_takes_two_sessions_does_not_cost_the_buy_two(monkeypatch):
+    """The buy gets its own three sessions from the day it was placed."""
+    events = Events()
+    recorded = [
+        recorded_row(
+            "005930", side="buy", created=WEDNESDAY, sent_at=datetime(2026, 9, 30, tzinfo=UTC)
+        ),
+    ]
+    limit, _ = limit_and_trigger(78_000.0, 1, "buy")
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(cash=0.0, pending_orders=[pending(price=limit, amount=52)])),
+        recorded={11: recorded},
+    )
+
+    fakes.run(now=noon(FRIDAY), log=events)
+
+    # Wednesday, Thursday, Friday: the buy's own third rung, not a spent ladder.
+    assert events.of("recorded_orders")[0]["ladder_day"] == {"buy": 3}
+    assert events.of("ladder_step")[0]["steps"][0]["band"] == PRICE_BANDS[2]

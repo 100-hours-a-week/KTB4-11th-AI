@@ -23,11 +23,12 @@ def rebalance(
     portfolio: Portfolio,
     account: AccountState,
     prices: Mapping[str, float],
-    day: int = FIRST_DAY,
+    sell_day: int = FIRST_DAY,
+    buy_day: int = FIRST_DAY,
 ) -> list[Order]:
-    # Selling and buying share one ladder, so `day` -- the session the cycle is on, not the
-    # age of any one order -- decides the band everything is quoted at. A buy placed after
-    # the sells have taken a day starts narrow rather than restarting the ladder.
+    # Each side runs its own ladder. The sells begin when the cycle does; the buys begin on
+    # the day the first of them is placed, which is the pass that saw the sells fill. So a
+    # sell that takes two sessions does not cost the buy two of its own.
     #
     # Buys are limited to cash that exists. The targets are computed against the whole
     # portfolio, including what the exits are worth, but their proceeds are not money until
@@ -39,7 +40,14 @@ def rebalance(
     # not block the sells that fund it. A held company that is in neither the portfolio nor
     # the exits is left alone, because no reason exists to act on it.
     sells = [
-        _order(account.account_id, leaving, SELL, account.held[leaving.stock_code], prices, day)
+        _order(
+            account.account_id,
+            leaving,
+            SELL,
+            account.held[leaving.stock_code],
+            prices,
+            sell_day,
+        )
         for leaving in portfolio.exits
         if account.held.get(leaving.stock_code, 0) > 0
     ]
@@ -68,9 +76,9 @@ def rebalance(
             continue
         delta = shares[company.stock_code] - account.held.get(company.stock_code, 0)
         if delta > 0:
-            buys.append(_order(account.account_id, company, BUY, delta, prices, day))
+            buys.append(_order(account.account_id, company, BUY, delta, prices, buy_day))
         elif delta < 0:
-            more_sells.append(_order(account.account_id, company, SELL, -delta, prices, day))
+            more_sells.append(_order(account.account_id, company, SELL, -delta, prices, sell_day))
 
     skips = [
         *(
