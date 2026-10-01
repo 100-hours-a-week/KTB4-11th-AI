@@ -159,7 +159,7 @@ Parsed into Pydantic models matching the Backend's `AiUserSnapshotResponse`:
 class Stock(BaseModel):
     stock_code: str
     quantity: int
-    total_cost: Decimal
+    total_cost: float
 
 class PendingOrder(BaseModel):
     order_id: int
@@ -169,7 +169,7 @@ class PendingOrder(BaseModel):
     order_status: str
     limit_price: int | None
     quantity: int
-    current_stock_price: Decimal
+    current_stock_price: float
 
 class Account(BaseModel):
     account_id: int
@@ -192,7 +192,7 @@ A pure function, no I/O:
 
 ```python
 def rebalance(
-    portfolio: Portfolio, account: Account, closes: dict[str, Decimal], band: float
+    portfolio: Portfolio, account: Account, closes: dict[str, float], band: float
 ) -> list[Order]: ...
 ```
 
