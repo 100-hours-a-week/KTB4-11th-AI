@@ -1,10 +1,9 @@
-import logging
-
 import sqlalchemy as sa
+from ktb_core.logging import get_logger
 
 __all__ = ["EmptyIndexError", "load_symbols"]
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class EmptyIndexError(RuntimeError):
@@ -30,5 +29,5 @@ def load_symbols(dsn: str, index_name: str) -> list[str]:
         raise EmptyIndexError(
             f"corporation_indices has no rows for index_name={index_name!r}; run market-syncer"
         )
-    log.info("loaded %d symbols for index_name=%s", len(symbols), index_name)
+    log.info("symbols_loaded", count=len(symbols), index_name=index_name)
     return symbols

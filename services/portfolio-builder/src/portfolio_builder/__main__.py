@@ -1,8 +1,7 @@
-import logging
 import uuid
 
 import sqlalchemy as sa
-from ktb_core.logging import bind_logger, setup_logging
+from ktb_core.logging import get_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
 
 from portfolio_builder.agent.run import run_agent
@@ -20,11 +19,11 @@ from portfolio_builder.tools.technicals import technicals_tool
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="portfolio-builder")
-    log = bind_logger(logging.getLogger("portfolio_builder"), run_id=str(uuid.uuid4()))
+    log = get_logger(__name__, run_id=str(uuid.uuid4()))
     stopwatch = Stopwatch.start()
     engine = sa.create_engine(settings.postgres_dsn)
     try:
-        log(
+        log.info(
             "run_start",
             provider="openrouter",
             model=settings.llm_model,
@@ -33,7 +32,7 @@ def main() -> None:
             news_window_days=settings.news_window_days,
         )
         briefing = load_briefing(engine, settings.news_window_days)
-        log(
+        log.info(
             "ingestion",
             previous_portfolio_id=briefing.previous_portfolio_id,
             previous_holdings=briefing.previous_holdings,
@@ -44,7 +43,7 @@ def main() -> None:
             theme_count=briefing.theme_count,
             briefing_chars=len(briefing.text),
         )
-        log("prompt", system_prompt=SYSTEM_PROMPT, briefing=briefing.text)
+        log.info("prompt", system_prompt=SYSTEM_PROMPT, briefing=briefing.text)
         model = ChatOpenRouter(
             model=settings.llm_model,
             api_key=settings.openrouter_api_key,
@@ -70,9 +69,8 @@ def main() -> None:
             log=log,
         )
     except Exception as error:
-        log(
+        log.error(
             "run_end",
-            logging.ERROR,
             outcome="error",
             error=f"{type(error).__name__}: {error}",
             elapsed_ms=stopwatch.elapsed_ms,
@@ -82,9 +80,8 @@ def main() -> None:
         engine.dispose()
 
     saved = result.outcome == "saved"
-    log(
+    (log.info if saved else log.error)(
         "run_end",
-        logging.INFO if saved else logging.ERROR,
         outcome=result.outcome,
         portfolio_id=result.portfolio_id,
         turns=result.turns,
