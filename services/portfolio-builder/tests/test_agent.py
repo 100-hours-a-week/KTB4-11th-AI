@@ -197,3 +197,28 @@ def test_usage_totals_accumulate_and_cost_stays_unknown_until_reported(engine):
 
 def test_the_nudge_text():
     assert "submit_portfolio" in NUDGE
+
+
+def test_the_trace_records_reasoning_text_and_tool_results_in_order(engine):
+    thinking = AIMessage(
+        content=[
+            {"type": "reasoning", "reasoning": "HBM 수요가 핵심이다"},
+            {"type": "text", "text": "살펴볼게요"},
+        ],
+        id=f"ai-{next(_ids)}",
+    )
+    result, _ = _run(engine, [thinking, reply("", ("submit_portfolio", VALID))])
+
+    assert [(e.turn, e.kind) for e in result.trace] == [(1, "model"), (2, "model"), (2, "tool")]
+    assert result.trace[0].reasoning == "HBM 수요가 핵심이다"
+    assert result.trace[0].text == "살펴볼게요"
+    assert result.trace[2].name == "submit_portfolio"
+    assert result.trace[2].args["cash_weight"] == 1
+    assert result.trace[2].result.startswith("Saved portfolio")
+
+
+def test_the_trace_is_kept_when_the_turn_limit_ends_the_run(engine):
+    result, _ = _run(engine, [reply(f"thinking {i}") for i in range(5)], max_turns=2)
+
+    assert result.outcome == "max_turns"
+    assert [e.text for e in result.trace] == ["thinking 0", "thinking 1"]

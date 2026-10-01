@@ -4,6 +4,7 @@ from typing import Annotated
 import sqlalchemy as sa
 from pydantic import BaseModel, Field
 
+from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.database import portfolio_exits, portfolio_holdings, portfolios
 from portfolio_builder.errors import PortfolioRejected
 
@@ -130,3 +131,12 @@ def save_portfolio(engine: sa.Engine, submission: Submission, model: str) -> int
         diag = getattr(error.orig, "diag", None)
         detail = getattr(diag, "message_detail", None) or str(error.orig)
         raise PortfolioRejected([detail]) from error
+
+
+def save_trace(engine: sa.Engine, portfolio_id: int, trace: list[TraceEntry]) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(portfolios)
+            .where(portfolios.c.id == portfolio_id)
+            .values(trace=[entry.model_dump(mode="json") for entry in trace])
+        )
