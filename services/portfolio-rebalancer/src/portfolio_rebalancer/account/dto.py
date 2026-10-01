@@ -1,46 +1,68 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 
-@dataclass(frozen=True)
-class AccountState:
+class Stock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    stock_code: str
+    total_cost: int
+    quantity: int
+
+
+class Order(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    order_id: int
+    stock_code: str
+    order_side: str
+    order_status: str
+    order_type: str
+    limit_price: float | None
+    quantity: int
+    current_stock_price: float | None
+
+
+class AccountState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     account_id: int
     cash: float
     held: dict[str, int]
 
 
-@dataclass(frozen=True)
-class Account:
+class Account(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     account_id: int
     account_name: str
     is_active: bool
     cash_balance: float
-    stocks: tuple[Mapping[str, object], ...]
-    pending_orders: tuple[Mapping[str, object], ...]
+    stocks: list[Stock]
+    pending_orders: list[Order]
 
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> "Account":
-        return cls(
-            account_id=int(payload["account_id"]),  # type: ignore[arg-type]
-            account_name=str(payload["account_name"]),
-            is_active=bool(payload["is_active"]),
-            cash_balance=float(payload["cash_balance"]),  # type: ignore[arg-type]
-            stocks=tuple(payload.get("stocks") or ()),  # type: ignore[arg-type]
-            pending_orders=tuple(payload.get("pending_orders") or ()),  # type: ignore[arg-type]
-        )
+        return cls.model_validate(payload)
 
 
-@dataclass(frozen=True)
-class User:
+class User(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
     user_id: int
     accounts: list[Account]
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_accounts(cls, payload: object) -> object:
+        if not isinstance(payload, Mapping):
+            return payload
+        accounts = payload.get("accounts") or []
+        if isinstance(accounts, Mapping):
+            accounts = [accounts]
+        return {**payload, "accounts": accounts}
+
     @classmethod
     def from_payload(cls, payload: Mapping[str, object]) -> "User":
-        accounts = payload.get("accounts") or ()
-        if isinstance(accounts, Mapping):
-            accounts = (accounts,)
-        return cls(
-            user_id=int(payload["user_id"]),  # type: ignore[arg-type]
-            accounts=tuple(Account.from_payload(account) for account in accounts),  # type: ignore[arg-type]
-        )
+        return cls.model_validate(payload)

@@ -44,9 +44,9 @@ def _write_account(conn: sa.Connection, user_id: int, account: Account) -> None:
     holdings = [
         {
             "account_id": account_id,
-            "stock_code": str(holding["stock_code"]),
-            "quantity": holding["quantity"],
-            "total_cost": holding["total_cost"],
+            "stock_code": holding.stock_code,
+            "quantity": holding.quantity,
+            "total_cost": holding.total_cost,
         }
         for holding in account.stocks
     ]
@@ -58,15 +58,15 @@ def _write_account(conn: sa.Connection, user_id: int, account: Account) -> None:
     )
     pending = [
         {
-            "order_id": order["order_id"],
+            "order_id": order.order_id,
             "account_id": account_id,
-            "order_side": order["order_side"],
-            "order_type": order["order_type"],
-            "order_status": order["order_status"],
-            "stock_code": str(order["stock_code"]),
-            "limit_price": order.get("limit_price"),
-            "quantity": order["quantity"],
-            "current_stock_price": order.get("current_stock_price"),
+            "order_side": order.order_side,
+            "order_type": order.order_type,
+            "order_status": order.order_status,
+            "stock_code": order.stock_code,
+            "limit_price": order.limit_price,
+            "quantity": order.quantity,
+            "current_stock_price": order.current_stock_price,
         }
         for order in account.pending_orders
     ]

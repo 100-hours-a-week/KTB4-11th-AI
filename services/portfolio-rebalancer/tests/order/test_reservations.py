@@ -1,4 +1,5 @@
 import pytest
+from portfolio_rebalancer.account.dto import Order
 from portfolio_rebalancer.order.dto import Outstanding
 from portfolio_rebalancer.order.reservations import (
     PRICE_BANDS,
@@ -26,16 +27,19 @@ def pending(stock_code="005930", order_side="buy", limit_price=74_100, quantity=
     `order_side` is buy or sell; `order_type` is limit or market. They are different
     fields, and reading one for the other files every order under the wrong key.
     """
-    return {
-        "order_id": 1,
-        "stock_code": stock_code,
-        "order_side": order_side,
-        "order_status": "pending",
-        "order_type": "limit",
-        "limit_price": limit_price,
-        "quantity": quantity,
-        "current_stock_price": 78_000,
-    } | extra
+    return Order.model_validate(
+        {
+            "order_id": 1,
+            "stock_code": stock_code,
+            "order_side": order_side,
+            "order_status": "pending",
+            "order_type": "limit",
+            "limit_price": limit_price,
+            "quantity": quantity,
+            "current_stock_price": 78_000,
+        }
+        | extra
+    )
 
 
 # ---- the KRX tick ----
@@ -237,7 +241,7 @@ def test_two_stocks_each_have_their_own():
 
 
 def test_an_order_that_is_not_pending_is_ignored():
-    settled = pending() | {"order_status": "filled"}
+    settled = pending(order_status="filled")
 
     assert outstanding_orders([settled]) == {}
 
