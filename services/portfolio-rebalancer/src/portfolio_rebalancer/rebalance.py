@@ -25,6 +25,7 @@ def rebalance(
         return []
     pending = {o.stock_code for o in account.pending_orders}
     held = {s.stock_code: s.quantity for s in account.stocks if s.quantity > 0}
+    priced = all(code in closes for code in held)
     cash = account.cash_balance - sum(
         o.quantity * (o.limit_price or o.current_stock_price)
         for o in account.pending_orders
@@ -46,12 +47,13 @@ def rebalance(
                     Order(stock_code=code, side="sell", quantity=have, explanation=target.sell)
                 )
             continue
-        if value <= 0:
+        if value <= 0 or not priced:
             continue
-        want = math.floor(value * target.weight / (close * (1 + buy_buffer)))
+        buy_target = math.floor(value * target.weight / (close * (1 + buy_buffer)))
+        sell_target = math.floor(value * target.weight / close)
         if have and abs(have * close / value - target.weight) <= band:
             continue
-        if want > have:
+        if buy_target > have:
             buys.append(
                 (
                     target.weight,
@@ -59,17 +61,17 @@ def rebalance(
                     Order(
                         stock_code=code,
                         side="buy",
-                        quantity=want - have,
+                        quantity=buy_target - have,
                         explanation=target.buy,
                     ),
                 )
             )
-        elif want < have:
+        elif sell_target < have:
             sells.append(
                 Order(
                     stock_code=code,
                     side="sell",
-                    quantity=have - want,
+                    quantity=have - sell_target,
                     explanation=target.sell,
                 )
             )

@@ -218,3 +218,63 @@ def test_an_inactive_account_trades_nothing():
     )
 
     assert result == []
+
+
+def test_a_held_stock_without_a_close_freezes_the_holdings():
+    result = rebalance(
+        portfolio(hold("005930", 0.5), hold("000660", 0.5)),
+        account(0, stocks=[("005930", 50), ("000660", 50)]),
+        {"005930": 100_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert result == []
+
+
+def test_a_held_stock_without_a_close_still_lets_exits_sell():
+    result = rebalance(
+        portfolio(hold("005930", 0.5), exit_("373220")),
+        account(0, stocks=[("005930", 50), ("000660", 50), ("373220", 2)]),
+        {"005930": 100_000, "373220": 350_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("373220", "sell", 2, "팔아요")]
+
+
+def test_a_trim_sells_to_the_unbuffered_target():
+    result = rebalance(
+        portfolio(hold("005930", 0.10)),
+        account(8_000_000, stocks=[("005930", 200)]),
+        {"005930": 10_000},
+        band=0.05,
+        buy_buffer=0.02,
+    )
+
+    assert orders(result) == [("005930", "sell", 100, "팔아요")]
+
+
+def test_a_leftover_that_is_a_current_holding_is_never_sold_as_a_leftover():
+    result = rebalance(
+        portfolio(hold("005930", 0.5), leftovers={"005930": LEFT}),
+        account(500_000, stocks=[("005930", 5)]),
+        {"005930": 100_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert result == []
+
+
+def test_a_leftover_that_is_a_current_exit_is_sold_once():
+    result = rebalance(
+        portfolio(exit_("000660"), leftovers={"000660": LEFT}),
+        account(0, stocks=[("000660", 3)]),
+        {"000660": 200_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("000660", "sell", 3, "팔아요")]
