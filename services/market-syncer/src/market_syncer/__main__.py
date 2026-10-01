@@ -2,7 +2,7 @@ import sys
 from contextlib import ExitStack
 
 import sqlalchemy as sa
-from ktb_core.logging import get_logger, log_run, set_logger_level, setup_logging
+from ktb_core.logging import emit_run_logs, get_logger, set_logger_level, setup_logging
 
 from market_syncer.corporations import has_corporations, replace_index, sync_corporations
 from market_syncer.dart import fetch_corp_codes
@@ -29,7 +29,7 @@ def main() -> None:
     set_logger_level("urllib3", "INFO")
     interval = settings.kiwoom_request_interval
     failed = False
-    with log_run(log), ExitStack() as cleanup:
+    with emit_run_logs(log), ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         run_lock = cleanup.enter_context(engine.connect())
