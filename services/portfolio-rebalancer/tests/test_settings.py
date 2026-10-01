@@ -29,3 +29,14 @@ def test_a_secret_shorter_than_the_backend_accepts_is_refused(monkeypatch):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_a_short_secret_is_not_echoed_in_the_error(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET", "hunter2-short-secret")
+
+    with pytest.raises(ValidationError) as error:
+        Settings()
+
+    assert "hunter2-short-secret" not in str(error.value)

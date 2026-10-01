@@ -5,7 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="PORTFOLIO_BUILDER_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="PORTFOLIO_BUILDER_", extra="ignore", hide_input_in_errors=True
+    )
 
     postgres_dsn: str
     questdb_conf: str
