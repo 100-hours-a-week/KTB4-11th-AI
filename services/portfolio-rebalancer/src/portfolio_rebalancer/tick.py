@@ -34,25 +34,20 @@ from portfolio_rebalancer.order.repository import SKIPPED as SKIP_STATUS
 from portfolio_rebalancer.portfolio import find_latest_portfolio
 from portfolio_rebalancer.trading_days import days_left
 
-# KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
 
 
 def market_now() -> datetime:
-    # The service may run anywhere; the market is in Seoul.
     return datetime.now(KST)
 
 
 def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: StructuredLogger) -> int:
-    # The logger carries the run_id bound in __main__. The clock is read
     now = market_now()
-    # Polling is hourly, so the gap between two tick_start lines is the cadence itself.
     log.info("tick_start", at=now.isoformat(), market_date=now.date().isoformat())
 
     with engine.begin() as conn:
         portfolio = find_latest_portfolio(conn)
     if portfolio is None:
-        # Nothing can be rebalanced without one, so this is louder than a note.
         log.warning("portfolio_missing")
         return 0
     _log_portfolio(log, portfolio)
@@ -71,8 +66,6 @@ def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: StructuredLog
 
 
 def _log_portfolio(log: StructuredLogger, portfolio: Any) -> None:
-    # What the rest of the tick actually sees: a holding whose company_id has no
-    # corporations row is dropped by the join, so these counts are the ones that matter.
     (log.info if portfolio.holdings else log.warning)(
         "portfolio_loaded",
         portfolio_id=portfolio.portfolio_id,
@@ -91,14 +84,11 @@ def _log_portfolio(log: StructuredLogger, portfolio: Any) -> None:
 
 
 def _log_poll(log: StructuredLogger, polled: Sequence[User]) -> None:
-    # An empty or half-filled poll is reported here rather than passed on, because every
-    # later step would simply find nothing to do and say nothing about why.
     accounts = [account for user in polled for account in user.accounts]
     unquoted = [
-        f"{account.account_id}:{holding.get('stock_code')}"
+        f"{account.account_id}:{holding.stock_code}"
         for account in accounts
         for holding in account.stocks
-        if holding.get("current_price") is None
     ]
     (log.warning if len(polled) == 0 else log.info)(
         "backend_poll",
@@ -141,16 +131,10 @@ def _account(engine, db, client, portfolio, account: Account, now, log) -> int:
 
 
 def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence[Mapping[str, Any]]:
-    # All placeable orders go out in one request, so one order still working means the
-    # request arrived and only the reply was lost: stamp them. Nothing working at all means
-    # the Backend never took them, so the record is discarded and the next pass decides
-    # again from current prices, which is better than replaying a decision made at
-    # yesterday's.
     arrived = reached_the_backend((row["stock_code"] for row in recorded), working)
     unsent = [row["stock_code"] for row in recorded if row["sent_at"] is None]
     with engine.begin() as conn:
         if arrived:
-            # Stamped, not re-sent: the Backend already holds these.
             log.info(
                 "unsent_reconciled",
                 account_id=state.account_id,
@@ -167,8 +151,6 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
 
 
 def _open(engine, client, portfolio, state, prices, now, log) -> int:
-    # The cycle's whole budget is ahead: the trading days left in this week, so a Chuseok
-    # week gives fewer.
     left = days_left(now.date(), now)
     plan = rebalance(portfolio, state, prices, days_left=left)
     if not plan:
@@ -186,8 +168,6 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
         no_order=_no_order(portfolio, plan),
         orders=[_order_fields(order) for order in plan],
     )
-    # Skips are recorded because "we could not buy this" is part of the decision, but
-    # there is nothing to place for them.
     with engine.begin() as conn:
         record_orders(conn, portfolio.portfolio_id, plan)
     return _send(engine, client, portfolio, state, placeable, log)
@@ -196,9 +176,6 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
 def _continue(
     engine, client, portfolio, state, working, recorded, started, now, prices, quoted, log
 ):
-    # Buys grow as the sells fill, so the plan is recomputed every pass and the orders are
-    # brought in line with it. A stock the plan has already placed at the right quantity and
-    # band is left alone, which is what makes the hourly poll idempotent within a day.
     left = days_left(started, now)
     plan = rebalance(portfolio, state, prices, days_left=left)
     references = {
@@ -209,27 +186,13 @@ def _continue(
     placed = {code for code, _ in working}
     known = {row["stock_code"] for row in recorded}
 
-    # An order already on the market keeps the quantity it was placed with; only its band
-    # moves, which `narrow` does. Re-deriving its quantity every pass would size it
-    # against cash the order itself has committed, and it would wobble instead of settle.
     place, amend, suppressed = [], [], []
     for order in (o for o in plan if o.action != SKIP):
         if order.stock_code in placed:
-            # The duplicate guard: one order per stock and side is already on the book, so
-            # the plan's copy of it is dropped rather than sent a second time.
             suppressed.append(order.stock_code)
             continue
-        # Nothing is on the market for this stock, and the plan still asks for it: either
-        # it was never placed, or it left the book without filling.
         (place if order.stock_code not in known else amend).append(order)
-
-    # A working order whose trigger the market has reached stops waiting: crossing it is
-    # the signal that the limit is not going to fill on the terms it was placed on.
     struck = _struck(portfolio, state, working, references, recorded, prices, log)
-    # An order the record already shows at market has no band left to move to, so narrowing
-    # it again would post the same market order on every later pass. Only an order that
-    # stayed on the book after going at market gets here, and that is exactly the state the
-    # hourly poll keeps finding.
     settled = {row["stock_code"] for row in recorded if row["status"] == MARKET_STATUS}
     settled |= {order.stock_code for order in struck}
     requote = narrow(portfolio, state, _without(working, settled), references, started, now)
@@ -264,9 +227,6 @@ def _continue(
 
 
 def _no_order(portfolio, plan) -> list[str]:
-    # A company the model portfolio names that produced no line at all this pass: either it
-    # already sits at its target, or the cash on hand could not reach it and a later pass
-    # will, once the sells have filled. Without this the two look identical from the logs.
     named = {company.stock_code for company in portfolio.holdings}
     named |= {leaving.stock_code for leaving in portfolio.exits}
     return sorted(named - {order.stock_code for order in plan})
@@ -313,9 +273,6 @@ def _log_continue(
             reason="already at market or struck this pass; no rung left to move to",
         )
 
-    # A recorded order that has left the book and that the plan no longer asks for has
-    # filled, and the line below is the evidence that nothing re-ordered it. Skips never
-    # went to the Backend, so they are not counted as fills.
     ordered = {row["stock_code"] for row in recorded if row["status"] != SKIP_STATUS}
     wanted = {order.stock_code for order in plan if order.action != SKIP}
     log.info(
@@ -331,7 +288,6 @@ def _log_continue(
     )
 
     if requote:
-        # The ladder narrowing, rung by rung: band 0.05 -> 0.03 -> 0.01 -> at_market.
         log.info(
             "ladder_step",
             account_id=state.account_id,
@@ -352,10 +308,6 @@ def _log_continue(
 
 
 def _prices(db, portfolio, state, quoted, log) -> dict[str, float]:
-    # The poll's live quote takes precedence, but it now rides on pending orders rather
-    # than on holdings, so it covers only what is still outstanding. QuestDB's close
-    # answers for everything else, which is most of the portfolio on a quiet pass. The
-    # precedence is the omission below rather than the merge: the two never share a code.
     wanted = {company.stock_code for company in portfolio.holdings}
     wanted |= {leaving.stock_code for leaving in portfolio.exits}
     wanted |= set(state.held)
@@ -377,8 +329,6 @@ def _prices(db, portfolio, state, quoted, log) -> dict[str, float]:
 
 
 def _struck(portfolio, state, working, references, recorded, quoted, log) -> list:
-    # The trigger is what the record kept, not something the poll reports: the Backend only
-    # holds the limit side.
     triggers = {
         row["stock_code"]: float(row["trigger_price"])
         for row in recorded
@@ -419,17 +369,12 @@ def _without(working, codes):
 
 
 def _send(engine, client, portfolio, state, orders, log) -> int:
-    # Orders are committed before they are sent, in their own transaction: holding it open
-    # across the send would roll the record back on a failed send, and if the request had
-    # already reached the Backend there would be a live order nothing knows about.
     if not orders:
         return 0
 
     hollow = [order.stock_code for order in orders if order.shares <= 0 or order.reference is None]
     if hollow:
         log.warning("orders_incomplete", account_id=state.account_id, codes=hollow)
-    # Logged before the send and again after it, so a request that never came back leaves
-    # an orders_sending line with no orders_sent line to match it.
     log.info(
         "orders_sending",
         account_id=state.account_id,
