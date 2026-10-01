@@ -4,7 +4,7 @@ elsewhere, so these fakes stand in for the datastores and the Backend."""
 import logging
 from datetime import UTC, date, datetime, timedelta, timezone
 
-from ktb_core.logging import bind_logger
+from ktb_core.logging import get_logger
 from portfolio_rebalancer import tick as tick_module
 from portfolio_rebalancer.market import Price
 from portfolio_rebalancer.order.reservations import PRICE_BANDS, limit_and_trigger
@@ -122,6 +122,7 @@ class Fakes:
         self.marked: list[tuple] = []
         self.saved: list[list] = []
         self._recorded = recorded if recorded is not None else {}
+        self._monkeypatch = monkeypatch
         self.discarded: list[tuple] = []
         self.today = TUESDAY
 
@@ -201,14 +202,16 @@ class Fakes:
                 )
 
     def run(self, now=None, log=None):
+        """`now` still reads as an argument at every call site, but it is applied by
+        patching the clock rather than by threading a parameter through `tick`."""
         now = now or noon(TUESDAY)
         self.today = now.date()
+        self._monkeypatch.setattr(tick_module, "market_now", lambda: now)
         return tick(
             _Engine(),
             "db",
             "client",
-            now=now,
-            log=log or bind_logger(logging.getLogger("portfolio_rebalancer")),
+            log=log or get_logger("portfolio_rebalancer"),
         )
 
 
@@ -814,14 +817,20 @@ def test_an_order_already_at_market_is_not_sent_again(monkeypatch):
 class Events:
     """Collects the structured events one tick emits, in order.
 
-    The signature mirrors ktb_core.logging.bind_logger's returned callable.
+    The methods mirror ktb_core.logging.StructuredLogger.
     """
 
     def __init__(self):
         self.seen: list[tuple] = []
 
-    def __call__(self, event, level=logging.INFO, **fields):
-        self.seen.append((event, level, fields))
+    def info(self, event, **fields):
+        self.seen.append((event, logging.INFO, fields))
+
+    def warning(self, event, **fields):
+        self.seen.append((event, logging.WARNING, fields))
+
+    def error(self, event, **fields):
+        self.seen.append((event, logging.ERROR, fields))
 
     @property
     def names(self):

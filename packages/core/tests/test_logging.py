@@ -1,7 +1,7 @@
 import json
 import logging
 
-from ktb_core.logging import bind_logger, setup_logging
+from ktb_core.logging import bind_logger, get_logger, setup_logging
 
 
 def test_emits_one_json_object_per_record(capsys):
@@ -88,3 +88,20 @@ def test_bind_logger_puts_bound_fields_on_every_line(capsys):
     assert payload["run_id"] == "run-1"
     assert payload["name"] == "search_graph"
     assert payload["is_error"] is True
+
+
+def test_get_logger_binds_fields_and_preserves_exception(capsys):
+    setup_logging("INFO", service_name="svc")
+    log = get_logger("svc").bind(run_id="run-1")
+
+    try:
+        raise ValueError("bad")
+    except ValueError:
+        log.exception("sync_failed", corp_code="42")
+
+    payload = json.loads(capsys.readouterr().out.strip())
+    assert payload["message"] == "sync_failed"
+    assert payload["level"] == "ERROR"
+    assert payload["run_id"] == "run-1"
+    assert payload["corp_code"] == "42"
+    assert "ValueError: bad" in payload["exception"]

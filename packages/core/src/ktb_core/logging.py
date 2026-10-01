@@ -10,6 +10,38 @@ from typing import Any
 BoundLogger = Callable[..., None]
 
 
+class StructuredLogger:
+    def __init__(self, logger: logging.Logger, **bound: Any) -> None:
+        self.logger = logger
+        self.bound = bound
+
+    def bind(self, **fields: Any) -> "StructuredLogger":
+        return StructuredLogger(self.logger, **self.bound, **fields)
+
+    def _log(self, level: int, event: str, *, exc_info: bool = False, **fields: Any) -> None:
+        self.logger.log(level, event, extra={"fields": {**self.bound, **fields}}, exc_info=exc_info)
+
+    def info(self, event: str, **fields: Any) -> None:
+        self._log(logging.INFO, event, **fields)
+
+    def warning(self, event: str, **fields: Any) -> None:
+        self._log(logging.WARNING, event, **fields)
+
+    def error(self, event: str, **fields: Any) -> None:
+        self._log(logging.ERROR, event, **fields)
+
+    def exception(self, event: str, **fields: Any) -> None:
+        self._log(logging.ERROR, event, exc_info=True, **fields)
+
+
+def get_logger(name: str, **bound: Any) -> StructuredLogger:
+    return StructuredLogger(logging.getLogger(name), **bound)
+
+
+def set_logger_level(name: str, level: str) -> None:
+    logging.getLogger(name).setLevel(level.upper())
+
+
 class JsonFormatter(logging.Formatter):
     def __init__(self, service_name: str) -> None:
         super().__init__()

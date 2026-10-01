@@ -7,43 +7,48 @@
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
-- `portfolio-rebalancer`: 모델 포트폴리오를 매수·매도 요청으로 바꾸는 주기 실행 작업
-- `portainer`: 컨테이너 상태와 CPU, 메모리, 네트워크, 디스크 I/O를 조회하고 노드 알림을 보내는 관리 UI
+- `portfolio-rebalancer`:  포트폴리오를 매수·매도 요청으로 바꾸는 
 
-## 컨테이너 메트릭
+```mermaid
+flowchart LR
+    subgraph EXT["External"]
+        NEWS["뉴스"]
+        KIWOOM["Kiwoom"]
+        OPENROUTER["OpenRouter"]
+    end
 
-Portainer는 기본 Compose 실행에 포함됩니다.
+    subgraph AI["KTB4-11th-AI"]
+        NP["news-preprocessor"]
+        NC["news-clusterer"]
+        NGB["news-graph-builder"]
+        MC["market-collector"]
+        PB["portfolio-builder"]
+        PRH["portfolio-rebalancer-http"]
 
-```bash
-docker compose -f compose.dev.yaml up -d
+        PG[("PostgreSQL")]
+        QDB[("QuestDB")]
+    end
+
+    subgraph BACKEND["KTB4-11th-BE"]
+        BE["Backend"]
+    end
+
+    NEWS --> NP
+    NP <--> PG
+    NC <--> PG
+    NGB <--> PG
+
+    KIWOOM --> MC
+    MC <--> QDB
+
+    PG <-->|model portfolio| PB
+    QDB <--> PB
+    OPENROUTER <--> PB
+
+    PG <-->|model portfolio| PRH
+    PRH -->|buy sell requests| BE
+	BE -->|register user portfolio| PRH
 ```
-
-시작 후 `https://localhost:9443`에 접속해 관리자 계정을 만들고 Portainer Business Edition
-라이선스를 등록합니다. 로컬 환경의 `Containers`에서 컨테이너를 선택하고 `Stats`를 열면
-실시간 메트릭을 볼 수 있습니다. 자체 서명 인증서를 사용하므로 처음 접속할 때 브라우저
-경고가 표시될 수 있습니다.
-
-알림은 관리자 계정으로 다음 순서로 설정합니다.
-
-1. `Settings` → `General` → `Additional functionality`에서 `Observability`를 활성화합니다.
-2. `Alerting` → `Settings`에서 `internal` Alertmanager를 활성화합니다.
-3. Slack, 이메일, Microsoft Teams 또는 Webhook 채널을 추가하고 `Test`로 전송을 확인합니다.
-4. `Alerting` → `Rules`에서 `Environment High CPU Usage %`,
-   `Environment High Memory Usage %`, `Environment Down` 규칙을 활성화합니다.
-
-CPU와 메모리 규칙은 개별 컨테이너가 아니라 Docker 환경인 단일 노드 전체 사용량을
-감시합니다. Portainer와 감시 대상이 같은 노드에 있으므로 노드 자체가 중단되면 Portainer도
-알림을 전송할 수 없습니다. EC2 상태 검사 실패 알림은 CloudWatch에 별도로 유지해야 합니다.
-
-포트가 겹치면 `PORTAINER_HTTPS_PORT`로 호스트 포트를 바꿀 수 있습니다.
-
-```bash
-PORTAINER_HTTPS_PORT=10443 docker compose -f compose.dev.yaml up -d portainer
-```
-
-Portainer는 호스트의 Docker 소켓에 접근하므로 호스트의 컨테이너를 제어할 수 있습니다.
-운영 환경에서는 9443 포트를 신뢰할 수 있는 네트워크에만 허용하고 강한 관리자 비밀번호를
-설정해야 합니다. Portainer 설정과 계정은 `portainer-data` 볼륨에 유지됩니다.
 
 ## 데이터베이스 (ERD)
 
