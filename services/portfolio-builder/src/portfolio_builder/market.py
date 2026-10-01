@@ -37,11 +37,9 @@ class QuestDBMarket(Market):
         view = VIEWS[timeframe]
         session = " AND session = 'regular'" if timeframe in SESSION_FILTERED else ""
         records = self._records(
-            f"SELECT ts, high, low, close, volume FROM {view} "
-            f"WHERE symbol = $1{session} ORDER BY ts DESC LIMIT $2",
-            [symbol, LIMIT],
+            f"SELECT ts, high, low, close, volume FROM {view} WHERE symbol = $1{session} LIMIT $2",
+            [symbol, -LIMIT],
         )
-        records.reverse()
 
         def column(name: str) -> Array:
             return np.array([r[name] for r in records], dtype=np.float64)
