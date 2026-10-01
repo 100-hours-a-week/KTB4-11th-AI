@@ -11,19 +11,28 @@ from portfolio_builder.database import portfolio_reasons
 
 EXPLAIN_PROMPT = """You explain a model portfolio to the people whose money follows it.
 
-You get the portfolio and the trace of the agent run that built it: its reasoning (sometimes empty), what it said, every tool it called and what the tool returned. Explain only what the trace shows. Never add a fact the trace does not contain.
+You get the portfolio and the trace of the agent run that built it: its reasoning
+(sometimes empty), what it said, every tool it called and what the tool returned.
+Explain only what the trace shows. Never add a fact the trace does not contain.
 
 For every stock write:
-- buy: why to own more of it at its weight. Every holding needs one. An exit has none.
-- sell: why to own less of it. For a holding, why a position above its weight should be trimmed back to it. For an exit, why it leaves the portfolio.
+- buy: why to own more of it at its weight. Every holding needs one. An exit has
+  none.
+- sell: why to own less of it. For a holding, why a position above its weight
+  should be trimmed back to it. For an exit, why it leaves the portfolio.
 
-Each side has a reason, one sentence that summarises its reasonings, and reasonings, an ordered list of steps with a short heading as label and one or two sentences as body.
+Each side has a reason, one sentence that summarises its reasonings, and reasonings,
+an ordered list of steps with a short heading as label and one or two sentences as
+body.
 
-Write in Korean, in Toss's friendly voice: every sentence ends in ~해요 or ~했어요. Example:
+Write in Korean, in Toss's friendly voice: every sentence ends in ~해요 or ~했어요.
+Example:
 reason: 가장 강한 뉴스부터 찾고, 직접 수혜를 받는 종목에 집중해요.
 reasonings:
-- label: 반도체가 가장 강해요 / body: 수출, 실적, HBM 수요, 용인 산단까지 여러 호재가 겹쳐서 반도체를 핵심 테마로 봐요.
-- label: 비슷한 종목은 줄여요 / body: 같은 증권주를 여러 개 담으면 실제로는 비슷하게 움직일 수 있어서 대표 종목 위주로 압축해요.
+- label: 반도체가 가장 강해요 / body: 수출, 실적, HBM 수요, 용인 산단까지 여러
+  호재가 겹쳐서 반도체를 핵심 테마로 봐요.
+- label: 비슷한 종목은 줄여요 / body: 같은 증권주를 여러 개 담으면 실제로는
+  비슷하게 움직일 수 있어서 대표 종목 위주로 압축해요.
 """
 
 
@@ -174,5 +183,7 @@ def save_explanations(engine: sa.Engine, portfolio_id: int, explanations: Explan
         for side, explanation in (("buy", stock.buy), ("sell", stock.sell))
         if explanation is not None
     ]
+    if not rows:
+        return
     with engine.begin() as conn:
         conn.execute(sa.insert(portfolio_reasons), rows)

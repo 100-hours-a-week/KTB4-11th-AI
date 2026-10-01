@@ -185,3 +185,22 @@ def test_save_explanations_writes_one_row_per_side(engine):
         (HYNIX, "sell"),
     ]
     assert rows[0].reasonings == [{"label": "HBM", "body": "늘었어요."}]
+
+
+def test_save_explanations_handles_empty_stocks(engine):
+    with engine.begin() as conn:
+        portfolio_id = conn.execute(
+            sa.text(
+                "INSERT INTO portfolios (cash_weight, commentary, model)"
+                " VALUES (1.0, 'c', 'm') RETURNING id"
+            )
+        ).scalar_one()
+
+    save_explanations(engine, portfolio_id, Explanations(stocks=[]))
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text("SELECT COUNT(*) FROM portfolio_reasons WHERE portfolio_id = :id"),
+            {"id": portfolio_id},
+        ).scalar_one()
+    assert rows == 0
