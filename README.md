@@ -78,8 +78,10 @@ erDiagram
     themes ||--o{ theme_companies : "구성 종목"
     portfolios ||--o{ portfolio_holdings : "편입 종목"
     portfolios ||--o{ portfolio_exits : "편출 종목"
+    portfolios ||--o{ portfolio_reasons : "종목별 설명"
     corporations ||--o{ portfolio_holdings : "corp_code"
     corporations ||--o{ portfolio_exits : "corp_code"
+    corporations ||--o{ portfolio_reasons : "corp_code"
 
     articles {
         bigint id PK
@@ -159,6 +161,7 @@ erDiagram
         double cash_weight
         text commentary
         text model
+        jsonb trace
     }
     portfolio_holdings {
         bigint portfolio_id PK, FK "ON DELETE CASCADE"
@@ -172,6 +175,13 @@ erDiagram
         text company_id PK, FK "corporations.corp_code"
         text reason
         bigint_array cited_cluster_ids
+    }
+    portfolio_reasons {
+        bigint portfolio_id PK, FK "ON DELETE CASCADE"
+        text company_id PK, FK "corporations.corp_code"
+        text side PK "buy or sell"
+        text reason
+        jsonb reasonings
     }
 ```
 
