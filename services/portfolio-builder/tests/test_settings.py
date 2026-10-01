@@ -65,3 +65,12 @@ def test_rejects_an_empty_api_key(monkeypatch):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_explain_defaults(monkeypatch):
+    _populate(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.explain_result_chars == 2000
+    assert settings.explain_max_tokens == 16000

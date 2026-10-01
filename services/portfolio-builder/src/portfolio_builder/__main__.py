@@ -7,7 +7,15 @@ from langchain_openrouter import ChatOpenRouter
 from portfolio_builder.agent.run import run_agent
 from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
 from portfolio_builder.briefing import load_briefing
+from portfolio_builder.explain import (
+    ExplanationRejected,
+    Explanations,
+    explain,
+    load_targets,
+    save_explanations,
+)
 from portfolio_builder.market import QuestDBMarket
+from portfolio_builder.portfolio import save_trace
 from portfolio_builder.settings import Settings
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
@@ -66,6 +74,34 @@ def main() -> None:
                 max_turns=settings.max_turns,
                 log=log,
             )
+            error = result.error
+            if result.outcome == "saved":
+                save_trace(engine, result.portfolio_id, result.trace)
+                explainer = ChatOpenRouter(
+                    model=settings.llm_model,
+                    api_key=settings.openrouter_api_key,
+                    max_tokens=settings.explain_max_tokens,
+                ).with_structured_output(Explanations, include_raw=True)
+                try:
+                    explanations = explain(
+                        explainer,
+                        load_targets(engine, result.portfolio_id),
+                        result.trace,
+                        settings.explain_result_chars,
+                    )
+                    save_explanations(engine, result.portfolio_id, explanations)
+                    log.info(
+                        "explained",
+                        portfolio_id=result.portfolio_id,
+                        stocks=len(explanations.stocks),
+                    )
+                except ExplanationRejected as rejected:
+                    error = f"explain: {rejected}"
+                    log.error(
+                        "explain_failed",
+                        portfolio_id=result.portfolio_id,
+                        error=str(rejected),
+                    )
         finally:
             engine.dispose()
 
@@ -74,7 +110,7 @@ def main() -> None:
             portfolio_id=result.portfolio_id,
             turns=result.turns,
             usage=result.usage,
-            error=result.error,
+            error=error,
         )
         raise SystemExit(0 if result.outcome == "saved" else 1)
 

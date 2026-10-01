@@ -15,3 +15,5 @@ class Settings(BaseSettings):
     news_window_days: int = Field(default=7, gt=0)
     max_turns: int = Field(default=150, gt=0)
     log_level: str = "INFO"
+    explain_result_chars: int = Field(default=2000, gt=0)
+    explain_max_tokens: int = Field(default=16000, gt=0)
