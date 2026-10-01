@@ -95,7 +95,9 @@ def test_syncs_corporations_index_and_themes(env, engine, query, market_data, ca
     ) == [("100", "000660", False), ("100", "005930", True)]
     assert market_data.client.auth.tokens == 1
     assert market_data.dart_keys == [SECRETS[2]]
-    assert "members=1 skipped=1" in caplog.text
+    index_log = next(record for record in caplog.records if record.getMessage() == "index_synced")
+    assert index_log.fields["members"] == 1
+    assert index_log.fields["skipped"] == 1
 
 
 def test_no_secret_is_logged(env, engine, market_data, monkeypatch, caplog):

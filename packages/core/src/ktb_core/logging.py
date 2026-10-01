@@ -3,11 +3,84 @@
 import json
 import logging
 import sys
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from types import TracebackType
 from typing import Any
 
 BoundLogger = Callable[..., None]
+
+
+class StructuredLogger:
+    def __init__(self, logger: logging.Logger, **bound: Any) -> None:
+        self.logger = logger
+        self.bound = bound
+
+    def bind(self, **fields: Any) -> "StructuredLogger":
+        return StructuredLogger(self.logger, **self.bound, **fields)
+
+    def _log(self, level: int, event: str, *, exc_info: bool = False, **fields: Any) -> None:
+        self.logger.log(level, event, extra={"fields": {**self.bound, **fields}}, exc_info=exc_info)
+
+    def info(self, event: str, **fields: Any) -> None:
+        self._log(logging.INFO, event, **fields)
+
+    def warning(self, event: str, **fields: Any) -> None:
+        self._log(logging.WARNING, event, **fields)
+
+    def error(self, event: str, **fields: Any) -> None:
+        self._log(logging.ERROR, event, **fields)
+
+    def exception(self, event: str, **fields: Any) -> None:
+        self._log(logging.ERROR, event, exc_info=True, **fields)
+
+
+def get_logger(name: str, **bound: Any) -> StructuredLogger:
+    return StructuredLogger(logging.getLogger(name), **bound)
+
+
+class start_logging:
+    def __init__(self, log: StructuredLogger, **fields: Any) -> None:
+        self.log = log
+        self.fields = fields
+        self.end: dict[str, Any] = {}
+
+    def __enter__(self) -> dict[str, Any]:
+        self.started = time.perf_counter()
+        self.log.info("run_start", **self.fields)
+        return self.end
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        elapsed_ms = round((time.perf_counter() - self.started) * 1000)
+        if error is None:
+            self.log.info(
+                "run_end", **{"outcome": "ok", **self.end}, exit_code=0, elapsed_ms=elapsed_ms
+            )
+        elif isinstance(error, SystemExit):
+            failed = error.code not in (None, 0)
+            (self.log.error if failed else self.log.info)(
+                "run_end",
+                **{"outcome": "error" if failed else "ok", **self.end},
+                exit_code=error.code or 0,
+                elapsed_ms=elapsed_ms,
+            )
+        else:
+            self.log.exception(
+                "run_end",
+                **{**self.end, "outcome": "error", "error": f"{type(error).__name__}: {error}"},
+                exit_code=1,
+                elapsed_ms=elapsed_ms,
+            )
+
+
+def set_logger_level(name: str, level: str) -> None:
+    logging.getLogger(name).setLevel(level.upper())
 
 
 class JsonFormatter(logging.Formatter):

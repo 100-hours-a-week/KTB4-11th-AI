@@ -1,24 +1,22 @@
-import logging
 import resource
 import time
 from contextlib import ExitStack
 
 import sqlalchemy as sa
-from ktb_core.logging import setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from news_clusterer.dbscan import NOISE, dbscan
 from news_clusterer.match import match
 from news_clusterer.settings import Settings
 from news_clusterer.storage import load_assignment, load_embeddings, write_clusters
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="news-clusterer")
-    logger.info("news-clusterer started")
-    with ExitStack() as cleanup:
+    with start_logging(log), ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         started = time.perf_counter()
@@ -33,17 +31,15 @@ def main() -> None:
             if label != NOISE:
                 new.setdefault(label, set()).add(article_id)
         clustered_count = sum(len(members) for members in new.values())
-        # Keep this key=value format stable: it decides when to leave full-recompute DBSCAN.
-        logger.info(
-            "clustering cost: articles=%d clusters=%d noise=%d load_seconds=%.2f"
-            " dbscan_seconds=%.2f peak_rss_mib=%d",
-            len(article_ids),
-            len(new),
-            len(article_ids) - clustered_count,
-            loaded - started,
-            clustered - loaded,
-            # Linux reports ru_maxrss in KiB.
-            resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024,
+        # Keep the event and field names stable; they decide when to leave full-recompute DBSCAN.
+        log.info(
+            "clustering cost:",
+            articles=len(article_ids),
+            clusters=len(new),
+            noise=len(article_ids) - clustered_count,
+            load_seconds=loaded - started,
+            dbscan_seconds=clustered - loaded,
+            peak_rss_mib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss // 1024,
         )
 
         with engine.begin() as conn:

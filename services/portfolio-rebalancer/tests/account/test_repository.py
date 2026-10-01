@@ -5,26 +5,30 @@ from portfolio_rebalancer.database import account_holdings, account_pending_orde
 pytestmark = pytest.mark.usefixtures("migrated")
 
 
+def pending(order_id=1, **changes):
+    return {
+        "order_id": order_id,
+        "order_side": "buy",
+        "order_type": "limit",
+        "order_status": "pending",
+        "stock_code": "005930",
+        "limit_price": 1234.00,
+        "quantity": 123,
+        "current_stock_price": 1250.00,
+    } | changes
+
+
 def poll(**changes):
+    """GET /api/v1/users/ai-server: a user is its id and its accounts, nothing more."""
     account = {
         "account_id": 11,
         "account_name": "기본 계좌2",
-        "is_ai_managed": True,
-        "is_duel_account": False,
         "is_active": True,
         "cash_balance": 1234.00,
-        "stocks": [{"stock_code": "005930", "total_price": 12341234, "amount": 123}],
-        "pending_orders": [
-            {
-                "order_type": "buy",
-                "status": "pending",
-                "stock_code": "005930",
-                "price": 1234.00,
-                "amount": 123.44,
-            }
-        ],
+        "stocks": [{"stock_code": "005930", "quantity": 123, "total_cost": 12341234}],
+        "pending_orders": [pending()],
     }
-    user = {"user_id": 1, "nickname": "스톡스푼", "state": "active", "accounts": [account]}
+    user = {"user_id": 1, "accounts": [account]}
     user.update(changes)
     return [user]
 
@@ -36,40 +40,51 @@ def rows(conn, table):
 def test_a_poll_writes_the_user_the_account_the_holdings_and_the_pending_orders(conn):
     write_poll(conn, poll())
 
-    assert [row["nickname"] for row in rows(conn, users)] == ["스톡스푼"]
+    assert [row["user_id"] for row in rows(conn, users)] == [1]
     assert [row["account_id"] for row in rows(conn, accounts)] == [11]
     assert [row["stock_code"] for row in rows(conn, account_holdings)] == ["005930"]
     assert [row["stock_code"] for row in rows(conn, account_pending_orders)] == ["005930"]
 
 
-def test_a_holdings_renamed_columns_carry_the_payloads_values(conn):
+def test_a_holding_carries_the_payloads_quantity_and_cost(conn):
     write_poll(conn, poll())
 
     holding = rows(conn, account_holdings)[0]
-    assert float(holding["quantity"]) == 123.0
-    assert float(holding["principal"]) == 12_341_234.0
+    assert holding["quantity"] == 123
+    assert float(holding["total_cost"]) == 12_341_234.0
 
 
-def test_a_fractional_pending_quantity_is_stored_as_sent(conn):
-    """The mirror keeps what the Backend sent; rounding to whole shares belongs to the
-    code that decides orders, not to the mirror."""
+def test_a_pending_order_keeps_the_backends_id_side_and_quote(conn):
     write_poll(conn, poll())
 
-    assert float(rows(conn, account_pending_orders)[0]["quantity"]) == 123.44
+    order = rows(conn, account_pending_orders)[0]
+    assert (order["order_id"], order["order_side"], order["order_type"]) == (1, "buy", "limit")
+    assert order["order_status"] == "pending"
+    assert (order["quantity"], float(order["limit_price"])) == (123, 1234.0)
+    assert float(order["current_stock_price"]) == 1250.0
+
+
+def test_a_market_order_is_stored_with_no_limit_price(conn):
+    market = poll()
+    market[0]["accounts"][0]["pending_orders"] = [pending(order_type="market", limit_price=None)]
+
+    write_poll(conn, market)
+
+    assert rows(conn, account_pending_orders)[0]["limit_price"] is None
 
 
 def test_a_second_poll_updates_the_user_rather_than_duplicating_it(conn):
     write_poll(conn, poll())
-    write_poll(conn, poll(nickname="이름바꿈"))
+    write_poll(conn, poll())
 
-    assert [row["nickname"] for row in rows(conn, users)] == ["이름바꿈"]
+    assert [row["user_id"] for row in rows(conn, users)] == [1]
 
 
 def test_a_second_poll_replaces_holdings_rather_than_adding_to_them(conn):
     """A stock sold since the last poll has to disappear, not linger."""
     write_poll(conn, poll())
     later = poll()
-    later[0]["accounts"][0]["stocks"] = [{"stock_code": "000660", "total_price": 1, "amount": 2}]
+    later[0]["accounts"][0]["stocks"] = [{"stock_code": "000660", "quantity": 2, "total_cost": 1}]
 
     write_poll(conn, later)
 
@@ -100,7 +115,8 @@ def test_several_accounts_of_one_user_each_keep_their_own_rows(conn):
     two = poll()
     second = dict(two[0]["accounts"][0])
     second["account_id"] = 12
-    second["stocks"] = [{"stock_code": "035420", "total_price": 5, "amount": 5}]
+    second["stocks"] = [{"stock_code": "035420", "quantity": 5, "total_cost": 5}]
+    second["pending_orders"] = [pending(order_id=2)]
     two[0]["accounts"] = [two[0]["accounts"][0], second]
 
     write_poll(conn, two)
@@ -119,10 +135,10 @@ def test_deleting_an_account_clears_its_holdings_and_pending_orders(conn):
     assert rows(conn, account_pending_orders) == []
 
 
-def test_an_accounts_object_is_accepted_as_well_as_a_list(conn):
-    one = poll()
-    one[0]["accounts"] = one[0]["accounts"][0]
+def test_a_user_with_no_managed_accounts_still_lands(conn):
+    """The endpoint lists every user, with an empty list when none of their accounts is
+    AI-managed."""
+    write_poll(conn, poll(accounts=[]))
 
-    write_poll(conn, one)
-
-    assert [row["account_id"] for row in rows(conn, accounts)] == [11]
+    assert [row["user_id"] for row in rows(conn, users)] == [1]
+    assert rows(conn, accounts) == []

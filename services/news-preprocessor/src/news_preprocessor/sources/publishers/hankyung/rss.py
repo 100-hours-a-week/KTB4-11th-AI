@@ -1,14 +1,14 @@
-import logging
 from dataclasses import asdict
 from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup, Tag
+from ktb_core.logging import get_logger
 
 from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.hankyung.parser import parse_article_body
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class HankyungEconomyRSS:
@@ -43,7 +43,7 @@ class HankyungEconomyRSS:
                     )
                 )
             except ValueError as error:
-                logger.warning("skipping %s feed item: %s", self.source, error)
+                log.warning("feed_item_skipped", source=self.source, error=error)
         return entries
 
     def article(self, entry: FeedEntry) -> NewsItem:

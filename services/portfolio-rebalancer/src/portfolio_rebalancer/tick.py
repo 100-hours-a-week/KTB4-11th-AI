@@ -1,11 +1,10 @@
-import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import BoundLogger
+from ktb_core.logging import StructuredLogger
 
 from portfolio_rebalancer.account import apply_pending, managed_accounts, write_poll
 from portfolio_rebalancer.backend import fetch_accounts, send_orders
@@ -46,18 +45,17 @@ def market_now() -> datetime:
     return datetime.now(KST)
 
 
-def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: BoundLogger) -> int:
-    # The logger is handed in rather than built here, so every line of one pass carries the
-    # run_id __main__ bound and there is only ever one logger in play. The clock is read
+def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: StructuredLogger) -> int:
+    # The logger carries the run_id bound in __main__. The clock is read
     now = market_now()
     # Polling is hourly, so the gap between two tick_start lines is the cadence itself.
-    log("tick_start", at=now.isoformat(), market_date=now.date().isoformat())
+    log.info("tick_start", at=now.isoformat(), market_date=now.date().isoformat())
 
     with engine.begin() as conn:
         portfolio = find_latest_portfolio(conn)
     if portfolio is None:
         # Nothing can be rebalanced without one, so this is louder than a note.
-        log("portfolio_missing", logging.WARNING)
+        log.warning("portfolio_missing")
         return 0
     _log_portfolio(log, portfolio)
 
@@ -73,7 +71,7 @@ def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: BoundLogger) 
     sent = 0
     for account in accounts:
         sent += _account(engine, client, portfolio, account, prices, now, log)
-    log("tick_end", orders_sent=sent, accounts=len(accounts))
+    log.info("tick_end", orders_sent=sent, accounts=len(accounts))
     return sent
 
 
@@ -85,12 +83,11 @@ def _accounts_of(user: Mapping[str, object]) -> list[Mapping[str, object]]:
     return list(accounts)  # type: ignore[arg-type]
 
 
-def _log_portfolio(log: BoundLogger, portfolio: Any) -> None:
+def _log_portfolio(log: StructuredLogger, portfolio: Any) -> None:
     # What the rest of the tick actually sees: a holding whose company_id has no
     # corporations row is dropped by the join, so these counts are the ones that matter.
-    log(
+    (log.info if portfolio.holdings else log.warning)(
         "portfolio_loaded",
-        logging.INFO if portfolio.holdings else logging.WARNING,
         portfolio_id=portfolio.portfolio_id,
         cash_weight=portfolio.cash_weight,
         holdings=len(portfolio.holdings),
@@ -106,7 +103,7 @@ def _log_portfolio(log: BoundLogger, portfolio: Any) -> None:
     )
 
 
-def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
+def _log_poll(log: StructuredLogger, polled: Sequence[Mapping[str, object]]) -> None:
     # An empty or half-filled poll is reported here rather than passed on, because every
     # later step would simply find nothing to do and say nothing about why.
     accounts = [account for user in polled for account in _accounts_of(user)]
@@ -115,9 +112,8 @@ def _log_poll(log: BoundLogger, polled: Sequence[Mapping[str, object]]) -> None:
         for account in accounts
         if account.get("account_id") is None or account.get("cash_balance") is None
     ]
-    log(
+    (log.warning if not polled or blank else log.info)(
         "backend_poll",
-        logging.WARNING if not polled or blank else logging.INFO,
         users=len(polled),
         accounts=len(accounts),
         managed_accounts=sum(1 for account in accounts if account.get("is_active")),
@@ -131,13 +127,13 @@ def _account(engine, client, portfolio, account, prices, now, log) -> int:
     state = apply_pending(account, prices)
     working = outstanding_orders(account.get("pending_orders") or ())
 
-    log(
+    log.info(
         "account_state",
         account_id=state.account_id,
         cash=state.cash,
         held=state.held,
         pending_orders=len(account.get("pending_orders") or ()),
-        working_orders=sorted(f"{code}:{side}" for code, side in working),
+        working_orders=sorted((f"{code}:{side}" for code, side in working)),
     )
 
     with engine.begin() as conn:
@@ -177,7 +173,7 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
     with engine.begin() as conn:
         if arrived:
             # Stamped, not re-sent: the Backend already holds these.
-            log(
+            log.info(
                 "unsent_reconciled",
                 account_id=state.account_id,
                 outcome="stamped_sent",
@@ -185,12 +181,8 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
             )
             mark_sent(conn, portfolio.portfolio_id, state.account_id)
             return find_orders(conn, portfolio.portfolio_id, state.account_id)
-        log(
-            "unsent_reconciled",
-            logging.WARNING,
-            account_id=state.account_id,
-            outcome="discarded",
-            codes=unsent,
+        log.warning(
+            "unsent_reconciled", account_id=state.account_id, outcome="discarded", codes=unsent
         )
         discard_unsent(conn, portfolio.portfolio_id, state.account_id)
         return find_orders(conn, portfolio.portfolio_id, state.account_id)
@@ -198,7 +190,7 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
 
 def _open(engine, client, portfolio, state, prices, now, log) -> int:
     if now.hour != PLACING_HOUR:
-        log(
+        log.info(
             "placing_deferred",
             account_id=state.account_id,
             cycle="open",
@@ -211,11 +203,11 @@ def _open(engine, client, portfolio, state, prices, now, log) -> int:
     day = ladder_day(now.date(), now)
     plan = rebalance(portfolio, state, prices, sell_day=day, buy_day=day)
     if not plan:
-        log("orders_none", logging.WARNING, account_id=state.account_id, ladder_day=day)
+        log.warning("orders_none", account_id=state.account_id, ladder_day=day)
         return 0
 
     placeable = _sendable([o for o in plan if o.action != SKIP], state, log)
-    log(
+    log.info(
         "orders_planned",
         account_id=state.account_id,
         cycle="open",
@@ -339,7 +331,7 @@ def _log_continue(
     settled,
 ) -> None:
     placeable = [order for order in plan if order.action != SKIP]
-    log(
+    log.info(
         "orders_planned",
         account_id=state.account_id,
         cycle="continue",
@@ -350,14 +342,14 @@ def _log_continue(
         orders=[_order_fields(order) for order in plan],
     )
     if suppressed:
-        log(
+        log.info(
             "duplicate_suppressed",
             account_id=state.account_id,
             codes=sorted(set(suppressed)),
             reason="already outstanding at the Backend",
         )
     if settled:
-        log(
+        log.info(
             "ladder_spent",
             account_id=state.account_id,
             codes=sorted(settled),
@@ -369,7 +361,7 @@ def _log_continue(
     # went to the Backend, so they are not counted as fills.
     ordered = {row["stock_code"] for row in recorded if row["status"] != SKIP_STATUS}
     wanted = {order.stock_code for order in plan if order.action != SKIP}
-    log(
+    log.info(
         "recorded_orders",
         account_id=state.account_id,
         started={side: began.isoformat() for side, began in started.items()},
@@ -383,7 +375,7 @@ def _log_continue(
 
     if requote:
         # The ladder narrowing, rung by rung: band 0.05 -> 0.03 -> 0.01 -> at_market.
-        log(
+        log.info(
             "ladder_step",
             account_id=state.account_id,
             ladder_day=days,
@@ -414,9 +406,8 @@ def _prices(db, portfolio, accounts, log) -> dict[str, float]:
     closes = latest_prices(db, sorted(wanted)) if wanted else {}
     prices = {code: price.close for code, price in closes.items()}
     unpriced = sorted(wanted - prices.keys())
-    log(
+    (log.warning if unpriced else log.info)(
         "prices_resolved",
-        logging.WARNING if unpriced else logging.INFO,
         from_questdb=sorted(prices),
         unpriced=unpriced,
         closed_at={code: price.ts.isoformat() for code, price in closes.items()},
@@ -445,7 +436,7 @@ def _struck(portfolio, state, working, references, recorded, prices, log) -> lis
         if code in hit and code in companies and code in references
     ]
     if struck:
-        log(
+        log.info(
             "trigger_struck",
             account_id=state.account_id,
             orders=[
@@ -473,9 +464,8 @@ def _sendable(orders, state, log) -> list:
     # with nothing. The fill the market rung was there to guarantee is not guaranteed.
     blocked = [order for order in orders if order.limit is None]
     if blocked:
-        log(
+        log.warning(
             "orders_blocked",
-            logging.WARNING,
             account_id=state.account_id,
             codes=[order.stock_code for order in blocked],
             reason="v1 of the Backend has no market order, so the ladder stops at its"
@@ -493,10 +483,10 @@ def _send(engine, client, portfolio, state, orders, log) -> int:
 
     hollow = [order.stock_code for order in orders if order.shares <= 0 or order.reference is None]
     if hollow:
-        log("orders_incomplete", logging.WARNING, account_id=state.account_id, codes=hollow)
+        log.warning("orders_incomplete", account_id=state.account_id, codes=hollow)
     # Logged before the send and again after it, so a request that never came back leaves
     # an orders_sending line with no orders_sent line to match it.
-    log(
+    log.info(
         "orders_sending",
         account_id=state.account_id,
         count=len(orders),
@@ -505,7 +495,7 @@ def _send(engine, client, portfolio, state, orders, log) -> int:
     send_orders(client, orders)
     with engine.begin() as conn:
         mark_sent(conn, portfolio.portfolio_id, state.account_id)
-    log("orders_sent", account_id=state.account_id, count=len(orders))
+    log.info("orders_sent", account_id=state.account_id, count=len(orders))
     return len(orders)
 
 
