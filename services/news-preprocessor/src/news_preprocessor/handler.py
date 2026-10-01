@@ -1,9 +1,8 @@
-import logging
 from typing import Any
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import setup_logging
+from ktb_core.logging import get_logger, setup_logging
 
 from news_preprocessor.embed import embed
 from news_preprocessor.embed_pending import embed_pending
@@ -11,13 +10,13 @@ from news_preprocessor.scrape import scrape
 from news_preprocessor.settings import Settings
 from news_preprocessor.sources.publishers import publishers
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, dict[str, Any]]:
     settings = Settings()
     setup_logging(settings.log_level, service_name="news-preprocessor")
-    logger.info("news-preprocessor started")
+    log.info("run_start")
     engine = sa.create_engine(settings.postgres_dsn)
     client = httpx.Client(headers={"User-Agent": settings.user_agent}, follow_redirects=True)
     try:

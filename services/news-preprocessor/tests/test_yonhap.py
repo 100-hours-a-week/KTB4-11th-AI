@@ -35,7 +35,7 @@ def test_entries_skip_headline_digests_and_a_broken_pubdate(caplog):
         "https://www.yna.co.kr/view/AKR20260924000100001",
         "https://www.yna.co.kr/view/AKR20260924000200003",
     ]
-    assert "skipping yonhap_economy feed item" in caplog.text
+    assert "feed_item_skipped" in caplog.text
 
 
 def test_pubdate_is_timezone_aware():
