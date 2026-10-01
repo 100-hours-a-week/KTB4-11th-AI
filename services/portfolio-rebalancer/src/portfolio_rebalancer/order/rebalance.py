@@ -5,6 +5,7 @@ from portfolio_rebalancer.account.dto import AccountState
 from portfolio_rebalancer.order.dto import BUY, SELL, SKIP, Order
 from portfolio_rebalancer.order.reservations import (
     PRICE_BANDS,
+    TRIGGER_BAND,
     band_for,
     limit_and_trigger,
     on_tick,
@@ -139,7 +140,12 @@ def _target_shares(
                 for company in still_open
             )
         )
-        positions, _ = whole_shares(still_open, prices, capital, cash_weight)
+        # The reference is the previous close, and a buy is costed at the trigger, so a
+        # company is only counted as affordable if its budget covers the price the order
+        # would actually be paid at. Without the margin a stock sitting just inside its
+        # budget at yesterday's close is kept, and the share it cannot buy today leaves
+        # the weight stranded instead of shared out.
+        positions, _ = whole_shares(still_open, prices, capital, cash_weight, margin=TRIGGER_BAND)
         sized = {position.stock_code: position.shares for position in positions}
         held_drops = {
             company.stock_code

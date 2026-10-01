@@ -282,16 +282,18 @@ def _continue(
     )
 
     # A buy the sells have just funded waits for the opening pass rather than going out
-    # against a close the market has had all day to leave behind.
-    if place and now.hour != PLACING_HOUR:
+    # against a close the market has had all day to leave behind. `amend` is held back for
+    # the same reason: a recorded order that has left the book without filling is priced
+    # again from scratch, which makes it a new order in all but the row it reuses.
+    if (place or amend) and now.hour != PLACING_HOUR:
         log(
             "placing_deferred",
             account_id=state.account_id,
             cycle="continue",
-            codes=[order.stock_code for order in place],
+            codes=[order.stock_code for order in (*place, *amend)],
             until=f"{PLACING_HOUR:02d}:00",
         )
-        place = []
+        place, amend = [], []
     place = _sendable(place, state, log)
     sent = 0
     if place:

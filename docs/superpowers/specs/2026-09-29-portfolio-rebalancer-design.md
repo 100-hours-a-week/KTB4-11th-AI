@@ -80,9 +80,22 @@ waits for the next day's opening rather than going out against a close the marke
 already left behind. The later passes still narrow what is on the book and still watch
 the triggers; they place nothing. A deferral is logged as `placing_deferred`.
 
+`amend` is held back on the same gate. A recorded order that has left the book without
+filling is priced again from scratch when it is put back, which makes it a new order in
+all but the row it reuses. Narrowing is not gated, because it takes its reference from
+`rebalance_orders.reference_price` rather than from a price, and the band only changes
+at a day boundary anyway.
+
 The cost is a missed 09:00 -- a pass the service did not run -- costing a day. That is
 the conservative direction for a weekly rebalance, and the alternative is sizing against
 a reference that is stale in the way that actually hurts.
+
+Because the reference is the previous close, `whole_shares` is now given a margin, and
+the value is `TRIGGER_BAND` rather than a new setting. A buy is costed at its trigger
+everywhere else, so "can this budget buy a share" is asked at the same price the order
+would actually be paid at. Without it a stock sitting just inside its budget at
+yesterday's close is kept, and the share it cannot buy today leaves the weight stranded
+instead of shared out over the companies that remain.
 
 `reason` travels as the plain string portfolio-builder stored. The Backend's current
 record wants `{decision_id, summary}`, but this service has no decision id to give: a

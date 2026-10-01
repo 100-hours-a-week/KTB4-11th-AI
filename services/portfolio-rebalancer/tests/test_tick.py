@@ -473,9 +473,25 @@ def test_a_recorded_order_that_is_no_longer_on_the_market_is_put_back(monkeypatc
         recorded={11: already},
     )
 
-    assert fakes.run(now=noon(MONDAY)) > 0
+    assert fakes.run(now=opening(MONDAY)) > 0
     assert fakes.amended
     assert fakes.recorded_rows == []
+
+
+def test_a_recorded_order_off_the_book_also_waits_for_the_opening_pass(monkeypatch):
+    """Putting it back prices it again from scratch, which makes it a new order in all
+    but the row it reuses."""
+    events = Events()
+    already = [recorded_row("005930", sent_at=datetime(2026, 9, 28, tzinfo=UTC))]
+    fakes = Fakes(
+        monkeypatch,
+        users=polled(account(cash=10_000_000.0, pending_orders=[])),
+        recorded={11: already},
+    )
+
+    assert fakes.run(now=noon(MONDAY), log=events) == 0
+    assert fakes.amended == []
+    assert events.of("placing_deferred")[0]["codes"] == ["005930"]
 
 
 def test_the_record_is_committed_before_the_send(monkeypatch):
