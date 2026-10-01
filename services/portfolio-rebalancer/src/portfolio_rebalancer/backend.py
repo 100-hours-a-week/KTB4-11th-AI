@@ -26,9 +26,9 @@ TOKEN_LIFETIME = 300
 # OrderController answers 403 AI_ORDER_ONLY unless `actor` says AI.
 TOKEN_TYPE = "access"
 ACTOR = "AI"
-# The only order type v1 of the Backend has. Market arrives in v2; until then anything
-# else is a 400.
+
 LIMIT = "limit"
+MARKET = "market"
 
 
 def build_client(backend_url: str) -> httpx.Client:
@@ -97,21 +97,16 @@ def send_orders(client: httpx.Client, orders: Sequence[Any]) -> None:
 
 
 def _as_payload(order: Any) -> Mapping[str, object]:
-    # The Backend's OrderCreateRequest. `reason` is the text portfolio-builder stored on
-    # the holding or the exit: a stock code carries one reason within a portfolio, so
-    # there is nothing else for this service to identify the decision by.
-    if order.limit is None:
-        raise ValueError(
-            f"{order.stock_code}: v1 of the Backend has only limit orders, and this has no price"
-        )
     if not order.reason:
         raise ValueError(f"{order.stock_code}: the Backend requires a reason, and this has none")
 
+    is_market = order.limit is None
+    
     return {
         "stock_code": order.stock_code,
         "order_side": order.action,
-        "order_type": LIMIT,
-        "limit_price": int(order.limit),
+        "order_type": MARKET if is_market else LIMIT,
+        "limit_price": None if is_market else int(order.limit),
         "quantity": int(order.shares),
         "reason": order.reason,
     }
