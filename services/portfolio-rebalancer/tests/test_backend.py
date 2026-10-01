@@ -121,3 +121,44 @@ def test_any_other_403_is_raised_without_a_retry():
 
     assert fake.csrf_issued == 1
     assert sum(r.method == "POST" for r in fake.requests) == 1
+
+
+class SecureCookieFakeBackend:
+    def __init__(self):
+        self.requests = []
+        self.csrf_issued = 0
+        self.post_count = 0
+
+    def __call__(self, request):
+        self.requests.append(request)
+        if request.url.path == "/api/v1/auth/csrf":
+            self.csrf_issued += 1
+            n = self.csrf_issued
+            has_cookie = "XSRF-TOKEN" in request.headers.get("cookie", "")
+            if has_cookie:
+                return httpx.Response(
+                    200, json={"token": f"masked-{n}", "header_name": "X-XSRF-TOKEN"}
+                )
+            return httpx.Response(
+                200,
+                json={"token": f"masked-{n}", "header_name": "X-XSRF-TOKEN"},
+                headers={
+                    "set-cookie": f"XSRF-TOKEN=raw-{n}; Path=/; Secure; HttpOnly; SameSite=Lax"
+                },
+            )
+        if request.method == "POST":
+            self.post_count += 1
+            if self.post_count == 1:
+                return httpx.Response(403, json={"code": "INVALID_CSRF_TOKEN", "message": "m"})
+        return httpx.Response(201, json={"order_id": 9})
+
+
+def test_csrf_retry_clears_cookies_for_https_with_secure_flag():
+    fake = SecureCookieFakeBackend()
+    client = httpx.Client(base_url="https://backend", transport=httpx.MockTransport(fake))
+    backend = Backend(client, SECRET, ISSUER)
+
+    backend.place(7, 11, ORDER)
+
+    assert fake.csrf_issued == 2
+    assert fake.requests[-1].headers["x-xsrf-token"] == "masked-2"

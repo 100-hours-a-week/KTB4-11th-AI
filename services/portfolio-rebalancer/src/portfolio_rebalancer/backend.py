@@ -51,6 +51,7 @@ class Backend:
         return Snapshot.model_validate(response.json()).users
 
     def _fresh_csrf(self) -> tuple[str, str, str]:
+        self._client.cookies.clear()
         response = self._client.get("/api/v1/auth/csrf")
         response.raise_for_status()
         cookie = SimpleCookie()
