@@ -22,8 +22,9 @@ def write_poll(conn: sa.Connection, polled_users: Sequence[Mapping[str, object]]
                 set_={"polled_at": sa.func.now()},
             )
         )
-        for account in user.get("accounts") or ():  # type: ignore[union-attr]
-            _write_account(conn, int(user["user_id"]), account)  # type: ignore[arg-type]
+        if "accounts" in user:
+          for account in user.get("accounts"):
+            _write_account(conn, int(user["user_id"]), account)
 
 
 def _write_account(conn: sa.Connection, user_id: int, account: Mapping[str, object]) -> None:
