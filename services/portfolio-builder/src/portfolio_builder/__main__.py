@@ -1,7 +1,7 @@
 import uuid
 
 import sqlalchemy as sa
-from ktb_core.logging import emit_run_logs, get_logger, setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 from langchain_openrouter import ChatOpenRouter
 
 from portfolio_builder.agent.run import run_agent
@@ -19,7 +19,7 @@ def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="portfolio-builder")
     log = get_logger(__name__, run_id=str(uuid.uuid4()))
-    with emit_run_logs(
+    with start_logging(
         log,
         provider="openrouter",
         model=settings.llm_model,

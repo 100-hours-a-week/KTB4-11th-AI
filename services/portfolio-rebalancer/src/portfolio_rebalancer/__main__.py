@@ -2,7 +2,7 @@ import uuid
 from contextlib import ExitStack
 
 import sqlalchemy as sa
-from ktb_core.logging import emit_run_logs, get_logger, setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from portfolio_rebalancer.backend import access_token, authenticate, build_client
 from portfolio_rebalancer.market import connect
@@ -17,7 +17,7 @@ def main() -> None:
     # CloudWatch and two passes can never be confused for one.
     log = get_logger(__name__, run_id=str(uuid.uuid4()))
     with (
-        emit_run_logs(log, poll_interval_hint="compose owns the interval") as end,
+        start_logging(log, poll_interval_hint="compose owns the interval") as end,
         ExitStack() as cleanup,
     ):
         engine = sa.create_engine(settings.postgres_dsn)

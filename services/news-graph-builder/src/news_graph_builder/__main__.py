@@ -3,7 +3,7 @@ from contextlib import ExitStack
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import emit_run_logs, get_logger, setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from news_graph_builder.cluster import find_cluster_articles, find_stale_clusters, lock_cluster
 from news_graph_builder.graph import (
@@ -25,7 +25,7 @@ def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="news-graph-builder")
     failed = 0
-    with emit_run_logs(log), httpx.Client() as client, ExitStack() as cleanup:
+    with start_logging(log), httpx.Client() as client, ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         run_lock = cleanup.enter_context(engine.connect())

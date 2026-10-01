@@ -3,7 +3,7 @@ from typing import Any
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import emit_run_logs, get_logger, setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from news_preprocessor.embed import embed
 from news_preprocessor.embed_pending import embed_pending
@@ -17,7 +17,7 @@ log = get_logger(__name__)
 def handler(event: dict[str, Any], context: Any) -> dict[str, dict[str, Any]]:
     settings = Settings()
     setup_logging(settings.log_level, service_name="news-preprocessor")
-    with emit_run_logs(log):
+    with start_logging(log):
         engine = sa.create_engine(settings.postgres_dsn)
         client = httpx.Client(headers={"User-Agent": settings.user_agent}, follow_redirects=True)
         try:

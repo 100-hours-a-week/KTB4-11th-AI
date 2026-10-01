@@ -40,13 +40,7 @@ def get_logger(name: str, **bound: Any) -> StructuredLogger:
     return StructuredLogger(logging.getLogger(name), **bound)
 
 
-class emit_run_logs:
-    """Log `run_start`, then exactly one `run_end` however the block exits.
-
-    Fields put in the dict returned on entry go on `run_end`. A non-zero `SystemExit` or
-    an exception logs it at ERROR; an exception always forces `outcome="error"`.
-    """
-
+class start_logging:
     def __init__(self, log: StructuredLogger, **fields: Any) -> None:
         self.log = log
         self.fields = fields
