@@ -7,7 +7,7 @@
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
 - `market-collector`: 외부 스케줄러가 실행하는 키움 OHLCV 보관 작업
-- `portfolio-rebalancer`: 모델 포트폴리오를 계좌별 시장가 매수·매도 주문으로 바꿔 Backend 에 보냅니다 
+- `portfolio-rebalancer`: 모델 포트폴리오를 계좌별 시장가 매수·매도 주문으로 바꿔 Backend 에 보냅니다
 
 ```mermaid
 flowchart LR
@@ -183,7 +183,6 @@ erDiagram
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | `market-syncer` | `0003`, `0004`, `0006` |
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
-| `users`, `accounts`, `account_holdings`, `account_pending_orders`, `rebalance_orders` | `portfolio-rebalancer` | `0007` |
 
 - `corporations` 는 DART 고유번호와 연결되는 KOSPI 종목만, `corporation_indices` 는 KOSPI 200 구성 종목만 저장합니다.
 - `themes` / `theme_companies` 는 `corporations` 에 있는 종목만 저장합니다.
