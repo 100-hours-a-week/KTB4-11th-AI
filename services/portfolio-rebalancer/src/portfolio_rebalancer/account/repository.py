@@ -1,8 +1,9 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert
 
+from portfolio_rebalancer.account.dto import Account, User
 from portfolio_rebalancer.database import (
     account_holdings,
     account_pending_orders,
@@ -11,29 +12,26 @@ from portfolio_rebalancer.database import (
 )
 
 
-def write_poll(conn: sa.Connection, polled_users: Sequence[Mapping[str, object]]) -> None:
-    # The mirror holds only the latest poll: holdings and pending orders are replaced, so a
-    # stock sold since the last poll disappears instead of lingering.
+def write_polled_users(conn: sa.Connection, polled_users: Sequence[User]) -> None:
     for user in polled_users:
-        statement = insert(users).values(user_id=user["user_id"], polled_at=sa.func.now())
+        statement = insert(users).values(user_id=user.user_id, polled_at=sa.func.now())
         conn.execute(
             statement.on_conflict_do_update(
                 index_elements=[users.c.user_id],
                 set_={"polled_at": sa.func.now()},
             )
         )
-        if "accounts" in user:
-          for account in user.get("accounts"):
-            _write_account(conn, int(user["user_id"]), account)
+        for account in user.accounts:
+            _write_account(conn, user.user_id, account)
 
 
-def _write_account(conn: sa.Connection, user_id: int, account: Mapping[str, object]) -> None:
-    account_id = int(account["account_id"])  # type: ignore[arg-type]
+def _write_account(conn: sa.Connection, user_id: int, account: Account) -> None:
+    account_id = account.account_id
     values = {
         "user_id": user_id,
-        "account_name": account["account_name"],
-        "is_active": account["is_active"],
-        "cash_balance": account["cash_balance"],
+        "account_name": account.account_name,
+        "is_active": account.is_active,
+        "cash_balance": account.cash_balance,
         "polled_at": sa.func.now(),
     }
     conn.execute(
@@ -50,7 +48,7 @@ def _write_account(conn: sa.Connection, user_id: int, account: Mapping[str, obje
             "quantity": holding["quantity"],
             "total_cost": holding["total_cost"],
         }
-        for holding in account.get("stocks") or ()  # type: ignore[union-attr]
+        for holding in account.stocks
     ]
     if holdings:
         conn.execute(insert(account_holdings), holdings)
@@ -70,7 +68,7 @@ def _write_account(conn: sa.Connection, user_id: int, account: Mapping[str, obje
             "quantity": order["quantity"],
             "current_stock_price": order.get("current_stock_price"),
         }
-        for order in account.get("pending_orders") or ()  # type: ignore[union-attr]
+        for order in account.pending_orders
     ]
     if pending:
         conn.execute(insert(account_pending_orders), pending)

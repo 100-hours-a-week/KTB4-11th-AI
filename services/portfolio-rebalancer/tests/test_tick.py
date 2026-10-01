@@ -6,6 +6,7 @@ from datetime import UTC, date, datetime, timedelta, timezone
 
 from ktb_core.logging import get_logger
 from portfolio_rebalancer import tick as tick_module
+from portfolio_rebalancer.account import User
 from portfolio_rebalancer.market import Price
 from portfolio_rebalancer.order.reservations import PRICE_BANDS, limit_and_trigger
 from portfolio_rebalancer.portfolio import Exit, Holding, Portfolio
@@ -132,7 +133,7 @@ class Fakes:
         model = portfolio() if model is None else model
         prices = {"005930": 78_000.0, "000660": 412_000.0} if prices is None else prices
         self.users = _quote(polled() if users is None else users, quoted or {})
-        users = self.users
+        users = [User.from_payload(user) for user in self.users]
         self.asked = []
 
         def note(name, value=None):
@@ -144,7 +145,7 @@ class Fakes:
         )
         monkeypatch.setattr(tick_module, "fetch_accounts", lambda c: note("fetch", users))
         monkeypatch.setattr(
-            tick_module, "write_poll", lambda conn, u: note("save") or self.saved.append(u)
+            tick_module, "write_polled_users", lambda conn, u: note("save") or self.saved.append(u)
         )
         monkeypatch.setattr(
             tick_module,
@@ -248,7 +249,7 @@ def test_the_poll_is_mirrored_before_anything_is_decided(monkeypatch):
     fakes.run()
 
     assert fakes.calls.index("save") < fakes.calls.index("stored")
-    assert fakes.saved == [fakes.users]
+    assert fakes.saved == [[User.from_payload(user) for user in fakes.users]]
 
 
 def test_a_fresh_account_is_recorded_before_it_is_sent(monkeypatch):

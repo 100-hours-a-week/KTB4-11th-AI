@@ -6,6 +6,8 @@ different field from `order_type`, where the Backend puts limit or market.
 """
 
 from portfolio_rebalancer.account import (
+    Account,
+    User,
     apply_pending,
     managed_accounts,
     polled_prices,
@@ -21,11 +23,12 @@ def account(**changes):
         "stocks": [{"stock_code": "005930", "total_cost": 7_800_000, "quantity": 100}],
         "pending_orders": [],
     }
-    return values | changes
+    return Account.from_payload(values | changes)
 
 
 def user(**changes):
-    return {"user_id": 1, "accounts": [account()]} | changes
+    values = {"user_id": 1, "accounts": [account()]} | changes
+    return User(user_id=values["user_id"], accounts=tuple(values["accounts"]))
 
 
 def order(**changes):
@@ -164,7 +167,7 @@ def test_every_account_of_a_user_is_yielded_not_just_the_first():
 
     yielded = list(managed_accounts([user(accounts=accounts)]))
 
-    assert [a["account_id"] for a in yielded] == [11, 12, 13]
+    assert [a.account_id for a in yielded] == [11, 12, 13]
 
 
 def test_an_inactive_account_is_skipped():
@@ -172,7 +175,7 @@ def test_an_inactive_account_is_skipped():
 
     yielded = list(managed_accounts([user(accounts=accounts)]))
 
-    assert [a["account_id"] for a in yielded] == [12]
+    assert [a.account_id for a in yielded] == [12]
 
 
 def test_accounts_of_several_users_all_come_through():
@@ -183,14 +186,14 @@ def test_accounts_of_several_users_all_come_through():
 
     yielded = list(managed_accounts(users))
 
-    assert [a["account_id"] for a in yielded] == [11, 21, 22]
+    assert [a.account_id for a in yielded] == [11, 21, 22]
 
 
 def test_a_user_with_no_ai_accounts_is_listed_but_yields_nothing():
     """The endpoint returns every user, with an empty list for those it manages none of."""
     users = [user(user_id=1, accounts=[]), user(user_id=2, accounts=[account(account_id=21)])]
 
-    assert [a["account_id"] for a in managed_accounts(users)] == [21]
+    assert [a.account_id for a in managed_accounts(users)] == [21]
     assert list(managed_accounts([])) == []
 
 

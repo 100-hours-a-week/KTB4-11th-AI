@@ -6,7 +6,13 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import StructuredLogger
 
-from portfolio_rebalancer.account import apply_pending, managed_accounts, polled_prices, write_poll
+from portfolio_rebalancer.account import (
+    apply_pending,
+    managed_accounts,
+    polled_prices,
+    write_polled_users,
+)
+from portfolio_rebalancer.account.dto import Account, User
 from portfolio_rebalancer.backend import fetch_accounts, send_orders
 from portfolio_rebalancer.market import latest_prices
 from portfolio_rebalancer.order import (
@@ -54,7 +60,7 @@ def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: StructuredLog
     polled = fetch_accounts(client)
     _log_poll(log, polled)
     with engine.begin() as conn:
-        write_poll(conn, polled)
+        write_polled_users(conn, polled)
 
     accounts = list(managed_accounts(polled))
     sent = 0
@@ -62,14 +68,6 @@ def tick(engine: sa.Engine, db: Any, client: httpx.Client, *, log: StructuredLog
         sent += _account(engine, db, client, portfolio, account, now, log)
     log.info("tick_end", orders_sent=sent, accounts=len(accounts))
     return sent
-
-
-def _accounts_of(user: Mapping[str, object]) -> list[Mapping[str, object]]:
-    accounts = user.get("accounts") or ()
-    # The example payload spells `accounts` as one object where the Backend sends a list.
-    if isinstance(accounts, Mapping):
-        return [accounts]
-    return list(accounts)  # type: ignore[arg-type]
 
 
 def _log_portfolio(log: StructuredLogger, portfolio: Any) -> None:
@@ -92,44 +90,39 @@ def _log_portfolio(log: StructuredLogger, portfolio: Any) -> None:
     )
 
 
-def _log_poll(log: StructuredLogger, polled: Sequence[Mapping[str, object]]) -> None:
+def _log_poll(log: StructuredLogger, polled: Sequence[User]) -> None:
     # An empty or half-filled poll is reported here rather than passed on, because every
     # later step would simply find nothing to do and say nothing about why.
-    accounts = [account for user in polled for account in _accounts_of(user)]
-    blank = [
-        account.get("account_id")
-        for account in accounts
-        if account.get("account_id") is None or account.get("cash_balance") is None
-    ]
+    accounts = [account for user in polled for account in user.accounts]
     unquoted = [
-        f"{account.get('account_id')}:{holding.get('stock_code')}"
+        f"{account.account_id}:{holding.get('stock_code')}"
         for account in accounts
-        for holding in (account.get("stocks") or ())  # type: ignore[union-attr]
+        for holding in account.stocks
         if holding.get("current_price") is None
     ]
-    (log.warning if not polled or blank else log.info)(
+    (log.warning if len(polled) == 0 else log.info)(
         "backend_poll",
         users=len(polled),
         accounts=len(accounts),
-        managed_accounts=sum(1 for account in accounts if account.get("is_active")),
-        accounts_missing_id_or_cash=blank,
+        managed_accounts=sum(1 for account in accounts if account.is_active),
+        accounts_missing_id_or_cash=[],
         orders_without_quote=unquoted,
     )
 
 
-def _account(engine, db, client, portfolio, account, now, log) -> int:
+def _account(engine, db, client, portfolio, account: Account, now, log) -> int:
     state = apply_pending(account)
     quoted = polled_prices(account)
     prices = _prices(db, portfolio, state, quoted, log)
-    working = outstanding_orders(account.get("pending_orders") or ())
+    working = outstanding_orders(account.pending_orders)
 
     log.info(
         "account_state",
         account_id=state.account_id,
         cash=state.cash,
         held=state.held,
-        pending_orders=len(account.get("pending_orders") or ()),
-        working_orders=sorted((f"{code}:{side}" for code, side in working)),
+        pending_orders=len(account.pending_orders),
+        working_orders=sorted(f"{code}:{side}" for code, side in working),
     )
 
     with engine.begin() as conn:
@@ -423,6 +416,7 @@ def _struck(portfolio, state, working, references, recorded, quoted, log) -> lis
 
 def _without(working, codes):
     return {key: order for key, order in working.items() if key[0] not in codes}
+
 
 def _send(engine, client, portfolio, state, orders, log) -> int:
     # Orders are committed before they are sent, in their own transaction: holding it open

@@ -5,6 +5,8 @@ from typing import Any
 import httpx
 import jwt
 
+from portfolio_rebalancer.account.dto import User
+
 # Every active AI-managed account in one answer: the Backend selects them, not this
 # service, and a service token is the only thing allowed to ask.
 USERS_PATH = "/api/v1/users/ai-server"
@@ -72,10 +74,10 @@ def authenticate(client: httpx.Client, token: str) -> None:
     client.headers[payload.get("header_name") or DEFAULT_CSRF_HEADER] = payload["token"]
 
 
-def fetch_accounts(client: httpx.Client) -> list[Mapping[str, object]]:
+def fetch_accounts(client: httpx.Client) -> list[User]:
     response = client.get(USERS_PATH)
     response.raise_for_status()
-    return response.json().get("users") or []
+    return [User.from_payload(user) for user in response.json().get("users") or []]
 
 
 def send_orders(client: httpx.Client, orders: Sequence[Any]) -> None:

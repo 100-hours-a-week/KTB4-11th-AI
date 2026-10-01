@@ -156,7 +156,7 @@ def test_the_active_users_come_back():
     users = [{"user_id": 1, "accounts": []}]
     client, _ = recorder(responder({"message": "ok", "users": users}))
 
-    assert fetch_accounts(client) == users
+    assert [(user.user_id, user.accounts) for user in fetch_accounts(client)] == [(1, ())]
 
 
 def test_the_ai_server_endpoint_is_the_one_asked():
