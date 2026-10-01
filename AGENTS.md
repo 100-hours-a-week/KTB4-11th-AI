@@ -59,6 +59,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
 | `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `ktb_test`, never `ktb` | — |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
+| `KTB_EMBEDDING_API_KEY` | news-preprocessor; sent as `Authorization: Bearer` when set (e.g. OpenRouter at `https://openrouter.ai/api/v1`; leave unset for a keyless local server) | — |
 | `KTB_EMBEDDING_MODEL` | news-preprocessor | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` |
 | `KTB_EMBEDDING_DIMENSIONS` | news-preprocessor, news-clusterer; must equal the `vector(2000)` column | `2000` |
 | `KTB_EMBEDDING_MAX_TOKENS` | news-preprocessor | `16384` |
@@ -67,8 +68,8 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `NEWS_PREPROCESSOR_USER_AGENT` | news-preprocessor | `ktb-ai/0.1` |
 | `NEWS_PREPROCESSOR_LOG_LEVEL` | news-preprocessor | `INFO` |
 | `NEWS_CLUSTERER_POSTGRES_DSN` | news-clusterer | required |
-| `NEWS_CLUSTERER_EPS` | news-clusterer (cosine distance, 0 < eps ≤ 2) | `0.2` |
-| `NEWS_CLUSTERER_MIN_SAMPLES` | news-clusterer | `3` |
+| `NEWS_CLUSTERER_EPS` | news-clusterer (cosine distance, 0 < eps ≤ 2); tuned for Qwen3-Embedding-4B, recalibrate when the model changes | `0.36` |
+| `NEWS_CLUSTERER_MIN_SAMPLES` | news-clusterer | `2` |
 | `NEWS_CLUSTERER_LOG_LEVEL` | news-clusterer | `INFO` |
 | `NEWS_GRAPH_BUILDER_POSTGRES_DSN` | news-graph-builder | required |
 | `NEWS_GRAPH_BUILDER_LOG_LEVEL` | news-graph-builder | `INFO` |

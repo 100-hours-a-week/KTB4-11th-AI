@@ -1,4 +1,5 @@
 import sys
+from functools import partial
 
 import httpx
 import sqlalchemy as sa
@@ -21,7 +22,9 @@ def main() -> None:
     client = httpx.Client(headers={"User-Agent": settings.user_agent}, follow_redirects=True)
     try:
         scraped = [scrape(engine, source) for source in publishers(client)]
-        embedded = embed_pending(engine, embed, settings.embed_batch_limit)
+        embedded = embed_pending(
+            engine, partial(embed, api_key=settings.embedding_api_key), settings.embed_batch_limit
+        )
     finally:
         client.close()
         engine.dispose()
