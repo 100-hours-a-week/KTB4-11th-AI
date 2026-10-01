@@ -24,8 +24,16 @@ KST = timezone(timedelta(hours=9))
 
 
 def noon(day):
-    """A KST datetime in the middle of the session, well before the 15:00 cutoff."""
+    """A KST datetime in the middle of the session, well before the 15:00 cutoff.
+
+    New orders are not placed at this hour; only the opening pass places.
+    """
     return datetime(day.year, day.month, day.day, 11, 0, tzinfo=KST)
+
+
+def opening(day):
+    """The 09:00 pass, which is the only one that places a new order."""
+    return datetime(day.year, day.month, day.day, 9, 0, tzinfo=KST)
 
 
 def portfolio(holdings=None, exits=()):
@@ -207,7 +215,7 @@ class Fakes:
     def run(self, now=None, log=None):
         """`now` still reads as an argument at every call site, but it is applied by
         patching the clock rather than by threading a parameter through `tick`."""
-        now = now or noon(TUESDAY)
+        now = now or opening(TUESDAY)
         self.today = now.date()
         self._monkeypatch.setattr(tick_module, "market_now", lambda: now)
         return tick(
@@ -504,7 +512,7 @@ def test_an_unsent_record_with_no_pair_is_discarded_and_decided_again(monkeypatc
     unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(monkeypatch, recorded={11: unsent})
 
-    sent = fakes.run(now=noon(TUESDAY))
+    sent = fakes.run(now=opening(TUESDAY))
 
     assert fakes.discarded == [(42, 11)]
     assert sent == 1
@@ -546,7 +554,7 @@ def test_a_discarded_record_gets_a_new_reference_from_current_prices(monkeypatch
     unsent = [recorded_row("005930", sent_at=None)]
     fakes = Fakes(monkeypatch, prices={"005930": 90_000.0}, recorded={11: unsent})
 
-    fakes.run(now=noon(TUESDAY))
+    fakes.run(now=opening(TUESDAY))
 
     order = fakes.sent[0][0]
     assert order.reference == 90_000.0
@@ -557,10 +565,10 @@ def test_a_discarded_record_is_re_sized_at_the_new_price(monkeypatch):
     """The share count is decided again too, not carried over from the discarded record."""
     unsent = [recorded_row("005930", sent_at=None)]
     cheap = Fakes(monkeypatch, prices={"005930": 10_000.0}, recorded={11: [dict(unsent[0])]})
-    cheap.run(now=noon(TUESDAY))
+    cheap.run(now=opening(TUESDAY))
 
     dear = Fakes(monkeypatch, prices={"005930": 500_000.0}, recorded={11: [dict(unsent[0])]})
-    dear.run(now=noon(TUESDAY))
+    dear.run(now=opening(TUESDAY))
 
     assert cheap.sent[0][0].shares > dear.sent[0][0].shares
 
@@ -584,7 +592,7 @@ def test_a_cycle_with_no_cash_places_only_the_sell(monkeypatch):
     )
     fakes = Fakes(monkeypatch, model=plan, users=users)
 
-    fakes.run(now=noon(MONDAY))
+    fakes.run(now=opening(MONDAY))
 
     assert [order.action for order in fakes.sent[0]] == ["sell"]
 
@@ -601,7 +609,7 @@ def test_the_buy_arrives_once_the_sell_has_freed_the_cash(monkeypatch):
     users = polled(account(cash=4_120_000.0))
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
-    fakes.run(now=noon(MONDAY))
+    fakes.run(now=opening(MONDAY))
 
     buys = [order for order in fakes.sent[0] if order.action == "buy"]
     assert buys
@@ -621,15 +629,16 @@ def test_an_order_placed_late_in_the_week_starts_narrow(monkeypatch):
     users = polled(account(cash=4_120_000.0))
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
-    fakes.run(now=noon(THURSDAY))
+    fakes.run(now=opening(THURSDAY))
 
     buys = [order for order in fakes.sent[0] if order.action == "buy"]
     assert buys[0].band == PRICE_BANDS[1]
 
 
-def test_a_buy_placed_after_the_cutoff_goes_straight_to_market(monkeypatch):
-    """KRX closes at 15:30. Past the cutoff on the last session there is no day left to
-    chase a price with, and the market rung is what guarantees it fills at all."""
+def test_a_buy_the_sells_funded_waits_for_the_opening_pass(monkeypatch):
+    """The only reference for a stock with no order on it is QuestDB's previous close,
+    and market-collector writes that once at 06:00. It does not get fresher as the day
+    goes on -- the market just walks away from it -- so the buy waits for 09:00."""
     plan = Portfolio(
         portfolio_id=42,
         cash_weight=0.0,
@@ -641,12 +650,31 @@ def test_a_buy_placed_after_the_cutoff_goes_straight_to_market(monkeypatch):
     fakes = Fakes(monkeypatch, model=plan, users=users, recorded={11: already})
 
     events = Events()
-    fakes.run(now=datetime(2026, 10, 2, 15, 0, tzinfo=KST), log=events)
+    fakes.run(now=noon(TUESDAY), log=events)
 
-    # The Backend takes only limit orders, so the market rung has nowhere to go. Nothing
-    # is sent, and the block is named rather than failing silently on the wire.
     assert fakes.sent == []
-    assert "005930" in events.of("orders_blocked")[0]["codes"]
+    deferred = events.of("placing_deferred")[0]
+    assert deferred["codes"] == ["005930"]
+    assert deferred["until"] == "09:00"
+
+
+def test_a_fresh_cycle_waits_for_the_opening_pass_too(monkeypatch):
+    """A new portfolio lands before the open, so its first order belongs at 09:00."""
+    events = Events()
+    fakes = Fakes(monkeypatch)
+
+    assert fakes.run(now=noon(TUESDAY), log=events) == 0
+    assert fakes.recorded_rows == []
+    assert events.of("placing_deferred")[0]["cycle"] == "open"
+
+
+def test_the_opening_pass_does_place(monkeypatch):
+    """The gate is on the hour, not on placing at all."""
+    events = Events()
+    fakes = Fakes(monkeypatch)
+
+    assert fakes.run(now=opening(TUESDAY), log=events) > 0
+    assert events.of("placing_deferred") == []
 
 
 def working_buy(reference=78_000.0, days_left=5, amount=52, quote=None):

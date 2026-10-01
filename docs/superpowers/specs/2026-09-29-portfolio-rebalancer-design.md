@@ -65,6 +65,25 @@ back rather than sent, logged as `orders_blocked`, and the narrowest limit alrea
 the book keeps standing. **So the fill is not guaranteed in v1**, and the "market rung is
 what guarantees the fill" sentence below does not hold until v2.
 
+### New Orders Are Placed on the Opening Pass
+
+A stock this service holds no order on has no quote in the snapshot, so its reference is
+QuestDB's previous close. `market-collector` writes that once a day, at 06:00, inside
+`run-morning-pipeline.sh` -- there is no timer of its own and the old sixty-second
+compose loop is gone. **The close therefore does not get fresher as the session goes
+on.** A buy sized at 14:00 reads exactly the same number as one sized at 09:00, except
+that by 14:00 the market has had a day to walk away from it.
+
+So placing happens on the 09:00 pass and no other. A new portfolio lands before the
+open, which is when its first orders go out, and a buy that the sells only funded later
+waits for the next day's opening rather than going out against a close the market has
+already left behind. The later passes still narrow what is on the book and still watch
+the triggers; they place nothing. A deferral is logged as `placing_deferred`.
+
+The cost is a missed 09:00 -- a pass the service did not run -- costing a day. That is
+the conservative direction for a weekly rebalance, and the alternative is sizing against
+a reference that is stale in the way that actually hurts.
+
 `reason` travels as the plain string portfolio-builder stored. The Backend's current
 record wants `{decision_id, summary}`, but this service has no decision id to give: a
 stock code carries exactly one reason within a portfolio, because the exits are removed

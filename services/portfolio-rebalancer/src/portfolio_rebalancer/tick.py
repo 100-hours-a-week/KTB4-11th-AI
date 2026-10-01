@@ -32,6 +32,13 @@ from portfolio_rebalancer.trading_days import days_left
 # KST has no daylight saving, so a fixed offset is exact and needs no timezone database.
 KST = timezone(timedelta(hours=9))
 
+# New orders are placed on the opening pass and no other. A new portfolio lands before
+# the open, and the only reference this service has for a stock it holds no order on is
+# QuestDB's previous close -- which market-collector writes once, at 06:00. That close
+# does not improve as the day goes on; the market simply walks away from it. At 09:00 it
+# is the price the session just opened from, so it is as close as it ever gets.
+PLACING_HOUR = 9
+
 
 def market_now() -> datetime:
     # The service may run anywhere; the market is in Seoul.
@@ -182,6 +189,15 @@ def _settle_unsent(engine, portfolio, state, recorded, working, log) -> Sequence
 
 
 def _open(engine, client, portfolio, state, prices, now, log) -> int:
+    if now.hour != PLACING_HOUR:
+        log(
+            "placing_deferred",
+            account_id=state.account_id,
+            cycle="open",
+            until=f"{PLACING_HOUR:02d}:00",
+        )
+        return 0
+
     # The cycle's whole budget is ahead: the trading days left in this week, so a Chuseok
     # week gives fewer.
     left = days_left(now.date(), now)
@@ -265,6 +281,17 @@ def _continue(
         settled,
     )
 
+    # A buy the sells have just funded waits for the opening pass rather than going out
+    # against a close the market has had all day to leave behind.
+    if place and now.hour != PLACING_HOUR:
+        log(
+            "placing_deferred",
+            account_id=state.account_id,
+            cycle="continue",
+            codes=[order.stock_code for order in place],
+            until=f"{PLACING_HOUR:02d}:00",
+        )
+        place = []
     place = _sendable(place, state, log)
     sent = 0
     if place:
