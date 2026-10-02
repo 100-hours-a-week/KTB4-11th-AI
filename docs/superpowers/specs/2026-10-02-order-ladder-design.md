@@ -99,8 +99,28 @@ Buys are still funded in descending target weight after sells, as today.
 - **`now` is past `COVERED_THROUGH`**: `hours_left` raises and the run fails.
 - **`COVERED_THROUGH` is less than 30 days away**: log the `holidays_expiring` warning and carry on.
 
-All logging goes through `ktb_core.logging` (`get_logger` and the existing run logger in
-`__main__.py`); no `print` and no stdlib `logging` calls.
+## Observability
+
+All logging goes through `ktb_core.logging`, using the run logger in `__main__.py` (bound with
+`run_id`) and the `start_logging` envelope. There are no `print` calls and no stdlib `logging`
+calls. Every per-order event carries `user_id`, `account_id`, `stock_code`, and `side`, so one
+stock can be traced through cancel → decide → place.
+
+| event | level | fields | when |
+|---|---|---|---|
+| `run_start` | info | `band`, `buy_buffer`, `runs_left` (h), `week_runs` (H), `last_run` | start of every run (via `start_logging`) |
+| `holidays_expiring` | warning | `covered_through`, `days_left` | `COVERED_THROUGH` is less than 30 days away |
+| `no_price` | warning | `stock_codes`, `missing` (`daily_closes` or `latest_price`) | replaces `no_close`; one line per missing kind |
+| `leftover_without_reason` | warning | unchanged | unchanged |
+| `order_cancelled` | info | `order_id`, `order_type`, `limit_price`, `quantity` (remaining) | each successful cancel |
+| `cancel_failed` | error | `order_id`, `status` and `body`, or `error` | a cancel fails; the account is skipped |
+| `order_sent` | info | `order_type`, `quantity`, `limit_price`, `price`, `sma`, `sigma`, `alpha`, `lower_bound`, `upper_bound`, `trigger` (`upper`, `lower`, `last_run`, or null), `reason` | each successful place |
+| `order_failed` | error | the `order_sent` fields, plus `status` and `body`, or `error` | a place fails |
+| `run_end` | info/error | `portfolio_id`, `cancelled`, `cancel_failed`, `sent`, `failed`, `limit`, `market`, `upper_triggered`, `lower_triggered` | end of every run (via `start_logging`) |
+
+`order_sent` carries the bound inputs (`sma`, `sigma`, `alpha`), so any limit price can be recomputed
+from the log alone. `trigger` distinguishes an escape from the forced market of the last run,
+even though both send the same flag.
 
 ## Testing
 
