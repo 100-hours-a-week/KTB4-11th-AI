@@ -101,10 +101,10 @@ def test_every_account_is_rebalanced_and_the_run_exits_zero(env, monkeypatch, ca
         entry.main()
 
     assert exit_.value.code == 0
-    assert backends[0].placed == [(1, 12, "005930", 4)]
+    assert backends[0].placed == [(1, 11, "005930", 4), (1, 12, "005930", 4)]
     assert env["codes"] == {"005930", "000660"}
     events = _events(capsys.readouterr().out)
-    assert events[-1]["sent"] == 1
+    assert events[-1]["sent"] == 2
     assert events[-1]["failed"] == 0
     assert any(e["message"] == "no_close" and e["stock_codes"] == ["000660"] for e in events)
 
@@ -116,7 +116,7 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
         entry.main()
 
     assert exit_.value.code == 1
-    assert backends[0].placed == []
+    assert backends[0].placed == [(1, 11, "005930", 4)]
     failed = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_failed")
     assert failed["account_id"] == 12
     assert failed["status"] == 400
