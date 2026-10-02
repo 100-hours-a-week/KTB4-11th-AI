@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 from ktb_core.logging import StructuredLogger
 from langchain.agents import create_agent
