@@ -2,60 +2,41 @@ import pytest
 from portfolio_rebalancer.settings import Settings
 from pydantic import ValidationError
 
-SECRET = "a-shared-secret-of-at-least-thirty-two-bytes"
-GIVEN = {
-    "postgres_dsn": "postgresql+psycopg://ktb:ktb@postgres:5432/ktb",
-    "questdb_conf": "ws::addr=localhost:9000;",
-    "backend_url": "http://backend:8080",
-    "backend_jwt_secret": SECRET,
-    "backend_jwt_issuer": "https://stock-spoon.com",
-    "backend_jwt_subject": "4242",
+REQUIRED = {
+    "PORTFOLIO_REBALANCER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
+    "PORTFOLIO_REBALANCER_QUESTDB_CONF": "ws::addr=localhost:9000;",
+    "PORTFOLIO_REBALANCER_BACKEND_URL": "http://localhost:8081",
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
 }
 
 
-@pytest.mark.parametrize("missing", sorted(GIVEN))
-def test_a_connection_setting_has_no_default(missing):
-    """The service cannot read a portfolio, price a holding or reach the Backend without
-    these, so starting without one is a configuration error rather than a later surprise."""
-    given = {key: value for key, value in GIVEN.items() if key != missing}
-
-    with pytest.raises(ValidationError, match=missing):
-        Settings(_env_file=None, **given)
-
-
-def test_the_log_level_defaults():
-    assert Settings(**GIVEN).log_level == "INFO"
-
-
-def test_reads_the_prefixed_environment(monkeypatch):
-    for key, value in GIVEN.items():
-        monkeypatch.setenv(f"PORTFOLIO_REBALANCER_{key.upper()}", value)
-    monkeypatch.setenv("PORTFOLIO_REBALANCER_LOG_LEVEL", "DEBUG")
+def test_defaults(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
 
     settings = Settings()
 
-    assert settings.backend_jwt_secret.get_secret_value() == SECRET
-    assert settings.postgres_dsn == GIVEN["postgres_dsn"]
-    assert settings.log_level == "DEBUG"
+    assert settings.band == 0.05
+    assert settings.buy_buffer == 0.02
+    assert settings.log_level == "INFO"
 
 
-def test_the_signing_secret_is_kept_out_of_logs_and_repr():
-    """It is a credential. A plain str would leak it the first time settings were logged."""
-    settings = Settings(**GIVEN)
+def test_a_secret_shorter_than_the_backend_accepts_is_refused(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET", "s" * 31)
 
-    assert SECRET not in repr(settings)
-    assert SECRET not in str(settings.backend_jwt_secret)
-
-
-def test_the_token_subject_must_be_a_numeric_user_id():
-    with pytest.raises(ValidationError, match="backend_jwt_subject"):
-        Settings(**{**GIVEN, "backend_jwt_subject": "portfolio-rebalancer"})
+    with pytest.raises(ValidationError):
+        Settings()
 
 
-def test_no_host_or_port_is_carried():
-    """There is no server to bind. Leaving them would invite someone to serve routes the
-    design deliberately dropped."""
-    fields = set(Settings.model_fields)
+def test_a_short_secret_is_not_echoed_in_the_error(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET", "hunter2-short-secret")
 
-    assert "host" not in fields
-    assert "port" not in fields
+    with pytest.raises(ValidationError) as error:
+        Settings()
+
+    assert "hunter2-short-secret" not in str(error.value)

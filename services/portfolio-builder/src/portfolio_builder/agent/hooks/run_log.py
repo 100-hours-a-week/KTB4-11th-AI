@@ -5,6 +5,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, ToolMessage
 
 from portfolio_builder.agent.hooks.usage import add_usage, empty_usage, message_usage
+from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.stopwatch import Stopwatch
 
 
@@ -22,6 +23,7 @@ class RunLog(AgentMiddleware):
         self.turns = 0
         self.portfolio_id: int | None = None
         self.usage = empty_usage()
+        self.trace: list[TraceEntry] = []
 
     def wrap_model_call(self, request: Any, handler: Any) -> Any:
         self.turns += 1
@@ -38,15 +40,24 @@ class RunLog(AgentMiddleware):
             return response
         turn_usage = message_usage(message)
         add_usage(self.usage, turn_usage)
+        reasoning = "\n".join(
+            b.get("reasoning", "") for b in message.content_blocks if b["type"] == "reasoning"
+        )
+        self.trace.append(
+            TraceEntry(
+                turn=self.turns,
+                kind="model",
+                reasoning=reasoning or None,
+                text=message.text or None,
+            )
+        )
         self.log.info(
             "llm_response",
             turn=self.turns,
             model=message.response_metadata.get("model_name"),
             finish_reason=message.response_metadata.get("finish_reason"),
             text=message.text,
-            reasoning="\n".join(
-                b.get("reasoning", "") for b in message.content_blocks if b["type"] == "reasoning"
-            ),
+            reasoning=reasoning,
             tool_calls=[{"name": c["name"], "arguments": c["args"]} for c in message.tool_calls],
             latency_ms=stopwatch.elapsed_ms,
             usage=turn_usage,
@@ -60,6 +71,15 @@ class RunLog(AgentMiddleware):
         try:
             result = handler(request)
         except Exception as error:
+            self.trace.append(
+                TraceEntry(
+                    turn=self.turns,
+                    kind="tool",
+                    name=call["name"],
+                    args=call["args"],
+                    result=f"{type(error).__name__}: {error}",
+                )
+            )
             self.log.error(
                 "tool_call",
                 **fields,
@@ -73,6 +93,15 @@ class RunLog(AgentMiddleware):
             self.portfolio_id = update["portfolio_id"]
         messages = _tool_messages(result)
         is_error = any(m.status == "error" for m in messages)
+        self.trace.append(
+            TraceEntry(
+                turn=self.turns,
+                kind="tool",
+                name=call["name"],
+                args=call["args"],
+                result="\n".join(m.text for m in messages),
+            )
+        )
         (self.log.warning if is_error else self.log.info)(
             "tool_call",
             **fields,

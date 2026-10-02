@@ -5,6 +5,7 @@ import talib
 from portfolio_builder import __main__ as entry
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.briefing import Briefing
+from portfolio_builder.explain import ExplanationRejected, Explanations
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
@@ -24,6 +25,14 @@ def env(monkeypatch):
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(entry, "load_briefing", lambda engine, days: BRIEFING)
+    calls = {}
+    monkeypatch.setattr(entry, "save_trace", lambda engine, pid, trace: calls.update(trace=pid))
+    monkeypatch.setattr(entry, "load_targets", lambda engine, pid: [])
+    monkeypatch.setattr(entry, "explain", lambda *args: Explanations(stocks=[]))
+    monkeypatch.setattr(
+        entry, "save_explanations", lambda engine, pid, explanations: calls.update(saved=pid)
+    )
+    return calls
 
 
 def _events(out):
@@ -45,7 +54,8 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
     assert exit_.value.code == 0
     out = capsys.readouterr().out
     events = _events(out)
-    assert [e["message"] for e in events] == ["run_start", "ingestion", "prompt", "run_end"]
+    messages = [e["message"] for e in events]
+    assert messages == ["run_start", "ingestion", "prompt", "explained", "run_end"]
     assert events[-1]["outcome"] == "saved"
     assert events[-1]["portfolio_id"] == 7
     assert len({e["run_id"] for e in events}) == 1
@@ -59,6 +69,7 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
     }
     assert captured["max_turns"] == 150
     assert "test-openrouter-key" not in out
+    assert env == {"trace": 7, "saved": 7}
 
 
 def test_max_turns_exits_one(env, monkeypatch, capsys):
@@ -84,3 +95,54 @@ def test_a_failure_before_the_agent_raises_after_run_end(env, monkeypatch, capsy
     assert last["message"] == "run_end"
     assert last["outcome"] == "error"
     assert "postgres unreachable" in last["error"]
+
+
+def test_a_rejected_explanation_still_exits_zero(env, monkeypatch, capsys):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 3, {}))
+
+    def rejected(*args):
+        raise ExplanationRejected("HYNIX: missing")
+
+    monkeypatch.setattr(entry, "explain", rejected)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    events = _events(capsys.readouterr().out)
+    failed = next(e for e in events if e["message"] == "explain_failed")
+    assert failed["level"] == "ERROR"
+    assert events[-1]["outcome"] == "saved"
+    assert "HYNIX: missing" in events[-1]["error"]
+    assert "saved" not in env
+    assert env["trace"] == 7
+
+
+def test_provider_error_during_explain_still_exits_zero(env, monkeypatch, capsys):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 3, {}))
+
+    def provider_error(*args):
+        raise RuntimeError("502 from provider")
+
+    monkeypatch.setattr(entry, "explain", provider_error)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    events = _events(capsys.readouterr().out)
+    failed = next(e for e in events if e["message"] == "explain_failed")
+    assert failed["level"] == "ERROR"
+    assert events[-1]["outcome"] == "saved"
+    assert "502 from provider" in events[-1]["error"]
+    assert "saved" not in env
+    assert env["trace"] == 7
+
+
+def test_no_explanation_without_a_saved_portfolio(env, monkeypatch, capsys):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("max_turns", None, 150, {}))
+
+    with pytest.raises(SystemExit):
+        entry.main()
+
+    assert env == {}
