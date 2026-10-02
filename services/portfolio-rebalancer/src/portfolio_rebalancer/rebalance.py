@@ -6,6 +6,9 @@ from pydantic import BaseModel
 from portfolio_rebalancer.portfolio import Explanation, Portfolio
 from portfolio_rebalancer.snapshot import Account
 
+# 경험으로 정한 값이에요. 목표 비중보다 이만큼 더 들고 있어도 허용해요.
+HOLDING_WEIGHT_LIMIT_MARGIN = 0.2
+
 
 class Order(BaseModel):
     stock_code: str
@@ -13,6 +16,8 @@ class Order(BaseModel):
     side: Literal["buy", "sell"]
     quantity: int
     explanation: Explanation
+    holding_weight_after_trade_percent: float
+    holding_weight_limit_percent: float
 
 
 def rebalance(
@@ -35,6 +40,16 @@ def rebalance(
     )
     value = cash + sum(q * closes[c] for c, q in held.items() if c in closes)
 
+    def weights(code: str, after: int, weight: float) -> dict[str, float]:
+        return {
+            "holding_weight_after_trade_percent": round(
+                after * closes[code] / value * 100 if after else 0.0, 2
+            ),
+            "holding_weight_limit_percent": round(
+                weight * (1 + HOLDING_WEIGHT_LIMIT_MARGIN) * 100, 2
+            ),
+        }
+
     sells: list[Order] = []
     buys: list[tuple[float, float, Order]] = []
     for target in portfolio.targets:
@@ -51,6 +66,7 @@ def rebalance(
                         side="sell",
                         quantity=have,
                         explanation=target.sell,
+                        **weights(code, 0, 0.0),
                     )
                 )
             continue
@@ -72,6 +88,7 @@ def rebalance(
                         side="buy",
                         quantity=buy_target - have,
                         explanation=target.buy,
+                        **weights(code, buy_target, target.weight),
                     ),
                 )
             )
@@ -83,6 +100,7 @@ def rebalance(
                     side="sell",
                     quantity=have - sell_target,
                     explanation=target.sell,
+                    **weights(code, sell_target, target.weight),
                 )
             )
 
@@ -97,15 +115,24 @@ def rebalance(
                 side="sell",
                 quantity=have,
                 explanation=portfolio.leftovers[code],
+                **weights(code, 0, 0.0),
             )
         )
 
     budget = max(cash, 0)
     placed: list[Order] = []
-    for _, close, order in sorted(buys, key=lambda b: -b[0]):
+    for weight, close, order in sorted(buys, key=lambda b: -b[0]):
         quantity = min(order.quantity, math.floor(budget / (close * (1 + buy_buffer))))
         if quantity <= 0:
             continue
         budget -= quantity * close * (1 + buy_buffer)
-        placed.append(order.model_copy(update={"quantity": quantity}))
+        after = held.get(order.stock_code, 0) + quantity
+        placed.append(
+            order.model_copy(
+                update={
+                    "quantity": quantity,
+                    **weights(order.stock_code, after, weight),
+                }
+            )
+        )
     return sells + placed
