@@ -98,6 +98,31 @@ def test_an_order_carries_the_user_token_the_csrf_pair_and_the_explanation():
     }
 
 
+@pytest.mark.parametrize(
+    ("quantity", "after", "limit"),
+    [(100, 10.0, 12.0), (3, 0.0, 0.0)],
+    ids=["trim", "sell_all"],
+)
+def test_a_sell_carries_its_weights(quantity, after, limit):
+    fake = FakeBackend()
+    sell = ORDER.model_copy(
+        update={
+            "side": "sell",
+            "quantity": quantity,
+            "holding_weight_after_trade_percent": after,
+            "holding_weight_limit_percent": limit,
+        }
+    )
+
+    _backend(fake).place(7, 11, sell)
+
+    body = json.loads(fake.requests[-1].content)
+    assert body["order_side"] == "sell"
+    assert body["quantity"] == quantity
+    assert body["holding_weight_after_trade_percent"] == after
+    assert body["holding_weight_limit_percent"] == limit
+
+
 def test_the_csrf_token_is_fetched_once_per_run():
     fake = FakeBackend()
     backend = _backend(fake)
