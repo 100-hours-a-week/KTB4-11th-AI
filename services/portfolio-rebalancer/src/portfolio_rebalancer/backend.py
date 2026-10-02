@@ -15,7 +15,10 @@ class OrderRequest(BaseModel):
     stock_code: str
     stock_name: str
     order_side: Literal["buy", "sell"]
-    order_type: Literal["market"] = "market"
+    order_type: Literal["limit", "market"]
+    limit_price: int | None
+    is_upper_triggered: bool
+    is_lower_triggered: bool
     quantity: int
     reason: str
     thoughts: list[Reasoning]
@@ -81,10 +84,15 @@ class Backend:
         response.raise_for_status()
 
     def place(self, user_id: int, account_id: int, order: Order) -> None:
+        market = order.pricing.order_type == "market"
         body = OrderRequest(
             stock_code=order.stock_code,
             stock_name=order.stock_name,
             order_side=order.side,
+            order_type=order.pricing.order_type,
+            limit_price=order.pricing.limit_price,
+            is_upper_triggered=market and order.side == "buy",
+            is_lower_triggered=market and order.side == "sell",
             quantity=order.quantity,
             reason=order.explanation.reason,
             thoughts=order.explanation.reasonings,

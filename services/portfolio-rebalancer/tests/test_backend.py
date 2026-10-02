@@ -5,16 +5,28 @@ import jwt
 import pytest
 from portfolio_rebalancer.backend import Backend
 from portfolio_rebalancer.portfolio import Explanation
-from portfolio_rebalancer.rebalance import Order
+from portfolio_rebalancer.rebalance import Order, Pricing
 
 SECRET = "s" * 32
 ISSUER = "river-be"
+PRICING = Pricing(
+    order_type="limit",
+    limit_price=74_100,
+    trigger=None,
+    price=78_000,
+    sma=78_000,
+    sigma=1_950,
+    alpha=1_950,
+    lower_bound=74_100,
+    upper_bound=81_900,
+)
 ORDER = Order(
     stock_code="005930",
     stock_name="삼성전자",
     side="buy",
     quantity=3,
     explanation=Explanation(reason="사요", reasonings=[{"label": "HBM", "body": "늘었어요."}]),
+    pricing=PRICING,
 )
 
 
@@ -87,7 +99,10 @@ def test_an_order_carries_the_user_token_the_csrf_pair_and_the_explanation():
         "stock_code": "005930",
         "stock_name": "삼성전자",
         "order_side": "buy",
-        "order_type": "market",
+        "order_type": "limit",
+        "limit_price": 74100,
+        "is_upper_triggered": False,
+        "is_lower_triggered": False,
         "quantity": 3,
         "reason": "사요",
         "thoughts": [{"label": "HBM", "body": "늘었어요."}],
@@ -194,3 +209,17 @@ def test_a_failed_cancel_raises():
 
     with pytest.raises(httpx.HTTPStatusError):
         _backend(fake).cancel(7, 11, 42)
+
+
+@pytest.mark.parametrize(("side", "upper", "lower"), [("buy", True, False), ("sell", False, True)])
+def test_a_market_order_flags_the_bound_its_side_escapes_through(side, upper, lower):
+    fake = FakeBackend()
+    market = PRICING.model_copy(
+        update={"order_type": "market", "limit_price": None, "trigger": "last_run"}
+    )
+
+    _backend(fake).place(7, 11, ORDER.model_copy(update={"side": side, "pricing": market}))
+
+    body = json.loads(fake.requests[-1].content)
+    assert (body["order_type"], body["limit_price"]) == ("market", None)
+    assert (body["is_upper_triggered"], body["is_lower_triggered"]) == (upper, lower)
