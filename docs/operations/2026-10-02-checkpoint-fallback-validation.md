@@ -31,11 +31,37 @@ checkpoints; collection still archives 1m and 1d bars.
 
 This preserves incremental Kiwoom pagination for old checkpoints. A cutoff alone
 would lose those boundaries and can trigger full pagination. Truly new members
-or absent timeframes still require the existing initial-history collection.
+or absent timeframes still require initial-history collection, subject to the
+bootstrap limits below.
 No checkpoint table, migration, or write-ordering dependency is introduced.
 Separate reads have normal live-query visibility, not a cross-query snapshot:
 compare mappings while ingestion is quiescent. A concurrent write after a recent
 query can be seen by a fallback, as with other sequential live reads.
+
+## Initial collection limits
+
+`reconcile_candles` uses `LIMITS = {"1m": 8000, "1d": 300}` only when the
+symbol/timeframe has no checkpoint (`latest is None`). It stops requesting older
+pages once that many distinct timestamps have been collected, or when the API
+has no more pages. The last page can exceed the limit: the result is sorted by
+timestamp and trimmed to the newest N bars before writing oldest to newest.
+Duplicate rows across pages do not count toward the cap. Available history may
+contain fewer than N bars; limits apply per symbol/timeframe and include all
+collected sessions.
+
+When a checkpoint exists, neither the page-count stop nor the final trim applies.
+The collector requests pages until it reaches the stored boundary or exhausts
+available history, then stores every strictly newer bar. Capping this path could
+skip an older portion of a backlog permanently after advancing the checkpoint.
+The tests exercise backlogs exceeding both 8,000 minute bars and 300 daily bars.
+
+These are bootstrap request/storage limits, not a cap on total retained DB rows;
+later incremental runs add more bars. No historical deletion or TTL is introduced.
+The portfolio-builder query continues to read its latest 300 bars with `LIMIT -300`
+in timestamp order; no reversal is added. Derived 15m/1h views still aggregate
+the available minute history. The minute cap does not guarantee a particular
+count of aggregated bars for every symbol; missing history remains reported
+through the existing insufficient-data behavior.
 
 ## Actual QuestDB validation
 
@@ -106,14 +132,15 @@ No production GC failure was reproduced or claimed resolved.
 
 ## Repository checks
 
-Collector, QuestDB infrastructure, portfolio-builder, and core tests: 253 passed,
+Collector, QuestDB infrastructure, portfolio-builder, and core tests: 257 passed,
 78 skipped with the disposable QuestDB connection enabled. Changed-scope Ruff
 lint/format, collector source `ty check`, and Tach module/external dependency
 checks passed. Independent code review found no actionable defects.
 
-Global Ruff remains blocked by six existing portfolio-rebalancer errors (undefined
+The earlier whole-repository validation, before the bootstrap-limit addition,
+found six existing portfolio-rebalancer Ruff errors (undefined
 `portfolio_id`, undefined `value`, and four syntax errors); formatting cannot parse
-that existing test file. The whole suite excluding that syntax-invalid file had
+that existing test file. That whole-suite run excluding the syntax-invalid file had
 465 passed, 179 skipped, and four existing failures caused by undefined `value`.
 Those rebalancer files are unchanged from base commit `f6cfa2e`.
 
