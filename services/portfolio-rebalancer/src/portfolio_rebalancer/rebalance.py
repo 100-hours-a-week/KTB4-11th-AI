@@ -6,7 +6,6 @@ from pydantic import BaseModel
 from portfolio_rebalancer.portfolio import Explanation, Portfolio
 from portfolio_rebalancer.snapshot import Account
 
-# 경험으로 정한 값이에요. 목표 비중보다 이만큼 더 들고 있어도 허용해요.
 HOLDING_WEIGHT_LIMIT_MARGIN = 0.2
 
 
