@@ -1,10 +1,69 @@
 import math
+import statistics
 from typing import Literal
 
 from pydantic import BaseModel
 
 from portfolio_rebalancer.portfolio import Explanation, Portfolio
 from portfolio_rebalancer.snapshot import Account
+
+
+class Quote(BaseModel):
+    price: float
+    sma: float
+    sigma: float
+
+
+def quote(closes: list[float], price: float) -> Quote:
+    return Quote(price=price, sma=statistics.fmean(closes), sigma=statistics.pstdev(closes))
+
+
+class Pricing(BaseModel):
+    order_type: Literal["limit", "market"]
+    limit_price: int | None
+    trigger: Literal["upper", "lower", "last_run"] | None
+    price: float
+    sma: float
+    sigma: float
+    alpha: float
+    lower_bound: float
+    upper_bound: float
+
+
+TICKS = ((2_000, 1), (5_000, 5), (20_000, 10), (50_000, 50), (200_000, 100), (500_000, 500))
+
+
+def tick(price: float) -> int:
+    return next((size for below, size in TICKS if price < below), 1_000)
+
+
+def ladder(side: Literal["buy", "sell"], quote: Quote, runs_left: int, week_runs: int) -> Pricing:
+    alpha = quote.sigma * runs_left / week_runs
+    lower, upper = quote.sma - 2 * alpha, quote.sma + 2 * alpha
+    trigger: Literal["upper", "lower", "last_run"] | None = None
+    if runs_left == 1:
+        trigger = "last_run"
+    elif side == "buy" and quote.price > upper:
+        trigger = "upper"
+    elif side == "sell" and quote.price < lower:
+        trigger = "lower"
+    limit = None
+    if trigger is None:
+        bound = lower if side == "buy" else upper
+        size = tick(bound)
+        steps = round(bound / size, 6)
+        limit = max(math.floor(steps) * size, 1) if side == "buy" else math.ceil(steps) * size
+    return Pricing(
+        order_type="limit" if trigger is None else "market",
+        limit_price=limit,
+        trigger=trigger,
+        price=quote.price,
+        sma=quote.sma,
+        sigma=quote.sigma,
+        alpha=alpha,
+        lower_bound=lower,
+        upper_bound=upper,
+    )
 
 
 class Order(BaseModel):
