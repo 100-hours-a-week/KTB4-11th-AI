@@ -1,5 +1,7 @@
+import importlib.util
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from time import monotonic, sleep
 from uuid import uuid4
 
@@ -22,9 +24,11 @@ def checkpoint_db():
         )
 
         class CheckpointDatabase:
-            def query(self, sql):
+            table_name = table
+
+            def query(self, sql, binds=None):
                 self.last_sql = sql
-                return db.query(sql.replace("FROM bars", f"FROM {table}"))
+                return db.query(sql.replace("FROM bars", f"FROM {table}"), binds)
 
             def execute(self, sql):
                 db.execute(sql.replace("INTO bars", f"INTO {table}"))
@@ -106,3 +110,33 @@ def test_checkpoint_latest_on_large_partitioned_history(checkpoint_db):
             for r in result.to_pandas().itertuples()
         }
     assert latest == aggregate
+
+
+def test_checkpoint_inspection_reports_cutoff_loss_without_changing_boundaries(checkpoint_db):
+    path = Path(__file__).parents[3] / "infrastructure/questdb/inspect_checkpoint.py"
+    spec = importlib.util.spec_from_file_location("inspect_checkpoint", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    checkpoint_db.execute(
+        """INSERT INTO bars VALUES
+        (dateadd('d', -1, now()), 'active', '1m', 'regular'),
+        (dateadd('d', -1, now()), 'active', '1d', 'regular'),
+        (dateadd('d', -500, now()), 'stale', '1m', 'regular'),
+        (dateadd('d', -500, now()), 'stale', '1d', 'regular')"""
+    )
+    before = Store(checkpoint_db).latest_bar_timestamps()
+    report = module.inspect_checkpoint(
+        checkpoint_db, table=checkpoint_db.table_name, repeats=1, compare_aggregate=True
+    )
+    assert report["aggregate_mapping_equal"] is True
+    assert report["bounded_mapping_equal"] is False
+    assert report["retained_boundaries_equal"] is True
+    assert {(r["symbol"], r["timeframe"]) for r in report["checkpoints_lost_with_cutoff"]} == {
+        ("stale", "1m"),
+        ("stale", "1d"),
+    }
+    assert report["latest"]["returned_rows"] == 4
+    assert report["bounded_comparison"]["returned_rows"] == 2
+    assert report["latest"]["metrics"]["sample_count"] == 0
+    assert len(report["partitions"]) == 2
+    assert Store(checkpoint_db).latest_bar_timestamps() == before

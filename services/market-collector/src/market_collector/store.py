@@ -9,6 +9,13 @@ from ktb_core.logging import get_logger
 __all__ = ["Candle", "CandleRow", "Store"]
 
 TIMEFRAMES = frozenset({"1m", "1d"})
+CHECKPOINT_SQL = """SELECT symbol, '1m' AS timeframe, ts AS latest_ts FROM bars
+WHERE timeframe = '1m'
+LATEST ON ts PARTITION BY symbol
+UNION ALL
+SELECT symbol, '1d' AS timeframe, ts AS latest_ts FROM bars
+WHERE timeframe = '1d'
+LATEST ON ts PARTITION BY symbol"""
 log = get_logger(__name__)
 
 
@@ -76,16 +83,9 @@ class Store:
         return written
 
     def latest_bar_timestamps(self) -> dict[tuple[str, str], datetime]:
-        sql = """SELECT symbol, '1m' AS timeframe, ts AS latest_ts FROM bars
-        WHERE timeframe = '1m'
-        LATEST ON ts PARTITION BY symbol
-        UNION ALL
-        SELECT symbol, '1d' AS timeframe, ts AS latest_ts FROM bars
-        WHERE timeframe = '1d'
-        LATEST ON ts PARTITION BY symbol"""
         started = perf_counter()
         try:
-            with self._db.query(sql) as result:
+            with self._db.query(CHECKPOINT_SQL) as result:
                 records = result.to_pandas().to_dict("records")
         except Exception:
             log.exception(
