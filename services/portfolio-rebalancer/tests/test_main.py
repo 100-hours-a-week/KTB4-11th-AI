@@ -233,7 +233,16 @@ def test_the_last_run_of_the_week_sends_market_orders(env, monkeypatch, capsys):
     assert events[-1]["last_run"] is True
 
 
-def test_a_closed_market_touches_nothing(env, monkeypatch, capsys):
+def test_test_mode_executes_on_a_market_holiday(env, monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_TEST_MODE", "true")
+    clock(monkeypatch, datetime(2026, 10, 9, 10, tzinfo=KST))
+    backends = _use(monkeypatch)
+
+    assert _main() == 0
+    assert backends[0].calls_of("users") == [("users",)]
+
+
+def test_default_mode_skips_a_market_holiday(env, monkeypatch, capsys):
     clock(monkeypatch, datetime(2026, 10, 9, 10, tzinfo=KST))
     backends = _use(monkeypatch)
 
