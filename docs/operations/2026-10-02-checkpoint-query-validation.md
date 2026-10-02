@@ -3,48 +3,10 @@
 `Store.latest_bar_timestamps()` now queries each physical timeframe separately with
 `LATEST ON ts PARTITION BY symbol`, then combines the results with `UNION ALL`.
 Filtering before latest selection preserves different latest timestamps for 1m and 1d.
-All sessions remain included. The follow-up now restricts 1m checkpoints to
-`ts > dateadd('d', -7, now())` and 1d checkpoints to
-`ts > dateadd('d', -100, now())`, before latest selection.
+All sessions remain included, and stale symbols remain eligible without a time cutoff.
 The returned mapping is still `(symbol, timeframe) -> UTC datetime`.
 
-## Bounded-query follow-up
-
-The time predicates limit the designated timestamp scan. They do not delete historical
-bars or change `read_regular_candles()`. There is no unbounded fallback query: symbols
-outside their timeframe's window have no checkpoint. Existing `reconcile_candles()`
-then fetches every available REST page and resubmits history; DEDUP absorbs duplicate
-keys, but API calls and ingestion still cost resources. Monitor prolonged collection
-gaps and suspended symbols for repeated backfills.
-
-Production now sets QuestDB `mem_limit: 1500m` and
-`JVM_PREPEND: "-Xms256m -Xmx768m"`; PostgreSQL changes from 900m to 600m.
-The combined container limits stay at 2100m. QuestDB's remaining nominal 732MB budget
-also covers native allocations, JVM overhead and mapped/file-backed pages; it is not
-a reserved native-memory allowance. PostgreSQL retains `shared_buffers=256MB` and
-`max_connections=50`, so a roughly 60MB idle observation does not prove its peak fits
-the new cap. Check actual workload peaks after deployment.
-
-The follow-up was tested with official QuestDB 10.0.1 and Python client 5.0.0, using
-`-Xms256m -Xmx768m` and two workers locally, without a production cgroup limit:
-
-- All 57 market-collector tests passed; two PostgreSQL tests were skipped.
-- Three real QuestDB tests cover sparse/expired symbols, after-hours data, strict
-  cutoff boundaries and 1,000,000 rows across 200 symbols and 12 DAY partitions.
-- The bounded result equals an independently grouped query with the same windows.
-- EXPLAIN contains two latest operators and `Interval backward scan`, with no GroupBy.
-- All three integration tests failed against the previous unbounded query, then passed
-  with the timestamp filters.
-
-Full-suite collection is blocked by a pre-existing SyntaxError at
-`services/portfolio-rebalancer/tests/test_rebalance.py:342`, observed before these edits.
-Excluding that file gives 418 passed, 161 skipped and four failures in
-`portfolio-rebalancer/tests/test_main.py`, caused by the unchanged
-`rebalance.py:95` referencing undefined `value`. Global Ruff check/format are also
-blocked by the existing syntax errors; market-collector checks pass.
-Production OOM resolution and container peak memory remain deployment checks.
-
-## Historical local evidence from #146
+## Local evidence
 
 Validated against the official QuestDB 10.0.1 Linux release and Python client 5.0.0.
 The test table has an indexed SYMBOL, VARCHAR timeframe, designated timestamp,
@@ -98,9 +60,9 @@ not imply `LatestByAllIndexed` for this plan. A symbol absent from a timeframe c
 require scanning old partitions. EXPLAIN did not report actual scanned row counts;
 no scan-count or per-query peak-memory reduction is claimed.
 
-## Historical memory decision from #146
+## Memory decision
 
-At the time of #146, production retained its 1200m container limit and existing JVM arguments. The local
+Production retains its 1200m container limit and existing JVM arguments. The local
 server used `-Xms64m -Xmx384m` and two query workers to bound the experiment, without
 a production-equivalent cgroup cap. This heap is an experiment setting, not a sizing recommendation.
 
@@ -114,8 +76,8 @@ Metrics snapshots before/after the alternating reads:
 | questdb_memory_jvm_max | 358088704 | 358088704 |
 
 These snapshots cover both queries and are not attributable peak measurements.
-No GC error occurred in that local run. Production GC resolution and the adequacy of
-1200m were deployment checks at that time: production logs, CloudWatch data and credentials were unavailable.
+No GC error occurred in this local run. Production GC resolution and the adequacy of
+1200m remain deployment checks: production logs, CloudWatch data and credentials were unavailable.
 Heap, native allocations and mapped pages all consume the container budget, so increasing
 heap alone could cause a container OOM. Measure them before changing either limit.
 
