@@ -53,7 +53,7 @@ Cancel-all loses queue position every hour in exchange for no state and no order
 
 `holidays.py` hardcodes `KRX_HOLIDAYS: frozenset[date]`, i.e. the weekdays where KIS
 `chk-holiday` returns `opnd_yn: "N"`, and a `COVERED_THROUGH: date`. The list was verified against
-a one-year KIS `chk-holiday` export ending 2027-09-26, so `COVERED_THROUGH` is 2027-09-26:
+the one-year KIS `chk-holiday` export for 2026-10-02 → 2027-10-01, so `COVERED_THROUGH` is 2027-10-01:
 
 - 2026: 10-05 (substitute), 10-09, 12-25, 12-31
 - 2027: 01-01, 02-08, 02-09 (substitute), 03-01, 05-05, 05-13, 08-16 (substitute), 09-14,
