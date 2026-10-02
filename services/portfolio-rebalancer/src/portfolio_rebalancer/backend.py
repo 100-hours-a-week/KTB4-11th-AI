@@ -15,7 +15,10 @@ class OrderRequest(BaseModel):
     stock_code: str
     stock_name: str
     order_side: Literal["buy", "sell"]
-    order_type: Literal["market"] = "market"
+    order_type: Literal["limit", "market"]
+    limit_price: int | None
+    is_upper_triggered: bool
+    is_lower_triggered: bool
     quantity: int
     reason: str
     thoughts: list[Reasoning]
@@ -64,22 +67,13 @@ class Backend:
         self._csrf = (cookie["XSRF-TOKEN"].value, body["header_name"], body["token"])
         return self._csrf
 
-    def place(self, user_id: int, account_id: int, order: Order) -> None:
-        body = OrderRequest(
-            stock_code=order.stock_code,
-            stock_name=order.stock_name,
-            order_side=order.side,
-            quantity=order.quantity,
-            reason=order.explanation.reason,
-            thoughts=order.explanation.reasonings,
-            holding_weight_after_trade_percent=order.holding_weight_after_trade_percent,
-            holding_weight_limit_percent=order.holding_weight_limit_percent,
-        ).model_dump(mode="json")
+    def _send(self, method: str, path: str, user_id: int, body: dict | None = None) -> None:
         csrf = self._csrf or self._fresh_csrf()
         for attempt in range(2):
             cookie, header, token = csrf
-            response = self._client.post(
-                f"/api/v1/accounts/{account_id}/orders",
+            response = self._client.request(
+                method,
+                path,
                 json=body,
                 headers={
                     "Cookie": f"access_token={self._token(str(user_id))}; XSRF-TOKEN={cookie}",
@@ -90,3 +84,24 @@ class Backend:
                 break
             csrf = self._fresh_csrf()
         response.raise_for_status()
+
+    def place(self, user_id: int, account_id: int, order: Order) -> None:
+        market = order.pricing.order_type == "market"
+        body = OrderRequest(
+            stock_code=order.stock_code,
+            stock_name=order.stock_name,
+            order_side=order.side,
+            order_type=order.pricing.order_type,
+            limit_price=order.pricing.limit_price,
+            is_upper_triggered=market and order.side == "buy",
+            is_lower_triggered=market and order.side == "sell",
+            quantity=order.quantity,
+            reason=order.explanation.reason,
+            thoughts=order.explanation.reasonings,
+            holding_weight_after_trade_percent=order.holding_weight_after_trade_percent,
+            holding_weight_limit_percent=order.holding_weight_limit_percent,
+        ).model_dump(mode="json")
+        self._send("POST", f"/api/v1/accounts/{account_id}/orders", user_id, body)
+
+    def cancel(self, user_id: int, account_id: int, order_id: int) -> None:
+        self._send("PATCH", f"/api/v1/accounts/{account_id}/orders/{order_id}", user_id)
