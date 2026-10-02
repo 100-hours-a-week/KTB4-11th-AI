@@ -1,5 +1,5 @@
 from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target
-from portfolio_rebalancer.rebalance import rebalance
+from portfolio_rebalancer.rebalance import rebalance, whole_shares
 from portfolio_rebalancer.snapshot import Account
 
 BUY = Explanation(reason="사요", reasonings=[{"label": "사요", "body": "사요"}])
@@ -15,11 +15,12 @@ def exit_(code):
     return Target(stock_code=code, weight=0.0, exiting=True, buy=None, sell=SELL)
 
 
-def portfolio(*targets, leftovers=None):
+def portfolio(*targets, leftovers=None, cash_weight=None):
     leftovers = leftovers or {}
     codes = [t.stock_code for t in targets] + list(leftovers)
     return Portfolio(
         id=1,
+        cash_weight=1 - sum(t.weight for t in targets) if cash_weight is None else cash_weight,
         targets=list(targets),
         leftovers=leftovers,
         names={code: f"name-{code}" for code in codes},
@@ -324,3 +325,70 @@ def test_every_order_carries_the_stock_name():
         ("373220", "name-373220"),
         ("005930", "name-005930"),
     ]
+
+
+def test_cash_weight_is_held_back_before_sizing():
+    result = rebalance(
+        portfolio(hold("005930", 0.5), cash_weight=0.5),
+        account(1_000_000),
+        {"005930": 100_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("005930", "buy", 5, "사요")]
+
+
+def test_an_unaffordable_weight_is_shared_equally_over_the_rest():
+    result = rebalance(
+        portfolio(hold("005930", 0.6), hold("035720", 0.2), hold("000660", 0.1)),
+        account(1_000_000),
+        {"005930": 10_000, "035720": 10_000, "000660": 1_800_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("005930", "buy", 65, "사요"), ("035720", "buy", 25, "사요")]
+
+
+def test_a_redistributed_weight_sets_the_band_for_a_holding():
+    result = rebalance(
+        portfolio(hold("005930", 0.4), hold("000660", 0.4)),
+        account(400_000, stocks=[("005930", 40)]),
+        {"005930": 10_000, "000660": 1_800_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("005930", "buy", 24, "사요")]
+
+
+def test_the_leftover_from_whole_shares_is_spent_one_share_at_a_time():
+    result = rebalance(
+        portfolio(hold("005930", 0.5), hold("000660", 0.5)),
+        account(1_000_000),
+        {"005930": 70_000, "000660": 300_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("005930", "buy", 10, "사요"), ("000660", "buy", 1, "사요")]
+
+
+def test_a_held_stock_that_cannot_be_bought_is_kept_and_its_value_locked():
+    result = rebalance(
+        portfolio(hold("005930", 0.4), hold("000660", 0.1), cash_weight=0.5),
+        account(1_000_000, stocks=[("000660", 1)]),
+        {"005930": 10_000, "000660": 900_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("005930", "buy", 50, "사요")]
+
+
+def test_whole_shares_goes_past_the_ideal_in_weight_order_once_the_short_one_is_too_dear():
+    assert whole_shares(
+        {"000660": 500_000, "005930": 300_000, "035720": 200_000},
+        {"000660": 300_000, "005930": 100_000, "035720": 100_000},
+    ) == {"000660": 1, "005930": 4, "035720": 3}

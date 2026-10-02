@@ -22,12 +22,15 @@ class Target(BaseModel):
 
 class Portfolio(BaseModel):
     id: int
+    cash_weight: float
     targets: list[Target]
     leftovers: dict[str, Explanation]
     names: dict[str, str]
 
 
 LATEST = "SELECT max(portfolio_id) FROM portfolio_reasons"
+
+CASH_WEIGHT = "SELECT cash_weight FROM portfolios WHERE id = :id"
 
 TARGETS = """
 SELECT c.stock_code, c.name, h.weight, false AS exiting
@@ -60,6 +63,7 @@ def load_portfolio(engine: sa.Engine) -> Portfolio | None:
         portfolio_id = conn.execute(sa.text(LATEST)).scalar()
         if portfolio_id is None:
             return None
+        cash_weight = conn.execute(sa.text(CASH_WEIGHT), {"id": portfolio_id}).scalar_one()
         reasons = {
             (row.stock_code, row.side): Explanation(reason=row.reason, reasonings=row.reasonings)
             for row in conn.execute(sa.text(REASONS), {"id": portfolio_id})
@@ -81,4 +85,10 @@ def load_portfolio(engine: sa.Engine) -> Portfolio | None:
         for row in leftover_rows
     }
     names = {row.stock_code: row.name for row in [*target_rows, *leftover_rows]}
-    return Portfolio(id=portfolio_id, targets=targets, leftovers=leftovers, names=names)
+    return Portfolio(
+        id=portfolio_id,
+        cash_weight=cash_weight,
+        targets=targets,
+        leftovers=leftovers,
+        names=names,
+    )

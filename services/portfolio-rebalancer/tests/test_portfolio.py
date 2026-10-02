@@ -87,6 +87,7 @@ def test_the_latest_explained_portfolio_is_loaded_and_an_unexplained_newer_one_s
 
     assert portfolio.id == explained
     assert first < explained
+    assert portfolio.cash_weight == 0.1
     by_code = {t.stock_code: t for t in portfolio.targets}
     assert by_code["005930"].weight == 0.6
     assert by_code["005930"].exiting is False
