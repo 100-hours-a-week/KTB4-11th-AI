@@ -164,3 +164,33 @@ def test_csrf_retry_clears_cookies_for_https_with_secure_flag():
 
     assert fake.csrf_issued == 2
     assert fake.requests[-1].headers["x-xsrf-token"] == "masked-2"
+
+
+def test_a_cancel_patches_the_order_with_no_body_and_the_csrf_pair():
+    fake = FakeBackend()
+
+    _backend(fake).cancel(7, 11, 42)
+
+    patch = fake.requests[-1]
+    assert patch.method == "PATCH"
+    assert patch.url.path == "/api/v1/accounts/11/orders/42"
+    assert patch.content == b""
+    assert _claims(patch)["sub"] == "7"
+    assert patch.headers["x-xsrf-token"] == "masked-1"
+
+
+def test_a_cancel_retries_once_on_an_invalid_csrf_token():
+    invalid = httpx.Response(403, json={"code": "INVALID_CSRF_TOKEN", "message": "m"})
+    fake = FakeBackend([invalid])
+
+    _backend(fake).cancel(7, 11, 42)
+
+    assert fake.csrf_issued == 2
+    assert fake.requests[-1].method == "PATCH"
+
+
+def test_a_failed_cancel_raises():
+    fake = FakeBackend([httpx.Response(409, json={"code": "ALREADY_FILLED", "message": "m"})])
+
+    with pytest.raises(httpx.HTTPStatusError):
+        _backend(fake).cancel(7, 11, 42)
