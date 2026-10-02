@@ -92,7 +92,7 @@ def rebalance(
     def weights(code: str, after: int, weight: float) -> dict[str, float]:
         return {
             "holding_weight_after_trade_percent": round(
-                after * closes[code] / value * 100 if after else 0.0, 2
+                after * closes[code] / capital * 100 if after else 0.0, 2
             ),
             "holding_weight_limit_percent": round(
                 weight * (1 + HOLDING_WEIGHT_LIMIT_MARGIN) * 100, 2
@@ -171,7 +171,7 @@ def rebalance(
 
     budget = max(cash, 0)
     placed: list[Order] = []
-    for weight, close, order in sorted(buys, key=lambda b: -b[0]):
+    for _weight, close, order in sorted(buys, key=lambda b: -b[0]):
         quantity = min(order.quantity, math.floor(budget / (close * (1 + buy_buffer))))
         if quantity <= 0:
             continue
@@ -181,7 +181,9 @@ def rebalance(
             order.model_copy(
                 update={
                     "quantity": quantity,
-                    **weights(order.stock_code, after, weight),
+                    "holding_weight_after_trade_percent": round(
+                        after * closes[order.stock_code] / capital * 100 if after else 0.0, 2
+                    ),
                 }
             )
         )

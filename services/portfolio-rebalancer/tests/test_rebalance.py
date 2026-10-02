@@ -339,6 +339,49 @@ def test_a_buy_carries_its_weight_after_the_trade_and_its_limit():
         portfolio(hold("005930", 0.20)),
         account(1_000_000),
         {"005930": 30_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert weights(result) == [("005930", 18.0, 24.0)]
+
+
+def test_a_buy_cut_by_cash_reports_the_weight_it_actually_reaches():
+    result = rebalance(
+        portfolio(hold("005930", 0.6), hold("000660", 0.4), exit_("373220")),
+        account(500_000, stocks=[("373220", 1)]),
+        {"005930": 100_000, "000660": 100_000, "373220": 500_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert weights(result) == [("373220", 0.0, 0.0), ("005930", 50.0, 72.0)]
+
+
+def test_a_trim_carries_its_weight_after_the_trade_and_its_limit():
+    result = rebalance(
+        portfolio(hold("005930", 0.10)),
+        account(8_000_000, stocks=[("005930", 200)]),
+        {"005930": 10_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert weights(result) == [("005930", 10.0, 12.0)]
+
+
+def test_selling_every_share_leaves_no_weight_and_no_limit():
+    result = rebalance(
+        portfolio(exit_("000660"), leftovers={"373220": LEFT}),
+        account(0, stocks=[("000660", 3), ("373220", 2)]),
+        {"000660": 200_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert weights(result) == [("000660", 0.0, 0.0), ("373220", 0.0, 0.0)]
+
+
 def test_cash_weight_is_held_back_before_sizing():
     result = rebalance(
         portfolio(hold("005930", 0.5), cash_weight=0.5),
@@ -360,14 +403,6 @@ def test_an_unaffordable_weight_is_shared_equally_over_the_rest():
         buy_buffer=0.0,
     )
 
-    assert weights(result) == [("005930", 18.0, 24.0)]
-
-
-def test_a_buy_cut_by_cash_reports_the_weight_it_actually_reaches():
-    result = rebalance(
-        portfolio(hold("005930", 0.6), hold("000660", 0.4), exit_("373220")),
-        account(500_000, stocks=[("373220", 1)]),
-        {"005930": 100_000, "000660": 100_000, "373220": 500_000},
     assert orders(result) == [("005930", "buy", 65, "사요"), ("035720", "buy", 25, "사요")]
 
 
@@ -380,14 +415,6 @@ def test_a_redistributed_weight_sets_the_band_for_a_holding():
         buy_buffer=0.0,
     )
 
-    assert weights(result) == [("373220", 0.0, 0.0), ("005930", 50.0, 72.0)]
-
-
-def test_a_trim_carries_its_weight_after_the_trade_and_its_limit():
-    result = rebalance(
-        portfolio(hold("005930", 0.10)),
-        account(8_000_000, stocks=[("005930", 200)]),
-        {"005930": 10_000},
     assert orders(result) == [("005930", "buy", 24, "사요")]
 
 
@@ -400,14 +427,6 @@ def test_the_leftover_from_whole_shares_is_spent_one_share_at_a_time():
         buy_buffer=0.0,
     )
 
-    assert weights(result) == [("005930", 10.0, 12.0)]
-
-
-def test_selling_every_share_leaves_no_weight_and_no_limit():
-    result = rebalance(
-        portfolio(exit_("000660"), leftovers={"373220": LEFT}),
-        account(0, stocks=[("000660", 3), ("373220", 2)]),
-        {"000660": 200_000},
     assert orders(result) == [("005930", "buy", 10, "사요"), ("000660", "buy", 1, "사요")]
 
 
@@ -420,7 +439,6 @@ def test_a_held_stock_that_cannot_be_bought_is_kept_and_its_value_locked():
         buy_buffer=0.0,
     )
 
-    assert weights(result) == [("000660", 0.0, 0.0), ("373220", 0.0, 0.0)]
     assert orders(result) == [("005930", "buy", 50, "사요")]
 
 
@@ -428,4 +446,8 @@ def test_whole_shares_goes_past_the_ideal_in_weight_order_once_the_short_one_is_
     assert whole_shares(
         {"000660": 500_000, "005930": 300_000, "035720": 200_000},
         {"000660": 300_000, "005930": 100_000, "035720": 100_000},
-    ) == {"000660": 1, "005930": 4, "035720": 3}
+    ) == {
+        "000660": 1,
+        "005930": 4,
+        "035720": 3,
+    }

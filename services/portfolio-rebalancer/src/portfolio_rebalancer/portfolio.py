@@ -68,10 +68,10 @@ def load_portfolio(engine: sa.Engine) -> Portfolio | Unready | None:
         latest = conn.execute(sa.text(LATEST)).first()
         if latest is None:
             return None
-        cash_weight = conn.execute(sa.text(CASH_WEIGHT), {"id": portfolio_id}).scalar_one()
         if latest.status != "ready":
             return Unready(id=latest.id, status=latest.status)
         portfolio_id = latest.id
+        cash_weight = conn.execute(sa.text(CASH_WEIGHT), {"id": portfolio_id}).scalar_one()
         reasons = {
             (row.stock_code, row.side): Explanation(reason=row.reason, reasonings=row.reasonings)
             for row in conn.execute(sa.text(REASONS), {"id": portfolio_id})
