@@ -22,10 +22,7 @@ TIMEFRAME_HELP = (
 
 
 class AnalyzeTechnicalsArgs(BaseModel):
-    name: str = Field(
-        description="company identifier: 6-digit stock_code, 8-digit corp_code/company_id,"
-        " Korean or English company name, or alias; keep leading zeros in codes"
-    )
+    name: str = Field(description="company name or company_id")
     timeframe: Literal["1m", "15m", "1h", "1d"] = Field(description=TIMEFRAME_HELP)
 
 
