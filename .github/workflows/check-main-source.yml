@@ -1,0 +1,16 @@
+name: Check main PR source
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only allow dev -> main
+        if: github.head_ref != 'dev'
+        run: |
+          echo "PRs to main must come from dev."
+          exit 1
