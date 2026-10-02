@@ -76,7 +76,7 @@ def main() -> None:
             )
         runs_left, week_runs = hours_left(now)
         end.update(runs_left=runs_left, week_runs=week_runs, last_run=runs_left == 1)
-        if not in_session(now):
+        if not settings.test_mode and not in_session(now):
             end.update(outcome="market_closed")
             raise SystemExit(0)
 

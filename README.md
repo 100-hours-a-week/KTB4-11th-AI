@@ -324,6 +324,7 @@ QuestDB의 PGWire 설정이며 이 WebSocket 연결 문자열에는 사용되지
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | Backend 의 `JWT_ISSUER` 와 같아야 합니다 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` |
+| `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` — `true`면 KRX 거래일·시간 확인을 건너뜁니다 |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` |
 
 환경변수 변경 시 서비스의 `settings.py`를 기준으로 필수 여부와 기본값을 확인하고,
