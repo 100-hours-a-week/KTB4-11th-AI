@@ -23,7 +23,7 @@ class Company(NamedTuple):
     stock_code: str
 
 
-def resolve_company(engine: sa.Engine, name: str) -> Company:
+def _parse_company_identifier(name: str) -> tuple[str, str | None]:
     identifier = name.strip()
     if not identifier:
         raise UnknownCompany("empty company identifier; provide a stock_code, corp_code or name")
@@ -34,6 +34,10 @@ def resolve_company(engine: sa.Engine, name: str) -> Company:
         if re.fullmatch(r"[0-9]{8}", identifier)
         else None
     )
+    return identifier, code_field
+
+
+def _company_query(identifier: str, code_field: str | None) -> sa.Select:
     query = sa.select(
         corporations.c.corp_code,
         corporations.c.name.label("corp_name"),
@@ -50,6 +54,12 @@ def resolve_company(engine: sa.Engine, name: str) -> Company:
         query = query.where(sa.or_(named, english, aliased)).order_by(
             sa.case((named, 0), (english, 1), else_=2), corporations.c.stock_code
         )
+    return query
+
+
+def resolve_company(engine: sa.Engine, name: str) -> Company:
+    identifier, code_field = _parse_company_identifier(name)
+    query = _company_query(identifier, code_field)
     with engine.connect() as conn:
         company = conn.execute(query.limit(1)).first()
         if company is not None:
