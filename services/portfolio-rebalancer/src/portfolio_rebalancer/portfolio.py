@@ -22,6 +22,7 @@ class Target(BaseModel):
 
 class Portfolio(BaseModel):
     id: int
+    cash_weight: float
     targets: list[Target]
     leftovers: dict[str, Explanation]
     names: dict[str, str]
@@ -33,6 +34,8 @@ class Unready(BaseModel):
 
 
 LATEST = "SELECT id, status FROM portfolios ORDER BY id DESC LIMIT 1"
+
+CASH_WEIGHT = "SELECT cash_weight FROM portfolios WHERE id = :id"
 
 TARGETS = """
 SELECT c.stock_code, c.name, h.weight, false AS exiting
@@ -65,6 +68,7 @@ def load_portfolio(engine: sa.Engine) -> Portfolio | Unready | None:
         latest = conn.execute(sa.text(LATEST)).first()
         if latest is None:
             return None
+        cash_weight = conn.execute(sa.text(CASH_WEIGHT), {"id": portfolio_id}).scalar_one()
         if latest.status != "ready":
             return Unready(id=latest.id, status=latest.status)
         portfolio_id = latest.id
@@ -89,4 +93,10 @@ def load_portfolio(engine: sa.Engine) -> Portfolio | Unready | None:
         for row in leftover_rows
     }
     names = {row.stock_code: row.name for row in [*target_rows, *leftover_rows]}
-    return Portfolio(id=portfolio_id, targets=targets, leftovers=leftovers, names=names)
+    return Portfolio(
+        id=portfolio_id,
+        cash_weight=cash_weight,
+        targets=targets,
+        leftovers=leftovers,
+        names=names,
+    )

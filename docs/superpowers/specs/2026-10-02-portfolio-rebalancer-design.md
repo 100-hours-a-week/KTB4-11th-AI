@@ -215,24 +215,48 @@ A pure function, no I/O:
 
 ```python
 def rebalance(
-    portfolio: Portfolio, account: Account, closes: dict[str, float], band: float
+    portfolio: Portfolio,
+    account: Account,
+    closes: dict[str, float],
+    band: float,
+    buy_buffer: float,
 ) -> list[Order]: ...
 ```
 
 - An inactive account returns nothing.
 - A stock with any pending order in the account is skipped, both sides.
-- **Value** = `cash_balance` − Σ pending buys (`quantity × (limit_price or current_stock_price)`)
-  \+ Σ held `quantity × close`.
+- **Capital** = `cash_balance` − Σ pending buys (`quantity × (limit_price or current_stock_price)`)
+  \+ Σ held `quantity × close`, minus the value of locked holdings (below).
 - **Exits:** sell every held share.
-- **Holdings:** target = ⌊value × weight ÷ close⌋.
-  - Nothing held and target > 0: buy target.
-  - Otherwise trade to target only when |held weight − target weight| > `band`, where held weight
-    is `quantity × close ÷ value`.
 - A held stock that is neither a holding nor an exit (bought by hand) is left alone.
-- A stock without a close is skipped and logged.
+- A holding that is held but has no close freezes every holding in the account; exits still sell.
 - Sells come first. Buys spend only cash that exists now, never a sell's proceeds, and go in
-  descending portfolio weight; a buy that does not fit is cut to the shares that do, and dropped
-  at zero.
+  descending budget; a buy that does not fit is cut to the shares that do, and dropped at zero.
+
+#### Allocation
+
+Restored from `2026-09-29-portfolio-rebalancer-design.md`. Every price below is the ask,
+`close × (1 + buy_buffer)`.
+
+1. **Cash first.** `investable = capital × (1 − cash_weight − unpriced)`. `cash_weight` comes from
+   `portfolios`. `unpriced` is the weight of holdings that have no close and are not held: it stays
+   cash rather than being shared out, because a missing close is usually a gap in the data, and
+   sharing its weight out would overbuy the rest until the close returns.
+2. **Drop what cannot be bought.** `budget_i = round(investable × weight_i ÷ Σ weights)`, in whole
+   won. A holding whose budget is below one share is dropped, and its weight is **shared equally**
+   over those that remain, not in proportion, so one expensive name is not absorbed by the largest
+   holding. Repeat until every remaining holding can afford a share. An equal share raises every
+   remaining budget, so the set only shrinks.
+3. **Lock dropped holdings that are held.** Their value cannot be spent while they are not sold,
+   so it leaves the capital and steps 1–2 run again. A locked holding gets no order, neither buy
+   nor sell. The locked set only grows, so this ends.
+4. **Whole shares.** `target_i = ⌊budget_i ÷ ask_i⌋`. The cash flooring leaves is spent one share
+   at a time: first for whichever holding is furthest below its budget, and once none that is
+   short can afford a share, round-robin over the holdings in descending budget. Whatever cannot
+   buy a share stays cash.
+5. **Band.** A held holding trades only when `|quantity × close − budget| ÷ capital > band`. It
+   then buys up to `target`, or sells down to `max(target, ⌊budget ÷ close⌋)`, so a trim is not
+   deepened by the buy buffer.
 
 Each `Order` carries the side's `reason` and `reasonings`.
 
@@ -278,6 +302,7 @@ retries it, because nothing was recorded.
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | required |
 | `PORTFOLIO_REBALANCER_BAND` | `0.05` |
+| `PORTFOLIO_REBALANCER_BUY_BUFFER` | `0.02` |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | `INFO` |
 
 `BACKEND_JWT_SUBJECT` is gone: the subject is `ai-server` or a user id, never configured.
@@ -299,7 +324,10 @@ orders from the service token with the account in the path.
 - **portfolio-rebalancer:** table-driven `rebalance()` tests: a share costing more than the
   budget (SK하이닉스 at 1,800,000 with a 500,000 budget) buys nothing; drift inside the band does
   not trade and outside it does; an exit sells everything; a pending order skips its stock; a cash
-  shortfall cuts the lowest-weight buy. The snapshot model parses the Backend doc's example JSON.
+  shortfall cuts the lowest-weight buy; `cash_weight` is held back; a dropped weight is shared
+  equally, and the band uses the shared-out budget; the leftover is spent share by share, past the
+  budget once the short holding is too dear; a held holding that cannot be bought is kept and its
+  value locked out of the capital. The snapshot model parses the Backend doc's example JSON.
   The client sends the cookies, the CSRF header and the right `sub`, and retries once on
   `INVALID_CSRF_TOKEN`, against `httpx.MockTransport`. The repository loads the latest explained
   portfolio against `ktb_test`.
