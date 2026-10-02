@@ -6,7 +6,7 @@ from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from portfolio_rebalancer.backend import Backend
 from portfolio_rebalancer.market import last_closes
-from portfolio_rebalancer.portfolio import load_portfolio
+from portfolio_rebalancer.portfolio import Unready, load_portfolio
 from portfolio_rebalancer.rebalance import rebalance
 from portfolio_rebalancer.settings import Settings
 
@@ -24,6 +24,9 @@ def main() -> None:
         if portfolio is None:
             end.update(outcome="no_portfolio")
             raise SystemExit(0)
+        if isinstance(portfolio, Unready):
+            end.update(outcome=portfolio.status, portfolio_id=portfolio.id)
+            raise SystemExit(1 if portfolio.status == "explanation_failed" else 0)
 
         sent = failed = 0
         with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:

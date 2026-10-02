@@ -25,7 +25,7 @@
 
 ## Deviations From the Spec (confirm with the user)
 
-1. **An explain failure exits 0, not 1.** `run_agent` already reports `saved` when a portfolio was written, because a retrying scheduler would otherwise write a second portfolio. An explain failure logs `explain_failed` at ERROR and the run ends `outcome=saved` with an `error` field. The rebalancer still skips the unexplained portfolio.
+1. **An explain failure exits 1.** (Superseded the original exit-0 deviation.) The portfolio is marked `explanation_failed`, and the next run re-explains it from the stored trace instead of calling the agent, so a retrying scheduler never writes a second portfolio. See the spec's "Order readiness" section.
 2. **Leftover holdings are sold.** The Backend refuses any order without `actor=AI`, so nothing in an AI account was bought by hand. A held stock that is neither a holding nor an exit of the latest portfolio was exited earlier and never sold (a pending order blocked it, the sell failed, or the account joined later). It is sold in full with the most recent `sell` reason of a portfolio that exited it; with no such reason it is skipped and logged.
 3. **Buys are sized with a buffer.** A market buy fills at the live price, not yesterday's close. Buys are sized at `close × (1 + PORTFOLIO_REBALANCER_BUY_BUFFER)`, default `0.02`, so a small rise does not push the last buy past the cash.
 4. **The explain call uses its own model instance** with reasoning off and `max_tokens` from `PORTFOLIO_BUILDER_EXPLAIN_MAX_TOKENS` (default `16000`): forced tool choice is rejected by some providers while reasoning is on, and the output is long.
@@ -829,6 +829,8 @@ git commit -m "feat: Explain each portfolio stock for buying and selling"
 ---
 
 ### Task 4: Wire explain into portfolio-builder's main
+
+> Superseded by issue #132: an explain failure now marks the portfolio `explanation_failed` and exits 1, and the next run re-explains it. See the spec's "Order readiness" section; the exit-0 snippets below are historical.
 
 **Files:**
 - Modify: `services/portfolio-builder/src/portfolio_builder/settings.py`

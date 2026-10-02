@@ -280,6 +280,45 @@ def test_downgrade_to_0006_removes_reasons_and_trace(pg_dsn, pg_engine, monkeypa
         command.upgrade(config, "head")
 
 
+def test_upgrade_to_0008_marks_explained_portfolios_ready_and_the_rest_failed(
+    pg_dsn, pg_engine, monkeypatch
+):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+    command.downgrade(config, "0007")
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE portfolios, corporations RESTART IDENTITY CASCADE"))
+            conn.execute(
+                sa.text(
+                    "INSERT INTO corporations (stock_code, corp_code, name)"
+                    " VALUES ('005930', '00126380', '삼성전자')"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolios (cash_weight, commentary, model)"
+                    " VALUES (1, 'c', 'm'), (1, 'c', 'm')"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_reasons"
+                    " (portfolio_id, company_id, side, reason, reasonings)"
+                    " VALUES (1, '00126380', 'sell', 'r', '[]')"
+                )
+            )
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            statuses = conn.execute(sa.text("SELECT status FROM portfolios ORDER BY id")).scalars()
+            assert list(statuses) == ["ready", "explanation_failed"]
+    finally:
+        command.upgrade(config, "head")
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE portfolios, corporations RESTART IDENTITY CASCADE"))
+
+
 def _seed_0004(conn) -> None:
     conn.execute(
         sa.text(

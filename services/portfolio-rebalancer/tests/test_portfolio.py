@@ -1,7 +1,8 @@
 import json
 
+import pytest
 import sqlalchemy as sa
-from portfolio_rebalancer.portfolio import Explanation, load_portfolio
+from portfolio_rebalancer.portfolio import Explanation, Unready, load_portfolio
 
 SAMSUNG, HYNIX, LGES = "00126380", "00164779", "01515323"
 
@@ -10,12 +11,13 @@ def _explanation(text):
     return {"reason": text, "reasonings": [{"label": "근거", "body": text}]}
 
 
-def _portfolio(conn, holdings, exits, reasons):
+def _portfolio(conn, holdings, exits, reasons, status="ready"):
     portfolio_id = conn.execute(
         sa.text(
-            "INSERT INTO portfolios (cash_weight, commentary, model) VALUES (0.1, 'c', 'm')"
-            " RETURNING id"
-        )
+            "INSERT INTO portfolios (cash_weight, commentary, model, status)"
+            " VALUES (0.1, 'c', 'm', :s) RETURNING id"
+        ),
+        {"s": status},
     ).scalar_one()
     for company, weight in holdings:
         conn.execute(
@@ -52,14 +54,20 @@ def _portfolio(conn, holdings, exits, reasons):
     return portfolio_id
 
 
-def test_nothing_explained_yet_loads_nothing(engine):
-    with engine.begin() as conn:
-        _portfolio(conn, [(SAMSUNG, 0.9)], [], [])
-
+def test_no_portfolio_loads_nothing(engine):
     assert load_portfolio(engine) is None
 
 
-def test_the_latest_explained_portfolio_is_loaded_and_an_unexplained_newer_one_skipped(engine):
+@pytest.mark.parametrize("status", ["explanation_pending", "explanation_failed"])
+def test_an_unready_latest_portfolio_hides_the_older_ready_one(engine, status):
+    with engine.begin() as conn:
+        _portfolio(conn, [(HYNIX, 0.5)], [], [(HYNIX, "buy", "사요"), (HYNIX, "sell", "줄여요")])
+        latest = _portfolio(conn, [(SAMSUNG, 0.9)], [HYNIX], [], status)
+
+    assert load_portfolio(engine) == Unready(id=latest, status=status)
+
+
+def test_the_latest_ready_portfolio_is_loaded_with_every_earlier_exit_reason(engine):
     with engine.begin() as conn:
         first = _portfolio(
             conn,
@@ -81,7 +89,6 @@ def test_the_latest_explained_portfolio_is_loaded_and_an_unexplained_newer_one_s
                 (HYNIX, "sell", "하이닉스 팔아요"),
             ],
         )
-        _portfolio(conn, [(LGES, 0.9)], [SAMSUNG], [])
 
     portfolio = load_portfolio(engine)
 
