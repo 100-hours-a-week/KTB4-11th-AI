@@ -1,3 +1,5 @@
+import json
+
 import pytest
 import sqlalchemy as sa
 from langchain_core.messages import HumanMessage
@@ -9,8 +11,10 @@ from portfolio_builder.explain import (
     Target,
     explain,
     load_targets,
+    load_unexplained,
     save_explanations,
 )
+from portfolio_builder.portfolio import mark_explanation_failed
 from pydantic import ValidationError
 
 SAMSUNG = "00126380"
@@ -193,6 +197,7 @@ def test_save_explanations_writes_one_row_per_side(engine):
         (HYNIX, "sell"),
     ]
     assert rows[0].reasonings == [{"label": "HBM", "body": "늘었어요."}]
+    assert _status(engine, portfolio_id) == "ready"
 
 
 def test_save_explanations_handles_empty_stocks(engine):
@@ -212,3 +217,59 @@ def test_save_explanations_handles_empty_stocks(engine):
             {"id": portfolio_id},
         ).scalar_one()
     assert rows == 0
+    assert _status(engine, portfolio_id) == "ready"
+
+
+def _status(engine, portfolio_id):
+    with engine.connect() as conn:
+        return conn.execute(
+            sa.text("SELECT status FROM portfolios WHERE id = :id"), {"id": portfolio_id}
+        ).scalar_one()
+
+
+def _insert(engine, trace):
+    with engine.begin() as conn:
+        return conn.execute(
+            sa.text(
+                "INSERT INTO portfolios (cash_weight, commentary, model, trace)"
+                " VALUES (1.0, 'c', 'm', CAST(:t AS jsonb)) RETURNING id"
+            ),
+            {"t": None if trace is None else json.dumps([e.model_dump() for e in trace])},
+        ).scalar_one()
+
+
+def test_nothing_is_unexplained_without_a_portfolio(engine):
+    assert load_unexplained(engine) is None
+
+
+def test_a_new_portfolio_is_pending_and_unexplained(engine):
+    portfolio_id = _insert(engine, TRACE)
+
+    assert _status(engine, portfolio_id) == "explanation_pending"
+    assert load_unexplained(engine) == (portfolio_id, TRACE)
+
+
+def test_a_failed_portfolio_is_unexplained_until_its_explanation_is_saved(engine):
+    portfolio_id = _insert(engine, TRACE)
+    mark_explanation_failed(engine, portfolio_id)
+
+    assert _status(engine, portfolio_id) == "explanation_failed"
+    assert load_unexplained(engine) == (portfolio_id, TRACE)
+
+    save_explanations(engine, portfolio_id, Explanations(stocks=[]))
+
+    assert load_unexplained(engine) is None
+
+
+def test_only_the_latest_portfolio_is_retried(engine):
+    _insert(engine, TRACE)
+    latest = _insert(engine, TRACE)
+    save_explanations(engine, latest, Explanations(stocks=[]))
+
+    assert load_unexplained(engine) is None
+
+
+def test_a_portfolio_without_a_trace_is_not_retried(engine):
+    _insert(engine, None)
+
+    assert load_unexplained(engine) is None

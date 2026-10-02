@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 from portfolio_rebalancer import __main__ as entry
-from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target
+from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target, Unready
 from portfolio_rebalancer.snapshot import User
 
 REQUIRED = {
@@ -134,6 +134,23 @@ def test_no_explained_portfolio_exits_zero_without_calling_the_backend(env, monk
     assert exit_.value.code == 0
     assert backends == []
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "no_portfolio"
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "level"),
+    [("explanation_pending", 0, "INFO"), ("explanation_failed", 1, "ERROR")],
+)
+def test_an_unready_latest_portfolio_sends_nothing(env, monkeypatch, capsys, status, code, level):
+    monkeypatch.setattr(entry, "load_portfolio", lambda engine: Unready(id=8, status=status))
+    backends = _use(monkeypatch)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == code
+    assert backends == []
+    last = _events(capsys.readouterr().out)[-1]
+    assert (last["outcome"], last["portfolio_id"], last["level"]) == (status, 8, level)
 
 
 def test_the_secret_never_reaches_the_log(env, monkeypatch, capsys):

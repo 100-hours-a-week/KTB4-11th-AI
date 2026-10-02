@@ -9,7 +9,7 @@ Two members change:
 
 1. **portfolio-builder** keeps the agent's reasoning trace and, with one more LLM call per
    portfolio, turns it into a buy and a sell explanation per stock.
-2. **portfolio-rebalancer** reads the latest explained portfolio, polls the Backend for accounts,
+2. **portfolio-rebalancer** reads the latest portfolio once it is explained, polls the Backend for accounts,
    and sends one market order per stock that needs to move.
 
 portfolio-builder is built first: the rebalancer has nothing to send until explanations exist.
@@ -120,9 +120,30 @@ it at this weight; an exit's `sell` says why it leaves.
 `Explanations.model_validate(raw, context={"holdings": …, "exits": …})`: every holding has `buy`
 and `sell`, every exit has `sell` and no `buy`, and no other company appears. All violations are
 reported together. On failure the errors go back to the model once; a second failure ends the run
-with exit code 1. The portfolio row then exists without reasons, and the rebalancer skips it.
+with exit code 1.
 
-On success the rows are inserted into `portfolio_reasons` in one transaction.
+### Order readiness
+
+`portfolios.status` (migration `0008`) says whether a portfolio can be traded:
+
+| status | set when |
+|---|---|
+| `explanation_pending` | the agent saves the portfolio (column default) |
+| `ready` | the explanations are saved, in the same transaction as the `portfolio_reasons` rows |
+| `explanation_failed` | the explain step raises (trace save, provider error, or a second rejection) |
+
+The migration marks existing portfolios `ready` when they have reasons and `explanation_failed`
+otherwise.
+
+A run first looks at the latest portfolio. When it is not `ready` and has a trace, the run does not
+call the agent: it explains that portfolio again from the stored trace and exits 0 on success, or
+marks it `explanation_failed`, logs `explain_failed` at ERROR and exits 1. A retrying scheduler
+therefore never writes a second portfolio. Without a trace (a crash before it was saved) the run
+builds a new portfolio. An explanation that can never succeed keeps every run failing and trading
+halted; deleting that portfolio row (it cascades) unblocks it.
+
+On success the rows are inserted into `portfolio_reasons` and the status set to `ready` in one
+transaction.
 
 ### Unchanged
 
@@ -143,8 +164,10 @@ holding on the next run.
 
 ### One run
 
-1. **Portfolio.** Load the latest portfolio that has `portfolio_reasons` rows, with its holdings,
-   exits, reasons, and stock codes from `corporations`. None: log and exit 0.
+1. **Portfolio.** Load the latest portfolio. None: log and exit 0. `explanation_pending`: send
+   nothing and exit 0. `explanation_failed`: send nothing and exit 1, so the job's failure alert
+   fires. Never fall back to an older `ready` portfolio. `ready`: load its holdings, exits,
+   reasons, and stock codes from `corporations`.
 2. **Snapshot.** `GET {BACKEND_URL}/api/v1/users/ai-server` with the service token.
 3. **Prices.** The last regular-session daily close from QuestDB `bars_1d` for every stock in the
    portfolio or held by any account, in one query.
@@ -318,7 +341,6 @@ declared.
 
 ## Out of Scope
 
-- Rerunning the explain call alone for a portfolio whose explanation failed.
 - A trading-day calendar: the schedule only runs during market hours.
 - Fees, taxes and slippage.
 - Limit orders. Orders are market orders on both sides, assuming the Backend accepts market

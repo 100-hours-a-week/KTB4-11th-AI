@@ -14,7 +14,7 @@ from pydantic import (
 )
 
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.database import portfolio_reasons
+from portfolio_builder.database import portfolio_reasons, portfolios
 
 EXPLAIN_PROMPT = """You explain a model portfolio to the people whose money follows it.
 
@@ -98,6 +98,16 @@ class Explanations(BaseModel):
         if errors:
             raise ValueError("; ".join(errors))
         return self
+
+
+def load_unexplained(engine: sa.Engine) -> tuple[int, list[TraceEntry]] | None:
+    with engine.connect() as conn:
+        row = conn.execute(
+            sa.text("SELECT id, status, trace FROM portfolios ORDER BY id DESC LIMIT 1")
+        ).first()
+    if row is None or row.status == "ready" or row.trace is None:
+        return None
+    return row.id, [TraceEntry.model_validate(entry) for entry in row.trace]
 
 
 def load_targets(engine: sa.Engine, portfolio_id: int) -> list[Target]:
@@ -190,7 +200,9 @@ def save_explanations(engine: sa.Engine, portfolio_id: int, explanations: Explan
         for side, explanation in (("buy", stock.buy), ("sell", stock.sell))
         if explanation is not None
     ]
-    if not rows:
-        return
     with engine.begin() as conn:
-        conn.execute(sa.insert(portfolio_reasons), rows)
+        conn.execute(
+            sa.update(portfolios).where(portfolios.c.id == portfolio_id).values(status="ready")
+        )
+        if rows:
+            conn.execute(sa.insert(portfolio_reasons), rows)
