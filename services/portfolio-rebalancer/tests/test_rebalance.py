@@ -239,9 +239,9 @@ def test_a_held_stock_without_a_close_freezes_the_holdings():
     assert result == []
 
 
-def test_a_held_stock_without_a_close_still_lets_exits_sell():
+def test_a_held_holding_without_a_close_still_lets_exits_sell():
     result = rebalance(
-        portfolio(hold("005930", 0.5), exit_("373220")),
+        portfolio(hold("005930", 0.5), hold("000660", 0.5), exit_("373220")),
         account(0, stocks=[("005930", 50), ("000660", 50), ("373220", 2)]),
         {"005930": 100_000, "373220": 350_000},
         band=0.05,
@@ -249,6 +249,30 @@ def test_a_held_stock_without_a_close_still_lets_exits_sell():
     )
 
     assert orders(result) == [("373220", "sell", 2, "팔아요")]
+
+
+def test_an_exit_without_a_close_still_sells_every_share():
+    result = rebalance(
+        portfolio(exit_("000660")),
+        account(0, stocks=[("000660", 3)]),
+        {},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("000660", "sell", 3, "팔아요")]
+
+
+def test_an_unpriced_stock_outside_the_portfolio_does_not_freeze_the_account():
+    result = rebalance(
+        portfolio(hold("005930", 0.5)),
+        account(1_000_000, stocks=[("373220", 2)]),
+        {"005930": 100_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert orders(result) == [("005930", "buy", 5, "사요")]
 
 
 def test_a_trim_sells_to_the_unbuffered_target():
