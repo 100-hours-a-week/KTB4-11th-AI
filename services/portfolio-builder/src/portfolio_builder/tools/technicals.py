@@ -22,7 +22,10 @@ TIMEFRAME_HELP = (
 
 
 class AnalyzeTechnicalsArgs(BaseModel):
-    name: str = Field(description="company name or company_id")
+    name: str = Field(
+        description="company identifier: 6-digit stock_code, 8-digit corp_code/company_id,"
+        " Korean or English company name, or alias; keep leading zeros in codes"
+    )
     timeframe: Literal["1m", "15m", "1h", "1d"] = Field(description=TIMEFRAME_HELP)
 
 
@@ -71,7 +74,8 @@ def technicals_tool(engine: sa.Engine, market: Any) -> BaseTool:
             " relative_strength, short_term_rank, volatility, volume, liquidity) has a state"
             " decided by a fixed rule and the measurements behind it; weigh the signals"
             " together yourself. Signals that cannot be decided are listed under unavailable"
-            " with the reason. Look the company up by name or company_id."
+            " with the reason. Look the company up by stock_code, corp_code/company_id,"
+            " Korean or English company name, or alias."
         ),
         args_schema=AnalyzeTechnicalsArgs,
     )
