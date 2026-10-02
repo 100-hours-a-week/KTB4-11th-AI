@@ -52,14 +52,12 @@ Cancel-all loses queue position every hour in exchange for no state and no order
 ## Holidays
 
 `holidays.py` hardcodes `KRX_HOLIDAYS: frozenset[date]`, i.e. the weekdays where KIS
-`chk-holiday` returns `opnd_yn: "N"`, and a `COVERED_THROUGH: date`. Sample from KIS for
-2026-10-02 → 2026-10-25: closed on 2026-10-05 (substitute for 10-03) and 2026-10-09.
+`chk-holiday` returns `opnd_yn: "N"`, and a `COVERED_THROUGH: date`. The list was verified against
+a one-year KIS `chk-holiday` export ending 2027-09-26, so `COVERED_THROUGH` is 2027-09-26:
 
-Initial list (2026-10 through 2027-12): verify every date against KIS `chk-holiday` before merge.
-
-- 2026: 10-05, 10-09, 12-25, 12-31
+- 2026: 10-05 (substitute), 10-09, 12-25, 12-31
 - 2027: 01-01, 02-08, 02-09 (substitute), 03-01, 05-05, 05-13, 08-16 (substitute), 09-14,
-  09-15, 09-16, 10-04 (substitute), 10-11 (substitute), 12-27 (substitute), 12-31
+  09-15, 09-16
 
 `hours_left(now) -> tuple[int, int]` returns `(h, H)` for the KST week containing `now`. When
 `now` is past `COVERED_THROUGH`, it raises, so the job fails loudly until someone extends the list.

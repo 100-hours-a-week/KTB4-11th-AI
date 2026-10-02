@@ -23,13 +23,9 @@ KRX_HOLIDAYS = frozenset(
         date(2027, 9, 14),
         date(2027, 9, 15),
         date(2027, 9, 16),
-        date(2027, 10, 4),
-        date(2027, 10, 11),
-        date(2027, 12, 27),
-        date(2027, 12, 31),
     }
 )
-COVERED_THROUGH = date(2027, 12, 31)
+COVERED_THROUGH = date(2027, 9, 26)
 
 
 def _open(day: date) -> bool:
