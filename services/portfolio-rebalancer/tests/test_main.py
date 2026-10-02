@@ -161,6 +161,8 @@ def test_every_account_is_rebalanced_on_the_ladder_and_the_run_exits_zero(env, m
     sent = next(e for e in events if e["message"] == "order_sent")
     assert (sent["order_type"], sent["limit_price"], sent["trigger"]) == ("limit", 100_000, None)
     assert {"sma", "sigma", "alpha", "lower_bound", "upper_bound", "price"} <= sent.keys()
+    received = [e for e in events if e["message"] == "users_received"]
+    assert [e["user_count"] for e in received] == [2]
     end = events[-1]
     assert (end["sent"], end["failed"], end["limit"], end["market"]) == (2, 0, 2, 0)
     assert (end["runs_left"], end["week_runs"], end["last_run"]) == (18, 35, False)
@@ -182,6 +184,8 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
         (78, 95_000, 2),
     ]
     assert events[-1]["cancelled"] == 2
+    received = [e for e in events if e["message"] == "users_received"]
+    assert [e["user_count"] for e in received] == [2, 2]
     kinds = [c[0] for c in backends[0].calls]
     assert kinds == ["users", "cancel", "cancel", "users", "place"]
 
@@ -236,6 +240,16 @@ def test_a_closed_market_touches_nothing(env, monkeypatch, capsys):
     assert _main() == 0
     assert backends == []
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "market_closed"
+
+
+def test_an_empty_user_response_is_logged_as_zero(env, monkeypatch, capsys):
+    _use(monkeypatch, users=[])
+
+    assert _main() == 0
+
+    events = _events(capsys.readouterr().out)
+    received = [e for e in events if e["message"] == "users_received"]
+    assert [e["user_count"] for e in received] == [0]
 
 
 def test_a_calendar_ending_within_a_month_is_warned(env, monkeypatch, capsys):

@@ -100,6 +100,7 @@ def main() -> None:
                 settings.backend_jwt_issuer,
             )
             users = backend.users()
+            log.info("users_received", user_count=len(users))
             failed_cancels: set[int] = set()
             for user in users:
                 for account in user.accounts:
@@ -109,6 +110,7 @@ def main() -> None:
                         failed_cancels.add(account.account_id)
             if counts["cancelled"]:
                 users = backend.users()
+                log.info("users_received", user_count=len(users))
             codes = {t.stock_code for t in portfolio.targets} | {
                 s.stock_code for u in users for a in u.accounts for s in a.stocks
             }
