@@ -29,7 +29,8 @@ def test_archive_run_reconciles_each_symbol_after_loading_symbols(monkeypatch):
     }
 
     class Store:
-        def latest_bar_timestamps(self):
+        def latest_bar_timestamps(self, target_symbols):
+            assert target_symbols == symbols
             events.append(("checkpoints",))
             return checkpoints
 
@@ -100,7 +101,8 @@ def test_archive_run_shards_stably_and_skips_removed_symbols(monkeypatch):
     checkpoints = {("999999", "1m"): datetime(2026, 9, 27, tzinfo=UTC)}
 
     class Store:
-        def latest_bar_timestamps(self):
+        def latest_bar_timestamps(self, target_symbols):
+            assert target_symbols == symbols
             return checkpoints
 
     class DB:
@@ -140,7 +142,8 @@ def test_archive_run_propagates_worker_exception(monkeypatch):
     symbols = ["005930"]
 
     class Store:
-        def latest_bar_timestamps(self):
+        def latest_bar_timestamps(self, target_symbols):
+            assert target_symbols == symbols
             return {}
 
     monkeypatch.setattr(cli, "load_symbols", lambda dsn, index_name: symbols)

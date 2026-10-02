@@ -1,5 +1,11 @@
 # Latest bar checkpoint validation (#145)
 
+This is the historical #146 report. Compose memory limits changed in #149,
+and #153 replaces the whole-universe read with current-member queries and a
+recent-first historical fallback. See
+[the fallback validation](2026-10-02-checkpoint-fallback-validation.md)
+for current behavior and measurements.
+
 `Store.latest_bar_timestamps()` now queries each physical timeframe separately with
 `LATEST ON ts PARTITION BY symbol`, then combines the results with `UNION ALL`.
 Filtering before latest selection preserves different latest timestamps for 1m and 1d.
