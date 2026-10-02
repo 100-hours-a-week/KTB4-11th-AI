@@ -24,7 +24,10 @@ def checkpoint_db():
         class CheckpointDatabase:
             def query(self, sql):
                 self.last_sql = sql
-                return db.query(sql.replace("FROM bars", f"FROM {table}"))
+                sql = sql.replace("FROM bars", f"FROM {table}")
+                if not sql.startswith("EXPLAIN "):
+                    sql = sql.replace("now()", "cast('2026-09-24T08:00:00Z' AS TIMESTAMP)")
+                return db.query(sql)
 
             def execute(self, sql):
                 db.execute(sql.replace("INTO bars", f"INTO {table}"))
@@ -47,7 +50,7 @@ def checkpoint_db():
             db.execute(f"DROP TABLE {table}")
 
 
-def test_checkpoint_latest_matches_aggregate_and_handles_sparse_history(checkpoint_db):
+def test_checkpoint_latest_matches_bounded_aggregate_and_handles_sparse_history(checkpoint_db):
     assert Store(checkpoint_db).latest_bar_timestamps() == {}
     checkpoint_db.execute(
         """INSERT INTO bars VALUES
@@ -61,11 +64,13 @@ def test_checkpoint_latest_matches_aggregate_and_handles_sparse_history(checkpoi
         ('2026-09-24T06:00:00Z', 'derived_only', '15m', 'regular')"""
     )
     checkpoint_db.execute(
+        "INSERT INTO bars VALUES ('2026-06-01T06:00:00Z', 'expired', '1d', 'regular')"
+    )
+    checkpoint_db.execute(
         "INSERT INTO bars VALUES ('2026-08-01T06:00:00Z', 'active', '1m', 'regular')"
     )
     latest = Store(checkpoint_db).latest_bar_timestamps()
     assert latest == {
-        ("stale", "1m"): datetime(2026, 9, 1, 6, tzinfo=UTC),
         ("stale", "1d"): datetime(2026, 9, 1, 6, tzinfo=UTC),
         ("daily_only", "1d"): datetime(2026, 9, 2, 6, tzinfo=UTC),
         ("active", "1d"): datetime(2026, 9, 22, 6, tzinfo=UTC),
@@ -73,7 +78,8 @@ def test_checkpoint_latest_matches_aggregate_and_handles_sparse_history(checkpoi
     }
     with checkpoint_db.query(
         "SELECT symbol, timeframe, max(ts) latest_ts FROM bars "
-        "WHERE timeframe IN ('1m', '1d') GROUP BY symbol, timeframe"
+        "WHERE (timeframe = '1m' AND ts > dateadd('d', -7, now())) "
+        "OR (timeframe = '1d' AND ts > dateadd('d', -100, now())) GROUP BY symbol, timeframe"
     ) as result:
         aggregate = {
             (r.symbol, r.timeframe): r.latest_ts.replace(tzinfo=UTC)
@@ -85,7 +91,7 @@ def test_checkpoint_latest_matches_aggregate_and_handles_sparse_history(checkpoi
 def test_checkpoint_latest_on_large_partitioned_history(checkpoint_db):
     checkpoint_db.execute(
         """INSERT INTO bars SELECT
-        timestamp_sequence('2026-01-01T00:00:00Z', 1000000),
+        timestamp_sequence('2026-09-12T00:00:00Z', 1000000),
         cast(x % 200 AS STRING),
         cast(CASE WHEN (x / 200) % 390 = 0 THEN '1d' ELSE '1m' END AS VARCHAR),
         'regular' FROM long_sequence(1000000)"""
@@ -97,12 +103,28 @@ def test_checkpoint_latest_on_large_partitioned_history(checkpoint_db):
         plan = result.to_pandas().to_string(index=False)
     assert plan.count("LatestBy") == 2
     assert "GroupBy" not in plan
+    assert "Interval backward scan" in plan
     with checkpoint_db.query(
         "SELECT symbol, timeframe, max(ts) latest_ts FROM bars "
-        "WHERE timeframe IN ('1m', '1d') GROUP BY symbol, timeframe"
+        "WHERE (timeframe = '1m' AND ts > dateadd('d', -7, now())) "
+        "OR (timeframe = '1d' AND ts > dateadd('d', -100, now())) GROUP BY symbol, timeframe"
     ) as result:
         aggregate = {
             (r.symbol, r.timeframe): r.latest_ts.replace(tzinfo=UTC)
             for r in result.to_pandas().itertuples()
         }
     assert latest == aggregate
+
+
+def test_checkpoint_cutoffs_exclude_boundary_and_include_next_microsecond(checkpoint_db):
+    checkpoint_db.execute(
+        """INSERT INTO bars VALUES
+        ('2026-09-17T08:00:00Z', 'minute_boundary', '1m', 'regular'),
+        ('2026-09-17T08:00:00.000001Z', 'minute_inside', '1m', 'regular'),
+        ('2026-06-16T08:00:00Z', 'daily_boundary', '1d', 'regular'),
+        ('2026-06-16T08:00:00.000001Z', 'daily_inside', '1d', 'regular')"""
+    )
+    assert Store(checkpoint_db).latest_bar_timestamps() == {
+        ("minute_inside", "1m"): datetime(2026, 9, 17, 8, microsecond=1, tzinfo=UTC),
+        ("daily_inside", "1d"): datetime(2026, 6, 16, 8, microsecond=1, tzinfo=UTC),
+    }

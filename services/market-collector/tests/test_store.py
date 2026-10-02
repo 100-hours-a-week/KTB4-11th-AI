@@ -138,6 +138,8 @@ def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundari
     assert sql.count("LATEST ON ts PARTITION BY symbol") == 2
     assert "WHERE timeframe = '1m'" in sql
     assert "WHERE timeframe = '1d'" in sql
+    assert "ts > dateadd('d', -7, now())" in sql
+    assert "ts > dateadd('d', -100, now())" in sql
     assert "UNION ALL" in sql
     assert "max(ts)" not in sql
     assert binds is None

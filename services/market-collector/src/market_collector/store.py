@@ -77,11 +77,11 @@ class Store:
 
     def latest_bar_timestamps(self) -> dict[tuple[str, str], datetime]:
         sql = """SELECT symbol, '1m' AS timeframe, ts AS latest_ts FROM bars
-        WHERE timeframe = '1m'
+        WHERE timeframe = '1m' AND ts > dateadd('d', -7, now())
         LATEST ON ts PARTITION BY symbol
         UNION ALL
         SELECT symbol, '1d' AS timeframe, ts AS latest_ts FROM bars
-        WHERE timeframe = '1d'
+        WHERE timeframe = '1d' AND ts > dateadd('d', -100, now())
         LATEST ON ts PARTITION BY symbol"""
         started = perf_counter()
         try:
