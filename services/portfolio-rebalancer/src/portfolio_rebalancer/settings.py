@@ -14,4 +14,5 @@ class Settings(BaseSettings):
     backend_jwt_issuer: str = Field(min_length=1)
     band: float = Field(default=0.05, gt=0, lt=1)
     buy_buffer: float = Field(default=0.02, ge=0, lt=1)
+    test_mode: bool = False
     log_level: str = "INFO"
