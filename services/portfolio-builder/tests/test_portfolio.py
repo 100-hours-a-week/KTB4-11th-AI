@@ -186,3 +186,46 @@ def test_rejects_weights_whose_sum_overflows():
     assert validate_portfolio(submission, frozenset()) == [
         "weights and cash_weight must add up to a finite number"
     ]
+
+
+def test_save_trace_writes_the_entries_as_json(engine):
+    from portfolio_builder.agent.trace import TraceEntry
+    from portfolio_builder.portfolio import save_trace
+
+    with engine.begin() as conn:
+        portfolio_id = conn.execute(
+            sa.text(
+                "INSERT INTO portfolios (cash_weight, commentary, model)"
+                " VALUES (0.1, 'c', 'm') RETURNING id"
+            )
+        ).scalar_one()
+
+    save_trace(
+        engine,
+        portfolio_id,
+        [
+            TraceEntry(
+                turn=1,
+                kind="tool",
+                name="search_news_cluster",
+                args={"q": "HBM"},
+                result="r",
+            )
+        ],
+    )
+
+    with engine.connect() as conn:
+        stored = conn.execute(
+            sa.text("SELECT trace FROM portfolios WHERE id = :id"), {"id": portfolio_id}
+        ).scalar_one()
+    assert stored == [
+        {
+            "turn": 1,
+            "kind": "tool",
+            "reasoning": None,
+            "text": None,
+            "name": "search_news_cluster",
+            "args": {"q": "HBM"},
+            "result": "r",
+        }
+    ]

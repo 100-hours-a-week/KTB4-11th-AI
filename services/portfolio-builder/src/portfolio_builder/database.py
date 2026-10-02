@@ -23,6 +23,7 @@ portfolios = sa.Table(
     sa.Column("cash_weight", sa.Double, nullable=False),
     sa.Column("commentary", sa.Text, nullable=False),
     sa.Column("model", sa.Text, nullable=False),
+    sa.Column("trace", postgresql.JSONB, nullable=True),
     sa.Index("portfolios_created_at_idx", "created_at"),
 )
 
@@ -63,6 +64,22 @@ portfolio_exits = sa.Table(
         nullable=False,
         server_default=sa.text("'{}'"),
     ),
+)
+
+portfolio_reasons = sa.Table(
+    "portfolio_reasons",
+    metadata,
+    sa.Column(
+        "portfolio_id",
+        sa.BigInteger,
+        sa.ForeignKey("portfolios.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    sa.Column("company_id", sa.Text, sa.ForeignKey("corporations.corp_code"), primary_key=True),
+    sa.Column("side", sa.Text, primary_key=True),
+    sa.Column("reason", sa.Text, nullable=False),
+    sa.Column("reasonings", postgresql.JSONB, nullable=False),
+    sa.CheckConstraint("side IN ('buy', 'sell')", name="portfolio_reasons_side_check"),
 )
 
 

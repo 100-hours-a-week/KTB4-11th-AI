@@ -1,22 +1,17 @@
-from typing import Annotated
-
-from pydantic import SecretStr, StringConstraints
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="PORTFOLIO_REBALANCER_",
-        extra="ignore",
+        env_prefix="PORTFOLIO_REBALANCER_", extra="ignore", hide_input_in_errors=True
     )
 
-    log_level: str = "INFO"
     postgres_dsn: str
     questdb_conf: str
     backend_url: str
-    # A credential: SecretStr keeps it out of logs and repr.
-    backend_jwt_secret: SecretStr
-    # The Backend parses `sub` as a Long user id.
-    backend_jwt_subject: Annotated[str, StringConstraints(pattern=r"^[0-9]+$")]
-    # Must equal the Backend's JWT_ISSUER: its decoder validates the issuer claim.
-    backend_jwt_issuer: str
+    backend_jwt_secret: SecretStr = Field(min_length=32)
+    backend_jwt_issuer: str = Field(min_length=1)
+    band: float = Field(default=0.05, gt=0, lt=1)
+    buy_buffer: float = Field(default=0.02, ge=0, lt=1)
+    log_level: str = "INFO"

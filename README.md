@@ -7,7 +7,7 @@
 - `news-graph-builder`: 뉴스 클러스터에서 지식 그래프 추출
 - `portfolio-builder`: 뉴스·지식 그래프·기술적 근거로 모델 포트폴리오 생성 (LangChain 에이전트)
 - `market-collector`: 평일 09:55~14:55 KST와 15:35 KST에 실행되는 키움 OHLCV 보관 작업
-- `portfolio-rebalancer`:  포트폴리오를 매수·매도 요청으로 바꾸는 
+- `portfolio-rebalancer`: 모델 포트폴리오를 계좌별 시장가 매수·매도 주문으로 바꿔 Backend 에 보냅니다
 
 ```mermaid
 flowchart LR
@@ -23,7 +23,7 @@ flowchart LR
         NGB["news-graph-builder"]
         MC["market-collector"]
         PB["portfolio-builder"]
-        PRH["portfolio-rebalancer-http"]
+        PR["portfolio-rebalancer"]
 
         PG[("PostgreSQL")]
         QDB[("QuestDB")]
@@ -45,9 +45,10 @@ flowchart LR
     QDB <--> PB
     OPENROUTER <--> PB
 
-    PG <-->|model portfolio| PRH
-    PRH -->|buy sell requests| BE
-	BE -->|register user portfolio| PRH
+    PG -->|model portfolio, reasons| PR
+    QDB -->|last close| PR
+    BE -->|users, accounts| PR
+    PR -->|market orders| BE
 ```
 
 ## 데이터베이스 (ERD)
@@ -77,8 +78,10 @@ erDiagram
     themes ||--o{ theme_companies : "구성 종목"
     portfolios ||--o{ portfolio_holdings : "편입 종목"
     portfolios ||--o{ portfolio_exits : "편출 종목"
+    portfolios ||--o{ portfolio_reasons : "종목별 설명"
     corporations ||--o{ portfolio_holdings : "corp_code"
     corporations ||--o{ portfolio_exits : "corp_code"
+    corporations ||--o{ portfolio_reasons : "corp_code"
 
     articles {
         bigint id PK
@@ -158,6 +161,7 @@ erDiagram
         double cash_weight
         text commentary
         text model
+        jsonb trace
     }
     portfolio_holdings {
         bigint portfolio_id PK, FK "ON DELETE CASCADE"
@@ -172,6 +176,13 @@ erDiagram
         text reason
         bigint_array cited_cluster_ids
     }
+    portfolio_reasons {
+        bigint portfolio_id PK, FK "ON DELETE CASCADE"
+        text company_id PK, FK "corporations.corp_code"
+        text side PK "buy or sell"
+        text reason
+        jsonb reasonings
+    }
 ```
 
 | 테이블 | 관리 주체 서비스 | 마이그레이션 |
@@ -181,10 +192,11 @@ erDiagram
 | `cluster_summaries`, `entities`, `cluster_entities`, `relations` | `news-graph-builder` | `0003` |
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | `market-syncer` | `0003`, `0004`, `0006` |
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
-| `users`, `accounts`, `account_holdings`, `account_pending_orders`, `rebalance_orders` | `portfolio-rebalancer` | `0007` |
+| `portfolio_reasons` | `portfolio-builder` | `0007` |
 
 - `corporations` 는 DART 고유번호와 연결되는 KOSPI 종목만, `corporation_indices` 는 KOSPI 200 구성 종목만 저장합니다.
 - `themes` / `theme_companies` 는 `corporations` 에 있는 종목만 저장합니다.
+- `portfolios.trace` 는 포트폴리오를 만든 에이전트 실행 기록, `portfolio_reasons` 는 종목별 매수·매도 설명입니다.
 - `market-syncer` 는 `news-graph-builder`, `market-collector` 보다 먼저 실행합니다. `market-collector` 는 수집 종목을 `corporation_indices` 에서 읽고, QuestDB `universe_members` 는 QuestDB 마이그레이션 `0002` 로 삭제했습니다. `portfolio-builder` 의 KOSPI 200 횡단면 순위도 `corporation_indices` 를 기준으로 계산합니다.
 - `portfolio_holdings` / `portfolio_exits` 의 `company_id` 는 종목코드가 아닌 DART 고유번호(`corporations.corp_code`)입니다.
 
@@ -293,6 +305,8 @@ QuestDB의 PGWire 설정이며 이 WebSocket 연결 문자열에는 사용되지
 | `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` |
 | `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | | `7` |
 | `PORTFOLIO_BUILDER_MAX_TURNS` | | `150` |
+| `PORTFOLIO_BUILDER_EXPLAIN_RESULT_CHARS` | | `2000` |
+| `PORTFOLIO_BUILDER_EXPLAIN_MAX_TOKENS` | | `16000` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` |
 
 
@@ -303,9 +317,10 @@ QuestDB의 PGWire 설정이며 이 WebSocket 연결 문자열에는 사용되지
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT` | 필수 | | Backend의 숫자 사용자 ID (`sub` claim) |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | 32바이트 이상 |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | Backend 의 `JWT_ISSUER` 와 같아야 합니다 |
+| `PORTFOLIO_REBALANCER_BAND` | | `0.05` |
+| `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` |
 
 환경변수 변경 시 서비스의 `settings.py`를 기준으로 필수 여부와 기본값을 확인하고,

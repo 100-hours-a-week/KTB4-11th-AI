@@ -1,143 +1,165 @@
-import logging
+import json
 
-from portfolio_rebalancer import __main__
+import httpx
+import pytest
+from portfolio_rebalancer import __main__ as entry
+from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target
+from portfolio_rebalancer.snapshot import User
+
+REQUIRED = {
+    "PORTFOLIO_REBALANCER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
+    "PORTFOLIO_REBALANCER_QUESTDB_CONF": "ws::addr=localhost:9000;",
+    "PORTFOLIO_REBALANCER_BACKEND_URL": "http://backend",
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
+}
+WHY = Explanation(reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
+PORTFOLIO = Portfolio(
+    id=5,
+    targets=[Target(stock_code="005930", weight=0.5, exiting=False, buy=WHY, sell=WHY)],
+    leftovers={},
+    names={"005930": "삼성전자"},
+)
+USERS = [
+    User.model_validate(
+        {
+            "user_id": 1,
+            "accounts": [
+                {
+                    "account_id": 11,
+                    "is_active": True,
+                    "cash_balance": 1_000_000,
+                    "stocks": [{"stock_code": "000660", "quantity": 1, "total_cost": 0}],
+                    "pending_orders": [],
+                },
+                {
+                    "account_id": 12,
+                    "is_active": True,
+                    "cash_balance": 1_000_000,
+                    "stocks": [],
+                    "pending_orders": [],
+                },
+            ],
+        }
+    ),
+    User(user_id=2, accounts=[]),
+]
 
 
-class Recorder:
-    def __init__(self):
-        self.logging = []
-        self.disposed = 0
-        self.ticks = []
-        self.authenticated = []
+class FakeBackend:
+    def __init__(self, client, secret, issuer, fail_account=None):
+        self.placed = []
+        self.fail_account = fail_account
+
+    def users(self):
+        return USERS
+
+    def place(self, user_id, account_id, order):
+        if account_id == self.fail_account:
+            request = httpx.Request("POST", "http://backend")
+            raise httpx.HTTPStatusError(
+                "boom", request=request, response=httpx.Response(400, text="bad", request=request)
+            )
+        self.placed.append((user_id, account_id, order.stock_code, order.quantity))
 
 
-def wire(monkeypatch, recorder, sent=3):
-    monkeypatch.setattr(
-        __main__,
-        "setup_logging",
-        lambda level, *, service_name: recorder.logging.append((level, service_name)),
+@pytest.fixture
+def env(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(entry, "load_portfolio", lambda engine: PORTFOLIO)
+    asked = {}
+
+    def closes(conf, codes):
+        asked["codes"] = codes
+        return {"005930": 100_000}
+
+    monkeypatch.setattr(entry, "last_closes", closes)
+    return asked
+
+
+def _events(out):
+    return [json.loads(line) for line in out.splitlines()]
+
+
+def _use(monkeypatch, **kwargs):
+    backends = []
+
+    def make(client, secret, issuer):
+        backend = FakeBackend(client, secret, issuer, **kwargs)
+        backends.append(backend)
+        return backend
+
+    monkeypatch.setattr(entry, "Backend", make)
+    return backends
+
+
+def test_every_account_is_rebalanced_and_the_run_exits_zero(env, monkeypatch, capsys):
+    backends = _use(monkeypatch)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    assert backends[0].placed == [(1, 12, "005930", 4)]
+    assert env["codes"] == {"005930", "000660"}
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["sent"] == 1
+    assert events[-1]["failed"] == 0
+    assert any(e["message"] == "no_close" and e["stock_codes"] == ["000660"] for e in events)
+
+
+def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monkeypatch, capsys):
+    backends = _use(monkeypatch, fail_account=12)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 1
+    assert backends[0].placed == []
+    failed = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_failed")
+    assert failed["account_id"] == 12
+    assert failed["status"] == 400
+    assert failed["body"] == "bad"
+
+
+def test_no_explained_portfolio_exits_zero_without_calling_the_backend(env, monkeypatch, capsys):
+    monkeypatch.setattr(entry, "load_portfolio", lambda engine: None)
+    backends = _use(monkeypatch)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    assert backends == []
+    assert _events(capsys.readouterr().out)[-1]["outcome"] == "no_portfolio"
+
+
+def test_the_secret_never_reaches_the_log(env, monkeypatch, capsys):
+    _use(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        entry.main()
+
+    assert "s" * 32 not in capsys.readouterr().out
+
+
+def test_a_stranded_holding_is_logged_as_leftover_without_reason(env, monkeypatch, capsys):
+    _use(monkeypatch)
+
+    with pytest.raises(SystemExit):
+        entry.main()
+
+    events = _events(capsys.readouterr().out)
+    leftover_warn = next(
+        (e for e in events if e["message"] == "leftover_without_reason" and e["account_id"] == 11),
+        None,
     )
-    monkeypatch.setattr(__main__, "Settings", lambda: _settings())
-    monkeypatch.setattr(__main__, "connect", lambda conf: _closing("db"))
-    monkeypatch.setattr(__main__, "build_client", lambda url: _closing("client"))
-    monkeypatch.setattr(__main__, "access_token", lambda secret, subject, issuer: "a-token")
-    monkeypatch.setattr(
-        __main__,
-        "authenticate",
-        lambda client, token: recorder.authenticated.append((client, token)),
+    assert leftover_warn is not None
+    assert leftover_warn["stock_codes"] == ["000660"]
+
+    leftover_warn_12 = next(
+        (e for e in events if e["message"] == "leftover_without_reason" and e["account_id"] == 12),
+        None,
     )
-    monkeypatch.setattr(__main__.sa, "create_engine", lambda dsn: _engine(recorder))
-    monkeypatch.setattr(
-        __main__,
-        "tick",
-        lambda engine, db, client, *, log: recorder.ticks.append((engine, db, client, log)) or sent,
-    )
-
-
-def test_logging_is_set_up_under_the_service_name(monkeypatch):
-    recorder = Recorder()
-    wire(monkeypatch, recorder)
-
-    __main__.main()
-
-    assert recorder.logging == [("INFO", "portfolio-rebalancer")]
-
-
-def test_the_tick_gets_the_engine_both_datastores_and_a_token(monkeypatch):
-    recorder = Recorder()
-    wire(monkeypatch, recorder)
-
-    __main__.main()
-
-    engine, db, client, log = recorder.ticks[0]
-    assert (db, client) == ("db", "client")
-    assert hasattr(engine, "begin")
-    assert callable(log.info)
-    # The credentials are put on the client rather than handed to the tick.
-    assert recorder.authenticated == [("client", "a-token")]
-
-
-def test_the_engine_is_disposed_even_when_the_tick_raises(monkeypatch):
-    """A tick that dies must not leak the connection pool; compose runs this every hour."""
-    recorder = Recorder()
-    wire(monkeypatch, recorder)
-    monkeypatch.setattr(
-        __main__, "tick", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError)
-    )
-
-    try:
-        __main__.main()
-    except RuntimeError:
-        pass
-
-    assert recorder.disposed == 1
-
-
-def test_the_tick_owns_its_transactions_rather_than_being_handed_one(monkeypatch):
-    """An order has to be committed before it is sent, so no single transaction may span
-    the send. main() therefore hands over the engine, not a connection."""
-    recorder = Recorder()
-    wire(monkeypatch, recorder)
-
-    __main__.main()
-
-    handed = recorder.ticks[0][0]
-    assert hasattr(handed, "begin")
-    assert not isinstance(handed, str)
-
-
-class _Secret:
-    def __init__(self, value):
-        self._value = value
-
-    def get_secret_value(self):
-        return self._value
-
-
-class _settings:
-    log_level = "INFO"
-    backend_jwt_issuer = "https://stock-spoon.com"
-    backend_url = "http://backend:8080"
-    postgres_dsn = "postgresql+psycopg://ktb:ktb@postgres:5432/ktb"
-    questdb_conf = "ws::addr=questdb:9000;"
-    backend_jwt_secret = _Secret("a-shared-secret-of-at-least-thirty-two-bytes")
-    backend_jwt_subject = "portfolio-rebalancer"
-
-
-class _closing:
-    def __init__(self, name):
-        self.name = name
-
-    def __enter__(self):
-        return self.name
-
-    def __exit__(self, *args):
-        return None
-
-
-class _engine:
-    def __init__(self, recorder):
-        self._recorder = recorder
-
-    def begin(self):
-        return _closing("conn")
-
-    def dispose(self):
-        self._recorder.disposed += 1
-
-
-def test_the_tick_is_handed_a_logger_bound_to_a_run_id(monkeypatch, caplog):
-    """Every line of one pass shares a run_id, so two passes can never be read as one,
-    and the logger name is the service's rather than whichever module logged."""
-    recorder = Recorder()
-    wire(monkeypatch, recorder)
-
-    __main__.main()
-
-    log = recorder.ticks[0][3]
-    with caplog.at_level(logging.INFO):
-        log.info("probe")
-
-    record = caplog.records[-1]
-    assert record.name == "portfolio_rebalancer.__main__"
-    assert "run_id" in record.fields
+    assert leftover_warn_12 is None

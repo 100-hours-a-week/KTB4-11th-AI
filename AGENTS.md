@@ -94,6 +94,8 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_BUILDER_THINKING_LEVEL` | portfolio-builder (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`) | `medium` |
 | `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | portfolio-builder | `7` |
 | `PORTFOLIO_BUILDER_MAX_TURNS` | portfolio-builder | `150` |
+| `PORTFOLIO_BUILDER_EXPLAIN_RESULT_CHARS` | portfolio-builder; each tool result is cut to this many characters in the explain prompt | `2000` |
+| `PORTFOLIO_BUILDER_EXPLAIN_MAX_TOKENS` | portfolio-builder explain call | `16000` |
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | portfolio-builder | `INFO` |
 | `MARKET_COLLECTOR_POSTGRES_DSN` | market-collector | required |
 | `MARKET_COLLECTOR_QUESTDB_CONF` | market-collector | required |
@@ -105,9 +107,10 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer | required |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | portfolio-rebalancer (HS256 secret shared with the Backend) | required |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | portfolio-rebalancer (HS256 secret shared with the Backend, ≥ 32 bytes; signs a token for any user) | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | portfolio-rebalancer; must equal the Backend's `JWT_ISSUER`, which its decoder validates | required |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SUBJECT` | portfolio-rebalancer; numeric Backend user ID | required |
+| `PORTFOLIO_REBALANCER_BAND` | portfolio-rebalancer; a kept stock trades only when its weight is off target by more than this | `0.05` |
+| `PORTFOLIO_REBALANCER_BUY_BUFFER` | portfolio-rebalancer; buys are sized at last close × (1 + this) | `0.02` |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | portfolio-rebalancer | `INFO` |
 
 Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
@@ -124,11 +127,11 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/market-collector` | service | weekdays 09:55–14:55 and 15:35 KST; single-run KOSPI 200 OHLCV archive | `ktb-core` |
-| `services/portfolio-rebalancer` | service | scheduled job: polls the Backend, decides, sends orders | `ktb-core` |
+| `services/portfolio-rebalancer` | service | scheduled job: polls the Backend, decides, sends market orders | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, market-syncer writes Kiwoom and OpenDART reference data (`corporations`, `corporation_aliases`, KOSPI 200 membership in `corporation_indices`, `themes`, `theme_companies`; design: `docs/superpowers/specs/2026-09-29-market-syncer-design.md`) and runs before news-graph-builder and market-collector, news-graph-builder reads clusters and corporations and writes `cluster_summaries` and the knowledge graph (`entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`), market-collector reads its symbols from `corporation_indices` and writes OHLCV to QuestDB, and portfolio-builder reads them all (its KOSPI 200 universe comes from `corporation_indices`) plus QuestDB bars and writes `portfolios`, `portfolio_holdings`, `portfolio_exits` (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself. portfolio-rebalancer has no inbound surface and nothing calls it: it reads the model portfolio from PostgreSQL, takes the live price from the Backend's own poll and the last close from QuestDB for a stock it does not hold yet, and its only outbound calls are to the Backend (design: `docs/superpowers/specs/2026-09-29-portfolio-rebalancer-design.md`).
+- **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes `clusters` / `article_clusters`, market-syncer writes Kiwoom and OpenDART reference data (`corporations`, `corporation_aliases`, KOSPI 200 membership in `corporation_indices`, `themes`, `theme_companies`; design: `docs/superpowers/specs/2026-09-29-market-syncer-design.md`) and runs before news-graph-builder and market-collector, news-graph-builder reads clusters and corporations and writes `cluster_summaries` and the knowledge graph (`entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`), market-collector reads its symbols from `corporation_indices` and writes OHLCV to QuestDB, and portfolio-builder reads them all (its KOSPI 200 universe comes from `corporation_indices`) plus QuestDB bars and writes `portfolios` (with the run's `trace`), `portfolio_holdings`, `portfolio_exits`, and, with one more LLM call, a buy and a sell explanation per stock in `portfolio_reasons` (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself. portfolio-rebalancer has no inbound surface and nothing calls it: it reads the latest explained portfolio from PostgreSQL and the last close from QuestDB, polls the Backend for accounts, and sends it one market order per stock, carrying `portfolio_reasons` as `reason` and `thoughts` (design: `docs/superpowers/specs/2026-10-02-portfolio-rebalancer-design.md`).
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot. Migration `0002` drops the old `universe_members` table.
 - **Work queue:** SQS in production, Redis in development. No consumer yet.
@@ -145,7 +148,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 ## Conventions
 
 - Try hard to resolve Pylance's complain
-- Don't add comments or docstrings that restate names. Keep comments only for a non-obvious *why*.
+- Don't add comments or docstrings that restate names. NEVER WRITE COMMENTS
 - Keep functions plain and don't pile logic into `__main__.py`. Don't create thin wrappers or tiny helpers that have only one caller.
 - Use BeautifulSoup for HTML/XML parsing.
 - Configure through environment variables with sensible defaults. Only truly required values have no default.

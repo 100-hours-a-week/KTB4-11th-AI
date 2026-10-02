@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from ktb_core.logging import StructuredLogger
@@ -13,6 +13,7 @@ from portfolio_builder.agent.hooks.nudge import Nudge
 from portfolio_builder.agent.hooks.run_log import RunLog
 from portfolio_builder.agent.hooks.stop_on_save import StopOnSave
 from portfolio_builder.agent.state import PortfolioState
+from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.errors import ToolError
 
 
@@ -23,6 +24,7 @@ class RunResult:
     turns: int
     usage: dict[str, float | None]
     error: str | None = None
+    trace: list[TraceEntry] = field(default_factory=list)
 
 
 def run_agent(
@@ -57,15 +59,27 @@ def run_agent(
             {"recursion_limit": steps_per_turn * max_turns * 2},
         )
     except ModelCallLimitExceededError:
-        return RunResult("max_turns", None, run_log.turns, run_log.usage)
+        return RunResult("max_turns", None, run_log.turns, run_log.usage, trace=run_log.trace)
     except Exception as error:
         message = f"{type(error).__name__}: {error}"
         if run_log.portfolio_id is not None:
-            return RunResult("saved", run_log.portfolio_id, run_log.turns, run_log.usage, message)
-        return RunResult("error", None, run_log.turns, run_log.usage, message)
+            return RunResult(
+                "saved",
+                run_log.portfolio_id,
+                run_log.turns,
+                run_log.usage,
+                message,
+                trace=run_log.trace,
+            )
+        return RunResult("error", None, run_log.turns, run_log.usage, message, trace=run_log.trace)
     portfolio_id = final.get("portfolio_id")
     if portfolio_id is None:
         return RunResult(
-            "error", None, run_log.turns, run_log.usage, "agent stopped without a portfolio"
+            "error",
+            None,
+            run_log.turns,
+            run_log.usage,
+            "agent stopped without a portfolio",
+            trace=run_log.trace,
         )
-    return RunResult("saved", portfolio_id, run_log.turns, run_log.usage)
+    return RunResult("saved", portfolio_id, run_log.turns, run_log.usage, trace=run_log.trace)
