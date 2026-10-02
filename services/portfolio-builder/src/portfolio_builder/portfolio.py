@@ -140,3 +140,12 @@ def save_trace(engine: sa.Engine, portfolio_id: int, trace: list[TraceEntry]) ->
             .where(portfolios.c.id == portfolio_id)
             .values(trace=[entry.model_dump(mode="json") for entry in trace])
         )
+
+
+def mark_explanation_failed(engine: sa.Engine, portfolio_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(portfolios)
+            .where(portfolios.c.id == portfolio_id)
+            .values(status="explanation_failed")
+        )

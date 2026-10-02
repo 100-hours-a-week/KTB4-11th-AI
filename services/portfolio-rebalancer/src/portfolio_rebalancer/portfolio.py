@@ -27,7 +27,12 @@ class Portfolio(BaseModel):
     names: dict[str, str]
 
 
-LATEST = "SELECT max(portfolio_id) FROM portfolio_reasons"
+class Unready(BaseModel):
+    id: int
+    status: str
+
+
+LATEST = "SELECT id, status FROM portfolios ORDER BY id DESC LIMIT 1"
 
 TARGETS = """
 SELECT c.stock_code, c.name, h.weight, false AS exiting
@@ -55,11 +60,14 @@ ORDER BY c.stock_code, r.portfolio_id DESC
 """
 
 
-def load_portfolio(engine: sa.Engine) -> Portfolio | None:
+def load_portfolio(engine: sa.Engine) -> Portfolio | Unready | None:
     with engine.connect() as conn:
-        portfolio_id = conn.execute(sa.text(LATEST)).scalar()
-        if portfolio_id is None:
+        latest = conn.execute(sa.text(LATEST)).first()
+        if latest is None:
             return None
+        if latest.status != "ready":
+            return Unready(id=latest.id, status=latest.status)
+        portfolio_id = latest.id
         reasons = {
             (row.stock_code, row.side): Explanation(reason=row.reason, reasonings=row.reasonings)
             for row in conn.execute(sa.text(REASONS), {"id": portfolio_id})
