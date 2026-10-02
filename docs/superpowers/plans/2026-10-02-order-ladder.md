@@ -21,7 +21,7 @@
 - `holidays_expiring` warns when `COVERED_THROUGH` is less than 30 days away; `hours_left` raises past `COVERED_THROUGH`.
 - Line length 100; `uv run ruff check .`, `uv run ruff format --check .`, `uv run tach check` must pass.
 - Comments: none that restate code; `ponytail:` comments only for deliberate ceilings.
-- Commit messages in English, ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Commit messages in English.
 
 ## Review Focus
 
@@ -30,6 +30,7 @@
 3. **Today's in-progress daily bar** — market-collector writes today's 1d bar intraday; it must not enter the SMA ("previous session's close"). Test: Task 3 `test_todays_bar_is_excluded`.
 4. **A huge σ on a cheap stock** — the lower bound goes ≤ 0; a buy limit must stay a positive price. Test: Task 2 `test_a_negative_lower_bound_still_gives_a_positive_buy_limit`.
 5. **A run on a holiday or outside 09:00–15:00** (manual run, timer firing on a KRX holiday) — nothing is cancelled or placed. Test: Task 6 `test_a_closed_market_touches_nothing`.
+6. **A week with only two market days** (Mon, Wed, Fri all holidays) — H = 14, the count skips the Wednesday gap between Tuesday and Thursday, Thursday 15:00 is the last run, and the holidays are not sessions. Test: Task 1 `test_a_two_day_week_counts_only_tuesday_and_thursday` and `test_a_two_day_week_trades_only_on_tuesday_and_thursday`.
 
 ## File Map
 
@@ -63,14 +64,51 @@ All paths below are relative to `services/portfolio-rebalancer/` unless they sta
 `tests/test_holidays.py`:
 
 ```python
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
+from portfolio_rebalancer import holidays
 from portfolio_rebalancer.holidays import KST, hours_left, in_session
 
 
 def at(*args):
     return datetime(*args, tzinfo=KST)
+
+
+@pytest.fixture
+def two_day_week(monkeypatch):
+    monkeypatch.setattr(
+        holidays,
+        "KRX_HOLIDAYS",
+        frozenset({date(2026, 10, 19), date(2026, 10, 21), date(2026, 10, 23)}),
+    )
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (at(2026, 10, 19, 9), (14, 14)),
+        (at(2026, 10, 20, 15), (8, 14)),
+        (at(2026, 10, 21, 10), (7, 14)),
+        (at(2026, 10, 22, 15), (1, 14)),
+    ],
+)
+def test_a_two_day_week_counts_only_tuesday_and_thursday(two_day_week, now, expected):
+    assert hours_left(now) == expected
+
+
+@pytest.mark.parametrize(
+    ("now", "expected"),
+    [
+        (at(2026, 10, 19, 10), False),
+        (at(2026, 10, 20, 10), True),
+        (at(2026, 10, 21, 10), False),
+        (at(2026, 10, 22, 10), True),
+        (at(2026, 10, 23, 10), False),
+    ],
+)
+def test_a_two_day_week_trades_only_on_tuesday_and_thursday(two_day_week, now, expected):
+    assert in_session(now) is expected
 
 
 def test_monday_open_of_a_full_week_has_every_run_left():
@@ -185,7 +223,7 @@ def hours_left(now: datetime) -> tuple[int, int]:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest services/portfolio-rebalancer/tests/test_holidays.py -v`
-Expected: PASS (13 tests)
+Expected: PASS (22 tests)
 
 - [ ] **Step 5: Commit**
 
