@@ -9,6 +9,7 @@ from portfolio_rebalancer.snapshot import Account
 
 class Order(BaseModel):
     stock_code: str
+    stock_name: str
     side: Literal["buy", "sell"]
     quantity: int
     explanation: Explanation
@@ -44,7 +45,13 @@ def rebalance(
         if target.exiting:
             if have:
                 sells.append(
-                    Order(stock_code=code, side="sell", quantity=have, explanation=target.sell)
+                    Order(
+                        stock_code=code,
+                        stock_name=portfolio.names[code],
+                        side="sell",
+                        quantity=have,
+                        explanation=target.sell,
+                    )
                 )
             continue
         if value <= 0 or not priced:
@@ -60,6 +67,7 @@ def rebalance(
                     close,
                     Order(
                         stock_code=code,
+                        stock_name=portfolio.names[code],
                         side="buy",
                         quantity=buy_target - have,
                         explanation=target.buy,
@@ -70,6 +78,7 @@ def rebalance(
             sells.append(
                 Order(
                     stock_code=code,
+                    stock_name=portfolio.names[code],
                     side="sell",
                     quantity=have - sell_target,
                     explanation=target.sell,
@@ -83,6 +92,7 @@ def rebalance(
         sells.append(
             Order(
                 stock_code=code,
+                stock_name=portfolio.names[code],
                 side="sell",
                 quantity=have,
                 explanation=portfolio.leftovers[code],

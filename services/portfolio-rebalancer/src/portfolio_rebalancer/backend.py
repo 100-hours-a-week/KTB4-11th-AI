@@ -13,6 +13,7 @@ from portfolio_rebalancer.snapshot import Snapshot, User
 
 class OrderRequest(BaseModel):
     stock_code: str
+    stock_name: str
     order_side: Literal["buy", "sell"]
     order_type: Literal["market"] = "market"
     quantity: int
@@ -64,6 +65,7 @@ class Backend:
     def place(self, user_id: int, account_id: int, order: Order) -> None:
         body = OrderRequest(
             stock_code=order.stock_code,
+            stock_name=order.stock_name,
             order_side=order.side,
             quantity=order.quantity,
             reason=order.explanation.reason,

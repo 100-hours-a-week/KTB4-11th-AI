@@ -99,3 +99,8 @@ def test_the_latest_explained_portfolio_is_loaded_and_an_unexplained_newer_one_s
         "373220": Explanation.model_validate(_explanation("LG엔솔 팔아요")),
         "000660": Explanation.model_validate(_explanation("하이닉스 팔아요")),
     }
+    assert portfolio.names == {
+        "005930": "삼성전자",
+        "000660": "SK하이닉스",
+        "373220": "LG에너지솔루션",
+    }

@@ -11,6 +11,7 @@ SECRET = "s" * 32
 ISSUER = "river-be"
 ORDER = Order(
     stock_code="005930",
+    stock_name="삼성전자",
     side="buy",
     quantity=3,
     explanation=Explanation(reason="사요", reasonings=[{"label": "HBM", "body": "늘었어요."}]),
@@ -84,6 +85,7 @@ def test_an_order_carries_the_user_token_the_csrf_pair_and_the_explanation():
     assert post.headers["x-xsrf-token"] == "masked-1"
     assert json.loads(post.content) == {
         "stock_code": "005930",
+        "stock_name": "삼성전자",
         "order_side": "buy",
         "order_type": "market",
         "quantity": 3,

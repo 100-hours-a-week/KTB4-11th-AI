@@ -18,6 +18,7 @@ PORTFOLIO = Portfolio(
     id=5,
     targets=[Target(stock_code="005930", weight=0.5, exiting=False, buy=WHY, sell=WHY)],
     leftovers={},
+    names={"005930": "삼성전자"},
 )
 USERS = [
     User.model_validate(

@@ -218,6 +218,7 @@ Each `Order` carries the side's `reason` and `reasonings`.
 ```python
 class OrderRequest(BaseModel):
     stock_code: str
+    stock_name: str
     order_side: Literal["buy", "sell"]
     order_type: Literal["market"] = "market"
     quantity: int
@@ -225,7 +226,7 @@ class OrderRequest(BaseModel):
     thoughts: list[Reasoning]
 ```
 
-`POST {BACKEND_URL}/api/v1/accounts/{account_id}/orders`, one order per request.
+`POST {BACKEND_URL}/api/v1/accounts/{account_id}/orders`, one order per request. `stock_name` is `corporations.name`, loaded with the portfolio.
 
 **Auth.** Every request carries an HS256 JWT, signed with PyJWT over
 `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET`, in the `access_token` cookie. Claims: `iss` = the

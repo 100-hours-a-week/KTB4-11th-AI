@@ -16,7 +16,14 @@ def exit_(code):
 
 
 def portfolio(*targets, leftovers=None):
-    return Portfolio(id=1, targets=list(targets), leftovers=leftovers or {})
+    leftovers = leftovers or {}
+    codes = [t.stock_code for t in targets] + list(leftovers)
+    return Portfolio(
+        id=1,
+        targets=list(targets),
+        leftovers=leftovers,
+        names={code: f"name-{code}" for code in codes},
+    )
 
 
 def account(cash, stocks=(), pending=(), active=True):
@@ -278,3 +285,18 @@ def test_a_leftover_that_is_a_current_exit_is_sold_once():
     )
 
     assert orders(result) == [("000660", "sell", 3, "팔아요")]
+
+
+def test_every_order_carries_the_stock_name():
+    result = rebalance(
+        portfolio(hold("005930", 0.5), leftovers={"373220": LEFT}),
+        account(1_000_000, stocks=[("373220", 2)]),
+        {"005930": 100_000, "373220": 350_000},
+        band=0.05,
+        buy_buffer=0.0,
+    )
+
+    assert [(o.stock_code, o.stock_name) for o in result] == [
+        ("373220", "name-373220"),
+        ("005930", "name-005930"),
+    ]
