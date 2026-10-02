@@ -54,8 +54,8 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `POSTGRES_DB` | compose | required |
 | `POSTGRES_PASSWORD` | compose | required |
 | `QUESTDB_USER` | compose | required |
-| `QUESTDB_DATABASE` | portfolio-builder QuestDB DSN | required |
-| `QUESTDB_PASSWORD` | compose, portfolio-builder QuestDB DSN | required |
+| `QUESTDB_PASSWORD` | compose QuestDB PGWire setting | required |
+| `KTB_QUESTDB_CONF` | QuestDB migrations | required to migrate |
 | `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
 | `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `ktb_test`, never `ktb` | — |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
@@ -85,7 +85,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_SYNCER_KIWOOM_SECRET_KEY` | market-syncer | required |
 | `MARKET_SYNCER_KIWOOM_MODE` | market-syncer (`real` or `demo`) | `real` |
 | `MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL` | market-syncer (seconds between pages) | `0.2` |
-| `MARKET_SYNCER_DART_API_KEY` | market-syncer; `compose.dev.yaml` fills it from `OPENDART_API_KEY` in `.env` | required |
+| `MARKET_SYNCER_DART_API_KEY` | market-syncer; Compose uses the same name | required |
 | `MARKET_SYNCER_LOG_LEVEL` | market-syncer | `INFO` |
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder | required |
 | `PORTFOLIO_BUILDER_QUESTDB_CONF` | portfolio-builder (official client config, e.g. `ws::addr=localhost:9000;`) | required |
@@ -147,6 +147,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 
 ## Conventions
 
+- Try hard to resolve Pylance's complain
 - Don't add comments or docstrings that restate names. NEVER WRITE COMMENTS
 - Keep functions plain and don't pile logic into `__main__.py`. Don't create thin wrappers or tiny helpers that have only one caller.
 - Use BeautifulSoup for HTML/XML parsing.
