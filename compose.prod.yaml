@@ -53,6 +53,7 @@ services:
     environment:
       QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
       QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
+      QDB_METRICS_ENABLED: "true"
     mem_limit: 1200m
     restart: unless-stopped
     volumes:

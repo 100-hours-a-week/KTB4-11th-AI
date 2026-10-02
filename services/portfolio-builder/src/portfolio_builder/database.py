@@ -24,6 +24,12 @@ portfolios = sa.Table(
     sa.Column("commentary", sa.Text, nullable=False),
     sa.Column("model", sa.Text, nullable=False),
     sa.Column("trace", postgresql.JSONB, nullable=True),
+    sa.Column(
+        "status",
+        sa.Text,
+        nullable=False,
+        server_default=sa.text("'explanation_pending'"),
+    ),
     sa.Index("portfolios_created_at_idx", "created_at"),
 )
 

@@ -19,6 +19,39 @@ class Order(BaseModel):
     holding_weight_limit_percent: float
 
 
+def allocate(
+    weights: dict[str, float], prices: dict[str, float], investable: float
+) -> dict[str, int]:
+    weights = {code: weight for code, weight in weights.items() if weight > 0}
+    while weights:
+        total = sum(weights.values())
+        budgets = {code: round(investable * weight / total) for code, weight in weights.items()}
+        dropped = [code for code, budget in budgets.items() if prices[code] > budget]
+        if not dropped:
+            return budgets
+        freed = sum(weights.pop(code) for code in dropped)
+        for code in weights:
+            weights[code] += freed / len(weights)
+    return {}
+
+
+def whole_shares(budgets: dict[str, int], prices: dict[str, float]) -> dict[str, int]:
+    shares = {code: math.floor(budget / prices[code]) for code, budget in budgets.items()}
+    leftover = sum(budgets.values()) - sum(shares[c] * prices[c] for c in shares)
+    ring = sorted(budgets, key=lambda code: -budgets[code])
+    extra = dict.fromkeys(ring, 0)
+    while affordable := [code for code in ring if prices[code] <= leftover]:
+        short = [code for code in affordable if shares[code] * prices[code] < budgets[code]]
+        if short:
+            pick = max(short, key=lambda code: budgets[code] - shares[code] * prices[code])
+        else:
+            pick = min(affordable, key=lambda code: extra[code])
+            extra[pick] += 1
+        shares[pick] += 1
+        leftover -= prices[pick]
+    return shares
+
+
 def rebalance(
     portfolio: Portfolio,
     account: Account,
@@ -30,14 +63,31 @@ def rebalance(
         return []
     pending = {o.stock_code for o in account.pending_orders}
     held = {s.stock_code: s.quantity for s in account.stocks if s.quantity > 0}
-    kept = {t.stock_code for t in portfolio.targets if not t.exiting}
-    priced = all(code in closes for code in held if code in kept)
+    kept = {t.stock_code: t.weight for t in portfolio.targets if not t.exiting}
     cash = account.cash_balance - sum(
         o.quantity * (o.limit_price or o.current_stock_price)
         for o in account.pending_orders
         if o.order_side == "buy"
     )
-    value = cash + sum(q * closes[c] for c, q in held.items() if c in closes)
+    asks = {code: close * (1 + buy_buffer) for code, close in closes.items()}
+    unpriced = sum(weight for code, weight in kept.items() if code not in closes)
+
+    locked: set[str] = set()
+    capital = cash
+    budgets: dict[str, int] = {}
+    if all(code in closes for code in held if code in kept):
+        while True:
+            capital = cash + sum(
+                q * closes[c] for c, q in held.items() if c in closes and c not in locked
+            )
+            weights = {c: w for c, w in kept.items() if c in closes and c not in locked}
+            investable = capital * (1 - portfolio.cash_weight - unpriced)
+            budgets = allocate(weights, asks, investable)
+            stranded = (held.keys() & weights.keys()) - budgets.keys()
+            if not stranded:
+                break
+            locked |= stranded
+    targets = whole_shares(budgets, asks)
 
     def weights(code: str, after: int, weight: float) -> dict[str, float]:
         return {
@@ -69,17 +119,18 @@ def rebalance(
                     )
                 )
             continue
-        if value <= 0 or not priced or code not in closes:
+        if code not in budgets:
             continue
         close = closes[code]
-        buy_target = math.floor(value * target.weight / (close * (1 + buy_buffer)))
-        sell_target = math.floor(value * target.weight / close)
-        if have and abs(have * close / value - target.weight) <= band:
+        budget = budgets[code]
+        if have and abs(have * close - budget) / capital <= band:
             continue
+        buy_target = targets[code]
+        sell_target = max(buy_target, math.floor(budget / close))
         if buy_target > have:
             buys.append(
                 (
-                    target.weight,
+                    budget,
                     close,
                     Order(
                         stock_code=code,
