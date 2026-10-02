@@ -4,8 +4,6 @@ import questdb
 
 from portfolio_rebalancer.holidays import KST
 
-# ponytail: 60 calendar days covers 20 sessions through the longest KRX holiday run;
-# widen it if a symbol ever comes back short.
 DAILY = (
     "SELECT symbol, ts, close FROM bars"
     " WHERE timeframe = '1d' AND session = 'regular' AND symbol IN ({codes})"

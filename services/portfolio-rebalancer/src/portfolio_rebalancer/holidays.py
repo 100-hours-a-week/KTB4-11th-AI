@@ -5,8 +5,6 @@ KST = ZoneInfo("Asia/Seoul")
 FIRST_RUN, LAST_RUN = 9, 15
 RUNS_PER_DAY = LAST_RUN - FIRST_RUN + 1
 
-# Weekdays that KIS chk-holiday reports with opnd_yn "N". Verify against KIS before
-# extending.
 KRX_HOLIDAYS = frozenset(
     {
         date(2026, 10, 5),
