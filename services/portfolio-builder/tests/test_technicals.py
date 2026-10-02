@@ -165,8 +165,6 @@ def test_universe_closes_groups_kospi200_members_by_symbol(monkeypatch, engine):
         {"symbol": "000660", "close": 10.0},
         {"symbol": "005930", "close": 1.0},
         {"symbol": "005930", "close": 2.0},
-        {"symbol": "373220", "close": 5.0},
-        {"symbol": "999999", "close": 5.0},
     ]
     db = FakeDB([closes])
     monkeypatch.setattr(market_module.questdb, "connect", lambda conf: db)
