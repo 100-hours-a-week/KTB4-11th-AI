@@ -62,6 +62,8 @@ Initial list (2026-10 through 2027-12): verify every date against KIS `chk-holid
 
 `hours_left(now) -> tuple[int, int]` returns `(h, H)` for the KST week containing `now`. When
 `now` is past `COVERED_THROUGH`, it raises, so the job fails loudly until someone extends the list.
+When `COVERED_THROUGH` is less than 30 days after `now`, the run logs a `holidays_expiring`
+warning (with `covered_through`) so the list is extended before it runs out.
 
 ## Components
 
@@ -95,10 +97,15 @@ Buys are still funded in descending target weight after sells, as today.
 - **A stock has fewer than 20 daily closes or no 1m price**: skip it and log a warning, the same
   as `no_close` today. An exit without a price is skipped too, and retried next hour.
 - **`now` is past `COVERED_THROUGH`**: `hours_left` raises and the run fails.
+- **`COVERED_THROUGH` is less than 30 days away**: log the `holidays_expiring` warning and carry on.
+
+All logging goes through `ktb_core.logging` (`get_logger` and the existing run logger in
+`__main__.py`); no `print` and no stdlib `logging` calls.
 
 ## Testing
 
-- `hours_left`: a full week, a week with a holiday, Friday 15:00 (h = 1), and past `COVERED_THROUGH` raises.
+- `hours_left`: a full week, a week with a holiday, Friday 15:00 (h = 1), past `COVERED_THROUGH` raises, and
+  within 30 days of `COVERED_THROUGH` logs `holidays_expiring`.
 - `ladder`: bounds and α shrinkage, the buy escape above upper, the sell escape below lower, the
   last run forcing market, and tick rounding direction.
 - `rebalance`: pending orders no longer block a stock; cash is not reduced by pending buys; exits
