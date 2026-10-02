@@ -1,10 +1,70 @@
 import math
+import statistics
 from typing import Literal
 
 from pydantic import BaseModel
 
 from portfolio_rebalancer.portfolio import Explanation, Portfolio
 from portfolio_rebalancer.snapshot import Account
+
+
+class Quote(BaseModel):
+    price: float
+    sma: float
+    sigma: float
+
+
+def quote(closes: list[float], price: float) -> Quote:
+    return Quote(price=price, sma=statistics.fmean(closes), sigma=statistics.pstdev(closes))
+
+
+class Pricing(BaseModel):
+    order_type: Literal["limit", "market"]
+    limit_price: int | None
+    trigger: Literal["upper", "lower", "last_run"] | None
+    price: float
+    sma: float
+    sigma: float
+    alpha: float
+    lower_bound: float
+    upper_bound: float
+
+
+TICKS = ((2_000, 1), (5_000, 5), (20_000, 10), (50_000, 50), (200_000, 100), (500_000, 500))
+
+
+def tick(price: float) -> int:
+    return next((size for below, size in TICKS if price < below), 1_000)
+
+
+def ladder(side: Literal["buy", "sell"], quote: Quote, runs_left: int, week_runs: int) -> Pricing:
+    alpha = quote.sigma * runs_left / week_runs
+    lower, upper = quote.sma - 2 * alpha, quote.sma + 2 * alpha
+    trigger: Literal["upper", "lower", "last_run"] | None = None
+    if runs_left == 1:
+        trigger = "last_run"
+    elif side == "buy" and quote.price > upper:
+        trigger = "upper"
+    elif side == "sell" and quote.price < lower:
+        trigger = "lower"
+    limit = None
+    if trigger is None:
+        bound = lower if side == "buy" else upper
+        size = tick(bound)
+        steps = round(bound / size, 6)
+        limit = max(math.floor(steps) * size, 1) if side == "buy" else math.ceil(steps) * size
+    return Pricing(
+        order_type="limit" if trigger is None else "market",
+        limit_price=limit,
+        trigger=trigger,
+        price=quote.price,
+        sma=quote.sma,
+        sigma=quote.sigma,
+        alpha=alpha,
+        lower_bound=lower,
+        upper_bound=upper,
+    )
+
 
 HOLDING_WEIGHT_LIMIT_MARGIN = 0.2
 
@@ -15,6 +75,7 @@ class Order(BaseModel):
     side: Literal["buy", "sell"]
     quantity: int
     explanation: Explanation
+    pricing: Pricing
     holding_weight_after_trade_percent: float
     holding_weight_limit_percent: float
 
@@ -55,32 +116,30 @@ def whole_shares(budgets: dict[str, int], prices: dict[str, float]) -> dict[str,
 def rebalance(
     portfolio: Portfolio,
     account: Account,
-    closes: dict[str, float],
+    quotes: dict[str, Quote],
     band: float,
     buy_buffer: float,
+    runs_left: int,
+    week_runs: int,
 ) -> list[Order]:
     if not account.is_active:
         return []
-    pending = {o.stock_code for o in account.pending_orders}
     held = {s.stock_code: s.quantity for s in account.stocks if s.quantity > 0}
     kept = {t.stock_code: t.weight for t in portfolio.targets if not t.exiting}
-    cash = account.cash_balance - sum(
-        o.quantity * (o.limit_price or o.current_stock_price)
-        for o in account.pending_orders
-        if o.order_side == "buy"
-    )
-    asks = {code: close * (1 + buy_buffer) for code, close in closes.items()}
-    unpriced = sum(weight for code, weight in kept.items() if code not in closes)
+    cash = account.cash_balance
+    prices = {code: q.price for code, q in quotes.items()}
+    asks = {code: price * (1 + buy_buffer) for code, price in prices.items()}
+    unpriced = sum(weight for code, weight in kept.items() if code not in prices)
 
     locked: set[str] = set()
     capital = cash
     budgets: dict[str, int] = {}
-    if all(code in closes for code in held if code in kept):
+    if all(code in prices for code in held if code in kept):
         while True:
             capital = cash + sum(
-                q * closes[c] for c, q in held.items() if c in closes and c not in locked
+                q * prices[c] for c, q in held.items() if c in prices and c not in locked
             )
-            weights = {c: w for c, w in kept.items() if c in closes and c not in locked}
+            weights = {c: w for c, w in kept.items() if c in prices and c not in locked}
             investable = capital * (1 - portfolio.cash_weight - unpriced)
             budgets = allocate(weights, asks, investable)
             stranded = (held.keys() & weights.keys()) - budgets.keys()
@@ -89,101 +148,72 @@ def rebalance(
             locked |= stranded
     targets = whole_shares(budgets, asks)
 
-    def weights(code: str, after: int, weight: float) -> dict[str, float]:
-        return {
-            "holding_weight_after_trade_percent": round(
-                after * closes[code] / capital * 100 if after else 0.0, 2
-            ),
-            "holding_weight_limit_percent": round(
-                weight * (1 + HOLDING_WEIGHT_LIMIT_MARGIN) * 100, 2
-            ),
-        }
+    def after_percent(code: str, after: int) -> float:
+        return round(after * prices[code] / capital * 100 if after else 0.0, 2)
+
+    def order(
+        code: str,
+        side: Literal["buy", "sell"],
+        quantity: int,
+        explanation: Explanation,
+        after: int,
+        weight: float,
+    ) -> Order:
+        return Order(
+            stock_code=code,
+            stock_name=portfolio.names[code],
+            side=side,
+            quantity=quantity,
+            explanation=explanation,
+            pricing=ladder(side, quotes[code], runs_left, week_runs),
+            holding_weight_after_trade_percent=after_percent(code, after),
+            holding_weight_limit_percent=round(weight * (1 + HOLDING_WEIGHT_LIMIT_MARGIN) * 100, 2),
+        )
 
     sells: list[Order] = []
-    buys: list[tuple[float, float, Order]] = []
+    buys: list[tuple[int, float, Order]] = []
     for target in portfolio.targets:
         code = target.stock_code
-        if code in pending:
-            continue
         have = held.get(code, 0)
         if target.exiting:
-            if have:
-                sells.append(
-                    Order(
-                        stock_code=code,
-                        stock_name=portfolio.names[code],
-                        side="sell",
-                        quantity=have,
-                        explanation=target.sell,
-                        **weights(code, 0, 0.0),
-                    )
-                )
+            if have and code in quotes:
+                sells.append(order(code, "sell", have, target.sell, 0, 0.0))
             continue
         if code not in budgets:
             continue
-        close = closes[code]
+        price = prices[code]
         budget = budgets[code]
-        if have and abs(have * close - budget) / capital <= band:
+        if have and abs(have * price - budget) / capital <= band:
             continue
         buy_target = targets[code]
-        sell_target = max(buy_target, math.floor(budget / close))
+        sell_target = max(buy_target, math.floor(budget / price))
         if buy_target > have:
-            buys.append(
-                (
-                    budget,
-                    close,
-                    Order(
-                        stock_code=code,
-                        stock_name=portfolio.names[code],
-                        side="buy",
-                        quantity=buy_target - have,
-                        explanation=target.buy,
-                        **weights(code, buy_target, target.weight),
-                    ),
-                )
-            )
+            buy = order(code, "buy", buy_target - have, target.buy, buy_target, target.weight)
+            buys.append((budget, buy.pricing.limit_price or asks[code], buy))
         elif sell_target < have:
             sells.append(
-                Order(
-                    stock_code=code,
-                    stock_name=portfolio.names[code],
-                    side="sell",
-                    quantity=have - sell_target,
-                    explanation=target.sell,
-                    **weights(code, sell_target, target.weight),
-                )
+                order(code, "sell", have - sell_target, target.sell, sell_target, target.weight)
             )
 
     named = {t.stock_code for t in portfolio.targets}
     for code, have in held.items():
-        if code in named or code in pending or code not in portfolio.leftovers:
+        if code in named or code not in portfolio.leftovers or code not in quotes:
             continue
-        sells.append(
-            Order(
-                stock_code=code,
-                stock_name=portfolio.names[code],
-                side="sell",
-                quantity=have,
-                explanation=portfolio.leftovers[code],
-                **weights(code, 0, 0.0),
-            )
-        )
+        sells.append(order(code, "sell", have, portfolio.leftovers[code], 0, 0.0))
 
     budget = max(cash, 0)
     placed: list[Order] = []
-    for _weight, close, order in sorted(buys, key=lambda b: -b[0]):
-        quantity = min(order.quantity, math.floor(budget / (close * (1 + buy_buffer))))
+    for _, cost, buy in sorted(buys, key=lambda b: -b[0]):
+        quantity = min(buy.quantity, math.floor(budget / cost))
         if quantity <= 0:
             continue
-        budget -= quantity * close * (1 + buy_buffer)
-        after = held.get(order.stock_code, 0) + quantity
+        budget -= quantity * cost
+        after = held.get(buy.stock_code, 0) + quantity
         placed.append(
-            order.model_copy(
+            buy.model_copy(
                 update={
                     "quantity": quantity,
-                    "holding_weight_after_trade_percent": round(
-                        after * closes[order.stock_code] / capital * 100 if after else 0.0, 2
-                    ),
+                    "holding_weight_after_trade_percent": after_percent(buy.stock_code, after),
                 }
             )
         )
