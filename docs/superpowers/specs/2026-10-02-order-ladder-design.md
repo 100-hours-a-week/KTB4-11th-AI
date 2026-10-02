@@ -98,6 +98,9 @@ Buys are still funded in descending target weight after sells, as today.
   as `no_close` today. An exit without a price is skipped too, and retried next hour.
 - **`now` is past `COVERED_THROUGH`**: `hours_left` raises and the run fails.
 - **`COVERED_THROUGH` is less than 30 days away**: log the `holidays_expiring` warning and carry on.
+- **The run is outside a session** (a KRX holiday, a weekend, or outside 09:00–15:00 KST): end
+  with `outcome: market_closed` and exit 0 without cancelling or placing anything.
+- **An inactive account**: skip it entirely; its pending orders are not cancelled.
 
 ## Observability
 
@@ -108,7 +111,7 @@ stock can be traced through cancel → decide → place.
 
 | event | level | fields | when |
 |---|---|---|---|
-| `run_start` | info | `band`, `buy_buffer`, `runs_left` (h), `week_runs` (H), `last_run` | start of every run (via `start_logging`) |
+| `run_start` | info | `band`, `buy_buffer` | start of every run (via `start_logging`) |
 | `holidays_expiring` | warning | `covered_through`, `days_left` | `COVERED_THROUGH` is less than 30 days away |
 | `no_price` | warning | `stock_codes`, `missing` (`daily_closes` or `latest_price`) | replaces `no_close`; one line per missing kind |
 | `leftover_without_reason` | warning | unchanged | unchanged |
@@ -116,7 +119,7 @@ stock can be traced through cancel → decide → place.
 | `cancel_failed` | error | `order_id`, `status` and `body`, or `error` | a cancel fails; the account is skipped |
 | `order_sent` | info | `order_type`, `quantity`, `limit_price`, `price`, `sma`, `sigma`, `alpha`, `lower_bound`, `upper_bound`, `trigger` (`upper`, `lower`, `last_run`, or null), `reason` | each successful place |
 | `order_failed` | error | the `order_sent` fields, plus `status` and `body`, or `error` | a place fails |
-| `run_end` | info/error | `portfolio_id`, `cancelled`, `cancel_failed`, `sent`, `failed`, `limit`, `market`, `upper_triggered`, `lower_triggered` | end of every run (via `start_logging`) |
+| `run_end` | info/error | `runs_left` (h), `week_runs` (H), `last_run`, `portfolio_id`, `cancelled`, `cancel_failed`, `sent`, `failed`, `limit`, `market`, `upper_triggered`, `lower_triggered`; `outcome` is `market_closed` outside 09:00–15:00 on an open day, `no_portfolio` with no portfolio | end of every run (via `start_logging`) |
 
 `order_sent` carries the bound inputs (`sma`, `sigma`, `alpha`), so any limit price can be recomputed
 from the log alone. `trigger` distinguishes an escape from the forced market of the last run,
