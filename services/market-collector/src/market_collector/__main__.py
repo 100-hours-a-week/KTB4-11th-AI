@@ -29,7 +29,7 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
 
     with questdb.connect(settings.questdb_conf) as db:
         store = Store(db)
-        latest = store.latest_bar_timestamps()
+        latest = store.latest_bar_timestamps(symbols)
 
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))

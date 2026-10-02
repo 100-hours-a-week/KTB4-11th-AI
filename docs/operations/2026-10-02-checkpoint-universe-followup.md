@@ -1,5 +1,12 @@
 # Checkpoint and universe follow-up (#153, #154, #155)
 
+This is the historical #156 report. Its universe and cache changes remain current.
+The subsequent #153 fix replaces the checkpoint strategy described below with
+current-member, recent-first queries and historical fallback. See
+[the fallback validation](2026-10-02-checkpoint-fallback-validation.md).
+`inspect_checkpoint.py` still measures the unbounded baseline and a cutoff-only
+comparison; its `latest` field is not the new production pipeline.
+
 The production checkpoint retains the unbounded `LATEST ON` query from #146.
 Its SQL is shared with a read-only diagnostic; no time cutoff or checkpoint table
 is introduced. The universe query now selects only current KOSPI200 members in

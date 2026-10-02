@@ -50,6 +50,86 @@ class FakeDatabase:
         return FakeResult(self.frame)
 
 
+class SequencedDatabase(FakeDatabase):
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = [pd.DataFrame(answer) for answer in answers]
+
+    def query(self, sql, binds=None):
+        self.queries.append((sql, binds))
+        return FakeResult(self.answers.pop(0))
+
+
+def test_recent_checkpoints_skip_historical_queries_and_bind_current_symbols():
+    rows = [
+        {"symbol": symbol, "timeframe": timeframe, "latest_ts": TS}
+        for symbol in ("005930", "000660")
+        for timeframe in ("1m", "1d")
+    ]
+    db = SequencedDatabase([rows])
+    latest = Store(db).latest_bar_timestamps(["005930", "000660", "005930"])
+    assert latest == {(r["symbol"], r["timeframe"]): TS for r in rows}
+    assert len(db.queries) == 1
+    sql, binds = db.queries[0]
+    assert binds == ["000660", "005930"]
+    assert sql.count("ts > dateadd('d', -7, now())") == 2
+    assert sql.count("symbol IN ($1, $2)") == 2
+
+
+def test_only_missing_symbol_timeframe_pairs_fall_back_to_history(caplog):
+    old = TS.replace(year=2025)
+    db = SequencedDatabase(
+        [
+            [
+                {"symbol": "active", "timeframe": "1m", "latest_ts": TS},
+                {"symbol": "active", "timeframe": "1d", "latest_ts": TS},
+                {"symbol": "stale", "timeframe": "1d", "latest_ts": TS},
+            ],
+            [{"symbol": "stale", "timeframe": "1m", "latest_ts": old}],
+            [],
+        ]
+    )
+    with caplog.at_level("INFO"):
+        latest = Store(db).latest_bar_timestamps(["active", "stale", "new"])
+    assert latest == {
+        ("active", "1m"): TS,
+        ("active", "1d"): TS,
+        ("stale", "1m"): old,
+        ("stale", "1d"): TS,
+    }
+    minute_sql, minute_binds = db.queries[1]
+    daily_sql, daily_binds = db.queries[2]
+    assert minute_binds == ["new", "stale"]
+    assert daily_binds == ["new"]
+    assert "WHERE timeframe = '1m'" in minute_sql
+    assert "WHERE timeframe = '1d'" not in minute_sql
+    assert "WHERE timeframe = '1d'" in daily_sql
+    assert "dateadd" not in minute_sql + daily_sql
+    assert all(ts.tzinfo is UTC for ts in latest.values())
+    complete = next(r for r in caplog.records if r.message == "checkpoint_query_complete")
+    assert complete.fields["fallback_pairs"] == 3
+    assert complete.fields["missing_pairs"] == 2
+
+
+def test_empty_target_symbols_do_not_query_questdb():
+    db = SequencedDatabase([])
+    assert Store(db).latest_bar_timestamps([]) == {}
+    assert db.queries == []
+
+
+def test_historical_query_failure_is_logged_and_propagated(caplog):
+    class FailedFallback(SequencedDatabase):
+        def query(self, sql, binds=None):
+            if "dateadd" not in sql:
+                raise RuntimeError("historical query failed")
+            return super().query(sql, binds)
+
+    with pytest.raises(RuntimeError, match="historical query failed"):
+        Store(FailedFallback([[]])).latest_bar_timestamps(["005930"])
+    failed = next(r for r in caplog.records if r.message == "checkpoint_query_failed")
+    assert failed.exc_info is not None
+
+
 def _candle(**changes) -> CandleRow:
     values = {
         "ts": TS,
@@ -124,9 +204,9 @@ def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundari
             ],
         }
     )
-    db = FakeDatabase(frame)
+    db = SequencedDatabase([frame.to_dict("records"), []])
 
-    latest = Store(db).latest_bar_timestamps()
+    latest = Store(db).latest_bar_timestamps(["005930", "000660"])
 
     assert latest == {
         ("005930", "1m"): TS,
@@ -140,11 +220,11 @@ def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundari
     assert "WHERE timeframe = '1d'" in sql
     assert "UNION ALL" in sql
     assert "max(ts)" not in sql
-    assert binds is None
+    assert binds == ["000660", "005930"]
 
 
 def test_latest_bar_timestamps_returns_empty_boundaries_for_empty_bars():
-    assert Store(FakeDatabase()).latest_bar_timestamps() == {}
+    assert Store(FakeDatabase()).latest_bar_timestamps(["005930"]) == {}
 
 
 def test_latest_bar_timestamps_converts_aware_timestamps_to_utc():
@@ -155,12 +235,13 @@ def test_latest_bar_timestamps_converts_aware_timestamps_to_utc():
             "latest_ts": [pd.Timestamp("2026-09-22T15:19:00+09:00")],
         }
     )
-    assert Store(FakeDatabase(frame)).latest_bar_timestamps() == {("005930", "1d"): TS}
+    db = SequencedDatabase([frame.to_dict("records"), []])
+    assert Store(db).latest_bar_timestamps(["005930"]) == {("005930", "1d"): TS}
 
 
 def test_latest_bar_timestamps_logs_query_cost(caplog):
     with caplog.at_level("INFO"):
-        Store(FakeDatabase()).latest_bar_timestamps()
+        Store(FakeDatabase()).latest_bar_timestamps(["005930"])
     record = next(r for r in caplog.records if r.message == "checkpoint_query_complete")
     assert record.fields["rows"] == 0
     assert record.fields["elapsed_ms"] >= 0
@@ -176,7 +257,7 @@ def test_latest_bar_timestamps_preserves_server_errors_and_logs_cost(caplog):
             return FailedResult(self.frame)
 
     with pytest.raises(RuntimeError, match="GC overhead limit exceeded"):
-        Store(FailedDatabase()).latest_bar_timestamps()
+        Store(FailedDatabase()).latest_bar_timestamps(["005930"])
     record = next(r for r in caplog.records if r.message == "checkpoint_query_failed")
     assert record.fields["elapsed_ms"] >= 0
     assert record.exc_info is not None

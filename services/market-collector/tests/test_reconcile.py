@@ -34,6 +34,16 @@ def _daily_row(date: str, price: int) -> dict[str, str]:
     }
 
 
+def _history_rows(timeframe: str, count: int) -> list[dict[str, str]]:
+    if timeframe == "1m":
+        return [_minute_row(100, offset) for offset in range(count)]
+    anchor = datetime.strptime(BASE_DT, "%Y%m%d")
+    return [
+        _daily_row((anchor - timedelta(days=offset)).strftime("%Y%m%d"), 100)
+        for offset in range(count)
+    ]
+
+
 class FakeClient:
     def __init__(self, pages: list[Page]):
         self.pages = list(pages)
@@ -88,6 +98,58 @@ def test_reconcile_without_checkpoint_exhausts_pages_and_writes_unique_rows_olde
     assert written == 3
     assert [row[3] for row in sink.rows] == sorted(row[3] for row in sink.rows)
     assert len({row[3] for row in sink.rows}) == 3
+
+
+@pytest.mark.parametrize("timeframe, limit", [("1m", 8000), ("1d", 300)])
+def test_initial_collection_caps_unique_bars_and_keeps_latest_in_chronological_order(
+    timeframe, limit
+):
+    history = _history_rows(timeframe, limit + 2)
+    client = FakeClient(
+        [
+            Page(history[: limit - 1], "NK1", True),
+            Page([history[limit - 2], history[limit], history[limit - 1]], "NK2", True),
+            Page([history[limit + 1]], None, False),
+        ]
+    )
+    sink = FakeSink()
+
+    written = reconcile_candles(client, Store(sink), "005930", timeframe, BASE_DT, None)
+
+    anchor = ANCHOR.astimezone(UTC) if timeframe == "1m" else datetime(2026, 9, 22, tzinfo=UTC)
+    step = timedelta(minutes=1) if timeframe == "1m" else timedelta(days=1)
+    assert written == limit
+    assert [row[3] for row in sink.rows] == [
+        anchor - offset * step for offset in reversed(range(limit))
+    ]
+    assert len(client.minute_calls + client.daily_calls) == 2
+    assert len(client.pages) == 1
+
+
+@pytest.mark.parametrize("timeframe, limit", [("1m", 8000), ("1d", 300)])
+def test_incremental_collection_exceeds_initial_limit_and_reaches_old_checkpoint(timeframe, limit):
+    history = _history_rows(timeframe, limit + 3)
+    anchor = ANCHOR.astimezone(UTC) if timeframe == "1m" else datetime(2026, 9, 22, tzinfo=UTC)
+    step = timedelta(minutes=1) if timeframe == "1m" else timedelta(days=1)
+    latest = anchor - (limit + 1) * step
+    client = FakeClient(
+        [
+            Page(history[:limit], "NK1", True),
+            Page(history[limit : limit + 2], "NK2", True),
+            Page([history[limit + 2]], None, False),
+        ]
+    )
+    sink = FakeSink()
+
+    written = reconcile_candles(client, Store(sink), "005930", timeframe, BASE_DT, latest)
+
+    assert written == limit + 1
+    assert [row[3] for row in sink.rows] == [
+        anchor - offset * step for offset in reversed(range(limit + 1))
+    ]
+    assert all(row[3] > latest for row in sink.rows)
+    assert len(client.minute_calls + client.daily_calls) == 2
+    assert len(client.pages) == 1
 
 
 def test_reconcile_with_checkpoint_filters_strictly_newer_and_stops_at_boundary_page():
