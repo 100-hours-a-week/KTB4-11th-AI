@@ -1,5 +1,6 @@
 from collections.abc import Callable, Mapping
 from functools import cache
+from threading import Lock
 from typing import Any, Literal
 
 import sqlalchemy as sa
@@ -57,12 +58,19 @@ def analyze_technicals(
 
 
 def technicals_tool(engine: sa.Engine, market: Any) -> BaseTool:
+    cached_universe = cache(market.universe_closes)
+    universe_lock = Lock()
+
+    def universe() -> Mapping[str, Array]:
+        with universe_lock:
+            return cached_universe()
+
     return StructuredTool.from_function(
         bind(
             analyze_technicals,
             engine=engine,
             market=market,
-            universe=cache(market.universe_closes),
+            universe=universe,
         ),
         name="analyze_technicals",
         description=(

@@ -10,7 +10,7 @@ from ktb_core.logging import StructuredLogger, get_logger, setup_logging, start_
 from portfolio_rebalancer.backend import Backend
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
-from portfolio_rebalancer.portfolio import load_portfolio
+from portfolio_rebalancer.portfolio import Unready, load_portfolio
 from portfolio_rebalancer.rebalance import quote, rebalance
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.snapshot import Account
@@ -88,6 +88,9 @@ def main() -> None:
         if portfolio is None:
             end.update(outcome="no_portfolio")
             raise SystemExit(0)
+        if isinstance(portfolio, Unready):
+            end.update(outcome=portfolio.status, portfolio_id=portfolio.id)
+            raise SystemExit(1 if portfolio.status == "explanation_failed" else 0)
 
         counts: Counter[str] = Counter()
         with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:

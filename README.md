@@ -162,6 +162,7 @@ erDiagram
         text commentary
         text model
         jsonb trace
+        text status "explanation_pending, ready, explanation_failed"
     }
     portfolio_holdings {
         bigint portfolio_id PK, FK "ON DELETE CASCADE"
@@ -193,10 +194,12 @@ erDiagram
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | `market-syncer` | `0003`, `0004`, `0006` |
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
+| `portfolios.status` | `portfolio-builder` | `0008` |
 
 - `corporations` 는 DART 고유번호와 연결되는 KOSPI 종목만, `corporation_indices` 는 KOSPI 200 구성 종목만 저장합니다.
 - `themes` / `theme_companies` 는 `corporations` 에 있는 종목만 저장합니다.
 - `portfolios.trace` 는 포트폴리오를 만든 에이전트 실행 기록, `portfolio_reasons` 는 종목별 매수·매도 설명입니다.
+- `portfolios.status` 는 저장 직후 `explanation_pending`, 설명 저장 시 `ready`, 설명 실패 시 `explanation_failed` 입니다. `portfolio-rebalancer` 는 가장 최근 포트폴리오가 `ready` 일 때만 주문하고, 그 전 포트폴리오로 돌아가지 않습니다. `portfolio-builder` 는 가장 최근 포트폴리오가 `ready` 가 아니고 `trace` 가 있으면 새 포트폴리오를 만들지 않고 그 설명만 다시 만듭니다.
 - `market-syncer` 는 `news-graph-builder`, `market-collector` 보다 먼저 실행합니다. `market-collector` 는 수집 종목을 `corporation_indices` 에서 읽고, QuestDB `universe_members` 는 QuestDB 마이그레이션 `0002` 로 삭제했습니다. `portfolio-builder` 의 KOSPI 200 횡단면 순위도 `corporation_indices` 를 기준으로 계산합니다.
 - `portfolio_holdings` / `portfolio_exits` 의 `company_id` 는 종목코드가 아닌 DART 고유번호(`corporations.corp_code`)입니다.
 

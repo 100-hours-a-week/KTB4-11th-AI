@@ -49,17 +49,25 @@ class QuestDBMarket(Market):
 
     def universe_closes(self) -> dict[str, Array]:
         with self._engine.connect() as conn:
-            members = set(
-                conn.execute(
-                    sa.text("SELECT stock_code FROM corporation_indices WHERE index_name = :name"),
-                    {"name": KOSPI200},
-                ).scalars()
+            members = sorted(
+                set(
+                    conn.execute(
+                        sa.text(
+                            "SELECT stock_code FROM corporation_indices WHERE index_name = :name"
+                        ),
+                        {"name": KOSPI200},
+                    ).scalars()
+                )
             )
+        if not members:
+            return {}
+        placeholders = ", ".join(f"${i}" for i in range(1, len(members) + 1))
         closes: dict[str, list[float]] = defaultdict(list)
         for r in self._records(
             "SELECT symbol, ts, close FROM bars_1d WHERE session = 'regular'"
-            f" AND ts > dateadd('d', -{UNIVERSE_DAYS}, now()) ORDER BY ts"
+            f" AND ts > dateadd('d', -{UNIVERSE_DAYS}, now())"
+            f" AND cast(symbol AS VARCHAR) IN ({placeholders}) ORDER BY ts",
+            members,
         ):
-            if r["symbol"] in members:
-                closes[r["symbol"]].append(r["close"])
+            closes[r["symbol"]].append(r["close"])
         return {symbol: np.array(values, dtype=np.float64) for symbol, values in closes.items()}

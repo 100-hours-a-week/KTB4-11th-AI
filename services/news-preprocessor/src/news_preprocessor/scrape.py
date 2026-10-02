@@ -41,6 +41,7 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
     log.info(
         "scrape_complete",
         source=source.source,
+        feed_url=source.feed_url,
         entries=len(entries),
         new_articles=len(succeed),
         failed=len(failed),

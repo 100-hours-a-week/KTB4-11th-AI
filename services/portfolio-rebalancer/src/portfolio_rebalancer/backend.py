@@ -22,6 +22,8 @@ class OrderRequest(BaseModel):
     quantity: int
     reason: str
     thoughts: list[Reasoning]
+    holding_weight_after_trade_percent: float
+    holding_weight_limit_percent: float
 
 
 class Backend:
@@ -96,6 +98,8 @@ class Backend:
             quantity=order.quantity,
             reason=order.explanation.reason,
             thoughts=order.explanation.reasonings,
+            holding_weight_after_trade_percent=order.holding_weight_after_trade_percent,
+            holding_weight_limit_percent=order.holding_weight_limit_percent,
         ).model_dump(mode="json")
         self._send("POST", f"/api/v1/accounts/{account_id}/orders", user_id, body)
 
