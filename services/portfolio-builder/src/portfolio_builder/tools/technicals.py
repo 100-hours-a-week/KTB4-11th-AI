@@ -72,7 +72,6 @@ def technicals_tool(engine: sa.Engine, market: Any) -> BaseTool:
             " decided by a fixed rule and the measurements behind it; weigh the signals"
             " together yourself. Signals that cannot be decided are listed under unavailable"
             " with the reason. Look the company up by name or company_id."
-            " Korean or English company name, or alias."
         ),
         args_schema=AnalyzeTechnicalsArgs,
     )
