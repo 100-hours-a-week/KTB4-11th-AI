@@ -39,8 +39,9 @@ Stateless: nothing is stored between runs.
 
 1. Snapshot users, accounts, holdings, and pending orders (unchanged).
 2. Per account, **cancel every pending order** with `PATCH /api/v1/accounts/{account_id}/orders/{order_id}`
-   (no body). Cancels are synchronous, and `pending_orders[].quantity` is the remaining
-   quantity, so after this step holdings and `cash_balance` are the whole truth.
+   (no body). Cancels are synchronous, and `pending_orders[].quantity` is the remaining quantity. When anything was
+   cancelled, re-read the snapshot once, so holdings and `cash_balance` include any fill that landed before its cancel.
+   An account whose re-read still shows pending orders is skipped (`pending_after_cancel`).
 3. Recompute the needed trades from target weights versus holdings. The `band` drift check,
    exits, and leftovers are unchanged. The pending-order skip and the pending-buy cash
    subtraction are removed.
@@ -117,6 +118,7 @@ stock can be traced through cancel → decide → place.
 | `leftover_without_reason` | warning | unchanged | unchanged |
 | `order_cancelled` | info | `order_id`, `order_type`, `limit_price`, `quantity` (remaining) | each successful cancel |
 | `cancel_failed` | error | `order_id`, `status` and `body`, or `error` | a cancel fails; the account is skipped |
+| `pending_after_cancel` | warning | `order_ids` | the re-read snapshot still shows pending orders; the account is skipped |
 | `order_sent` | info | `order_type`, `quantity`, `limit_price`, `price`, `sma`, `sigma`, `alpha`, `lower_bound`, `upper_bound`, `trigger` (`upper`, `lower`, `last_run`, or null), `reason` | each successful place |
 | `order_failed` | error | the `order_sent` fields, plus `status` and `body`, or `error` | a place fails |
 | `run_end` | info/error | `runs_left` (h), `week_runs` (H), `last_run`, `portfolio_id`, `cancelled`, `cancel_failed`, `sent`, `failed`, `limit`, `market`, `upper_triggered`, `lower_triggered`; `outcome` is `market_closed` outside 09:00–15:00 on an open day, `no_portfolio` with no portfolio | end of every run (via `start_logging`) |

@@ -34,7 +34,7 @@ def _failure(error: httpx.HTTPError) -> dict[str, Any]:
 
 
 def _cancel_all(
-    backend: Backend, log: StructuredLogger, user_id: int, account: Account, counts: Counter
+    backend: Backend, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
 ) -> bool:
     for pending in account.pending_orders:
         fields = {
@@ -89,7 +89,7 @@ def main() -> None:
             end.update(outcome="no_portfolio")
             raise SystemExit(0)
 
-        counts: Counter = Counter()
+        counts: Counter[str] = Counter()
         with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:
             backend = Backend(
                 client,
@@ -97,6 +97,15 @@ def main() -> None:
                 settings.backend_jwt_issuer,
             )
             users = backend.users()
+            failed_cancels: set[int] = set()
+            for user in users:
+                for account in user.accounts:
+                    if account.is_active and not _cancel_all(
+                        backend, log, user.user_id, account, counts
+                    ):
+                        failed_cancels.add(account.account_id)
+            if counts["cancelled"]:
+                users = backend.users()
             codes = {t.stock_code for t in portfolio.targets} | {
                 s.stock_code for u in users for a in u.accounts for s in a.stocks
             }
@@ -110,7 +119,15 @@ def main() -> None:
             named = {t.stock_code for t in portfolio.targets}
             for user in users:
                 for account in user.accounts:
-                    if not account.is_active:
+                    if not account.is_active or account.account_id in failed_cancels:
+                        continue
+                    if account.pending_orders:
+                        log.warning(
+                            "pending_after_cancel",
+                            user_id=user.user_id,
+                            account_id=account.account_id,
+                            order_ids=[o.order_id for o in account.pending_orders],
+                        )
                         continue
                     if stranded := sorted(
                         {s.stock_code for s in account.stocks if s.quantity > 0}
@@ -123,8 +140,6 @@ def main() -> None:
                             account_id=account.account_id,
                             stock_codes=stranded,
                         )
-                    if not _cancel_all(backend, log, user.user_id, account, counts):
-                        continue
                     for order in rebalance(
                         portfolio,
                         account,
@@ -140,6 +155,7 @@ def main() -> None:
                             "stock_code": order.stock_code,
                             "side": order.side,
                             "quantity": order.quantity,
+                            "reason": order.explanation.reason,
                             **order.pricing.model_dump(),
                         }
                         try:
@@ -152,7 +168,7 @@ def main() -> None:
                         counts[order.pricing.order_type] += 1
                         if order.pricing.trigger in ("upper", "lower"):
                             counts[f"{order.pricing.trigger}_triggered"] += 1
-                        log.info("order_sent", **fields, reason=order.explanation.reason)
+                        log.info("order_sent", **fields)
 
         end.update(portfolio_id=portfolio.id, **{key: counts[key] for key in TOTALS})
         raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)

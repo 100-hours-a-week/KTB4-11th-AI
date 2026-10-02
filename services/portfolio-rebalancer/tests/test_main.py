@@ -25,11 +25,11 @@ PORTFOLIO = Portfolio(
 )
 
 
-def account(account_id, stocks=(), pending=(), active=True):
+def account(account_id, stocks=(), pending=(), active=True, cash=1_000_000):
     return {
         "account_id": account_id,
         "is_active": active,
-        "cash_balance": 1_000_000,
+        "cash_balance": cash,
         "stocks": [{"stock_code": c, "quantity": q, "total_cost": 0} for c, q in stocks],
         "pending_orders": [
             {
@@ -58,15 +58,29 @@ USERS = users(account(11, stocks=[("000660", 1)]), account(12))
 
 
 class FakeBackend:
-    def __init__(self, client, secret, issuer, users=USERS, fail_account=None, fail_cancel=None):
+    def __init__(
+        self,
+        client,
+        secret,
+        issuer,
+        users=USERS,
+        refreshed=None,
+        fail_account=None,
+        fail_cancel=None,
+    ):
+        self.calls = []
         self.placed = []
         self.cancelled = []
-        self._users = users
+        self._snapshots = [users, refreshed or users]
         self.fail_account = fail_account
         self.fail_cancel = fail_cancel
 
     def users(self):
-        return self._users
+        self.calls.append(("users",))
+        return self._snapshots[min(len(self.calls_of("users")) - 1, 1)]
+
+    def calls_of(self, kind):
+        return [c for c in self.calls if c[0] == kind]
 
     def _boom(self, method):
         request = httpx.Request(method, "http://backend")
@@ -77,11 +91,13 @@ class FakeBackend:
     def cancel(self, user_id, account_id, order_id):
         if order_id == self.fail_cancel:
             self._boom("PATCH")
+        self.calls.append(("cancel", account_id, order_id))
         self.cancelled.append((user_id, account_id, order_id))
 
     def place(self, user_id, account_id, order):
         if account_id == self.fail_account:
             self._boom("POST")
+        self.calls.append(("place", account_id, order.stock_code))
         self.placed.append((user_id, account_id, order.stock_code, order.quantity))
 
 
@@ -152,7 +168,9 @@ def test_every_account_is_rebalanced_on_the_ladder_and_the_run_exits_zero(env, m
 
 
 def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
-    backends = _use(monkeypatch, users=users(account(11, pending=[77, 78])))
+    backends = _use(
+        monkeypatch, users=users(account(11, pending=[77, 78])), refreshed=users(account(11))
+    )
 
     assert _main() == 0
     assert backends[0].cancelled == [(1, 11, 77), (1, 11, 78)]
@@ -163,6 +181,8 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
         (78, 95_000, 2),
     ]
     assert events[-1]["cancelled"] == 2
+    kinds = [c[0] for c in backends[0].calls]
+    assert kinds == ["users", "cancel", "cancel", "users", "place"]
 
 
 def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsys):
@@ -194,6 +214,7 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
     failed = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_failed")
     assert (failed["account_id"], failed["status"], failed["body"]) == (12, 409, "bad")
     assert failed["order_type"] == "limit"
+    assert failed["reason"] == "사요"
 
 
 def test_the_last_run_of_the_week_sends_market_orders(env, monkeypatch, capsys):
@@ -259,3 +280,27 @@ def test_the_clock_reaches_the_daily_closes_query(env, monkeypatch):
     _main()
 
     assert env["now"] == WEDNESDAY_NOON.astimezone(UTC)
+
+
+def test_trades_are_sized_from_the_snapshot_after_cancelling(env, monkeypatch):
+    filled = users(account(11, stocks=[("005930", 4)], cash=600_000))
+    backends = _use(monkeypatch, users=users(account(11, pending=[77])), refreshed=filled)
+
+    assert _main() == 0
+    assert backends[0].cancelled == [(1, 11, 77)]
+    assert backends[0].placed == []
+
+
+def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, capsys):
+    backends = _use(
+        monkeypatch,
+        users=users(account(11, pending=[77])),
+        refreshed=users(account(11, pending=[79])),
+    )
+
+    assert _main() == 0
+    assert backends[0].placed == []
+    warn = next(
+        e for e in _events(capsys.readouterr().out) if e["message"] == "pending_after_cancel"
+    )
+    assert (warn["account_id"], warn["order_ids"]) == (11, [79])
