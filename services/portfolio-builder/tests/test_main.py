@@ -71,16 +71,15 @@ def test_max_turns_exits_one(env, monkeypatch, capsys):
     assert _events(capsys.readouterr().out)[-1]["level"] == "ERROR"
 
 
-def test_a_failure_before_the_agent_exits_one_with_run_end(env, monkeypatch, capsys):
+def test_a_failure_before_the_agent_raises_after_run_end(env, monkeypatch, capsys):
     def broken(engine, days):
         raise RuntimeError("postgres unreachable")
 
     monkeypatch.setattr(entry, "load_briefing", broken)
 
-    with pytest.raises(SystemExit) as exit_:
+    with pytest.raises(RuntimeError):
         entry.main()
 
-    assert exit_.value.code == 1
     last = _events(capsys.readouterr().out)[-1]
     assert last["message"] == "run_end"
     assert last["outcome"] == "error"

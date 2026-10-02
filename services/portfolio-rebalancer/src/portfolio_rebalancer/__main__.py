@@ -2,7 +2,7 @@ import uuid
 from contextlib import ExitStack
 
 import sqlalchemy as sa
-from ktb_core.logging import get_logger, setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from portfolio_rebalancer.backend import access_token, authenticate, build_client
 from portfolio_rebalancer.market import connect
@@ -16,8 +16,10 @@ def main() -> None:
     # run_id ties every line of one pass together, so a tick can be read end to end in
     # CloudWatch and two passes can never be confused for one.
     log = get_logger(__name__, run_id=str(uuid.uuid4()))
-    log.info("run_start", poll_interval_hint="compose owns the interval")
-    with ExitStack() as cleanup:
+    with (
+        start_logging(log, poll_interval_hint="compose owns the interval") as end,
+        ExitStack() as cleanup,
+    ):
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         db = cleanup.enter_context(connect(settings.questdb_conf))
@@ -34,8 +36,7 @@ def main() -> None:
         )
         # The tick owns its transactions: an order has to be committed before it is sent, so
         # one transaction cannot span the send.
-        sent = tick(engine, db, client, log=log)
-    log.info("run_end", orders_sent=sent)
+        end["orders_sent"] = tick(engine, db, client, log=log)
 
 
 if __name__ == "__main__":

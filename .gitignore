@@ -8,6 +8,7 @@ __pycache__/
 .env
 .env.*
 !.env.prod.example
+!.env.example
 
 # Created by https://www.toptal.com/developers/gitignore/api/macos,linux,windows,python,visualstudiocode,pycharm
 # Edit at https://www.toptal.com/developers/gitignore?templates=macos,linux,windows,python,visualstudiocode,pycharm

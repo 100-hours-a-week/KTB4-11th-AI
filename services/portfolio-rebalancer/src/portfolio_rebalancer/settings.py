@@ -1,4 +1,6 @@
-from pydantic import SecretStr
+from typing import Annotated
+
+from pydantic import SecretStr, StringConstraints
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,8 +16,7 @@ class Settings(BaseSettings):
     backend_url: str
     # A credential: SecretStr keeps it out of logs and repr.
     backend_jwt_secret: SecretStr
-    # Who the token says it is. The Backend reads `sub` with Long.parseLong, so this is
-    # the numeric id of the user whose accounts are being rebalanced, not a service name.
-    backend_jwt_subject: str = "portfolio-rebalancer"
+    # The Backend parses `sub` as a Long user id.
+    backend_jwt_subject: Annotated[str, StringConstraints(pattern=r"^[0-9]+$")]
     # Must equal the Backend's JWT_ISSUER: its decoder validates the issuer claim.
     backend_jwt_issuer: str

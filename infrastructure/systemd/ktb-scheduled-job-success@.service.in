@@ -1,0 +1,17 @@
+[Unit]
+Description=Publish ScheduledJobFailure=0 for KTB scheduled job %i
+Wants=network-online.target
+After=network-online.target
+# 지표 발행 일시 실패(네트워크, API 스로틀링)를 짧게 재시도합니다.
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+User=@@DEPLOY_USER@@
+ExecStart=@@DEPLOY_DIR@@/scripts/publish-scheduled-job-metric.sh %i 0
+TimeoutStartSec=2min
+Restart=on-failure
+RestartSec=30s
+# 인자 오류(64)와 AWS CLI 누락(69)은 재시도해도 해결되지 않습니다.
+RestartPreventExitStatus=64 69

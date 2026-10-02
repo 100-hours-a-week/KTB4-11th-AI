@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from portfolio_builder.company import resolve_company
 from portfolio_builder.errors import NoMarketData
 from portfolio_builder.interpretation import interpret
+from portfolio_builder.market import Market
 from portfolio_builder.measurement import Array, measure
 from portfolio_builder.tools.binding import bind
 from portfolio_builder.tools.result import json_result
@@ -28,9 +29,8 @@ class AnalyzeTechnicalsArgs(BaseModel):
 def analyze_technicals(
     name: str,
     timeframe: str,
-    *,
     engine: sa.Engine,
-    market: Any,
+    market: Market,
     universe: Callable[[], Mapping[str, Array]],
 ) -> str:
     company = resolve_company(engine, name)

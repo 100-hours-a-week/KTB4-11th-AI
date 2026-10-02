@@ -133,13 +133,13 @@ class FakeDB:
     [("1m", "bars_1m", True), ("15m", "bars_15m", False), ("1h", "bars_1h", False),
      ("1d", "bars_1d", True)],
 )  # fmt: skip
-def test_bars_reads_the_timeframe_view_newest_first_and_reverses(
+def test_bars_reads_the_timeframe_view_with_questdb_latest_limit(
     monkeypatch, timeframe, view, session
 ):
     rows = [
-        {"ts": AS_OF, "high": 3.0, "low": 1.0, "close": 2.0, "volume": 30},
         {"ts": datetime(2026, 9, 27, tzinfo=UTC), "high": 2.0, "low": 1.0, "close": 1.5,
          "volume": 20},
+        {"ts": AS_OF, "high": 3.0, "low": 1.0, "close": 2.0, "volume": 30},
     ]  # fmt: skip
     db = FakeDB([rows])
     monkeypatch.setattr(market_module.questdb, "connect", lambda conf: db)
@@ -149,7 +149,7 @@ def test_bars_reads_the_timeframe_view_newest_first_and_reverses(
     sql, binds = db.queries[0]
     assert f"FROM {view} " in sql
     assert ("session = 'regular'" in sql) is session
-    assert binds == ["005930", 300]
+    assert binds == ["005930", -300]
     assert bars.close.tolist() == [1.5, 2.0]
     assert bars.volume.dtype == np.float64
     assert as_of == AS_OF
