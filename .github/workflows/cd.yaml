@@ -85,6 +85,8 @@ jobs:
           scp "$image_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.image.env.next"
           scp scripts/run-morning-pipeline.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/run-morning-pipeline.sh"
+          scp scripts/publish-scheduled-job-metric.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/publish-scheduled-job-metric.sh"
           scp infrastructure/systemd/ktb-*.service.in \
             infrastructure/systemd/ktb-*.timer \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/"
@@ -147,6 +149,14 @@ jobs:
           # systemd 파일도 운영 경로에 설치하기 전에 렌더링하고 구문을 확인합니다.
           test -f "$schedule_stage/run-morning-pipeline.sh"
           bash -n "$schedule_stage/run-morning-pipeline.sh"
+          test -f "$schedule_stage/publish-scheduled-job-metric.sh"
+          bash -n "$schedule_stage/publish-scheduled-job-metric.sh"
+
+          # 작업 실패 알림 훅이 지표를 발행할 수 없으면 실패가 조용히 묻히므로 배포 전에 확인합니다.
+          test -x /usr/local/bin/aws || {
+            echo "::error::AWS CLI v2 must be installed at /usr/local/bin/aws for scheduled job alarms" >&2
+            false
+          }
 
           deploy_user="$(id -un)"
           deploy_dir="$(pwd -P)"
@@ -188,6 +198,9 @@ jobs:
           install -D -m 0755 \
             "$schedule_stage/run-morning-pipeline.sh" \
             "$deploy_dir/scripts/run-morning-pipeline.sh"
+          install -D -m 0755 \
+            "$schedule_stage/publish-scheduled-job-metric.sh" \
+            "$deploy_dir/scripts/publish-scheduled-job-metric.sh"
           sudo -n systemd-analyze verify \
             "$schedule_render_dir"/ktb-*.service \
             "$schedule_render_dir"/ktb-*.timer
@@ -234,6 +247,7 @@ jobs:
           done
 
           test -x "$deploy_dir/scripts/run-morning-pipeline.sh"
+          test -x "$deploy_dir/scripts/publish-scheduled-job-metric.sh"
           systemctl list-timers --all --no-pager | grep 'ktb-'
 
           rm -rf "$schedule_stage" "$schedule_render_dir"
