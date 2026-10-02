@@ -3,6 +3,9 @@ Description=KTB portfolio rebalancing job
 Wants=network-online.target
 After=network-online.target docker.service
 Requires=docker.service
+# 작업 결과를 AI_CWAgent/ScheduledJobFailure(JobName=portfolio-rebalancer)로 발행합니다.
+OnSuccess=ktb-scheduled-job-success@portfolio-rebalancer.service
+OnFailure=ktb-scheduled-job-failure@portfolio-rebalancer.service
 StartLimitIntervalSec=1h
 StartLimitBurst=3
 
@@ -13,5 +16,7 @@ WorkingDirectory=@@DEPLOY_DIR@@
 ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.portfolio-rebalancer.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T portfolio-rebalancer
 TimeoutStartSec=50m
 Restart=on-failure
+# 재시도 중간 실패는 failed 상태를 거치지 않게 해 OnFailure=가 최종 실패에만 실행되게 합니다.
+RestartMode=direct
 RestartSec=5m
 KillMode=mixed

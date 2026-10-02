@@ -126,7 +126,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/market-syncer` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
-| `services/market-collector` | service | single-run archive job for current KOSPI 200 OHLCV | `ktb-core` |
+| `services/market-collector` | service | weekdays 09:55–14:55 and 15:35 KST; single-run KOSPI 200 OHLCV archive | `ktb-core` |
 | `services/portfolio-rebalancer` | service | scheduled job: polls the Backend, decides, sends market orders | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
