@@ -5,6 +5,7 @@ from news_preprocessor.sources.publishers.chosun import ChosunEconomyRSS
 from news_preprocessor.sources.publishers.edaily import EdailyRSS
 from news_preprocessor.sources.publishers.hankyung import HankyungEconomyRSS
 from news_preprocessor.sources.publishers.maeil import MaeilBusinessEconomyRSS
+from news_preprocessor.sources.publishers.sedaily import SeoulEconomicRSS
 from news_preprocessor.sources.publishers.yonhap import YonhapEconomyRSS
 
 __all__ = [
@@ -12,6 +13,7 @@ __all__ = [
     "EdailyRSS",
     "HankyungEconomyRSS",
     "MaeilBusinessEconomyRSS",
+    "SeoulEconomicRSS",
     "YonhapEconomyRSS",
     "publishers",
 ]
@@ -24,4 +26,5 @@ def publishers(client: httpx.Client) -> tuple[NewsSource, ...]:
         MaeilBusinessEconomyRSS(client),
         YonhapEconomyRSS(client),
         EdailyRSS(client),
+        *(SeoulEconomicRSS(client, section) for section in SeoulEconomicRSS.sections),
     )

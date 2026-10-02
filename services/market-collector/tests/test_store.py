@@ -135,10 +135,51 @@ def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundari
     }
     assert all(timestamp.tzinfo is UTC for timestamp in latest.values())
     sql, binds = db.queries[0]
-    assert "max(ts)" in sql
-    assert "GROUP BY symbol, timeframe" in sql
-    assert "timeframe IN ('1m', '1d')" in sql
+    assert sql.count("LATEST ON ts PARTITION BY symbol") == 2
+    assert "WHERE timeframe = '1m'" in sql
+    assert "WHERE timeframe = '1d'" in sql
+    assert "UNION ALL" in sql
+    assert "max(ts)" not in sql
     assert binds is None
+
+
+def test_latest_bar_timestamps_returns_empty_boundaries_for_empty_bars():
+    assert Store(FakeDatabase()).latest_bar_timestamps() == {}
+
+
+def test_latest_bar_timestamps_converts_aware_timestamps_to_utc():
+    frame = pd.DataFrame(
+        {
+            "symbol": ["005930"],
+            "timeframe": ["1d"],
+            "latest_ts": [pd.Timestamp("2026-09-22T15:19:00+09:00")],
+        }
+    )
+    assert Store(FakeDatabase(frame)).latest_bar_timestamps() == {("005930", "1d"): TS}
+
+
+def test_latest_bar_timestamps_logs_query_cost(caplog):
+    with caplog.at_level("INFO"):
+        Store(FakeDatabase()).latest_bar_timestamps()
+    record = next(r for r in caplog.records if r.message == "checkpoint_query_complete")
+    assert record.fields["rows"] == 0
+    assert record.fields["elapsed_ms"] >= 0
+
+
+def test_latest_bar_timestamps_preserves_server_errors_and_logs_cost(caplog):
+    class FailedResult(FakeResult):
+        def to_pandas(self):
+            raise RuntimeError("GC overhead limit exceeded")
+
+    class FailedDatabase(FakeDatabase):
+        def query(self, sql, binds=None):
+            return FailedResult(self.frame)
+
+    with pytest.raises(RuntimeError, match="GC overhead limit exceeded"):
+        Store(FailedDatabase()).latest_bar_timestamps()
+    record = next(r for r in caplog.records if r.message == "checkpoint_query_failed")
+    assert record.fields["elapsed_ms"] >= 0
+    assert record.exc_info is not None
 
 
 def test_without_nones_keeps_falsy_but_non_none_values():

@@ -1,11 +1,15 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any
+
+from ktb_core.logging import get_logger
 
 __all__ = ["Candle", "CandleRow", "Store"]
 
 TIMEFRAMES = frozenset({"1m", "1d"})
+log = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -72,11 +76,27 @@ class Store:
         return written
 
     def latest_bar_timestamps(self) -> dict[tuple[str, str], datetime]:
-        sql = """SELECT symbol, timeframe, max(ts) AS latest_ts FROM bars
-        WHERE timeframe IN ('1m', '1d')
-        GROUP BY symbol, timeframe"""
-        with self._db.query(sql) as result:
-            records = result.to_pandas().to_dict("records")
+        sql = """SELECT symbol, '1m' AS timeframe, ts AS latest_ts FROM bars
+        WHERE timeframe = '1m'
+        LATEST ON ts PARTITION BY symbol
+        UNION ALL
+        SELECT symbol, '1d' AS timeframe, ts AS latest_ts FROM bars
+        WHERE timeframe = '1d'
+        LATEST ON ts PARTITION BY symbol"""
+        started = perf_counter()
+        try:
+            with self._db.query(sql) as result:
+                records = result.to_pandas().to_dict("records")
+        except Exception:
+            log.exception(
+                "checkpoint_query_failed", elapsed_ms=round((perf_counter() - started) * 1000)
+            )
+            raise
+        log.info(
+            "checkpoint_query_complete",
+            elapsed_ms=round((perf_counter() - started) * 1000),
+            rows=len(records),
+        )
         return {
             (record["symbol"], record["timeframe"]): _as_utc(record["latest_ts"])
             for record in records

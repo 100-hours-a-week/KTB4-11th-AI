@@ -38,9 +38,19 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 12
+      questdb:
+        image: questdb/questdb:10.0.1
+        ports:
+          - "9000:9000"
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9003/status"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     env:
       KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
       KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
+      KTB_TEST_QUESTDB_CONF: ws::addr=localhost:9000;
 
     steps:
       - uses: actions/checkout@v7
