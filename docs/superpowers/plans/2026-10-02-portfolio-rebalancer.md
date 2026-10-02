@@ -830,6 +830,8 @@ git commit -m "feat: Explain each portfolio stock for buying and selling"
 
 ### Task 4: Wire explain into portfolio-builder's main
 
+> Superseded by issue #132: an explain failure now marks the portfolio `explanation_failed` and exits 1, and the next run re-explains it. See the spec's "Order readiness" section; the exit-0 snippets below are historical.
+
 **Files:**
 - Modify: `services/portfolio-builder/src/portfolio_builder/settings.py`
 - Modify: `services/portfolio-builder/src/portfolio_builder/__main__.py`
