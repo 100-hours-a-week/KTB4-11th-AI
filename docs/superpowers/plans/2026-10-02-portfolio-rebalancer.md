@@ -1946,6 +1946,7 @@ from portfolio_rebalancer.snapshot import Snapshot, User
 
 class OrderRequest(BaseModel):
     stock_code: str
+    stock_name: str
     order_side: Literal["buy", "sell"]
     order_type: Literal["market"] = "market"
     quantity: int
