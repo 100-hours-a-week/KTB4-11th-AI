@@ -1,5 +1,8 @@
+from unittest.mock import patch
+
 import sqlalchemy as sa
 from news_preprocessor.scrape import scrape
+from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers import HankyungEconomyRSS, MaeilBusinessEconomyRSS
 from news_preprocessor.storage import articles
 
@@ -63,3 +66,27 @@ def test_a_failing_article_is_reported_and_the_others_are_stored(engine, fake_we
     assert result.succeed == [HANKYUNG_ARTICLES[1]]
     assert result.failed == [HANKYUNG_ARTICLES[0]]
     assert len(_sources(engine)) == 1
+
+
+def test_an_empty_body_article_is_skipped_with_a_warning(engine, fake_web, monkeypatch):
+    hankyung, _ = fake_web().sources()
+    article = hankyung.article
+
+    def return_an_empty_body(entry):
+        if entry.external_id == HANKYUNG_ARTICLES[0]:
+            raise EmptyBodyError(entry.url)
+        return article(entry)
+
+    monkeypatch.setattr(hankyung, "article", return_an_empty_body)
+
+    with patch("news_preprocessor.scrape.log.warning") as warning:
+        result = scrape(engine, hankyung)
+
+    assert result.succeed == [HANKYUNG_ARTICLES[1]]
+    assert result.failed == []
+    warning.assert_any_call(
+        "empty_body_article",
+        source="hankyung_economy",
+        url=HANKYUNG_ARTICLES[0],
+        article_id=HANKYUNG_ARTICLES[0],
+    )
