@@ -128,6 +128,7 @@ def test_a_second_run_without_new_articles_changes_nothing(
         "assignment_seconds": result.fields["assignment_seconds"],
         "matching_seconds": result.fields["matching_seconds"],
         "write_seconds": result.fields["write_seconds"],
+        "total_seconds": result.fields["total_seconds"],
     }
 
 
