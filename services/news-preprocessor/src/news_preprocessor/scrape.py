@@ -3,7 +3,7 @@ from typing import NamedTuple
 import sqlalchemy as sa
 from ktb_core.logging import get_logger
 
-from news_preprocessor.sources import NewsSource
+from news_preprocessor.sources import ImageOnlyArticleError, NewsSource
 from news_preprocessor.storage import insert_new, known_external_ids
 
 log = get_logger(__name__)
@@ -31,6 +31,15 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
             continue
         try:
             item = source.article(entry)
+        except ImageOnlyArticleError as error:
+            log.warning(
+                "image_only_article",
+                source=source.source,
+                url=entry.url,
+                image_count=error.image_count,
+                article_id=entry.external_id,
+            )
+            continue
         except Exception:
             log.exception("article_failed", source=source.source, url=entry.url)
             failed.append(entry.external_id)
