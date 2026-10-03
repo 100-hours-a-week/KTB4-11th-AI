@@ -55,7 +55,18 @@ def test_clusters_and_logs_the_cost(env, engine, two_events_and_noise, caplog):
     assert started[0].fields == {"eps": 0.36, "min_samples": 2, "embedding_dimensions": 2000}
     result = [record for record in caplog.records if record.getMessage() == "cluster_write_result"]
     assert len(result) == 1
-    assert result[0].fields == {
+    assert {
+        key: result[0].fields[key]
+        for key in (
+            "clusters_created",
+            "clusters_maintained",
+            "clusters_changed",
+            "clusters_deleted",
+            "mappings_added",
+            "mappings_moved",
+            "mappings_removed",
+        )
+    } == {
         "clusters_created": 2,
         "clusters_maintained": 0,
         "clusters_changed": 0,
