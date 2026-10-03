@@ -81,3 +81,19 @@ def test_set_embedding_writes_the_vector(conn):
 def test_set_embedding_rejects_mismatched_lengths(conn):
     with pytest.raises(ValueError):
         set_embedding(conn, [1, 2], [_vector(1.0)])
+
+
+def test_set_embedding_rejects_mismatched_lengths_before_writing():
+    class Connection:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, statement):
+            self.executed.append(statement)
+
+    conn = Connection()
+
+    with pytest.raises(ValueError):
+        set_embedding(conn, [1, 2], [_vector(1.0)])
+
+    assert conn.executed == []
