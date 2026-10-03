@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx
-import pytest
-from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers import EdailyRSS, publishers
 
 URL = "https://www.edaily.co.kr/News/Read?newsId=05172566645608656"
@@ -40,15 +38,15 @@ def test_edaily_feed_and_article(caplog):
     assert source.article(entries[0]).body == "[이데일리 기자] 실제 기사 다음 문장"
 
 
-def test_empty_article_raises():
+def test_title_only_article_uses_title_as_body():
     def handler(request):
         return httpx.Response(
             200,
             text=FEED
             if str(request.url) == EdailyRSS.feed_url
-            else '<div class="news_body"><table><tr><td>사진</td></tr></table></div>',
+            else '<header><img src="logo.jpg" /></header><div class="news_body"></div>',
         )
 
     source = EdailyRSS(httpx.Client(transport=httpx.MockTransport(handler)))
-    with pytest.raises(EmptyBodyError):
-        source.article(source.entries()[0])
+    entry = source.entries()[0]
+    assert source.article(entry).body == entry.title
