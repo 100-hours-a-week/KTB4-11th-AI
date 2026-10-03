@@ -50,6 +50,30 @@ def test_clusters_and_logs_the_cost(env, engine, two_events_and_noise, caplog):
         "noise": 1,
     }
     assert "dbscan_seconds" in cost[0].fields and "peak_rss_mib" in cost[0].fields
+    embedding_loaded = next(
+        record for record in caplog.records if record.getMessage() == "embedding_loaded"
+    )
+    assert embedding_loaded.fields["article_count"] == 7
+    assert "load_seconds" in embedding_loaded.fields
+    clustering_completed = next(
+        record for record in caplog.records if record.getMessage() == "clustering_completed"
+    )
+    assert {
+        key: clustering_completed.fields[key]
+        for key in ("article_count", "cluster_count", "noise_count")
+    } == {"article_count": 7, "cluster_count": 2, "noise_count": 1}
+    assert "clustering_seconds" in clustering_completed.fields
+    assignment_loaded = next(
+        record for record in caplog.records if record.getMessage() == "assignment_loaded"
+    )
+    assert assignment_loaded.fields["existing_cluster_count"] == 0
+    assert "assignment_seconds" in assignment_loaded.fields
+    cluster_matched = next(
+        record for record in caplog.records if record.getMessage() == "clusters_matched"
+    )
+    assert cluster_matched.fields["matched_cluster_count"] == 0
+    assert cluster_matched.fields["old_cluster_count_to_delete"] == 0
+    assert "matching_seconds" in cluster_matched.fields
     started = [record for record in caplog.records if record.getMessage() == "run_start"]
     assert len(started) == 1
     assert started[0].fields == {"eps": 0.36, "min_samples": 2, "embedding_dimensions": 2000}
@@ -75,7 +99,9 @@ def test_clusters_and_logs_the_cost(env, engine, two_events_and_noise, caplog):
         "mappings_moved": 0,
         "mappings_removed": 0,
     }
-    assert {"assignment_seconds", "matching_seconds", "write_seconds"} <= result[0].fields.keys()
+    assert {"assignment_seconds", "matching_seconds", "write_seconds", "total_seconds"} <= result[
+        0
+    ].fields.keys()
 
 
 def test_a_second_run_without_new_articles_changes_nothing(
@@ -121,9 +147,11 @@ def test_logs_the_embedding_load_stage_and_traceback_on_failure(monkeypatch, cap
         entry.main()
 
     failed = next(
-        record for record in caplog.records if record.getMessage() == "embedding_load_failed"
+        record for record in caplog.records if record.getMessage() == "clusterer_run_failed"
     )
-    assert failed.fields == {"stage": "embedding_load"}
+    assert failed.fields["stage"] == "embedding_load"
+    assert failed.fields["error_type"] == "RuntimeError"
+    assert failed.fields["error_message"] == "database unavailable"
     assert failed.exc_info is not None
 
 
@@ -143,8 +171,12 @@ def test_logs_the_clustering_stage_and_traceback_on_failure(monkeypatch, caplog)
     with pytest.raises(RuntimeError, match="clustering failed"):
         entry.main()
 
-    failed = next(record for record in caplog.records if record.getMessage() == "clustering_failed")
-    assert failed.fields == {"stage": "clustering"}
+    failed = next(
+        record for record in caplog.records if record.getMessage() == "clusterer_run_failed"
+    )
+    assert failed.fields["stage"] == "clustering"
+    assert failed.fields["error_type"] == "RuntimeError"
+    assert failed.fields["error_message"] == "clustering failed"
     assert failed.exc_info is not None
 
 
@@ -172,7 +204,9 @@ def test_logs_the_cluster_write_stage_and_traceback_on_failure(monkeypatch, capl
         entry.main()
 
     failed = next(
-        record for record in caplog.records if record.getMessage() == "cluster_write_failed"
+        record for record in caplog.records if record.getMessage() == "clusterer_run_failed"
     )
-    assert failed.fields == {"stage": "cluster_write"}
+    assert failed.fields["stage"] == "cluster_write"
+    assert failed.fields["error_type"] == "RuntimeError"
+    assert failed.fields["error_message"] == "write failed"
     assert failed.exc_info is not None
