@@ -7,7 +7,8 @@ import httpx
 from bs4 import BeautifulSoup
 from ktb_core.logging import get_logger
 
-from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
+from news_preprocessor.sources import FeedEntry, NewsItem
+from news_preprocessor.sources.article_body import body_or_title
 
 log = get_logger(__name__)
 
@@ -54,13 +55,14 @@ class ChosunEconomyRSS:
         html = response.raise_for_status().text
         marker = "Fusion.globalContent="
         if marker not in html:
-            raise EmptyBodyError(entry.url)
+            return NewsItem(**asdict(entry), body=entry.title)
         content = json.JSONDecoder().raw_decode(html.split(marker, 1)[1])[0]
         body = " ".join(
             BeautifulSoup(element.get("content", ""), "html.parser").get_text(" ", strip=True)
             for element in content.get("content_elements", [])
             if element.get("type") == "text"
         ).strip()
-        if not body:
-            raise EmptyBodyError(entry.url)
-        return NewsItem(**asdict(entry), body=body)
+        has_image = any(
+            element.get("type") == "image" for element in content.get("content_elements", [])
+        )
+        return NewsItem(**asdict(entry), body=body_or_title(entry, body, has_image))
