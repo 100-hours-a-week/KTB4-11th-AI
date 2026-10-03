@@ -120,7 +120,7 @@ def test_processes_every_pending_article_in_batch_sized_pages(engine):
 
     assert len(result.succeed) == 101
     assert result.failed == []
-    assert len(calls) == 7
+    assert len(calls) == 8
     assert sum(vector is not None for vector in _embeddings(engine)) == 101
 
 
