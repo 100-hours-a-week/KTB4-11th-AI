@@ -42,6 +42,7 @@ articles = sa.Table(
         postgresql_ops={"embedding": "vector_cosine_ops"},
     ),
     sa.Index("articles_published_at_idx", "published_at"),
+    sa.Index("articles_pending_embedding_idx", "embedding_status", "id"),
 )
 
 embedding_failures = sa.Table(
