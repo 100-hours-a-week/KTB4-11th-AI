@@ -2,9 +2,10 @@
 
 import json
 import logging
+import re
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from types import TracebackType
 from typing import Any
@@ -84,9 +85,12 @@ def set_logger_level(name: str, level: str) -> None:
 
 
 class JsonFormatter(logging.Formatter):
-    def __init__(self, service_name: str) -> None:
+    def __init__(self, service_name: str, sensitive_query_params: Collection[str] = ()) -> None:
         super().__init__()
         self.service_name = service_name
+        names = "|".join(map(re.escape, sensitive_query_params))
+        # The JSON line writes a quote as \" and a newline as \n, so a backslash ends the value.
+        self.sensitive = re.compile(rf"({names})=[^&\s\"'\\]+") if names else None
 
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -101,12 +105,15 @@ class JsonFormatter(logging.Formatter):
             payload.update(fields)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
-        return json.dumps(payload, ensure_ascii=False, default=str)
+        line = json.dumps(payload, ensure_ascii=False, default=str)
+        return self.sensitive.sub(r"\1=***", line) if self.sensitive else line
 
 
-def setup_logging(level: str = "INFO", *, service_name: str) -> None:
+def setup_logging(
+    level: str = "INFO", *, service_name: str, sensitive_query_params: Collection[str] = ()
+) -> None:
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter(service_name))
+    handler.setFormatter(JsonFormatter(service_name, sensitive_query_params))
 
     root = logging.getLogger()
     root.handlers.clear()
