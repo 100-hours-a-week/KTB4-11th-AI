@@ -7,6 +7,7 @@ from news_preprocessor.storage import (
     articles,
     insert_new,
     known_external_ids,
+    kospi200_stock_codes,
     pending_embedding,
     set_embedding,
 )
@@ -81,3 +82,25 @@ def test_set_embedding_writes_the_vector(conn):
 def test_set_embedding_rejects_mismatched_lengths(conn):
     with pytest.raises(ValueError):
         set_embedding(conn, [1, 2], [_vector(1.0)])
+
+
+def test_kospi200_stock_codes_reads_only_the_kospi200_rows(pg_conn):
+    pg_conn.execute(sa.text("TRUNCATE corporation_indices"))
+    for stock_code, index_name in (
+        ("005930", "KOSPI200"),
+        ("000660", "KOSPI200"),
+        ("035420", "OTHER"),
+    ):
+        pg_conn.execute(
+            sa.text(
+                "INSERT INTO corporations (stock_code, name, corp_code)"
+                " VALUES (:code, :code, 'dart' || :code) ON CONFLICT DO NOTHING"
+            ),
+            {"code": stock_code},
+        )
+        pg_conn.execute(
+            sa.text("INSERT INTO corporation_indices VALUES (:code, :index_name)"),
+            {"code": stock_code, "index_name": index_name},
+        )
+
+    assert kospi200_stock_codes(pg_conn) == {"005930", "000660"}

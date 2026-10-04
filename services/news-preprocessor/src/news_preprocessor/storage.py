@@ -39,12 +39,26 @@ articles = sa.Table(
     sa.Index("articles_published_at_idx", "published_at"),
 )
 
+corporation_indices = sa.Table(
+    "corporation_indices",
+    metadata,
+    sa.Column("stock_code", sa.Text, primary_key=True),
+    sa.Column("index_name", sa.Text, primary_key=True),
+)
+
 
 def known_external_ids(conn: sa.Connection, source: str, external_ids: list[str]) -> set[str]:
     if not external_ids:
         return set()
     query = sa.select(articles.c.external_id).where(
         articles.c.source == source, articles.c.external_id.in_(external_ids)
+    )
+    return set(conn.execute(query).scalars())
+
+
+def kospi200_stock_codes(conn: sa.Connection) -> set[str]:
+    query = sa.select(corporation_indices.c.stock_code).where(
+        corporation_indices.c.index_name == "KOSPI200"
     )
     return set(conn.execute(query).scalars())
 
