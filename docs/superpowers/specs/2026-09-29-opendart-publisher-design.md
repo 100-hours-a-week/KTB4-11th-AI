@@ -1,6 +1,6 @@
 # OpenDART publisher design
 
-`news-preprocessor` gains a fourth `NewsSource`, `opendart`, that stores KOSPI 200 corporations'
+`news-preprocessor` gains another `NewsSource`, `opendart`, that stores KOSPI 200 corporations'
 OpenDART disclosures (공시) as `articles` rows. From there they are embedded, clustered and
 graphed like any other article, so a disclosure and the news about it can land in one cluster.
 
@@ -31,7 +31,8 @@ graphed like any other article, so a disclosure and the news about it can land i
 ## Adapter: `sources/publishers/opendart/`
 
 `opendart.py` (class `OpenDart`) and `parser.py`, following the other
-publishers. It calls OpenDART with the shared `httpx.Client`; no OpenDartReader (it would add
+publishers. It logs through `ktb_core.logging.get_logger` with snake_case event names, as the
+other publishers do. It calls OpenDART with the shared `httpx.Client`; no OpenDartReader (it would add
 pandas and a `docs_cache/` write to this service).
 
 ```python
@@ -75,7 +76,8 @@ Each kept row becomes:
 
 `GET https://opendart.fss.or.kr/api/document.xml?crtfc_key=…&rcept_no=…`, open the bytes with
 `zipfile`, read `{rcept_no}.xml` (or the first entry if that name is missing), and pass the bytes to
-`parse_document_body`. An empty body raises `EmptyBodyError`. When DART answers with an error, the
+`parse_document_body`. An empty body raises `EmptyBodyError`, which `scrape()` logs as
+`empty_body_article` and skips without failing the run. When DART answers with an error, the
 body is a JSON or XML status instead of a zip; `zipfile.BadZipFile` is left to propagate and
 `scrape()` records the entry as failed.
 
@@ -112,8 +114,10 @@ exceptions include the URL. The root logger is at INFO, so without a guard the k
 
 - `news_preprocessor/log_filter.py`: a `logging.Filter` that rewrites
   `crtfc_key=<value>` to `crtfc_key=***` with `re.sub(r"(crtfc_key=)[^&\s\"']+", r"\1***", text)`.
-  It masks the rendered message (`record.msg = masked record.getMessage()`, `record.args = None`)
-  and, when `exc_info` is set, the formatted traceback into `record.exc_text`.
+  It masks the rendered message (`record.msg = masked record.getMessage()`, `record.args = None`),
+  every `str` value in the structured `record.fields` dict (`get_logger` puts `url`, `feed_url`,
+  `error` and `start_logging`'s `run_end` error string there), and, when `exc_info` is set, the
+  formatted traceback into `record.exc_text`.
 - `main()` and `handler()` add it to the root handler right after `setup_logging()`.
 - `ktb_core.logging.JsonFormatter` uses `record.exc_text or self.formatException(record.exc_info)`,
   the stdlib's own caching convention, so the masked traceback is what gets printed. Core gains no
@@ -134,9 +138,9 @@ publishers do.
   - field mapping (title whitespace, viewer URL, `published_at` at 00:00 KST, JSON payload);
   - `article()` reads `{rcept_no}.xml` from the zip and parses both the UTF-8 XML and the EUC-KR
     HTML fixture, with no CSS text in the body.
-- `test_log_filter.py`: through `setup_logging()` plus the filter, an httpx-style request message
-  and a logged exception whose message holds `crtfc_key=<key>&rcept_no=…` both print without the
-  key and keep `rcept_no`.
+- `test_log_filter.py`: through `setup_logging()` plus the filter, an httpx-style request message,
+  a `get_logger` field value, and a logged exception whose message holds
+  `crtfc_key=<key>&rcept_no=…` all print without the key and keep `rcept_no`.
 - `test_storage.py` (DB test): `kospi200_stock_codes` returns only `KOSPI200` rows.
 - `test_main.py` / `test_handler.py`: updated for the new `publishers` signature.
 
