@@ -634,28 +634,28 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `setup_logging(..., sensitive_query_params=...)` (Task 1), `kospi200_stock_codes(conn) -> set[str]` (Task 2), `OpenDart(client, api_key, stock_codes)` (Task 3).
-- Produces: `publishers(client: httpx.Client, dart_api_key: str, stock_codes: set[str]) -> tuple[NewsSource, ...]`; `Settings.opendart_api_key: SecretStr` (env `NEWS_PREPROCESSOR_OPENDART_API_KEY`, required).
+- Produces: `publishers(client: httpx.Client, dart_api_key: str, stock_codes: set[str]) -> tuple[NewsSource, ...]`; `Settings.dart_api_key: SecretStr` (env `NEWS_PREPROCESSOR_DART_API_KEY`, required).
 
 - [ ] **Step 1: Write the failing settings tests**
 
 In `services/news-preprocessor/tests/test_settings.py`, add to the `required_env` fixture, after the `POSTGRES_DSN` line:
 
 ```python
-    monkeypatch.setenv("NEWS_PREPROCESSOR_OPENDART_API_KEY", "dart-key")
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DART_API_KEY", "dart-key")
 ```
 
 Append:
 
 ```python
-def test_reads_the_opendart_api_key_as_a_secret(required_env):
+def test_reads_the_dart_api_key_as_a_secret(required_env):
     settings = Settings()
 
-    assert settings.opendart_api_key.get_secret_value() == "dart-key"
+    assert settings.dart_api_key.get_secret_value() == "dart-key"
     assert "dart-key" not in repr(settings)
 
 
-def test_missing_opendart_api_key_raises_at_construction(required_env, monkeypatch):
-    monkeypatch.delenv("NEWS_PREPROCESSOR_OPENDART_API_KEY")
+def test_missing_dart_api_key_raises_at_construction(required_env, monkeypatch):
+    monkeypatch.delenv("NEWS_PREPROCESSOR_DART_API_KEY")
 
     with pytest.raises(ValidationError):
         Settings()
@@ -669,7 +669,7 @@ In `services/news-preprocessor/tests/test_main.py`, add `import logging` and `fr
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("NEWS_PREPROCESSOR_POSTGRES_DSN", "postgresql+psycopg://u@unused.invalid/db")
-    monkeypatch.setenv("NEWS_PREPROCESSOR_OPENDART_API_KEY", "dart-key")
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DART_API_KEY", "dart-key")
     # main() reads corporation_indices before scraping; no database here.
     monkeypatch.setattr(entry.sa, "create_engine", lambda dsn: MagicMock())
     monkeypatch.setattr(entry, "kospi200_stock_codes", lambda conn: {"005930"})
@@ -763,14 +763,14 @@ def test_dart_keys_in_urls_are_masked_in_logs(env, monkeypatch, capsys):
 - [ ] **Step 3: Run the tests to verify they fail**
 
 Run: `uv run pytest services/news-preprocessor/tests/test_settings.py services/news-preprocessor/tests/test_main.py services/news-preprocessor/tests/test_handler.py -v`
-Expected: FAIL — `AttributeError: 'Settings' object has no attribute 'opendart_api_key'` and `AttributeError: ... has no attribute 'kospi200_stock_codes'` from the `env` fixture.
+Expected: FAIL — `AttributeError: 'Settings' object has no attribute 'dart_api_key'` and `AttributeError: ... has no attribute 'kospi200_stock_codes'` from the `env` fixture.
 
 - [ ] **Step 4: Implement settings and the publisher registry**
 
 In `settings.py`, add after `embed_batch_limit`:
 
 ```python
-    opendart_api_key: SecretStr
+    dart_api_key: SecretStr
 ```
 
 In `sources/publishers/__init__.py`, add the import (keep imports sorted):
@@ -819,7 +819,7 @@ and replace the `scraped = [...]` line inside `try:` with:
 ```python
             with engine.connect() as conn:
                 stock_codes = kospi200_stock_codes(conn)
-            dart_api_key = settings.opendart_api_key.get_secret_value()
+            dart_api_key = settings.dart_api_key.get_secret_value()
             sources = publishers(client, dart_api_key, stock_codes)
             scraped = [scrape(engine, source) for source in sources]
 ```
@@ -834,19 +834,19 @@ Expected: all PASS (DB tests skip without `KTB_TEST_POSTGRES_DSN`).
 `compose.dev.yaml` and `compose.prod.yaml`, in the `news-preprocessor` `environment:` block, after the `NEWS_PREPROCESSOR_USER_AGENT` line (same indentation):
 
 ```yaml
-      NEWS_PREPROCESSOR_OPENDART_API_KEY: ${NEWS_PREPROCESSOR_OPENDART_API_KEY:-}
+      NEWS_PREPROCESSOR_DART_API_KEY: ${NEWS_PREPROCESSOR_DART_API_KEY:-}
 ```
 
 `.env.example`, under `# Required by the corresponding jobs.`, after `KTB_EMBEDDING_BASE_URI=`:
 
 ```
-NEWS_PREPROCESSOR_OPENDART_API_KEY=
+NEWS_PREPROCESSOR_DART_API_KEY=
 ```
 
 `AGENTS.md`, env table, after the `NEWS_PREPROCESSOR_LOG_LEVEL` row:
 
 ```markdown
-| `NEWS_PREPROCESSOR_OPENDART_API_KEY` | news-preprocessor `opendart` publisher; Compose uses the same name | required |
+| `NEWS_PREPROCESSOR_DART_API_KEY` | news-preprocessor `opendart` publisher; Compose uses the same name | required |
 ```
 
 `AGENTS.md`, in the "Services communicate through datastores" bullet, replace this text:
@@ -864,7 +864,7 @@ and runs before news-preprocessor (whose `opendart` publisher keeps only KOSPI 2
 `README.md`, news-preprocessor env table, after the `NEWS_PREPROCESSOR_LOG_LEVEL` row:
 
 ```markdown
-| `NEWS_PREPROCESSOR_OPENDART_API_KEY` | 필수 | |
+| `NEWS_PREPROCESSOR_DART_API_KEY` | 필수 | |
 ```
 
 `README.md`, the reader-notes bullet that starts with ``- `market-syncer` 는 `news-graph-builder`, `market-collector` 보다 먼저 실행합니다.``: change its first sentence to ``- `market-syncer` 는 `news-preprocessor`, `news-graph-builder`, `market-collector` 보다 먼저 실행합니다. `news-preprocessor` 의 `opendart` publisher 는 `corporation_indices` 의 KOSPI 200 종목 공시만 저장합니다.``

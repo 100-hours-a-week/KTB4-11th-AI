@@ -104,10 +104,10 @@ collapse whitespace.
 - `publishers(client)` becomes `publishers(client, dart_api_key, stock_codes)` and appends
   `OpenDart(client, dart_api_key, stock_codes)`.
 - `main()` and `handler()` read `kospi200_stock_codes` in one connection before scraping and pass
-  it with `settings.opendart_api_key.get_secret_value()`.
-- Setting `opendart_api_key: SecretStr`, required, env `NEWS_PREPROCESSOR_OPENDART_API_KEY`.
+  it with `settings.dart_api_key.get_secret_value()`.
+- Setting `dart_api_key: SecretStr`, required, env `NEWS_PREPROCESSOR_DART_API_KEY`.
 - `compose.dev.yaml` and `compose.prod.yaml`:
-  `NEWS_PREPROCESSOR_OPENDART_API_KEY: ${NEWS_PREPROCESSOR_OPENDART_API_KEY:-}` (Compose uses the
+  `NEWS_PREPROCESSOR_DART_API_KEY: ${NEWS_PREPROCESSOR_DART_API_KEY:-}` (Compose uses the
   service's own name, as `MARKET_SYNCER_DART_API_KEY` does). `.env.example` lists it.
 - `AGENTS.md` and `README.md` env tables gain the new variable.
 - No new dependency: `httpx` and `beautifulsoup4` are already declared; `zipfile` and `json`
