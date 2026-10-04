@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     postgres_dsn: str
     questdb_conf: str
-    openrouter_api_key: SecretStr = Field(min_length=1)
+    llm_api_key: SecretStr = Field(min_length=1)
     llm_model: str
     thinking_level: Literal["none", "minimal", "low", "medium", "high", "xhigh"] = "medium"
     news_window_days: int = Field(default=7, gt=0)

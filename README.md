@@ -303,7 +303,7 @@ QuestDB의 PGWire 설정이며 이 WebSocket 연결 문자열에는 사용되지
 |---|---|---|
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | |
 | `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | 예: `ws::addr=localhost:9000;` |
-| `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | 필수 | |
+| `PORTFOLIO_BUILDER_LLM_API_KEY` | 필수 | |
 | `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | OpenRouter 모델 ID |
 | `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` |
 | `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | | `7` |

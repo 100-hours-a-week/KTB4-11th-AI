@@ -54,7 +54,7 @@ def main() -> None:
                 log.info("prompt", system_prompt=SYSTEM_PROMPT, briefing=briefing.text)
                 model = ChatOpenRouter(
                     model=settings.llm_model,
-                    api_key=settings.openrouter_api_key,
+                    api_key=settings.llm_api_key,
                     reasoning={"effort": settings.thinking_level},
                 )
                 tools = [
@@ -93,7 +93,7 @@ def main() -> None:
                         save_trace(engine, portfolio_id, trace)
                     explainer = ChatOpenRouter(
                         model=settings.llm_model,
-                        api_key=settings.openrouter_api_key,
+                        api_key=settings.llm_api_key,
                         max_tokens=settings.explain_max_tokens,
                         reasoning={"effort": "none"},
                     ).with_structured_output(Explanations, include_raw=True)
