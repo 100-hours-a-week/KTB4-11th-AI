@@ -24,7 +24,7 @@ KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up market-syncer   # needs the Kiwoom and DART keys below; run before news-graph-builder
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
-PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from LLM_API_KEY in .env
+PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from PORTFOLIO_BUILDER_LLM_API_KEY in .env
 docker compose -f compose.dev.yaml --profile jobs run --rm portfolio-rebalancer   # one tick, then exits
 
 # tests TRUNCATE tables: point them at a separate database, never at `ktb`
