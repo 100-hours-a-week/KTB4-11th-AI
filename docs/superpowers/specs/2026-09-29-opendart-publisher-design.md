@@ -92,10 +92,10 @@ def parse_document_body(document: bytes) -> str
 ```
 
 Decode the bytes as UTF-8 (strict: a non-UTF-8 document raises and `scrape()` records it as
-failed), then BeautifulSoup with `html.parser` for both formats. Passing a `str` makes it ignore
-the wrong `euc-kr` meta tag, and `html.parser` gives the same text as `lxml` on both samples
-without `XMLParsedAsHTMLWarning`. Remove `style` and `script` elements, then `get_text(" ")` and
-collapse whitespace.
+failed), then parse the `str`: documents starting with `<?xml` (DART4) with the `xml` parser, the
+rest (KRX HTML) with `html.parser`. Passing a `str` makes it ignore the wrong `euc-kr` meta tag, and
+splitting by format avoids `XMLParsedAsHTMLWarning`. Remove `style` and `script` elements, then
+`get_text(" ")` and collapse whitespace.
 
 ## Wiring
 
