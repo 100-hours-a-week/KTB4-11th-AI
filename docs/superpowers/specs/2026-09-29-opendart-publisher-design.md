@@ -76,8 +76,11 @@ Each kept row becomes:
 
 `GET https://opendart.fss.or.kr/api/document.xml?crtfc_key=…&rcept_no=…`, open the bytes with
 `zipfile`, read `{rcept_no}.xml` (or the first entry if that name is missing), and pass the bytes to
-`parse_document_body`. An empty body raises `EmptyBodyError`, which `scrape()` logs as
-`empty_body_article` and skips without failing the run. When DART answers with an error, the
+`parse_document_body`. An empty body does not raise `EmptyBodyError`: the disclosure is stored
+as a title-only article with `body=""` (`articles.body` is `NOT NULL`, so the empty string, not
+`NULL`). The title (`corp_name` plus `report_nm`) already names the event, and `embed_pending`
+embeds `f"{title}\n\n{body}"`, so it still gets a vector. The other publishers keep skipping empty
+bodies. When DART answers with an error, the
 body is a JSON or XML status instead of a zip; `zipfile.BadZipFile` is left to propagate and
 `scrape()` records the entry as failed.
 
@@ -136,6 +139,7 @@ publishers do.
   - field mapping (title whitespace, viewer URL, `published_at` at 00:00 KST, JSON payload);
   - `article()` reads `{rcept_no}.xml` from the zip and parses both the UTF-8 XML and the EUC-KR
     HTML fixture, with no CSS text in the body.
+  - a document with no text yields a `NewsItem` with `body=""` instead of raising.
 - `packages/core/tests/test_logging.py`: with `sensitive_query_params={"crtfc_key"}`, an
   httpx-style request message, a `get_logger` field value, and a logged exception whose message
   holds `crtfc_key=<key>&rcept_no=…` all print without the key, keep `rcept_no`, and each line
