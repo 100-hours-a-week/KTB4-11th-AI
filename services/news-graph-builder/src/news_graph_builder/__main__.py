@@ -1,10 +1,9 @@
-import logging
 import sys
 from contextlib import ExitStack
 
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from news_graph_builder.cluster import find_cluster_articles, find_stale_clusters, lock_cluster
 from news_graph_builder.graph import (
@@ -16,7 +15,7 @@ from news_graph_builder.graph import (
 )
 from news_graph_builder.settings import Settings
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 # Session-level advisory lock key that lets only one run build graphs at a time:
 # https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS
 RUN_LOCK = int.from_bytes(b"ngrb")
@@ -24,29 +23,28 @@ RUN_LOCK = int.from_bytes(b"ngrb")
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
-    logger.info("news-graph-builder started")
+    setup_logging(settings.log_level, service_name="news-graph-builder")
     failed = 0
-    with httpx.Client() as client, ExitStack() as cleanup:
+    with start_logging(log), httpx.Client() as client, ExitStack() as cleanup:
         engine = sa.create_engine(settings.postgres_dsn)
         cleanup.callback(engine.dispose)
         run_lock = cleanup.enter_context(engine.connect())
         if not run_lock.execute(
             sa.text("SELECT pg_try_advisory_lock(:id)"), {"id": RUN_LOCK}
         ).scalar_one():
-            logger.info("another news-graph-builder run is in progress, exiting")
+            log.info("run_skipped", reason="already_running")
             sys.exit(0)
         run_lock.commit()
 
         with engine.connect() as conn:
             if not has_corporations(conn):
                 # Without corporations every company would become a plain entity for good.
-                logger.error("corporations is empty; run market-syncer first")
+                log.error("corporations_missing")
                 sys.exit(1)
 
         with engine.begin() as conn:
             merged = merge_company_entities(conn)
-        logger.info("merged %d plain entities into corporations", merged)
+        log.info("entities_merged", count=merged)
 
         with engine.connect() as conn:
             clusters = find_stale_clusters(conn)
@@ -59,18 +57,18 @@ def main() -> None:
                 extraction = extract(client, articles)
                 with engine.begin() as conn:
                     if not lock_cluster(conn, cluster_id, seen):
-                        logger.info("cluster %d changed during extraction, skipped", cluster_id)
+                        log.info("cluster_changed", cluster_id=cluster_id)
                         continue
                     entity_ids = resolve(conn, extraction.entities)
                     dropped = write_graph(conn, cluster_id, seen, extraction, entity_ids)
             except Exception:
-                logger.exception("graph extraction failed for cluster %d", cluster_id)
+                log.exception("graph_extraction_failed", cluster_id=cluster_id)
                 failed += 1
                 continue
             if dropped:
-                logger.info("cluster %d: dropped %d dangling relations", cluster_id, dropped)
-        logger.info("built %d cluster graphs, %d failed", len(clusters) - failed, failed)
-    sys.exit(1 if failed else 0)
+                log.info("dangling_relations_dropped", cluster_id=cluster_id, count=dropped)
+        log.info("graphs_built", count=len(clusters) - failed, failed=failed)
+        sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

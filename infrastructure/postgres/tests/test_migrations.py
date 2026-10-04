@@ -108,6 +108,10 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
                 "relations",
             },
         ),
+        (
+            "portfolio_builder.database",
+            {"portfolios", "portfolio_holdings", "portfolio_exits", "portfolio_reasons"},
+        ),
     ],
 )
 def test_service_tables_match_the_migrated_schema(
@@ -119,6 +123,8 @@ def test_service_tables_match_the_migrated_schema(
     command.upgrade(_alembic_config(), "head")
 
     def only_owned_tables(obj, name, type_, reflected, compare_to):
+        if type_ == "index" and name == "cluster_summaries_fts_idx":
+            return False
         return name in owned_tables if type_ == "table" else True
 
     with pg_engine.connect() as conn:
@@ -245,6 +251,74 @@ def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypat
         assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None
 
 
+def test_a_reason_side_is_buy_or_sell(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+
+    with pg_engine.connect() as conn:
+        definition = conn.execute(
+            sa.text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
+                " WHERE conname = 'portfolio_reasons_side_check'"
+            )
+        ).scalar_one()
+
+    assert "'buy'" in definition and "'sell'" in definition
+
+
+def test_downgrade_to_0006_removes_reasons_and_trace(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+
+    command.downgrade(config, "0006")
+    try:
+        with pg_engine.connect() as conn:
+            assert conn.execute(sa.text("SELECT to_regclass('portfolio_reasons')")).scalar() is None
+            assert "trace" not in _columns(conn, "portfolios")
+    finally:
+        command.upgrade(config, "head")
+
+
+def test_upgrade_to_0008_marks_explained_portfolios_ready_and_the_rest_failed(
+    pg_dsn, pg_engine, monkeypatch
+):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.upgrade(config, "head")
+    command.downgrade(config, "0007")
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE portfolios, corporations RESTART IDENTITY CASCADE"))
+            conn.execute(
+                sa.text(
+                    "INSERT INTO corporations (stock_code, corp_code, name)"
+                    " VALUES ('005930', '00126380', '삼성전자')"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolios (cash_weight, commentary, model)"
+                    " VALUES (1, 'c', 'm'), (1, 'c', 'm')"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_reasons"
+                    " (portfolio_id, company_id, side, reason, reasonings)"
+                    " VALUES (1, '00126380', 'sell', 'r', '[]')"
+                )
+            )
+        command.upgrade(config, "head")
+        with pg_engine.connect() as conn:
+            statuses = conn.execute(sa.text("SELECT status FROM portfolios ORDER BY id")).scalars()
+            assert list(statuses) == ["ready", "explanation_failed"]
+    finally:
+        command.upgrade(config, "head")
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE portfolios, corporations RESTART IDENTITY CASCADE"))
+
+
 def _seed_0004(conn) -> None:
     conn.execute(
         sa.text(
@@ -285,7 +359,7 @@ def _truncate_reference_tables(pg_engine) -> None:
         )
 
 
-def test_upgrade_to_0005_rekeys_every_reference_by_stock_code(pg_dsn, pg_engine, monkeypatch):
+def test_upgrade_to_0006_rekeys_every_reference_by_stock_code(pg_dsn, pg_engine, monkeypatch):
     monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
     config = _alembic_config()
     command.downgrade(config, "0004")
@@ -325,7 +399,7 @@ def test_upgrade_to_0005_rekeys_every_reference_by_stock_code(pg_dsn, pg_engine,
         _truncate_reference_tables(pg_engine)
 
 
-def test_downgrade_from_0005_restores_corp_code_links(pg_dsn, pg_engine, monkeypatch):
+def test_downgrade_from_0006_restores_corp_code_links(pg_dsn, pg_engine, monkeypatch):
     monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
     config = _alembic_config()
     schema_query = sa.text(
@@ -342,7 +416,7 @@ def test_downgrade_from_0005_restores_corp_code_links(pg_dsn, pg_engine, monkeyp
         with pg_engine.begin() as conn:
             schema_at_0004 = set(conn.execute(schema_query).all())
             _seed_0004(conn)
-        command.upgrade(config, "0005")
+        command.upgrade(config, "0006")
 
         command.downgrade(config, "0004")
 
@@ -373,6 +447,103 @@ def test_downgrade_from_0005_restores_corp_code_links(pg_dsn, pg_engine, monkeyp
         assert memberships == [("1", "00126380", True), ("1", "00164779", False)]
     finally:
         command.upgrade(config, "head")
+        _truncate_reference_tables(pg_engine)
+
+
+def _seed_portfolio_0005(conn) -> None:
+    portfolio_id = conn.execute(
+        sa.text(
+            "INSERT INTO portfolios (cash_weight, commentary, model)"
+            " VALUES (0.2, '총평', 'm') RETURNING id"
+        )
+    ).scalar_one()
+    conn.execute(
+        sa.text(
+            "INSERT INTO portfolio_holdings (portfolio_id, company_id, weight, reason)"
+            " VALUES (:p, '00126380', 0.8, '편입')"
+        ),
+        {"p": portfolio_id},
+    )
+    conn.execute(
+        sa.text(
+            "INSERT INTO portfolio_exits (portfolio_id, company_id, reason)"
+            " VALUES (:p, '00164779', '편출')"
+        ),
+        {"p": portfolio_id},
+    )
+
+
+def test_0006_round_trip_keeps_portfolio_rows_linked_by_corp_code(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    foreign_keys_query = sa.text(
+        "SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint"
+        " WHERE contype = 'f' AND conrelid IN"
+        " ('portfolio_holdings'::regclass, 'portfolio_exits'::regclass)"
+        " ORDER BY 1, 2"
+    )
+    command.downgrade(config, "0004")
+    command.upgrade(config, "0005")
+    try:
+        with pg_engine.begin() as conn:
+            foreign_keys_at_0005 = conn.execute(foreign_keys_query).all()
+            _seed_0004(conn)
+            _seed_portfolio_0005(conn)
+
+        command.upgrade(config, "head")
+
+        with pg_engine.connect() as conn:
+            holdings = conn.execute(
+                sa.text(
+                    "SELECT h.company_id, c.stock_code FROM portfolio_holdings h"
+                    " JOIN corporations c ON c.corp_code = h.company_id"
+                )
+            ).all()
+            exits = conn.execute(
+                sa.text(
+                    "SELECT e.company_id, c.stock_code FROM portfolio_exits e"
+                    " JOIN corporations c ON c.corp_code = e.company_id"
+                )
+            ).all()
+            foreign_keys = conn.execute(foreign_keys_query).all()
+        assert holdings == [("00126380", "005930")]
+        assert exits == [("00164779", "000660")]
+        target = "REFERENCES corporations(corp_code)"
+        assert [(table, definition) for table, _, definition in foreign_keys] == [
+            ("portfolio_exits", f"FOREIGN KEY (company_id) {target}"),
+            (
+                "portfolio_exits",
+                "FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE",
+            ),
+            ("portfolio_holdings", f"FOREIGN KEY (company_id) {target}"),
+            (
+                "portfolio_holdings",
+                "FOREIGN KEY (portfolio_id) REFERENCES portfolios(id) ON DELETE CASCADE",
+            ),
+        ]
+
+        command.downgrade(config, "0005")
+
+        with pg_engine.connect() as conn:
+            assert conn.execute(foreign_keys_query).all() == foreign_keys_at_0005
+            holdings = conn.execute(
+                sa.text(
+                    "SELECT h.company_id, c.corp_name FROM portfolio_holdings h"
+                    " JOIN companies c ON c.corp_code = h.company_id"
+                )
+            ).all()
+            exits = conn.execute(
+                sa.text(
+                    "SELECT e.company_id, c.corp_name FROM portfolio_exits e"
+                    " JOIN companies c ON c.corp_code = e.company_id"
+                )
+            ).all()
+        assert holdings == [("00126380", "삼성전자")]
+        assert exits == [("00164779", "SK하이닉스")]
+    finally:
+        command.upgrade(config, "head")
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE portfolios CASCADE"))
         _truncate_reference_tables(pg_engine)
 
 
@@ -412,7 +583,7 @@ def _indexes(conn, table: str) -> dict[str, str]:
     )
 
 
-def test_0005_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch):
+def test_0006_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch):
     monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
     command.upgrade(_alembic_config(), "head")
 
@@ -470,3 +641,81 @@ def test_0005_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch
             "USING btree (name, type) WHERE (stock_code IS NULL)"
         )
         assert "theme_companies_stock_code_idx" in _indexes(conn, "theme_companies")
+
+
+def test_portfolio_rows_reference_corporations_and_cascade_from_portfolios(
+    pg_dsn, pg_engine, monkeypatch
+):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO corporations (stock_code, corp_code, name)"
+                    " VALUES ('005930', '00126380', '삼성전자')"
+                )
+            )
+            portfolio_id = conn.execute(
+                sa.text(
+                    "INSERT INTO portfolios (cash_weight, commentary, model)"
+                    " VALUES (0.2, '총평', 'openai-codex/gpt-5.5') RETURNING id"
+                )
+            ).scalar_one()
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_holdings (portfolio_id, company_id, weight, reason)"
+                    " VALUES (:p, '00126380', 0.8, '편입 사유')"
+                ),
+                {"p": portfolio_id},
+            )
+            holding = conn.execute(
+                sa.text("SELECT cited_cluster_ids FROM portfolio_holdings")
+            ).scalar_one()
+        assert holding == []
+
+        with pytest.raises(sa.exc.IntegrityError), pg_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_exits (portfolio_id, company_id, reason)"
+                    " VALUES (:p, '99999999', '없는 회사')"
+                ),
+                {"p": portfolio_id},
+            )
+
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("DELETE FROM portfolios"))
+            remaining = conn.execute(
+                sa.text("SELECT count(*) FROM portfolio_holdings")
+            ).scalar_one()
+        assert remaining == 0
+    finally:
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE portfolios, corporations CASCADE"))
+
+
+def test_cluster_summaries_have_a_full_text_index(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    command.upgrade(_alembic_config(), "head")
+    with pg_engine.connect() as conn:
+        definition = conn.execute(
+            sa.text("SELECT indexdef FROM pg_indexes WHERE indexname = 'cluster_summaries_fts_idx'")
+        ).scalar_one()
+    assert "to_tsvector('simple'" in definition
+
+
+def test_downgrade_to_0004_removes_the_portfolio_tables(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+
+    command.downgrade(config, "0004")
+    with pg_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT to_regclass('portfolios')")).scalar() is None
+        assert (
+            conn.execute(sa.text("SELECT to_regclass('cluster_summaries_fts_idx')")).scalar()
+            is None
+        )
+
+    command.upgrade(config, "head")
+    with pg_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT to_regclass('portfolios')")).scalar() is not None

@@ -13,28 +13,29 @@ x-app: &app
       tag: "{{.Name}}-{{.ID}}"
 
 x-postgres-environment: &postgres-environment
-  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/news
-  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  MARKET_SYNCER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
-  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+  NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+  NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  MARKET_SYNCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18-trixie
     environment:
-      POSTGRES_USER: ktb
+      POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: news
+      POSTGRES_DB: ${POSTGRES_DB}
     command: ["postgres", "-c", "shared_buffers=256MB", "-c", "max_connections=50"]
     shm_size: 128m
-    mem_limit: 900m
+    mem_limit: 600m
     restart: unless-stopped
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ktb -d news"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -49,7 +50,12 @@ services:
 
   questdb:
     image: questdb/questdb:10.0.1
-    mem_limit: 1200m
+    environment:
+      QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
+      QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
+      QDB_METRICS_ENABLED: "true"
+      JVM_PREPEND: "-Xms256m -Xmx768m"
+    mem_limit: 1500m
     restart: unless-stopped
     volumes:
       - questdb-data:/var/lib/questdb
@@ -80,7 +86,7 @@ services:
         echo "postgres migration finished: status=$$status"
         exit "$$status"
     environment:
-      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:${POSTGRES_PASSWORD}@postgres:5432/news
+      KTB_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     depends_on:
       postgres:
         condition: service_healthy
@@ -103,43 +109,27 @@ services:
       questdb:
         condition: service_healthy
 
-  market-analyzer-mcp:
+  portfolio-rebalancer:
     <<: *app
-    command: ["market-analyzer-mcp"]
+    profiles: ["jobs"]
+    command: ["portfolio-rebalancer"]
     mem_limit: 384m
-    restart: unless-stopped
+    stop_grace_period: 2m
     environment:
-      MARKET_ANALYZER_MCP_LOG_LEVEL: ${MARKET_ANALYZER_MCP_LOG_LEVEL:-INFO}
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  portfolio-rebalancer-http:
-    <<: *app
-    command: ["portfolio-rebalancer-http"]
-    mem_limit: 384m
-    restart: unless-stopped
-    environment:
-      PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL: ${PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL:-INFO}
-    ports:
-      - "${PUBLIC_HTTP_PORT:-8000}:8000"
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
+      <<: *postgres-environment
+      PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL:?PORTFOLIO_REBALANCER_BACKEND_URL must be set}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET:?PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET must be set}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER: ${PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER:?PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER must be set}
+      PORTFOLIO_REBALANCER_BAND: ${PORTFOLIO_REBALANCER_BAND:-0.05}
+      PORTFOLIO_REBALANCER_BUY_BUFFER: ${PORTFOLIO_REBALANCER_BUY_BUFFER:-0.02}
+      PORTFOLIO_REBALANCER_TEST_MODE: ${PORTFOLIO_REBALANCER_TEST_MODE:-false}
+      PORTFOLIO_REBALANCER_LOG_LEVEL: ${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
 
   news-preprocessor:
     <<: *app
@@ -151,9 +141,11 @@ services:
       NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT: ${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
       NEWS_PREPROCESSOR_LOG_LEVEL: ${NEWS_PREPROCESSOR_LOG_LEVEL:-INFO}
       KTB_EMBEDDING_BASE_URI: ${KTB_EMBEDDING_BASE_URI:-}
+      KTB_EMBEDDING_API_KEY: ${KTB_EMBEDDING_API_KEY:-}
       KTB_EMBEDDING_MODEL: ${KTB_EMBEDDING_MODEL:-mlx-community/Qwen3-Embedding-4B-4bit-DWQ}
       KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
       KTB_EMBEDDING_MAX_TOKENS: ${KTB_EMBEDDING_MAX_TOKENS:-16384}
+      NEWS_PREPROCESSOR_USER_AGENT: ${NEWS_PREPROCESSOR_USER_AGENT:-ktb-ai/0.1}
     depends_on:
       postgres:
         condition: service_healthy
@@ -165,8 +157,8 @@ services:
     mem_limit: 1400m
     environment:
       <<: *postgres-environment
-      NEWS_CLUSTERER_EPS: ${NEWS_CLUSTERER_EPS:-0.2}
-      NEWS_CLUSTERER_MIN_SAMPLES: ${NEWS_CLUSTERER_MIN_SAMPLES:-3}
+      NEWS_CLUSTERER_EPS: ${NEWS_CLUSTERER_EPS:-0.36}
+      NEWS_CLUSTERER_MIN_SAMPLES: ${NEWS_CLUSTERER_MIN_SAMPLES:-2}
       NEWS_CLUSTERER_LOG_LEVEL: ${NEWS_CLUSTERER_LOG_LEVEL:-INFO}
       KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
     depends_on:
@@ -203,6 +195,10 @@ services:
       NEWS_GRAPH_BUILDER_LLM_MODEL: ${NEWS_GRAPH_BUILDER_LLM_MODEL:-}
       NEWS_GRAPH_BUILDER_LLM_API_KEY: ${NEWS_GRAPH_BUILDER_LLM_API_KEY:-}
       NEWS_GRAPH_BUILDER_LOG_LEVEL: ${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
+      NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS: ${NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS:-24000}
+      NEWS_GRAPH_BUILDER_LLM_TIMEOUT: ${NEWS_GRAPH_BUILDER_LLM_TIMEOUT:-120}
+      NEWS_GRAPH_BUILDER_MAX_ENTITIES: ${NEWS_GRAPH_BUILDER_MAX_ENTITIES:-30}
+      NEWS_GRAPH_BUILDER_MAX_RELATIONS: ${NEWS_GRAPH_BUILDER_MAX_RELATIONS:-50}
     depends_on:
       postgres:
         condition: service_healthy
@@ -210,39 +206,8 @@ services:
   market-collector:
     <<: *app
     profiles: ["jobs"]
-    # 애플리케이션은 단발 작업이므로 운영 시간 동안 같은 컨테이너에서 반복 실행합니다.
-    command:
-      - /bin/sh
-      - -c
-      - |
-        stop() {
-          if [ -n "$${child:-}" ]; then
-            kill -TERM "$$child" 2>/dev/null || true
-            wait "$$child" 2>/dev/null || true
-          fi
-          exit 0
-        }
-
-        trap stop TERM INT
-
-        while true; do
-          market-collector &
-          child=$$!
-          wait "$$child"
-          status=$$?
-          child=
-
-          if [ "$$status" -ne 0 ]; then
-            exit "$$status"
-          fi
-
-          sleep "$${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}" &
-          child=$$!
-          wait "$$child"
-          child=
-        done
+    command: ["market-collector"]
     mem_limit: 768m
-    restart: on-failure
     stop_grace_period: 2m
     environment:
       <<: *postgres-environment
@@ -250,8 +215,8 @@ services:
       MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
       MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
       MARKET_COLLECTOR_INDEX_NAME: ${MARKET_COLLECTOR_INDEX_NAME:-KOSPI200}
+      MARKET_COLLECTOR_REQUEST_INTERVAL: ${MARKET_COLLECTOR_REQUEST_INTERVAL:-1.3}
       MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
-      MARKET_COLLECTOR_POLL_INTERVAL_SECONDS: ${MARKET_COLLECTOR_POLL_INTERVAL_SECONDS:-60}
     depends_on:
       questdb:
         condition: service_healthy
@@ -265,8 +230,12 @@ services:
     mem_limit: 768m
     environment:
       <<: *postgres-environment
-      PORTFOLIO_BUILDER_QUESTDB_DSN: postgresql://admin:quest@questdb:8812/qdb
-      PORTFOLIO_BUILDER_NEWS_CLUSTERER_URL: http://news-clusterer:8000
+      PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_BUILDER_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
+      PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
+      PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
+      PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
       PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:

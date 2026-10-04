@@ -1,10 +1,9 @@
-import logging
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import questdb
-from ktb_core.logging import setup_logging
+from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from market_collector.kiwoom.official import ChartClient, build_client
 from market_collector.kiwoom.parse import KST
@@ -13,7 +12,7 @@ from market_collector.settings import Settings
 from market_collector.store import Store
 from market_collector.symbols import load_symbols
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
@@ -30,13 +29,16 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
 
     with questdb.connect(settings.questdb_conf) as db:
         store = Store(db)
-        latest = store.latest_bar_timestamps()
+        latest = store.latest_bar_timestamps(symbols)
 
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
     def worker(index: int, bucket: list[str]) -> int:
-        client = ChartClient(build_client(settings.kiwoom_accounts[index], settings.kiwoom_mode))
+        client = ChartClient(
+            build_client(settings.kiwoom_accounts[index], settings.kiwoom_mode),
+            settings.request_interval,
+        )
         with questdb.connect(settings.questdb_conf) as db:
             store = Store(db)
             written = 0
@@ -57,14 +59,15 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
         totals = [future.result() for future in futures]
 
     total = sum(totals)
-    log.info("archive wrote %d candles across %d symbols", total, len(symbols))
+    log.info("archive_complete", candles=total, symbols=len(symbols))
     return total
 
 
 def main() -> None:
     settings = Settings()
-    setup_logging(settings.log_level)
-    archive_ohlcv(settings, datetime.now(UTC))
+    setup_logging(settings.log_level, service_name="market-collector")
+    with start_logging(log):
+        archive_ohlcv(settings, datetime.now(UTC))
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
-from news_preprocessor.sources import EmptyBodyError
+from news_preprocessor.sources import ImageOnlyArticleError
 from news_preprocessor.sources.publishers.yonhap import YonhapEconomyRSS
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -35,7 +35,7 @@ def test_entries_skip_headline_digests_and_a_broken_pubdate(caplog):
         "https://www.yna.co.kr/view/AKR20260924000100001",
         "https://www.yna.co.kr/view/AKR20260924000200003",
     ]
-    assert "skipping yonhap_economy feed item" in caplog.text
+    assert "feed_item_skipped" in caplog.text
 
 
 def test_pubdate_is_timezone_aware():
@@ -67,10 +67,12 @@ def test_article_extracts_the_body_only():
 
 def test_photo_only_article_raises():
     source = _source(
-        '<div class="story-news article"><div class="comp-box photo-group">'
+        '<div class="story-news article"><div class="comp-box photo-group"><img src="photo.jpg"/>'
         "<figcaption>사진 설명</figcaption></div><p></p>"
         '<p class="txt-copyright adrs">저작권자(c) 연합뉴스</p></div>'
     )
 
-    with pytest.raises(EmptyBodyError):
+    with pytest.raises(ImageOnlyArticleError) as error:
         source.article(source.entries()[0])
+
+    assert error.value.image_count == 1

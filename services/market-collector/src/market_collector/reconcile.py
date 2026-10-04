@@ -1,7 +1,8 @@
-import logging
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Protocol
+
+from ktb_core.logging import get_logger
 
 from market_collector.kiwoom.official import Page
 from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
@@ -9,7 +10,9 @@ from market_collector.store import CandleRow, Store
 
 __all__ = ["ChartSource", "reconcile_candles", "to_candle_rows"]
 
-log = logging.getLogger(__name__)
+LIMITS = {"1m": 8000, "1d": 300}
+
+log = get_logger(__name__)
 
 Bar = MinuteBar | DailyBar
 
@@ -65,7 +68,7 @@ def reconcile_candles(
         page_bars = [parse(row) for row in page.rows]
         bars_by_ts.update({bar.ts: bar for bar in page_bars})
 
-        if not page.has_more:
+        if not page.has_more or (latest is None and len(bars_by_ts) >= LIMITS[timeframe]):
             break
 
         continuation = page.next_key
@@ -82,7 +85,9 @@ def reconcile_candles(
         (bar for bar in bars_by_ts.values() if latest is None or bar.ts > latest),
         key=lambda bar: bar.ts,
     )
+    if latest is None:
+        bars = bars[-LIMITS[timeframe] :]
     rows = to_candle_rows(bars, symbol)
     written = store.write_candles(timeframe, rows)
-    log.info("reconciled %d %s candles for %s", written, timeframe, symbol)
+    log.info("candles_reconciled", count=written, timeframe=timeframe, symbol=symbol)
     return written

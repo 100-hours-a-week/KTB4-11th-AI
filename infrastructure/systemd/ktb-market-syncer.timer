@@ -1,0 +1,11 @@
+[Unit]
+Description=Run KTB market reference data synchronization hourly
+
+[Timer]
+OnCalendar=*-*-* *:00:00 Asia/Seoul
+AccuracySec=1s
+Persistent=true
+Unit=ktb-market-syncer.service
+
+[Install]
+WantedBy=timers.target

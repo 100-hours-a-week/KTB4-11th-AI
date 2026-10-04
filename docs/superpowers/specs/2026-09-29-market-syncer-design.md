@@ -22,7 +22,7 @@ the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLC
 - Trigger: cron, `main()` runs once and exits (same as the other batch services).
 - Runs before `news-graph-builder` and `market-collector` in the schedule.
 
-## Schema (Alembic `0005`, Postgres)
+## Schema (Alembic `0006`, Postgres)
 
 Reshaped in place with renames and data backfill, because `entities` and `relations` hold LLM
 output that cannot be rebuilt.
@@ -38,6 +38,9 @@ output that cannot be rebuilt.
 
 Migration order: add `stock_code` to `entities`, backfill through the old `corp_code` join, swap the
 FKs and unique indexes, then rename tables and columns. `downgrade` reverses it.
+`portfolio_holdings.company_id` and `portfolio_exits.company_id` (from `0005`) keep holding the DART
+`corp_code`; their FKs are re-pointed from `companies.corp_code` to the `corporations.corp_code`
+UNIQUE constraint and back on downgrade.
 
 ## Sync flow
 
@@ -102,6 +105,11 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
   `MARKET_COLLECTOR_POSTGRES_DSN` and `MARKET_COLLECTOR_INDEX_NAME` (default `KOSPI200`); remove
   `MARKET_COLLECTOR_INDEX_CODE`. An empty result raises, as `EmptyUniverseError` does now.
 - QuestDB migration `0002_drop_universe_members.sql` drops the `universe_members` table.
+
+**portfolio-builder**
+- The KOSPI 200 cross-section universe is read from `corporation_indices WHERE index_name = 'KOSPI200'`
+  in Postgres instead of QuestDB `universe_members`. `company_id` stays the DART `corp_code` in the
+  briefing, tool results and `portfolio_holdings` / `portfolio_exits`.
 
 **Repo plumbing**
 - New `services/market-syncer` (uv member, console script `market-syncer`), `docker/market-syncer.Dockerfile`,

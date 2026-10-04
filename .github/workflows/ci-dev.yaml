@@ -30,17 +30,27 @@ jobs:
         env:
           POSTGRES_USER: ktb
           POSTGRES_PASSWORD: ktb
-          POSTGRES_DB: news
+          POSTGRES_DB: ktb
         ports:
           - "5432:5432"
         options: >-
-          --health-cmd "pg_isready -U ktb -d news"
+          --health-cmd "pg_isready -U ktb -d ktb"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 12
+      questdb:
+        image: questdb/questdb:10.0.1
+        ports:
+          - "9000:9000"
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9003/status"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     env:
-      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
-      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
+      KTB_TEST_QUESTDB_CONF: ws::addr=localhost:9000;
 
     steps:
       - uses: actions/checkout@v7
@@ -102,7 +112,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder portfolio-builder market-collector market-analyzer-mcp portfolio-rebalancer-http; do
+          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder portfolio-builder market-collector portfolio-rebalancer; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done
@@ -122,8 +132,7 @@ jobs:
           - news-graph-builder
           - portfolio-builder
           - market-collector
-          - market-analyzer-mcp
-          - portfolio-rebalancer-http
+          - portfolio-rebalancer
 
     steps:
       - uses: actions/checkout@v7
@@ -169,17 +178,17 @@ jobs:
         env:
           POSTGRES_USER: ktb
           POSTGRES_PASSWORD: ktb
-          POSTGRES_DB: news
+          POSTGRES_DB: ktb
         ports:
           - "5432:5432"
         options: >-
-          --health-cmd "pg_isready -U ktb -d news"
+          --health-cmd "pg_isready -U ktb -d ktb"
           --health-interval 5s
           --health-timeout 3s
           --health-retries 12
     env:
-      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
-      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/news
+      KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
+      KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
 
     steps:
       - uses: actions/checkout@v7

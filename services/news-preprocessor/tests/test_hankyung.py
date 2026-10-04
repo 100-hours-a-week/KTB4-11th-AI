@@ -35,7 +35,7 @@ def test_entries_parse_valid_items_and_skip_one_without_pubdate(caplog):
         "https://www.hankyung.com/article/202609220001i",
         "https://www.hankyung.com/article/202609220002i",
     ]
-    assert "skipping hankyung_economy feed item" in caplog.text
+    assert "feed_item_skipped" in caplog.text
 
 
 def test_entry_fields():

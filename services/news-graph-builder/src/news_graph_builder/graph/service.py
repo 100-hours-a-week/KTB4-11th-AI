@@ -1,8 +1,8 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 
-from news_graph_builder.common import normalize
 from news_graph_builder.graph.company_entities import find_stock_code, upsert_company_entity
 from news_graph_builder.graph.dto import Entity
 from news_graph_builder.graph.repository import upsert_plain_entity

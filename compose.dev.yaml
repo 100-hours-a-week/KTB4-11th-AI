@@ -4,15 +4,15 @@ services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18-trixie
     environment:
-      POSTGRES_USER: ktb
-      POSTGRES_PASSWORD: ktb
-      POSTGRES_DB: news
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ktb -d news"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -20,6 +20,9 @@ services:
 
   questdb:
     image: questdb/questdb:10.0.1
+    environment:
+      QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
+      QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
     ports:
       - "8812:8812"
       - "9000:9000"
@@ -49,12 +52,19 @@ services:
       context: .
       dockerfile: docker/news-preprocessor.Dockerfile
     environment:
-      - NEWS_PREPROCESSOR_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
-      - NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT=${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
-      - NEWS_PREPROCESSOR_LOG_LEVEL=${NEWS_PREPROCESSOR_LOG_LEVEL:-INFO}
-      - KTB_EMBEDDING_BASE_URI
+      NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
+      NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT: ${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
+      NEWS_PREPROCESSOR_LOG_LEVEL: ${NEWS_PREPROCESSOR_LOG_LEVEL:-INFO}
+      KTB_EMBEDDING_BASE_URI: ${KTB_EMBEDDING_BASE_URI:-}
+      KTB_EMBEDDING_API_KEY: ${KTB_EMBEDDING_API_KEY:-}
+      KTB_EMBEDDING_MODEL: ${KTB_EMBEDDING_MODEL:-mlx-community/Qwen3-Embedding-4B-4bit-DWQ}
+      KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
+      KTB_EMBEDDING_MAX_TOKENS: ${KTB_EMBEDDING_MAX_TOKENS:-16384}
+      NEWS_PREPROCESSOR_USER_AGENT: ${NEWS_PREPROCESSOR_USER_AGENT:-ktb-ai/0.1}
     depends_on:
       postgres:
+        condition: service_healthy
+      questdb:
         condition: service_healthy
     restart: "no"
 
@@ -64,10 +74,11 @@ services:
       context: .
       dockerfile: docker/news-clusterer.Dockerfile
     environment:
-      - NEWS_CLUSTERER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
-      - NEWS_CLUSTERER_EPS=${NEWS_CLUSTERER_EPS:-0.2}
-      - NEWS_CLUSTERER_MIN_SAMPLES=${NEWS_CLUSTERER_MIN_SAMPLES:-3}
-      - NEWS_CLUSTERER_LOG_LEVEL=${NEWS_CLUSTERER_LOG_LEVEL:-INFO}
+      NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      NEWS_CLUSTERER_EPS: ${NEWS_CLUSTERER_EPS:-0.36}
+      NEWS_CLUSTERER_MIN_SAMPLES: ${NEWS_CLUSTERER_MIN_SAMPLES:-2}
+      NEWS_CLUSTERER_LOG_LEVEL: ${NEWS_CLUSTERER_LOG_LEVEL:-INFO}
+      KTB_EMBEDDING_DIMENSIONS: ${KTB_EMBEDDING_DIMENSIONS:-2000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,14 +90,17 @@ services:
       context: .
       dockerfile: docker/market-syncer.Dockerfile
     environment:
-      - MARKET_SYNCER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
-      - MARKET_SYNCER_KIWOOM_APP_KEY
-      - MARKET_SYNCER_KIWOOM_SECRET_KEY
-      - MARKET_SYNCER_KIWOOM_MODE=${MARKET_SYNCER_KIWOOM_MODE:-real}
-      - MARKET_SYNCER_DART_API_KEY=${OPENDART_API_KEY:-}
-      - MARKET_SYNCER_LOG_LEVEL=${MARKET_SYNCER_LOG_LEVEL:-INFO}
+      MARKET_SYNCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MARKET_SYNCER_KIWOOM_APP_KEY: ${MARKET_SYNCER_KIWOOM_APP_KEY:-}
+      MARKET_SYNCER_KIWOOM_SECRET_KEY: ${MARKET_SYNCER_KIWOOM_SECRET_KEY:-}
+      MARKET_SYNCER_KIWOOM_MODE: ${MARKET_SYNCER_KIWOOM_MODE:-real}
+      MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL: ${MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL:-0.2}
+      MARKET_SYNCER_DART_API_KEY: ${MARKET_SYNCER_DART_API_KEY:-}
+      MARKET_SYNCER_LOG_LEVEL: ${MARKET_SYNCER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
+        condition: service_healthy
+      questdb:
         condition: service_healthy
     restart: "no"
 
@@ -96,33 +110,64 @@ services:
       context: .
       dockerfile: docker/news-graph-builder.Dockerfile
     environment:
-      - NEWS_GRAPH_BUILDER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
-      - NEWS_GRAPH_BUILDER_LLM_BASE_URI
-      - NEWS_GRAPH_BUILDER_LLM_MODEL
-      - NEWS_GRAPH_BUILDER_LLM_API_KEY
-      - NEWS_GRAPH_BUILDER_LOG_LEVEL=${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
+      NEWS_GRAPH_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      NEWS_GRAPH_BUILDER_LLM_BASE_URI: ${NEWS_GRAPH_BUILDER_LLM_BASE_URI:-}
+      NEWS_GRAPH_BUILDER_LLM_MODEL: ${NEWS_GRAPH_BUILDER_LLM_MODEL:-}
+      NEWS_GRAPH_BUILDER_LLM_API_KEY: ${NEWS_GRAPH_BUILDER_LLM_API_KEY:-}
+      NEWS_GRAPH_BUILDER_LOG_LEVEL: ${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
+      NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS: ${NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS:-24000}
+      NEWS_GRAPH_BUILDER_LLM_TIMEOUT: ${NEWS_GRAPH_BUILDER_LLM_TIMEOUT:-120}
+      NEWS_GRAPH_BUILDER_MAX_ENTITIES: ${NEWS_GRAPH_BUILDER_MAX_ENTITIES:-30}
+      NEWS_GRAPH_BUILDER_MAX_RELATIONS: ${NEWS_GRAPH_BUILDER_MAX_RELATIONS:-50}
     depends_on:
       postgres:
         condition: service_healthy
+      questdb:
+        condition: service_healthy
     restart: "no"
 
-  market-analyzer-mcp:
+  portfolio-builder:
+    profiles: ["jobs"]
     build:
       context: .
-      dockerfile: docker/market-analyzer-mcp.Dockerfile
+      dockerfile: docker/portfolio-builder.Dockerfile
     environment:
-      - MARKET_ANALYZER_MCP_LOG_LEVEL=${MARKET_ANALYZER_MCP_LOG_LEVEL:-INFO}
-    restart: unless-stopped
+      PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_BUILDER_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
+      PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
+      PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
+      PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
+      PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    restart: "no"
 
-  portfolio-rebalancer-http:
+  portfolio-rebalancer:
+    profiles: ["jobs"]
     build:
       context: .
-      dockerfile: docker/portfolio-rebalancer-http.Dockerfile
+      dockerfile: docker/portfolio-rebalancer.Dockerfile
     environment:
-      - PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL=${PORTFOLIO_REBALANCER_HTTP_LOG_LEVEL:-INFO}
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
+      - PORTFOLIO_REBALANCER_POSTGRES_DSN=postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - PORTFOLIO_REBALANCER_QUESTDB_CONF=ws::addr=questdb:9000;
+      - PORTFOLIO_REBALANCER_BACKEND_URL
+      - PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET
+      - PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER
+      - PORTFOLIO_REBALANCER_BAND=${PORTFOLIO_REBALANCER_BAND:-0.05}
+      - PORTFOLIO_REBALANCER_BUY_BUFFER=${PORTFOLIO_REBALANCER_BUY_BUFFER:-0.02}
+      - PORTFOLIO_REBALANCER_TEST_MODE=${PORTFOLIO_REBALANCER_TEST_MODE:-false}
+      - PORTFOLIO_REBALANCER_LOG_LEVEL=${PORTFOLIO_REBALANCER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    restart: "no"
 
 volumes:
   postgres-data:

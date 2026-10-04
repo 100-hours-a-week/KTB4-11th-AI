@@ -1,6 +1,7 @@
 from kiwoom import Continuation, KiwoomClient, KiwoomResponse
 from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
+from market_collector.kiwoom import official
 from market_collector.kiwoom.official import ChartClient, build_auth, build_client
 from market_collector.settings import KiwoomAccount
 
@@ -46,3 +47,40 @@ def test_chart_page_uses_official_continuation_and_preserves_page_shape():
         "cont_yn": "Y",
         "next_key": "OLD",
     }
+
+
+def test_chart_client_spaces_requests_by_its_interval(monkeypatch):
+    client = FakeClient()
+    clock = Clock()
+    monkeypatch.setattr(official, "time", clock, raising=False)
+
+    chart = ChartClient(client, interval=0.2)
+    chart.minute_page("005930", 1)
+    chart.minute_page("005930", 1, "NK1")
+
+    assert clock.sleeps == [0.2]
+
+
+def test_chart_client_never_exceeds_five_requests_per_second(monkeypatch):
+    client = FakeClient()
+    clock = Clock()
+    monkeypatch.setattr(official, "time", clock, raising=False)
+
+    chart = ChartClient(client, interval=0)
+    chart.minute_page("005930", 1)
+    chart.minute_page("005930", 1, "NK1")
+
+    assert clock.sleeps == [0.2]
+
+
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, delay):
+        self.sleeps.append(delay)
+        self.now += delay

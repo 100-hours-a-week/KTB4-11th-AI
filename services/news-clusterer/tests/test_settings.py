@@ -2,7 +2,7 @@ import pytest
 from news_clusterer.settings import Settings
 from pydantic import ValidationError
 
-REQUIRED = {"NEWS_CLUSTERER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/news"}
+REQUIRED = {"NEWS_CLUSTERER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb"}
 
 
 @pytest.fixture
@@ -14,8 +14,8 @@ def required_env(monkeypatch):
 def test_defaults(required_env):
     settings = Settings()
 
-    assert settings.eps == 0.2
-    assert settings.min_samples == 3
+    assert settings.eps == 0.36
+    assert settings.min_samples == 2
 
 
 def test_clustering_parameters_come_from_the_environment(required_env, monkeypatch):

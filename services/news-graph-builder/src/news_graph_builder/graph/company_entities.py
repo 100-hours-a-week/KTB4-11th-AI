@@ -1,7 +1,7 @@
 import sqlalchemy as sa
+from ktb_core.normalize import normalize
 from sqlalchemy.dialects.postgresql import insert
 
-from news_graph_builder.common import normalize
 from news_graph_builder.database import (
     cluster_entities,
     corporation_aliases,

@@ -1,14 +1,14 @@
-import logging
 from dataclasses import asdict
 from datetime import datetime
 
 import httpx
 from bs4 import BeautifulSoup, Tag
+from ktb_core.logging import get_logger
 
-from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
+from news_preprocessor.sources import EmptyBodyError, FeedEntry, ImageOnlyArticleError, NewsItem
 from news_preprocessor.sources.publishers.yonhap.parser import parse_article_body
 
-logger = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 
 class YonhapEconomyRSS:
@@ -47,7 +47,7 @@ class YonhapEconomyRSS:
                     )
                 )
             except ValueError as error:
-                logger.warning("skipping %s feed item: %s", self.source, error)
+                log.warning("feed_item_skipped", source=self.source, error=error)
         return entries
 
     def article(self, entry: FeedEntry) -> NewsItem:
@@ -55,6 +55,10 @@ class YonhapEconomyRSS:
         article = response.raise_for_status().text
         body = parse_article_body(article)
         if not body:
+            content = BeautifulSoup(article, "html.parser")
+            image_count = len(content.select(".story-news.article img"))
+            if image_count:
+                raise ImageOnlyArticleError(image_count)
             raise EmptyBodyError(entry.url)
         return NewsItem(**asdict(entry), body=body)
 

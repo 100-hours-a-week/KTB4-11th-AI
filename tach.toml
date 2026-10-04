@@ -7,8 +7,7 @@ source_roots = [
     "services/news-clusterer/src",
     "services/news-graph-builder/src",
     "services/portfolio-builder/src",
-    "services/market-analyzer-mcp/src",
-    "services/portfolio-rebalancer-http/src",
+    "services/portfolio-rebalancer/src",
 ]
 root_module = "forbid"
 
@@ -39,27 +38,19 @@ path = "news_graph_builder.database"
 depends_on = []
 
 [[modules]]
-path = "news_graph_builder.common"
-depends_on = []
-
-[[modules]]
 path = "news_graph_builder.cluster"
 depends_on = ["news_graph_builder.database"]
 
 [[modules]]
 path = "news_graph_builder.graph"
 depends_on = [
-    "news_graph_builder.common",
+    "ktb_core",
     "news_graph_builder.database",
 ]
 
 [[interfaces]]
 expose = [".*"]
 from = ["news_graph_builder.database"]
-
-[[interfaces]]
-expose = ["normalize"]
-from = ["news_graph_builder.common"]
 
 [[interfaces]]
 expose = ["find_cluster_articles", "find_stale_clusters", "lock_cluster"]
@@ -80,10 +71,6 @@ from = ["news_graph_builder.graph"]
 
 [[modules]]
 path = "portfolio_builder"
-depends_on = ["ktb_core", "ktb_market_analyzer"]
-
-[[modules]]
-path = "market_analyzer_mcp"
 depends_on = ["ktb_core"]
 
 [[modules]]
@@ -95,5 +82,5 @@ path = "market_collector"
 depends_on = ["ktb_core"]
 
 [[modules]]
-path = "portfolio_rebalancer_http"
+path = "portfolio_rebalancer"
 depends_on = ["ktb_core"]

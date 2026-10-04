@@ -5,7 +5,7 @@ import pytest
 from market_collector import __main__ as cli
 from market_collector.settings import Settings
 
-QDB = "http::addr=localhost:9000;"
+QDB = "ws::addr=localhost:9000;"
 ACCOUNTS = '[{"app_key":"k1","secret_key":"s1"},{"app_key":"k2","secret_key":"s2"}]'
 POSTGRES_DSN = "postgresql+psycopg://ktb:FAKE-PASSWORD@localhost:5432/news"
 NOW = datetime(2026, 9, 28, 3, 0, tzinfo=UTC)
@@ -29,7 +29,8 @@ def test_archive_run_reconciles_each_symbol_after_loading_symbols(monkeypatch):
     }
 
     class Store:
-        def latest_bar_timestamps(self):
+        def latest_bar_timestamps(self, target_symbols):
+            assert target_symbols == symbols
             events.append(("checkpoints",))
             return checkpoints
 
@@ -52,7 +53,7 @@ def test_archive_run_reconciles_each_symbol_after_loading_symbols(monkeypatch):
         "build_client",
         lambda account, mode: events.append(("client", account.app_key)) or object(),
     )
-    monkeypatch.setattr(cli, "ChartClient", lambda client: client)
+    monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -100,7 +101,8 @@ def test_archive_run_shards_stably_and_skips_removed_symbols(monkeypatch):
     checkpoints = {("999999", "1m"): datetime(2026, 9, 27, tzinfo=UTC)}
 
     class Store:
-        def latest_bar_timestamps(self):
+        def latest_bar_timestamps(self, target_symbols):
+            assert target_symbols == symbols
             return checkpoints
 
     class DB:
@@ -114,7 +116,7 @@ def test_archive_run_shards_stably_and_skips_removed_symbols(monkeypatch):
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
     monkeypatch.setattr(cli, "build_client", lambda account, mode: account.app_key)
-    monkeypatch.setattr(cli, "ChartClient", lambda client: client)
+    monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -140,7 +142,8 @@ def test_archive_run_propagates_worker_exception(monkeypatch):
     symbols = ["005930"]
 
     class Store:
-        def latest_bar_timestamps(self):
+        def latest_bar_timestamps(self, target_symbols):
+            assert target_symbols == symbols
             return {}
 
     monkeypatch.setattr(cli, "load_symbols", lambda dsn, index_name: symbols)
