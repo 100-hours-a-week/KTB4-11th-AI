@@ -52,7 +52,7 @@ class OpenDart:
 
 1. If `stock_codes` is empty, raise: market-syncer has not filled `corporation_indices`. `scrape()`
    logs it as a feed failure and the run exits 1.
-2. Window: yesterday and today in `Asia/Seoul`, as `bgn_de`/`end_de`. A filing that lands after
+2. Window: yesterday and today in KST (fixed `+09:00`; KST has no DST, and `zoneinfo` would need tz data the slim and Lambda images may lack), as `bgn_de`/`end_de`. A filing that lands after
    the last run is caught by the next one; the overlap costs nothing because `scrape()` skips
    `known_external_ids`.
 3. Fetch `list.json` with `corp_cls=Y`, `page_count=100`, paging `page_no` until `total_page`.
@@ -70,7 +70,7 @@ Each kept row becomes:
 | `external_id` | `rcept_no` |
 | `url` | `https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}` (the public viewer) |
 | `title` | `f"{corp_name} {report_nm}"` with whitespace collapsed |
-| `published_at` | `rcept_dt` at 00:00 `Asia/Seoul`. DART gives no time of day. |
+| `published_at` | `rcept_dt` at 00:00 `+09:00`. DART gives no time of day. |
 | `raw_payload` | the row as JSON (`ensure_ascii=False`) |
 
 ### `article()`
@@ -110,8 +110,8 @@ collapse whitespace.
   `NEWS_PREPROCESSOR_OPENDART_API_KEY: ${NEWS_PREPROCESSOR_OPENDART_API_KEY:-}` (Compose uses the
   service's own name, as `MARKET_SYNCER_DART_API_KEY` does). `.env.example` lists it.
 - `AGENTS.md` and `README.md` env tables gain the new variable.
-- No new dependency: `httpx` and `beautifulsoup4` are already declared; `zipfile`, `json`
-  and `zoneinfo` are stdlib. `docker/requirements/*.txt` do not change.
+- No new dependency: `httpx` and `beautifulsoup4` are already declared; `zipfile` and `json`
+  are stdlib. `docker/requirements/*.txt` do not change.
 
 ## Keeping the key out of logs
 
