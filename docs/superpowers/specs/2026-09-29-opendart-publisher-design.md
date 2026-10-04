@@ -112,18 +112,16 @@ httpx logs every request at INFO as `HTTP Request: GET <full url> "HTTP/1.1 200 
 exceptions include the URL. The root logger is at INFO, so without a guard the key reaches stdout
 (and CloudWatch) on every DART call.
 
-- `news_preprocessor/log_filter.py`: a `logging.Filter` that rewrites
-  `crtfc_key=<value>` to `crtfc_key=***` with `re.sub(r"(crtfc_key=)[^&\s\"']+", r"\1***", text)`.
-  It masks the rendered message (`record.msg = masked record.getMessage()`, `record.args = None`),
-  every `str` value in the structured `record.fields` dict (`get_logger` puts `url`, `feed_url`,
-  `error` and `start_logging`'s `run_end` error string there), and, when `exc_info` is set, the
-  formatted traceback into `record.exc_text`.
-- `main()` and `handler()` add it to the root handler right after `setup_logging()`.
-- `ktb_core.logging.JsonFormatter` uses `record.exc_text or self.formatException(record.exc_info)`,
-  the stdlib's own caching convention, so the masked traceback is what gets printed. Core gains no
-  masking logic.
-- The bare key without its parameter name is not matched; the `SecretStr` setting keeps it out of
-  reprs.
+- `ktb_core.logging.setup_logging(level, *, service_name, sensitive_query_params=frozenset())`
+  passes the names to `JsonFormatter`. When the set is non-empty, the formatter compiles
+  `(name1|name2)=[^&\s"'\\]+` once and, after `json.dumps`, replaces each match with
+  `<name>=***`. Masking the final JSON string covers the message, every structured field (nested
+  ones too) and the traceback in one place. A backslash ends the value because a quote inside JSON
+  output is written `\"`; without it the match would swallow the backslash and break the JSON.
+- The default empty set adds no regex, so other services are unaffected.
+- `main()` and `handler()` call `setup_logging(..., sensitive_query_params={"crtfc_key"})`.
+- This masks named query parameters only; it is not secret scanning. The bare key without its
+  parameter name is not matched; the `SecretStr` setting keeps it out of reprs.
 
 ## Testing
 
@@ -138,9 +136,11 @@ publishers do.
   - field mapping (title whitespace, viewer URL, `published_at` at 00:00 KST, JSON payload);
   - `article()` reads `{rcept_no}.xml` from the zip and parses both the UTF-8 XML and the EUC-KR
     HTML fixture, with no CSS text in the body.
-- `test_log_filter.py`: through `setup_logging()` plus the filter, an httpx-style request message,
-  a `get_logger` field value, and a logged exception whose message holds
-  `crtfc_key=<key>&rcept_no=…` all print without the key and keep `rcept_no`.
+- `packages/core/tests/test_logging.py`: with `sensitive_query_params={"crtfc_key"}`, an
+  httpx-style request message, a `get_logger` field value, and a logged exception whose message
+  holds `crtfc_key=<key>&rcept_no=…` all print without the key, keep `rcept_no`, and each line
+  still parses as JSON (including a value followed by a quote). With the default, output is
+  unchanged.
 - `test_storage.py` (DB test): `kospi200_stock_codes` returns only `KOSPI200` rows.
 - `test_main.py` / `test_handler.py`: updated for the new `publishers` signature.
 
@@ -150,5 +150,6 @@ publishers do.
    or by body length: it uses DART's own classification and never downloads a long document.
 2. The KOSPI 200 filter reads `corporation_indices`, which market-syncer owns; news-preprocessor
    only reads it. market-syncer must run first, as it already does for news-graph-builder.
-3. The key is masked by a service-local log filter keyed on the `crtfc_key=` parameter name, not by
-   wrapping exceptions, because httpx's INFO request log would leak it on success too.
+3. The key is masked by `setup_logging(sensitive_query_params=...)` in core, keyed on the
+   `crtfc_key=` parameter name, not by wrapping exceptions, because httpx's INFO request log would
+   leak it on success too.
