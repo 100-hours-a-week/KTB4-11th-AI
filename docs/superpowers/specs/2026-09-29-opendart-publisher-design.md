@@ -24,8 +24,9 @@ graphed like any other article, so a disclosure and the news about it can land i
 - `rcept_dt` is a date (`YYYYMMDD`) with no time.
 - `document.xml` returns a zip whose main file is `{rcept_no}.xml`. It comes in two formats:
   regular filings are DART4 XML in UTF-8 (`<DOCUMENT xsi:noNamespaceSchemaLocation="dart4.xsd">`),
-  KRX filings (`rcept_no` like `20260928800899`) are HTML declaring `charset=euc-kr` with `<style>`
-  blocks. Two short samples gave 1,954 and 2,280 characters of text.
+  KRX filings (`rcept_no` like `20260928800899`) are HTML with `<style>` blocks. That HTML
+  **declares `charset=euc-kr` but its bytes are UTF-8** (they do not decode as EUC-KR); trusting
+  the meta tag gives empty text. Two short samples gave 1,954 and 1,303 characters of text.
 - The API key is only accepted as the `crtfc_key` query parameter.
 
 ## Adapter: `sources/publishers/opendart/`
@@ -90,9 +91,11 @@ body is a JSON or XML status instead of a zip; `zipfile.BadZipFile` is left to p
 def parse_document_body(document: bytes) -> str
 ```
 
-BeautifulSoup with the `lxml` HTML parser for both formats, given **bytes** so it detects UTF-8
-from the XML declaration and EUC-KR from the `<meta>` tag. Remove `style` and `script` elements,
-then `get_text(" ")` and collapse whitespace.
+Decode the bytes as UTF-8 (strict: a non-UTF-8 document raises and `scrape()` records it as
+failed), then BeautifulSoup with `html.parser` for both formats. Passing a `str` makes it ignore
+the wrong `euc-kr` meta tag, and `html.parser` gives the same text as `lxml` on both samples
+without `XMLParsedAsHTMLWarning`. Remove `style` and `script` elements, then `get_text(" ")` and
+collapse whitespace.
 
 ## Wiring
 
@@ -103,10 +106,11 @@ then `get_text(" ")` and collapse whitespace.
 - `main()` and `handler()` read `kospi200_stock_codes` in one connection before scraping and pass
   it with `settings.opendart_api_key.get_secret_value()`.
 - Setting `opendart_api_key: SecretStr`, required, env `NEWS_PREPROCESSOR_OPENDART_API_KEY`.
-- `compose.dev.yaml`: `NEWS_PREPROCESSOR_OPENDART_API_KEY=${OPENDART_API_KEY:-}`.
-  `compose.prod.yaml`: `NEWS_PREPROCESSOR_OPENDART_API_KEY: ${NEWS_PREPROCESSOR_OPENDART_API_KEY:-}`.
+- `compose.dev.yaml` and `compose.prod.yaml`:
+  `NEWS_PREPROCESSOR_OPENDART_API_KEY: ${NEWS_PREPROCESSOR_OPENDART_API_KEY:-}` (Compose uses the
+  service's own name, as `MARKET_SYNCER_DART_API_KEY` does). `.env.example` lists it.
 - `AGENTS.md` and `README.md` env tables gain the new variable.
-- No new dependency: `httpx`, `beautifulsoup4`, `lxml` are already declared; `zipfile`, `json`
+- No new dependency: `httpx` and `beautifulsoup4` are already declared; `zipfile`, `json`
   and `zoneinfo` are stdlib. `docker/requirements/*.txt` do not change.
 
 ## Keeping the key out of logs
@@ -128,7 +132,7 @@ exceptions include the URL. The root logger is at INFO, so without a guard the k
 
 ## Testing
 
-Fixtures trimmed from the two real filings above, plus `httpx.MockTransport`, as the other
+Documents trimmed from the two real filings above (inline in the test), plus `httpx.MockTransport`, as the other
 publishers do.
 
 - `test_opendart.py`
@@ -137,8 +141,8 @@ publishers do.
   - rows outside `stock_codes` are dropped; an empty `stock_codes` raises;
   - status `013` yields no entries, another status raises;
   - field mapping (title whitespace, viewer URL, `published_at` at 00:00 KST, JSON payload);
-  - `article()` reads `{rcept_no}.xml` from the zip and parses both the UTF-8 XML and the EUC-KR
-    HTML fixture, with no CSS text in the body.
+  - `article()` reads `{rcept_no}.xml` from the zip and parses both the DART4 XML and the KRX
+    HTML (UTF-8 bytes under an `euc-kr` meta tag), with no CSS text in the body.
   - a document with no text yields a `NewsItem` with `body=""` instead of raising.
 - `packages/core/tests/test_logging.py`: with `sensitive_query_params={"crtfc_key"}`, an
   httpx-style request message, a `get_logger` field value, and a logged exception whose message
