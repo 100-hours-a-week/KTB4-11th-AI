@@ -11,8 +11,8 @@ graphed like any other article, so a disclosure and the news about it can land i
 - Only short disclosures. Thirteen detail types are too long to embed or cluster usefully and are
   excluded: `A001`, `A002`, `A003` (periodic reports), `F001`, `F002`, `F003` (audit reports),
   `C001`–`C005` (registration statements), `J004`, `H002`.
-- Out of scope, filed as GitHub issues: (1) extracting events from those long filings and storing
-  them as article-like rows, (2) RAG over long filings.
+- Out of scope, filed as GitHub issues: (1) extracting events from those long filings and storing (#184)
+  them as article-like rows, (2) RAG over long filings (#185).
 
 ## Facts checked against the live API (2026-09-29)
 
