@@ -52,7 +52,7 @@ class OpenDart:
 
 1. If `stock_codes` is empty, raise: market-syncer has not filled `corporation_indices`. `scrape()`
    logs it as a feed failure and the run exits 1.
-2. Window: yesterday and today in KST (fixed `+09:00`; KST has no DST, and `zoneinfo` would need tz data the slim and Lambda images may lack), as `bgn_de`/`end_de`. A filing that lands after
+2. Window: yesterday and today in KST (fixed `+09:00`; KST has no DST, and `zoneinfo` would need tz data the slim image may lack), as `bgn_de`/`end_de`. A filing that lands after
    the last run is caught by the next one; the overlap costs nothing because `scrape()` skips
    `known_external_ids`.
 3. Fetch `list.json` with `corp_cls=Y`, `page_count=100`, paging `page_no` until `total_page`.
@@ -105,7 +105,7 @@ splitting by format avoids `XMLParsedAsHTMLWarning`. Remove `style` and `script`
   `kospi200_stock_codes(conn) -> set[str]` (`WHERE index_name = 'KOSPI200'`).
 - `publishers(client)` becomes `publishers(client, dart_api_key, stock_codes)` and appends
   `OpenDart(client, dart_api_key, stock_codes)`.
-- `main()` and `handler()` read `kospi200_stock_codes` in one connection before scraping and pass
+- `main()` reads `kospi200_stock_codes` in one connection before scraping and pass
   it with `settings.dart_api_key.get_secret_value()`.
 - Setting `dart_api_key: SecretStr`, required, env `NEWS_PREPROCESSOR_DART_API_KEY`.
 - `compose.dev.yaml` and `compose.prod.yaml`:
@@ -128,7 +128,7 @@ exceptions include the URL. The root logger is at INFO, so without a guard the k
   ones too) and the traceback in one place. A backslash ends the value because a quote inside JSON
   output is written `\"`; without it the match would swallow the backslash and break the JSON.
 - The default empty set adds no regex, so other services are unaffected.
-- `main()` and `handler()` call `setup_logging(..., sensitive_query_params={"crtfc_key"})`.
+- `main()` calls `setup_logging(..., sensitive_query_params={"crtfc_key"})`.
 - This masks named query parameters only; it is not secret scanning. The bare key without its
   parameter name is not matched; the `SecretStr` setting keeps it out of reprs.
 
@@ -152,7 +152,7 @@ publishers do.
   still parses as JSON (including a value followed by a quote). With the default, output is
   unchanged.
 - `test_storage.py` (DB test): `kospi200_stock_codes` returns only `KOSPI200` rows.
-- `test_main.py` / `test_handler.py`: updated for the new `publishers` signature.
+- `test_main.py`: updated for the new `publishers` signature.
 
 ## Decisions
 
