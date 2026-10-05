@@ -13,11 +13,12 @@ log = get_logger(__name__)
 
 class EdailyRSS:
     source = "edaily"
-    feed_url = "http://rss.edaily.co.kr/edaily_news.xml"
+    sections = ("economy", "stock")
     pub_date_format = "%a, %d %b %Y %H:%M:%S %z"
 
-    def __init__(self, client: httpx.Client) -> None:
+    def __init__(self, client: httpx.Client, section: str) -> None:
         self._client = client
+        self.feed_url = f"http://rss.edaily.co.kr/{section}_news.xml"
 
     def entries(self) -> list[FeedEntry]:
         response = self._client.get(self.feed_url, headers={"Accept": "text/xml"}, timeout=30)

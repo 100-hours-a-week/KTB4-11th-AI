@@ -13,7 +13,10 @@ FEED = f"""<rss><channel>
 
 def test_edaily_feed_and_article(caplog):
     def handler(request):
-        if str(request.url) == EdailyRSS.feed_url:
+        if str(request.url) in (
+            "http://rss.edaily.co.kr/economy_news.xml",
+            "http://rss.edaily.co.kr/stock_news.xml",
+        ):
             assert request.headers["accept"] == "text/xml"
             return httpx.Response(200, text=FEED)
         assert str(request.url) == URL
@@ -25,10 +28,15 @@ def test_edaily_feed_and_article(caplog):
         )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    source = EdailyRSS(client)
-    assert any(isinstance(item, EdailyRSS) for item in publishers(client))
-    entries = source.entries()
-    assert len(entries) == 1
+    edaily = [item for item in publishers(client) if isinstance(item, EdailyRSS)]
+    assert [item.feed_url for item in edaily] == [
+        "http://rss.edaily.co.kr/economy_news.xml",
+        "http://rss.edaily.co.kr/stock_news.xml",
+    ]
+    assert {item.source for item in edaily} == {"edaily"}
+    source = edaily[0]
+    entries = [entry for publisher in edaily for entry in publisher.entries()]
+    assert len(entries) == 2
     assert "feed_item_skipped" in caplog.text
     assert entries[0].external_id == URL
     assert entries[0].published_at == datetime(
@@ -43,10 +51,10 @@ def test_title_only_article_uses_title_as_body():
         return httpx.Response(
             200,
             text=FEED
-            if str(request.url) == EdailyRSS.feed_url
+            if str(request.url) == "http://rss.edaily.co.kr/economy_news.xml"
             else '<header><img src="logo.jpg" /></header><div class="news_body"></div>',
         )
 
-    source = EdailyRSS(httpx.Client(transport=httpx.MockTransport(handler)))
+    source = EdailyRSS(httpx.Client(transport=httpx.MockTransport(handler)), "economy")
     entry = source.entries()[0]
     assert source.article(entry).body == entry.title

@@ -126,6 +126,27 @@ services:
         condition: service_healthy
     restart: "no"
 
+  market-collector:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/market-collector.Dockerfile
+    stop_grace_period: 2m
+    environment:
+      MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
+      MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
+      MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
+      MARKET_COLLECTOR_INDEX_NAME: ${MARKET_COLLECTOR_INDEX_NAME:-KOSPI200}
+      MARKET_COLLECTOR_REQUEST_INTERVAL: ${MARKET_COLLECTOR_REQUEST_INTERVAL:-1.3}
+      MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      questdb:
+        condition: service_healthy
+    restart: "no"
+
   portfolio-builder:
     profiles: ["jobs"]
     build:
@@ -134,7 +155,7 @@ services:
     environment:
       PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
-      PORTFOLIO_BUILDER_OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      PORTFOLIO_BUILDER_LLM_API_KEY: ${PORTFOLIO_BUILDER_LLM_API_KEY:-}
       PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
       PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
       PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
