@@ -1,86 +1,85 @@
-from typing import Any
+from collections.abc import Callable
+from typing import cast
 
 from ktb_core.logging import StructuredLogger
-from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import ToolCallRequest, after_model, before_model, wrap_tool_call
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import BaseTool
+from langgraph.runtime import Runtime
+from langgraph.types import Command
 
-from portfolio_builder.agent.hooks.usage import add_usage, empty_usage, message_usage
+from portfolio_builder.agent.hooks.usage import message_usage
+from portfolio_builder.agent.state import PortfolioState
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.stopwatch import Stopwatch
 
 
-def _tool_messages(result: Any) -> list[ToolMessage]:
+def _tool_messages(result: ToolMessage | Command[object]) -> list[ToolMessage]:
     if isinstance(result, ToolMessage):
         return [result]
-    update = getattr(result, "update", None) or {}
-    return [m for m in update.get("messages", []) if isinstance(m, ToolMessage)]
+    return [
+        message for message in result.update.get("messages", []) if isinstance(message, ToolMessage)
+    ]
 
 
-class RunLog(AgentMiddleware):
-    def __init__(self, log: StructuredLogger) -> None:
-        super().__init__()
-        self.log = log
-        self.turns = 0
-        self.portfolio_id: int | None = None
-        self.usage = empty_usage()
-        self.trace: list[TraceEntry] = []
-
-    def wrap_model_call(self, request: Any, handler: Any) -> Any:
-        self.turns += 1
-        self.log.info(
+def run_log(log: StructuredLogger, tools: list[BaseTool]):
+    @before_model(state_schema=PortfolioState)
+    def log_model_request(state: PortfolioState, runtime: Runtime[None]) -> None:
+        log.info(
             "llm_request",
-            turn=self.turns,
-            tools=[getattr(t, "name", None) for t in request.tools],
-            message_count=len(request.messages),
+            turn=state.get("turns", 0) + 1,
+            tools=[tool.name for tool in tools],
+            message_count=len(state["messages"]),
         )
-        stopwatch = Stopwatch.start()
-        response = handler(request)
-        message = next((m for m in reversed(response.result) if isinstance(m, AIMessage)), None)
+
+    @after_model(state_schema=PortfolioState)
+    def log_model_response(state: PortfolioState, runtime: Runtime[None]):
+        turn = state.get("turns", 0) + 1
+        message = next(
+            (message for message in reversed(state["messages"]) if isinstance(message, AIMessage)),
+            None,
+        )
         if message is None:
-            return response
-        turn_usage = message_usage(message)
-        add_usage(self.usage, turn_usage)
+            return {"turns": 1}
+        usage = message_usage(message)
         reasoning = "\n".join(
-            b.get("reasoning", "") for b in message.content_blocks if b["type"] == "reasoning"
+            block.get("reasoning", "")
+            for block in message.content_blocks
+            if block["type"] == "reasoning"
         )
-        self.trace.append(
-            TraceEntry(
-                turn=self.turns,
-                kind="model",
-                reasoning=reasoning or None,
-                text=message.text or None,
-            )
+        trace = TraceEntry(
+            turn=turn,
+            kind="model",
+            reasoning=reasoning or None,
+            text=message.text or None,
         )
-        self.log.info(
+        log.info(
             "llm_response",
-            turn=self.turns,
+            turn=turn,
             model=message.response_metadata.get("model_name"),
             finish_reason=message.response_metadata.get("finish_reason"),
             text=message.text,
             reasoning=reasoning,
-            tool_calls=[{"name": c["name"], "arguments": c["args"]} for c in message.tool_calls],
-            latency_ms=stopwatch.elapsed_ms,
-            usage=turn_usage,
+            tool_calls=[
+                {"name": call["name"], "arguments": call["args"]} for call in message.tool_calls
+            ],
+            usage=usage,
         )
-        return response
+        return {"turns": 1, "usage": usage, "trace": [trace]}
 
-    def wrap_tool_call(self, request: Any, handler: Any) -> Any:
+    @wrap_tool_call(state_schema=PortfolioState)
+    def log_tool_call(
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command[object]],
+    ) -> ToolMessage | Command[object]:
+        state = cast(PortfolioState, request.state)
         call = request.tool_call
         stopwatch = Stopwatch.start()
-        fields = {"turn": self.turns, "name": call["name"], "args": call["args"]}
+        fields = {"turn": state.get("turns", 0), "name": call["name"], "args": call["args"]}
         try:
             result = handler(request)
         except Exception as error:
-            self.trace.append(
-                TraceEntry(
-                    turn=self.turns,
-                    kind="tool",
-                    name=call["name"],
-                    args=call["args"],
-                    result=f"{type(error).__name__}: {error}",
-                )
-            )
-            self.log.error(
+            log.error(
                 "tool_call",
                 **fields,
                 result=f"{type(error).__name__}: {error}",
@@ -88,25 +87,24 @@ class RunLog(AgentMiddleware):
                 duration_ms=stopwatch.elapsed_ms,
             )
             raise
-        update = getattr(result, "update", None) or {}
-        if update.get("portfolio_id") is not None:
-            self.portfolio_id = update["portfolio_id"]
         messages = _tool_messages(result)
-        is_error = any(m.status == "error" for m in messages)
-        self.trace.append(
-            TraceEntry(
-                turn=self.turns,
-                kind="tool",
-                name=call["name"],
-                args=call["args"],
-                result="\n".join(m.text for m in messages),
-            )
+        is_error = any(message.status == "error" for message in messages)
+        trace = TraceEntry(
+            turn=fields["turn"],
+            kind="tool",
+            name=call["name"],
+            args=call["args"],
+            result="\n".join(message.text for message in messages),
         )
-        (self.log.warning if is_error else self.log.info)(
+        (log.warning if is_error else log.info)(
             "tool_call",
             **fields,
-            result="\n".join(m.text for m in messages),
+            result=trace.result,
             is_error=is_error,
             duration_ms=stopwatch.elapsed_ms,
         )
-        return result
+        if isinstance(result, Command):
+            return Command(update={**result.update, "trace": [trace]})
+        return Command(update={"messages": messages, "trace": [trace]})
+
+    return [log_model_request, log_model_response, log_tool_call]
