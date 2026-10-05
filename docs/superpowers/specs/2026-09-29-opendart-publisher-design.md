@@ -81,9 +81,11 @@ Each kept row becomes:
 as a title-only article with `body=""` (`articles.body` is `NOT NULL`, so the empty string, not
 `NULL`). The title (`corp_name` plus `report_nm`) already names the event, and `embed_pending`
 embeds `f"{title}\n\n{body}"`, so it still gets a vector. The other publishers keep skipping empty
-bodies. When DART answers with an error, the
-body is a JSON or XML status instead of a zip; `zipfile.BadZipFile` is left to propagate and
-`scrape()` records the entry as failed.
+bodies. When DART answers with an XML status
+instead of a zip, status `014` (no file; seen live on an attachment-only `[첨부정정]` filing) is
+also stored as a title-only article, so it is not retried and failed on every run; any other
+status raises `RuntimeError("DART document.xml status …")` and `scrape()` records the entry as
+failed.
 
 ### `parser.py`
 

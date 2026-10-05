@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import httpx
+from bs4 import BeautifulSoup
 
 from news_preprocessor.sources import FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.opendart.parser import parse_document_body
@@ -65,7 +66,15 @@ class OpenDart:
             params={"crtfc_key": self._api_key, "rcept_no": entry.external_id},
             timeout=60,
         )
-        with zipfile.ZipFile(io.BytesIO(response.raise_for_status().content)) as archive:
+        content = io.BytesIO(response.raise_for_status().content)
+        if not zipfile.is_zipfile(content):
+            status = BeautifulSoup(content.getvalue(), "xml").find("status")
+            status = status.get_text(strip=True) if status else "unknown"
+            # 014: DART keeps no document for the filing, e.g. an attachment-only correction.
+            if status != "014":
+                raise RuntimeError(f"DART document.xml status {status}")
+            return NewsItem(**asdict(entry), body="")
+        with zipfile.ZipFile(content) as archive:
             names = archive.namelist()
             main = f"{entry.external_id}.xml"
             document = archive.read(main if main in names else names[0])

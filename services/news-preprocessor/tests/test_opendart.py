@@ -210,11 +210,24 @@ def test_an_empty_document_is_a_title_only_article():
     assert item.title == "삼성전자 단일판매ㆍ공급계약체결"
 
 
-def test_an_error_answer_instead_of_a_zip_raises():
-    error = json.dumps({"status": "014", "message": "파일이 존재하지 않습니다."}).encode()
+def _dart_status(status: str, message: str) -> bytes:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f"<result><status>{status}</status><message>{message}</message></result>"
+    ).encode()
 
-    with pytest.raises(zipfile.BadZipFile):
-        _article({"20260928800899": error})
+
+def test_a_filing_without_a_document_is_a_title_only_article():
+    # Seen live on an attachment-only correction ([첨부정정]).
+    item = _article({"20260928800899": _dart_status("014", "파일이 존재하지 않습니다.")})
+
+    assert item.body == ""
+    assert item.title == "삼성전자 단일판매ㆍ공급계약체결"
+
+
+def test_another_document_status_raises():
+    with pytest.raises(RuntimeError, match="status 020"):
+        _article({"20260928800899": _dart_status("020", "요청 제한을 초과하였습니다.")})
 
 
 def test_publishers_include_opendart():
