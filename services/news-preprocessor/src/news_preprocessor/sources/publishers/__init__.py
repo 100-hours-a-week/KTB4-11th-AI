@@ -25,6 +25,6 @@ def publishers(client: httpx.Client) -> tuple[NewsSource, ...]:
         HankyungEconomyRSS(client),
         MaeilBusinessEconomyRSS(client),
         YonhapEconomyRSS(client),
-        EdailyRSS(client),
+        *(EdailyRSS(client, section) for section in EdailyRSS.sections),
         *(SeoulEconomicRSS(client, section) for section in SeoulEconomicRSS.sections),
     )
