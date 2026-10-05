@@ -89,7 +89,6 @@ class JsonFormatter(logging.Formatter):
         super().__init__()
         self.service_name = service_name
         names = "|".join(map(re.escape, sensitive_query_params))
-        # The JSON line writes a quote as \" and a newline as \n, so a backslash ends the value.
         self.sensitive = re.compile(rf"({names})=[^&\s\"'\\]+") if names else None
 
     def format(self, record: logging.LogRecord) -> str:
