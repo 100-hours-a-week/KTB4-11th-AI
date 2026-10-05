@@ -11,14 +11,13 @@ from bs4 import BeautifulSoup
 from news_preprocessor.sources import FeedEntry, NewsItem
 from news_preprocessor.sources.publishers.opendart.parser import parse_document_body
 
-API = "https://opendart.fss.or.kr/api"
-# KST has no DST; zoneinfo would need tz data the slim and Lambda images may lack.
+OPENDART_API = "https://opendart.fss.or.kr/api"
 KST = timezone(timedelta(hours=9))
 
 
 class OpenDart:
     source = "opendart"
-    feed_url = f"{API}/list.json"
+    feed_url = f"{OPENDART_API}/list.json"
     # Periodic, audit and registration filings are too long to embed; see #184 and #185.
     long_detail_types = (
         "A001", "A002", "A003", "F001", "F002", "F003",
@@ -40,7 +39,6 @@ class OpenDart:
             "corp_cls": "Y",
         }
         rows = self._list(window)
-        # list.json rows carry no detail type, so the long ones are found by asking per type.
         long = {
             row["rcept_no"]
             for detail_type in self.long_detail_types
@@ -52,7 +50,6 @@ class OpenDart:
                 external_id=row["rcept_no"],
                 url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['rcept_no']}",
                 title=" ".join(f"{row['corp_name']} {row['report_nm']}".split()),
-                # DART gives the filing date only.
                 published_at=datetime.strptime(row["rcept_dt"], "%Y%m%d").replace(tzinfo=KST),
                 raw_payload=json.dumps(row, ensure_ascii=False),
             )
@@ -62,7 +59,7 @@ class OpenDart:
 
     def article(self, entry: FeedEntry) -> NewsItem:
         response = self._client.get(
-            f"{API}/document.xml",
+            f"{OPENDART_API}/document.xml",
             params={"crtfc_key": self._api_key, "rcept_no": entry.external_id},
             timeout=60,
         )
@@ -70,7 +67,7 @@ class OpenDart:
         if not zipfile.is_zipfile(content):
             status = BeautifulSoup(content.getvalue(), "xml").find("status")
             status = status.get_text(strip=True) if status else "unknown"
-            # 014: DART keeps no document for the filing, e.g. an attachment-only correction.
+            # 014: DART keeps no document for the filing, like an attachment-only correction.
             if status != "014":
                 raise RuntimeError(f"DART document.xml status {status}")
             return NewsItem(**asdict(entry), body="")
@@ -78,7 +75,6 @@ class OpenDart:
             names = archive.namelist()
             main = f"{entry.external_id}.xml"
             document = archive.read(main if main in names else names[0])
-        # An empty body stays a title-only article: the title already names the disclosure.
         return NewsItem(**asdict(entry), body=parse_document_body(document))
 
     def _list(self, params: dict[str, str]) -> list[dict[str, Any]]:
@@ -96,7 +92,7 @@ class OpenDart:
                 timeout=30,
             )
             data = response.raise_for_status().json()
-            if data["status"] == "013":  # no data
+            if data["status"] == "013":  # 013: No data
                 return rows
             if data["status"] != "000":
                 raise RuntimeError(f"DART list.json status {data['status']}: {data['message']}")
