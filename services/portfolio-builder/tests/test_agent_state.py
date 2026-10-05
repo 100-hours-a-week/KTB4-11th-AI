@@ -5,6 +5,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import InjectedToolCallId
 from langgraph.types import Command
+from portfolio_builder.agent.hooks.usage import reduce_usage
 from portfolio_builder.agent.run import run_agent
 
 
@@ -87,3 +88,7 @@ def test_error_recovers_last_checkpoint():
     assert result.outcome == "error"
     assert "unavailable" in result.error
     assert result.turns == 1
+
+
+def test_usage_without_reported_cost_keeps_unknown_cost():
+    assert reduce_usage({}, {"input": 3})["cost"] is None

@@ -23,7 +23,7 @@ def message_usage(message: AIMessage) -> dict[str, float]:
 def reduce_usage(
     totals: dict[str, float | None], turn: dict[str, float]
 ) -> dict[str, float | None]:
-    totals = totals.copy()
+    totals = empty_usage() | totals
     for key in TOKEN_KEYS:
         totals[key] = (totals[key] or 0) + turn.get(key, 0)
     if "cost" in turn:
