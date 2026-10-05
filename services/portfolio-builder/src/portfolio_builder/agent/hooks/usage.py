@@ -20,8 +20,12 @@ def message_usage(message: AIMessage) -> dict[str, float]:
     return tokens if cost is None else tokens | {"cost": cost}
 
 
-def add_usage(totals: dict[str, float | None], turn: dict[str, float]) -> None:
+def reduce_usage(
+    totals: dict[str, float | None], turn: dict[str, float]
+) -> dict[str, float | None]:
+    totals = totals.copy()
     for key in TOKEN_KEYS:
-        totals[key] = (totals[key] or 0) + turn[key]
+        totals[key] = (totals[key] or 0) + turn.get(key, 0)
     if "cost" in turn:
         totals["cost"] = (totals["cost"] or 0.0) + turn["cost"]
+    return totals
