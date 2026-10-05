@@ -12,7 +12,7 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from portfolio_builder.agent.hooks.nudge import Nudge
-from portfolio_builder.agent.hooks.run_log import RunLog
+from portfolio_builder.agent.hooks.run_log import run_log
 from portfolio_builder.agent.hooks.stop_on_save import StopOnSave
 from portfolio_builder.agent.hooks.usage import empty_usage
 from portfolio_builder.agent.state import PortfolioState
@@ -46,13 +46,13 @@ def run_agent(
         state_schema=PortfolioState,
         checkpointer=InMemorySaver(),
         middleware=[
-            RunLog(log),
             ToolErrorMiddleware(
                 lambda error, _: str(error) if isinstance(error, ToolError) else None
             ),
             StopOnSave(),
             Nudge(),
             ModelCallLimitMiddleware(run_limit=max_turns, exit_behavior="error"),
+            *run_log(log, tools),
         ],
     )
     steps_per_turn = len(agent.get_graph().nodes) - 2
