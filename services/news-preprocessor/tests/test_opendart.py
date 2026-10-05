@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from news_preprocessor.sources.publishers import publishers
 from news_preprocessor.sources.publishers.opendart import OpenDart, parse_document_body
 
 KEY = "test-key"
@@ -214,3 +215,9 @@ def test_an_error_answer_instead_of_a_zip_raises():
 
     with pytest.raises(zipfile.BadZipFile):
         _article({"20260928800899": error})
+
+
+def test_publishers_include_opendart():
+    client = httpx.Client(transport=httpx.MockTransport(FakeDart().handler))
+
+    assert any(isinstance(source, OpenDart) for source in publishers(client, KEY, {SAMSUNG}))

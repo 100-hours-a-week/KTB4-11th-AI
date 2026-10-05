@@ -29,7 +29,11 @@ def test_sedaily_feed_and_article(caplog):
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     source = SeoulEconomicRSS(client, "business")
-    sedaily = [item for item in publishers(client) if isinstance(item, SeoulEconomicRSS)]
+    sedaily = [
+        item
+        for item in publishers(client, "dart-key", {"005930"})
+        if isinstance(item, SeoulEconomicRSS)
+    ]
     assert [item.feed_url for item in sedaily] == [
         f"https://m.sedaily.com/rss/{section}"
         for section in ("business", "market", "economy", "finance", "international")

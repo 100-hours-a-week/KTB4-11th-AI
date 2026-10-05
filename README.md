@@ -14,6 +14,7 @@ flowchart LR
     subgraph EXT["External"]
         NEWS["뉴스"]
         KIWOOM["Kiwoom"]
+        OPENDART["OpenDART"]
         OPENROUTER["OpenRouter"]
     end
 
@@ -34,6 +35,7 @@ flowchart LR
     end
 
     NEWS --> NP
+    OPENDART --> NP
     NP <--> PG
     NC <--> PG
     NGB <--> PG
@@ -200,7 +202,7 @@ erDiagram
 - `themes` / `theme_companies` 는 `corporations` 에 있는 종목만 저장합니다.
 - `portfolios.trace` 는 포트폴리오를 만든 에이전트 실행 기록, `portfolio_reasons` 는 종목별 매수·매도 설명입니다.
 - `portfolios.status` 는 저장 직후 `explanation_pending`, 설명 저장 시 `ready`, 설명 실패 시 `explanation_failed` 입니다. `portfolio-rebalancer` 는 가장 최근 포트폴리오가 `ready` 일 때만 주문하고, 그 전 포트폴리오로 돌아가지 않습니다. `portfolio-builder` 는 가장 최근 포트폴리오가 `ready` 가 아니고 `trace` 가 있으면 새 포트폴리오를 만들지 않고 그 설명만 다시 만듭니다.
-- `market-syncer` 는 `news-graph-builder`, `market-collector` 보다 먼저 실행합니다. `market-collector` 는 수집 종목을 `corporation_indices` 에서 읽고, QuestDB `universe_members` 는 QuestDB 마이그레이션 `0002` 로 삭제했습니다. `portfolio-builder` 의 KOSPI 200 횡단면 순위도 `corporation_indices` 를 기준으로 계산합니다.
+- `market-syncer` 는 `news-preprocessor`, `news-graph-builder`, `market-collector` 보다 먼저 실행합니다. `news-preprocessor` 의 `opendart` publisher 는 `corporation_indices` 의 KOSPI 200 종목 공시만 저장합니다. `market-collector` 는 수집 종목을 `corporation_indices` 에서 읽고, QuestDB `universe_members` 는 QuestDB 마이그레이션 `0002` 로 삭제했습니다. `portfolio-builder` 의 KOSPI 200 횡단면 순위도 `corporation_indices` 를 기준으로 계산합니다.
 - `portfolio_holdings` / `portfolio_exits` 의 `company_id` 는 종목코드가 아닌 DART 고유번호(`corporations.corp_code`)입니다.
 
 ## 환경 변수
@@ -249,6 +251,7 @@ QuestDB의 PGWire 설정이며 이 WebSocket 연결 문자열에는 사용되지
 | `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` | | `100` |
 | `NEWS_PREPROCESSOR_USER_AGENT` | | `ktb-ai/0.1` |
 | `NEWS_PREPROCESSOR_LOG_LEVEL` | | `INFO` |
+| `NEWS_PREPROCESSOR_DART_API_KEY` | 필수 | |
 
 ### news-clusterer (`NEWS_CLUSTERER_`)
 

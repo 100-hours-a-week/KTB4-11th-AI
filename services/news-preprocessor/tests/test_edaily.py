@@ -28,7 +28,7 @@ def test_edaily_feed_and_article(caplog):
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     source = EdailyRSS(client)
-    assert any(isinstance(item, EdailyRSS) for item in publishers(client))
+    assert any(isinstance(item, EdailyRSS) for item in publishers(client, "dart-key", {"005930"}))
     entries = source.entries()
     assert len(entries) == 1
     assert "feed_item_skipped" in caplog.text

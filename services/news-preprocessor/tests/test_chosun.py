@@ -25,7 +25,10 @@ def test_chosun_economy_feed_and_article():
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     source = ChosunEconomyRSS(client)
-    assert any(isinstance(publisher, ChosunEconomyRSS) for publisher in publishers(client))
+    assert any(
+        isinstance(publisher, ChosunEconomyRSS)
+        for publisher in publishers(client, "dart-key", {"005930"})
+    )
     entries = source.entries()
     assert len(entries) == 1
     assert entries[0].source == "chosun_economy"
