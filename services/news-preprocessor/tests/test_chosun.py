@@ -1,8 +1,6 @@
 from datetime import datetime, timezone
 
 import httpx
-import pytest
-from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers import ChosunEconomyRSS, publishers
 
 FEED = """<rss><channel>
@@ -33,11 +31,10 @@ def test_chosun_economy_feed_and_article():
     assert source.article(entries[0]).body == "첫 문단 강조 둘째 문단"
 
 
-def test_article_without_body_raises():
+def test_title_only_article_without_content_marker_uses_title_as_body():
     client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, text="")))
     source = ChosunEconomyRSS(client)
     entry = ChosunEconomyRSS(
         httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, text=FEED)))
     ).entries()[0]
-    with pytest.raises(EmptyBodyError):
-        source.article(entry)
+    assert source.article(entry).body == entry.title

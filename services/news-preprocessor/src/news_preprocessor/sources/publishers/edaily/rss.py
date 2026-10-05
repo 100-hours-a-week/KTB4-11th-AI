@@ -5,18 +5,20 @@ import httpx
 from bs4 import BeautifulSoup
 from ktb_core.logging import get_logger
 
-from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
+from news_preprocessor.sources import FeedEntry, NewsItem
+from news_preprocessor.sources.article_body import body_or_title, contains_article_image
 
 log = get_logger(__name__)
 
 
 class EdailyRSS:
     source = "edaily"
-    feed_url = "http://rss.edaily.co.kr/edaily_news.xml"
+    sections = ("economy", "stock")
     pub_date_format = "%a, %d %b %Y %H:%M:%S %z"
 
-    def __init__(self, client: httpx.Client) -> None:
+    def __init__(self, client: httpx.Client, section: str) -> None:
         self._client = client
+        self.feed_url = f"http://rss.edaily.co.kr/{section}_news.xml"
 
     def entries(self) -> list[FeedEntry]:
         response = self._client.get(self.feed_url, headers={"Accept": "text/xml"}, timeout=30)
@@ -45,13 +47,11 @@ class EdailyRSS:
 
     def article(self, entry: FeedEntry) -> NewsItem:
         response = self._client.get(entry.url, headers={"Accept": "text/html"}, timeout=30)
-        body = BeautifulSoup(response.raise_for_status().text, "html.parser").select_one(
-            ".news_body"
-        )
+        article = response.raise_for_status().text
+        body = BeautifulSoup(article, "html.parser").select_one(".news_body")
+        has_image = contains_article_image(body)
         if body:
             for element in body.select("table, .view_ad01, .view_ad02, script, style, iframe"):
                 element.decompose()
         text = " ".join(body.get_text(" ").split()) if body else ""
-        if not text:
-            raise EmptyBodyError(entry.url)
-        return NewsItem(**asdict(entry), body=text)
+        return NewsItem(**asdict(entry), body=body_or_title(entry, text, has_image))
