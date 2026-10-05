@@ -2,8 +2,6 @@ import pathlib
 from datetime import datetime, timedelta, timezone
 
 import httpx
-import pytest
-from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers.maeil import MaeilBusinessEconomyRSS
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
@@ -67,8 +65,8 @@ def test_article_extracts_the_body_only():
     assert item.source == "maeil_business_economy"
 
 
-def test_article_without_the_body_container_raises():
+def test_title_only_article_uses_title_as_body():
     source = _source("<html><body><p>no body</p></body></html>")
 
-    with pytest.raises(EmptyBodyError):
-        source.article(source.entries()[0])
+    entry = source.entries()[0]
+    assert source.article(entry).body == entry.title

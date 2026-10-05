@@ -5,7 +5,8 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 from ktb_core.logging import get_logger
 
-from news_preprocessor.sources import EmptyBodyError, FeedEntry, NewsItem
+from news_preprocessor.sources import FeedEntry, NewsItem
+from news_preprocessor.sources.article_body import body_or_title, contains_article_image
 from news_preprocessor.sources.publishers.hankyung.parser import parse_article_body
 
 log = get_logger(__name__)
@@ -50,8 +51,8 @@ class HankyungEconomyRSS:
         response = self._client.get(entry.url, headers={"Accept": "text/html"}, timeout=30)
         article = response.raise_for_status().text
         body = parse_article_body(article)
-        if not body:
-            raise EmptyBodyError(entry.url)
+        content = BeautifulSoup(article, "html.parser").select_one(".article-body")
+        body = body_or_title(entry, body, contains_article_image(content))
         return NewsItem(**asdict(entry), body=body)
 
 

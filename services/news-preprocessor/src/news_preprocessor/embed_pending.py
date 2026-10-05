@@ -5,7 +5,12 @@ from typing import NamedTuple
 import sqlalchemy as sa
 from ktb_core.logging import get_logger
 
-from news_preprocessor.storage import pending_embedding, set_embedding
+from news_preprocessor.storage import (
+    mark_embedding_failed,
+    pending_embedding,
+    pending_embedding_high_watermark,
+    set_embedding,
+)
 
 EMBED_BATCH_SIZE = 16
 
@@ -21,18 +26,27 @@ def embed_pending(
     engine: sa.Engine, embedder: Callable[[list[str]], list[list[float]]], limit: int
 ) -> EmbedResult:
     with engine.connect() as conn:
-        rows = pending_embedding(conn, limit)
+        high_watermark = pending_embedding_high_watermark(conn)
+    if high_watermark is None:
+        return EmbedResult(succeed=[], failed=[])
 
     succeed: list[str] = []
-    for batch in batched(rows, EMBED_BATCH_SIZE):
-        try:
-            vectors = embedder([f"{row.title}\n\n{row.body}" for row in batch])
-        except Exception:
-            pending = [row.external_id for row in rows[len(succeed) :]]
-            log.exception("embedding_failed", pending=len(pending))
-            return EmbedResult(succeed=succeed, failed=pending)
+    while True:
         with engine.begin() as conn:
-            set_embedding(conn, [row.id for row in batch], vectors)
-        succeed.extend(row.external_id for row in batch)
+            rows = pending_embedding(conn, limit, high_watermark)
+            if not rows:
+                break
+            for batch in batched(rows, EMBED_BATCH_SIZE):
+                try:
+                    vectors = embedder([f"{row.title}\n\n{row.body}" for row in batch])
+                    with conn.begin_nested():
+                        set_embedding(conn, [row.id for row in batch], vectors)
+                except Exception as error:
+                    failed = [row.external_id for row in batch]
+                    mark_embedding_failed(conn, [row.id for row in batch], str(error))
+                    log.exception("embedding_failed", pending=len(failed))
+                    return EmbedResult(succeed=succeed, failed=failed)
+                succeed.extend(row.external_id for row in batch)
+
     log.info("embedding_complete", count=len(succeed))
     return EmbedResult(succeed=succeed, failed=[])

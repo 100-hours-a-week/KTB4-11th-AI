@@ -16,7 +16,7 @@ def apply(engine, new):
     with engine.begin() as conn:
         old = load_assignment(conn)
         matches, unmatched = match(new, old)
-        write_clusters(conn, new, old, matches, unmatched)
+        return write_clusters(conn, new, old, matches, unmatched)
 
 
 def updated_at(engine) -> dict[int, datetime]:
@@ -69,13 +69,36 @@ def test_rewrite_keeps_ids_moves_members_and_drops_noise(engine, article):
     stamps = updated_at(engine)
 
     # c and d become noise, e joins a's cluster.
-    apply(engine, {0: {a, b, e}})
+    stats = apply(engine, {0: {a, b, e}})
 
     with engine.connect() as conn:
         assert load_assignment(conn) == {kept: {a, b, e}}
     after = updated_at(engine)
     assert list(after) == [kept]
     assert after[kept] > stamps[kept]
+    assert stats.clusters_created == 0
+    assert stats.clusters_maintained == 0
+    assert stats.clusters_changed == 1
+    assert stats.clusters_deleted == 1
+    assert stats.mappings_added == 1
+    assert stats.mappings_moved == 0
+    assert stats.mappings_removed == 2
+
+
+def test_write_stats_count_moved_article_mappings(engine, article):
+    with engine.begin() as conn:
+        a, b, c, d = (article(conn) for _ in range(4))
+    apply(engine, {0: {a, b}, 1: {c, d}})
+
+    stats = apply(engine, {0: {a, c}, 1: {b, d}})
+
+    assert stats.clusters_created == 0
+    assert stats.clusters_maintained == 0
+    assert stats.clusters_changed == 2
+    assert stats.clusters_deleted == 0
+    assert stats.mappings_added == 0
+    assert stats.mappings_moved == 2
+    assert stats.mappings_removed == 0
 
 
 def test_an_unchanged_cluster_keeps_its_updated_at(engine, article):

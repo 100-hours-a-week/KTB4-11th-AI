@@ -5,7 +5,8 @@ import httpx
 from bs4 import BeautifulSoup, Tag
 from ktb_core.logging import get_logger
 
-from news_preprocessor.sources import EmptyBodyError, FeedEntry, ImageOnlyArticleError, NewsItem
+from news_preprocessor.sources import FeedEntry, ImageOnlyArticleError, NewsItem
+from news_preprocessor.sources.article_body import body_or_title, contains_article_image
 from news_preprocessor.sources.publishers.yonhap.parser import parse_article_body
 
 log = get_logger(__name__)
@@ -55,11 +56,11 @@ class YonhapEconomyRSS:
         article = response.raise_for_status().text
         body = parse_article_body(article)
         if not body:
-            content = BeautifulSoup(article, "html.parser")
-            image_count = len(content.select(".story-news.article img"))
+            content = BeautifulSoup(article, "html.parser").select_one(".story-news.article")
+            image_count = len(content.select("img")) if content is not None else 0
             if image_count:
                 raise ImageOnlyArticleError(image_count)
-            raise EmptyBodyError(entry.url)
+            body = body_or_title(entry, body, contains_article_image(content))
         return NewsItem(**asdict(entry), body=body)
 
 
