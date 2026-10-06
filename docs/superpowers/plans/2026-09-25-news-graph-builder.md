@@ -1,6 +1,41 @@
 # news-graph-builder Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+## Current execution guidance (supersedes the archived plan)
+
+This plan records the original implementation, not today's runbook. Since PR #69,
+`market-syncer` owns Kiwoom/OpenDART synchronization and writes `corporations`,
+`corporation_aliases`, `corporation_indices`, `themes` and `theme_companies`.
+`news-graph-builder` consumes the stored `corporations` and `corporation_aliases`
+to resolve company entities; it does not call Kiwoom/OpenDART or synchronize themes.
+Its former `company/`, `theme/` and `kiwoom/` modules and their settings were removed.
+
+Configure Kiwoom/OpenDART credentials only for `market-syncer` using
+`MARKET_SYNCER_KIWOOM_APP_KEY`, `MARKET_SYNCER_KIWOOM_SECRET_KEY` and
+`MARKET_SYNCER_DART_API_KEY`. Graph building requires
+`NEWS_GRAPH_BUILDER_POSTGRES_DSN`, `NEWS_GRAPH_BUILDER_LLM_BASE_URI` and
+`NEWS_GRAPH_BUILDER_LLM_MODEL`; `NEWS_GRAPH_BUILDER_LLM_API_KEY` is optional
+and depends on the LLM endpoint. See [README](../../../README.md),
+[the current graph-builder spec](../specs/2026-09-24-news-graph-builder-design.md)
+and [the market-syncer spec](../specs/2026-09-29-market-syncer-design.md).
+
+After migrations and news clustering, run the reference-data sync before graph building:
+
+```bash
+docker compose -f compose.dev.yaml up market-syncer
+docker compose -f compose.dev.yaml up news-graph-builder
+```
+
+Wait for a successful sync before running graph-builder. Compose does not trigger
+the sync automatically; graph-builder exits 1 with `corporations_missing` before
+any LLM request when `corporations` is empty.
+
+<details>
+<summary>Historical implementation archive — superseded, do not execute</summary>
+
+All tasks, code, fake-key fixtures, settings, Compose snippets and verification
+commands below describe the September 25 implementation. They are preserved as
+history, not instructions to restore removed modules or inject obsolete credentials.
+The later-change notes below also describe intermediate states, not current behavior.
 
 > **Later changes (after this plan ran, 2026-09-25/26).** The spec is the current authority;
 > this plan records how the first implementation was built. Since then:
@@ -761,7 +796,8 @@ USER app
 CMD ["news-graph-builder"]
 ```
 
-`compose.dev.yaml`: add after the `news-clusterer` service. Compose reads `.env` next to the compose file for `${...}` interpolation, which is where the DART key lives locally:
+Historical Compose excerpt, with obsolete credential injection removed. Use the current
+`compose.dev.yaml` and the execution guidance above rather than copying this excerpt:
 ```yaml
   news-graph-builder:
     profiles: ["jobs"]
@@ -772,10 +808,6 @@ CMD ["news-graph-builder"]
       - NEWS_GRAPH_BUILDER_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@postgres:5432/news
       - NEWS_GRAPH_BUILDER_LLM_BASE_URI
       - NEWS_GRAPH_BUILDER_LLM_MODEL
-      - NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY
-      - NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY
-      - NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI=${NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI:-https://api.kiwoom.com}
-      - NEWS_GRAPH_BUILDER_DART_API_KEY=${OPENDART_API_KEY:-}
       - NEWS_GRAPH_BUILDER_LOG_LEVEL=${NEWS_GRAPH_BUILDER_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
@@ -2652,7 +2684,8 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - In the Commands block, replace the news-clusterer compose line with:
   ```bash
   docker compose -f compose.dev.yaml up news-clusterer
-  NEWS_GRAPH_BUILDER_LLM_BASE_URI=http://100.bbb.ccc.ddd:8001/v1 NEWS_GRAPH_BUILDER_LLM_MODEL=<model> NEWS_GRAPH_BUILDER_KIWOOM_APP_KEY=<key> NEWS_GRAPH_BUILDER_KIWOOM_SECRET_KEY=<key> docker compose -f compose.dev.yaml up news-graph-builder
+  docker compose -f compose.dev.yaml up market-syncer
+  docker compose -f compose.dev.yaml up news-graph-builder
   ```
   and add after the pytest lines:
   ```bash
@@ -2664,8 +2697,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Replace the "Services communicate only through datastores." bullet with:
   `- **Services communicate only through datastores.** news-preprocessor writes articles to PostgreSQL, news-clusterer reads them and writes clusters / article_clusters, news-graph-builder reads those and writes cluster_summaries plus the knowledge graph (companies, company_aliases, entities, cluster_entities, relations; design: docs/superpowers/specs/2026-09-24-news-graph-builder-design.md), and portfolio-builder reads them all. There are no direct service-to-service calls.`
 - In the settings bullet, add `NEWS_GRAPH_BUILDER_` to the list of env prefixes.
-- Add a bullet under Architecture:
-  `- **news-graph-builder needs a Kiwoom app key and a DART key.** The Kiwoom key can place trades: prefer a paper-trading (모의투자) key via NEWS_GRAPH_BUILDER_KIWOOM_BASE_URI, never commit it, and register the task's outbound IP with Kiwoom.`
+- The original Architecture bullet required Kiwoom/DART credentials for graph-builder.
+  That requirement was removed in PR #69. Credential and outbound-IP configuration
+  now belong to `market-syncer`; use the current `AGENTS.md` and README guidance.
 
 - [ ] **Step 2: Run the full verification**
 
@@ -2700,4 +2734,9 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 - [ ] **Step 4: Hand over the live checks**
 
-The remaining spec §9 items need real keys, which this plan never reads: the Kiwoom code format, whether the paper-trading domain serves `ka10099`, and whether vLLM accepts the nested schema. Report to the user that the first real run settles them. It logs `synced companies: kiwoom=… dart=… joined=…`, and a `joined` of 0 fails the sync on purpose.
+Historically, live verification covered Kiwoom code formats, paper-trading support
+for `ka10099`, the company-sync log and the vLLM schema. Kiwoom/OpenDART live checks
+now belong to `market-syncer`; graph-builder only needs its database and LLM settings.
+The old sync log and spec section numbers above are historical references.
+
+</details>

@@ -1,6 +1,31 @@
 # news-graph-builder Themes Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+## Current responsibility boundary (supersedes the archived plan)
+
+Since PR #69, `market-syncer` owns Kiwoom/OpenDART synchronization, including
+`corporations`, `corporation_aliases`, `corporation_indices`, `themes` and
+`theme_companies`. `news-graph-builder` reads the stored `corporations` and
+`corporation_aliases` to resolve company entities. It does not fetch themes,
+request Kiwoom tokens or read Kiwoom/DART credentials; its former `company/`,
+`theme/` and `kiwoom/` modules and their settings were removed.
+
+Configure credentials under `MARKET_SYNCER_*` and run `market-syncer` successfully
+before graph-builder. Graph-builder requires its PostgreSQL DSN, LLM base URI and
+LLM model, with an optional LLM API key depending on the endpoint. See the
+[current execution guidance](2026-09-25-news-graph-builder.md#current-execution-guidance-supersedes-the-archived-plan),
+[README](../../../README.md) and
+[market-syncer spec](../specs/2026-09-29-market-syncer-design.md).
+Compose does not trigger a sync when graph-builder runs. An empty `corporations`
+table makes graph-builder exit 1 with `corporations_missing` before any LLM call.
+
+<details>
+<summary>Historical theme implementation archive — superseded, do not execute</summary>
+
+All goals, tasks, code, fake-key fixtures, settings and commands below record the
+September 26 implementation. Obsolete graph-builder environment variable names
+in the test fixtures are historical evidence only, not current configuration.
+Do not restore these modules or apply the archived `AGENTS.md` edits. The
+later-change note below describes an intermediate state, not current behavior.
 
 > **Later change (after this plan ran, 2026-09-26).** A failed theme sync is now only
 > logged: it keeps the old theme tables and no longer makes the run exit 1 (spec §4). Task 5's
@@ -1388,3 +1413,5 @@ Expected: all pass.
 git add services/news-graph-builder tach.toml AGENTS.md
 git commit -m "feat(graph-builder): sync Kiwoom themes on every run"
 ```
+
+</details>
