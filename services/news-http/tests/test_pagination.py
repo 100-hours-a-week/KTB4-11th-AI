@@ -27,6 +27,8 @@ def test_cursor_round_trips_offset_and_microseconds():
         b64("not a date|1"),
         b64("2026-10-05T00:00:00|1"),
         b64("2026-10-05T00:00:00+00:00|1|2"),
+        b64(f"2026-10-05T00:00:00+00:00|{2**63}"),
+        b64(f"2026-10-05T00:00:00+00:00|{-(2**63) - 1}"),
         urlsafe_b64encode(b"\xff\xfe|1").decode(),
     ],
 )

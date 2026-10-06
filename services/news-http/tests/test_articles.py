@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import pytest
 from news_http.controllers.pagination import encode_cursor
 
 
@@ -25,6 +26,11 @@ def test_lists_the_articles_of_a_cluster_newest_first(client, seed, at):
 
 def test_unknown_cluster_is_a_404(client, seed):
     assert client.get("/clusters/999/articles").status_code == 404
+
+
+@pytest.mark.parametrize("cluster_id", [0, -(2**63) - 1, 2**63])
+def test_cluster_id_outside_bigint_ids_is_a_422(client, cluster_id):
+    assert client.get(f"/clusters/{cluster_id}/articles").status_code == 422
 
 
 def test_paging_past_the_end_of_a_cluster_is_an_empty_page(client, seed, at):

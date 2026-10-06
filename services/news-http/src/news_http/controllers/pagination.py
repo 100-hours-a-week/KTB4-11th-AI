@@ -6,6 +6,8 @@ from typing import Annotated
 from fastapi import Depends, HTTPException, Query
 from pydantic import BaseModel
 
+BIGINT_MAX = 2**63 - 1
+
 
 class Page[T](BaseModel):
     items: list[T]
@@ -22,7 +24,7 @@ def decode_cursor(cursor: str) -> tuple[datetime, int]:
         decoded = datetime.fromisoformat(at), int(id)
     except ValueError as error:
         raise HTTPException(422, "invalid cursor") from error
-    if decoded[0].tzinfo is None:
+    if decoded[0].tzinfo is None or not -BIGINT_MAX - 1 <= decoded[1] <= BIGINT_MAX:
         raise HTTPException(422, "invalid cursor")
     return decoded
 
