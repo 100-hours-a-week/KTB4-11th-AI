@@ -59,9 +59,7 @@ class EdailyRSS:
                 timeout=30,
             )
         article = response.raise_for_status().text
-        body = BeautifulSoup(article, "html.parser").select_one(
-            ".news_text" if recovered else ".news_body"
-        )
+        body = BeautifulSoup(article, "html.parser").select_one(".news_text" if recovered else ".news_body")
         has_image = contains_article_image(body)
         if body:
             for element in body.select("table, .view_ad01, .view_ad02, script, style, iframe"):
@@ -71,14 +69,6 @@ class EdailyRSS:
             raise ValueError(f"missing Edaily TV article body: {response.url}")
 
         if recovered:
-            log.info(
-                "article_url_recovered",
-                source=self.source,
-                url=entry.url,
-                final_url=str(response.url),
-            )
+            log.info("article_url_recovered", source=self.source, url=entry.url, final_url=str(response.url))
 
-        return NewsItem(
-            **asdict(replace(entry, url=str(response.url))),
-            body=body_or_title(entry, text, has_image),
-        )
+        return NewsItem(**asdict(replace(entry, url=str(response.url))), body=body_or_title(entry, text, has_image))
