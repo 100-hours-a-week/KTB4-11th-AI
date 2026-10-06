@@ -158,10 +158,13 @@ def rebalance(
         explanation: Explanation,
         after: int,
         weight: float,
-    ) -> Order:
+    ) -> Order | None:
+        stock_name = portfolio.names.get(code)
+        if not stock_name or not stock_name.strip():
+            return None
         return Order(
             stock_code=code,
-            stock_name=portfolio.names[code],
+            stock_name=stock_name,
             side=side,
             quantity=quantity,
             explanation=explanation,
@@ -177,7 +180,8 @@ def rebalance(
         have = held.get(code, 0)
         if target.exiting:
             if have and code in quotes:
-                sells.append(order(code, "sell", have, target.sell, 0, 0.0))
+                if sell := order(code, "sell", have, target.sell, 0, 0.0):
+                    sells.append(sell)
             continue
         if code not in budgets:
             continue
@@ -189,17 +193,20 @@ def rebalance(
         sell_target = max(buy_target, math.floor(budget / price))
         if buy_target > have:
             buy = order(code, "buy", buy_target - have, target.buy, buy_target, target.weight)
-            buys.append((budget, buy.pricing.limit_price or asks[code], buy))
+            if buy:
+                buys.append((budget, buy.pricing.limit_price or asks[code], buy))
         elif sell_target < have:
-            sells.append(
-                order(code, "sell", have - sell_target, target.sell, sell_target, target.weight)
-            )
+            if sell := order(
+                code, "sell", have - sell_target, target.sell, sell_target, target.weight
+            ):
+                sells.append(sell)
 
     named = {t.stock_code for t in portfolio.targets}
     for code, have in held.items():
         if code in named or code not in portfolio.leftovers or code not in quotes:
             continue
-        sells.append(order(code, "sell", have, portfolio.leftovers[code], 0, 0.0))
+        if sell := order(code, "sell", have, portfolio.leftovers[code], 0, 0.0):
+            sells.append(sell)
 
     budget = max(cash, 0)
     placed: list[Order] = []

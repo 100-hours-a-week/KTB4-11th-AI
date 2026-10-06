@@ -1,3 +1,4 @@
+import pytest
 from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target
 from portfolio_rebalancer.rebalance import Quote, rebalance, whole_shares
 from portfolio_rebalancer.snapshot import Account
@@ -291,6 +292,33 @@ def test_every_order_carries_the_stock_name():
         ("373220", "name-373220"),
         ("005930", "name-005930"),
     ]
+
+
+@pytest.mark.parametrize("names", [{}, {"005930": "   "}])
+def test_a_stock_without_a_name_does_not_create_an_order(names):
+    unnamed = portfolio(hold("005930", 0.5))
+    unnamed.names = names
+
+    result = run(unnamed, account(1_000_000), {"005930": 100_000})
+
+    assert result == []
+
+
+@pytest.mark.parametrize(
+    ("targets", "leftovers", "stocks", "prices"),
+    [
+        ([exit_("000660")], {}, [("000660", 3)], {"000660": 200_000}),
+        ([hold("005930", 0.5)], {"373220": LEFT}, [("373220", 2)], {"373220": 350_000}),
+    ],
+    ids=["exit", "leftover"],
+)
+def test_an_unnamed_sell_does_not_create_an_order(targets, leftovers, stocks, prices):
+    unnamed = portfolio(*targets, leftovers=leftovers)
+    unnamed.names.clear()
+
+    result = run(unnamed, account(0, stocks=stocks), prices)
+
+    assert result == []
 
 
 def test_exits_and_leftovers_rest_at_the_upper_bound():
