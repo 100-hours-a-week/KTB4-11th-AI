@@ -74,7 +74,17 @@ flowchart LR
 
 - 경제 뉴스 RSS를 읽고 각 사이트의 본문 구조에 맞게 기사 추출
 - 기사 제목과 본문을 PostgreSQL `articles`에 저장 후 임베딩 시도
+- 본문과 이미지가 모두 없는 뉴스는 제목을 본문으로 저장
+- 이미지형 빈 본문은 로컬 Tesseract OCR로 추출하며, 모든 이미지가 품질 기준을 통과할 때만 저장
+- OCR 실패·빈 결과는 warning을 남기고 저장하지 않음. 다음 RSS 수집에 남아 있으면 다시 조회
 - 임베딩은 OpenAI API와 호완되는 서버로 요청을 보내며 2000차원으로 임베딩
+
+기본 news-preprocessor 이미지와 통합 app 이미지는 한국어·영어 OCR 실행 환경을 포함한다.
+Docker 밖에서 실행할 때는 Tesseract와 `kor`, `eng` 언어 데이터를 설치해야 한다.
+Debian/Ubuntu에서는 `apt-get install tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng`로 설치한다.
+기존 Lambda 이미지 target은 OCR을 비활성화해 기존 빈 본문 처리 정책을 유지한다.
+OCR은 외부 API를 호출하지 않으며, `article_ocr_complete`와 `article_ocr_failed` 로그로 결과를 확인한다.
+신뢰도 기준은 OCR 엔진의 점수이며 실제 내용의 정확도를 보장하는 값은 아니다.
 
 ### `news-clusterer`: 저장된 뉴스 클러스터링하기
 
@@ -312,6 +322,15 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` | | `100` | 한 번에 처리할 미임베딩 기사 수 |
 | `NEWS_PREPROCESSOR_USER_AGENT` | | `ktb-ai/0.1` | 뉴스 요청의 User-Agent |
 | `NEWS_PREPROCESSOR_LOG_LEVEL` | | `INFO` | 로그 수준 |
+| `NEWS_PREPROCESSOR_OCR_ENABLED` | | `true` | 이미지형 빈 본문 OCR 사용 여부. Lambda target은 `false` |
+| `NEWS_PREPROCESSOR_OCR_LANGUAGES` | | `kor+eng` | Tesseract 언어 데이터 |
+| `NEWS_PREPROCESSOR_OCR_MAX_IMAGES` | | `3` | 기사당 최대 이미지 수. 초과 시 저장하지 않음 |
+| `NEWS_PREPROCESSOR_OCR_MAX_IMAGE_BYTES` | | `5000000` | 이미지 다운로드 최대 바이트 수 |
+| `NEWS_PREPROCESSOR_OCR_MAX_IMAGE_PIXELS` | | `12000000` | 디코딩 허용 최대 픽셀 수 |
+| `NEWS_PREPROCESSOR_OCR_DOWNLOAD_TIMEOUT` | | `10` | 이미지 HTTP 요청 타임아웃(초) |
+| `NEWS_PREPROCESSOR_OCR_TIMEOUT` | | `15` | 이미지당 OCR 실행 제한 시간(초) |
+| `NEWS_PREPROCESSOR_OCR_MIN_CHARACTERS` | | `20` | 이미지당 최소 문자·숫자 수 |
+| `NEWS_PREPROCESSOR_OCR_MIN_CONFIDENCE` | | `60` | 문자 수로 가중한 평균 OCR 신뢰도 |
 
 ### news-clusterer (`NEWS_CLUSTERER_`)
 

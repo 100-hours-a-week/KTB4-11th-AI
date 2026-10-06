@@ -36,6 +36,7 @@ jobs:
     env:
       KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
       KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
+      KTB_TEST_OCR_RUNTIME: "1"
 
     steps:
       - uses: actions/checkout@v7
@@ -46,6 +47,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --all-packages --locked --group migrations
+
+      - name: Install OCR runtime
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng
 
       - name: Ruff check
         run: uv run ruff check .

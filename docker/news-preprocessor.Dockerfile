@@ -17,6 +17,8 @@ RUN uv pip install --no-deps ./packages/core ./services/news-preprocessor
 
 FROM public.ecr.aws/lambda/python:3.13 AS lambda
 
+ENV NEWS_PREPROCESSOR_OCR_ENABLED=false
+
 COPY --from=ghcr.io/astral-sh/uv:0.9.9 /uv /usr/local/bin/uv
 
 COPY docker/requirements/news-preprocessor.txt ./requirements.txt
@@ -33,6 +35,10 @@ RUN uv pip install --system --target "${LAMBDA_TASK_ROOT}" --no-deps \
 CMD ["news_preprocessor.handler.handler"]
 
 FROM python:3.13-slim-bookworm AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
