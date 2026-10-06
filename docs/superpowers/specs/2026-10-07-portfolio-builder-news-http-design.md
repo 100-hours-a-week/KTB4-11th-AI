@@ -4,11 +4,21 @@
 
 Portfolio builder reads news through `news-http` and keeps direct PostgreSQL access for portfolios and company reference data, plus QuestDB access for prices. A missing news result remains distinguishable from a failed HTTP request.
 
-## Read contract
+## API design
 
-Extend `news-http` with analysis-oriented endpoints for full-text cluster search, a cluster detail with its articles and extracted graph, a recent-news briefing, graph neighborhood search, and graph path search. Keep search limits, ordering, depth bounds, and truncation behavior that the current portfolio tools expose. Responses use names and concepts meaningful to the consumer rather than database table names. A cluster without a summary returns a missing result; a valid empty search or briefing returns an empty collection. The existing stock-cluster and cluster-article endpoints remain available.
+All new routes return JSON and use ISO 8601 timestamps with offsets. IDs identify domain objects and do not expose join-table structure. Existing `GET /stocks/{stock_code}/clusters` and `GET /clusters/{cluster_id}/articles` remain unchanged. A successful empty search uses `200` with an empty array; a missing cluster detail uses `404`. Invalid parameters use `422`, and a database failure uses `500`.
 
-The recent-news response contains updated clusters, mentioned companies, and their themes so portfolio builder can render the same briefing. `news-http` owns queries against news tables; it may join company reference data to identify mentions and themes. Portfolio builder continues to query company reference data for its non-news work.
+| Route | Input | `200` response | Ordering and bounds |
+|---|---|---|---|
+| `GET /analysis/clusters/search` | `q`: space-separated words | `[{"id": 12, "title": "...", "excerpt": "...", "rank": 0.4}]` | All words match as prefixes; rank descending, ID descending; at most 10. Empty or operator-only query is `422`. |
+| `GET /analysis/clusters/{id}` | Positive bigint ID | `{"id": 12, "title": "...", "summary": "...", "updated_at": "...", "articles": [{"title": "...", "source": "...", "published_at": "..."}], "entities": [{"id": 7, "name": "...", "type": "...", "company_id": "..."}], "relations": [{"source": "...", "type": "...", "target": "...", "description": "..."}]}` | Articles newest first, entities by ID, relations by ID. A cluster without a summary is `404`. |
+| `GET /analysis/recent-news` | `days`: positive integer | `{"clusters": [{"id": 12, "title": "...", "summary": "...", "updated_at": "..."}], "companies": [{"company_id": "...", "name": "...", "stock_code": "...", "cluster_ids": [12], "themes": ["theme (main)"]}], "theme_count": 1}` | Clusters updated within the window, newest first; companies by ID; themes major first then name. Empty window returns empty arrays and zero. |
+| `GET /analysis/graph/neighborhood` | `name`: nonempty entity name; `depth`: 1–3, default 2 | `{"nodes": [{"id": 7, "hop": 0, "name": "...", "type": "...", "company_id": "..."}], "edges": [{"id": 8, "source": "...", "type": "...", "target": "...", "description": "...", "cluster_id": 12, "hop": 0}], "truncated": false}` | Bidirectional traversal; nodes by hop then ID, max 100; edges by hop then ID, max 200. |
+| `GET /analysis/graph/paths` | `from_name`, `to_name`: nonempty entity names; `max_depth`: 1–6, default 4 | `{"paths": [{"length": 1, "steps": [{"from": "...", "to": "...", "type": "...", "direction": "forward", "description": "...", "cluster_id": 12}]}], "truncated": false}` | Shortest simple bidirectional paths first, max 20. |
+
+Graph lookup with no matching entity returns `404` with a candidate-name list, preserving the agent's ability to refine the name. A valid pair of entities with no connecting path returns `200` with `paths: []`. Database query timeout returns `504`, distinct from an empty graph result. The API owns full-text normalization, alias matching, and graph traversal; portfolio builder does not construct SQL or PostgreSQL search syntax for news.
+
+The recent-news response contains mentioned companies and their themes so portfolio builder can render the same briefing. `news-http` owns queries against news tables; it may join company reference data to identify mentions and themes. Portfolio builder continues to query company reference data for its non-news work.
 
 ## Consumer
 
