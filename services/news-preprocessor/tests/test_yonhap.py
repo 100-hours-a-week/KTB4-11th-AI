@@ -76,3 +76,16 @@ def test_photo_only_article_raises():
         source.article(source.entries()[0])
 
     assert error.value.image_count == 1
+
+
+def test_title_only_article_preserves_feed_metadata():
+    source = _source('<div class="story-news article"><p></p></div>')
+    entry = source.entries()[0]
+
+    item = source.article(entry)
+
+    assert item.body == entry.title
+    assert item.title == entry.title
+    assert item.url == entry.url
+    assert item.published_at == entry.published_at
+    assert item.raw_payload == entry.raw_payload
