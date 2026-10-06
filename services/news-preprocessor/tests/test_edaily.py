@@ -164,15 +164,36 @@ def test_edaily_direct_read_url_recovers_from_tv(missing_entry):
 
 
 @pytest.mark.parametrize(
-    "url",
+    ("url", "tv_url"),
     [
-        "https://www.edaily.co.kr/news/newspath.asp?newsid=invalid",
-        "https://www.edaily.co.kr/news/newspath.asp",
-        f"https://www.edaily.co.kr/other?newsid={MISSING_ID}",
-        f"https://example.com/News/Read?newsId={MISSING_ID}",
+        (
+            "https://www.edaily.co.kr/news/newspath.asp?newsid=invalid",
+            "https://tvm.edaily.co.kr/News/NewsRead?Kind=&NewsId=invalid",
+        ),
+        (f"https://www.edaily.co.kr/other?newsid={MISSING_ID}", TV_URL),
+        (f"https://example.com/News/Read?newsId={MISSING_ID}", TV_URL),
     ],
 )
-def test_edaily_unknown_article_url_does_not_guess_a_tv_url(missing_entry, url):
+def test_edaily_404_with_news_id_attempts_tv_recovery(missing_entry, url, tv_url):
+    def handler(request):
+        assert str(request.url) in (url, tv_url)
+        return httpx.Response(404)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError) as failure:
+            EdailyRSS(client, "stock").article(replace(missing_entry, url=url))
+
+    assert str(failure.value.response.url) == tv_url
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.edaily.co.kr/news/newspath.asp",
+        "https://www.edaily.co.kr/news/newspath.asp?newsid=",
+    ],
+)
+def test_edaily_missing_news_id_does_not_guess_a_tv_url(missing_entry, url):
     def handler(request):
         assert str(request.url) == url
         return httpx.Response(404)
