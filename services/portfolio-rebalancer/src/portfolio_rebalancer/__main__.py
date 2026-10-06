@@ -7,7 +7,7 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import StructuredLogger, get_logger, setup_logging, start_logging
 
-from portfolio_rebalancer.backend import Backend
+from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
 from portfolio_rebalancer.portfolio import Unready, load_portfolio
@@ -154,18 +154,20 @@ def main() -> None:
                         runs_left,
                         week_runs,
                     ):
+                        request_body = order_request_body(order)
                         fields = {
                             "user_id": user.user_id,
                             "account_id": account.account_id,
                             "stock_code": order.stock_code,
                             "stock_name": order.stock_name,
+                            "request_body": request_body,
                             "side": order.side,
                             "quantity": order.quantity,
                             "reason": order.explanation.reason,
                             **order.pricing.model_dump(),
                         }
                         try:
-                            backend.place(user.user_id, account.account_id, order)
+                            backend.place(user.user_id, account.account_id, order, request_body)
                         except httpx.HTTPError as error:
                             counts["failed"] += 1
                             log.error("order_failed", **fields, **_failure(error))

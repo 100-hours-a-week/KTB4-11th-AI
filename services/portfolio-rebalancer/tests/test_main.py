@@ -71,6 +71,7 @@ class FakeBackend:
     ):
         self.calls = []
         self.placed = []
+        self.request_bodies = []
         self.cancelled = []
         self._snapshots = [users, refreshed or users]
         self.fail_account = fail_account
@@ -95,7 +96,8 @@ class FakeBackend:
         self.calls.append(("cancel", account_id, order_id))
         self.cancelled.append((user_id, account_id, order_id))
 
-    def place(self, user_id, account_id, order):
+    def place(self, user_id, account_id, order, body=None):
+        self.request_bodies.append(body)
         if account_id == self.fail_account:
             self._boom("POST")
         self.calls.append(("place", account_id, order.stock_code))
@@ -220,6 +222,21 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
     assert (failed["account_id"], failed["status"], failed["body"]) == (12, 409, "bad")
     assert failed["order_type"] == "limit"
     assert failed["stock_name"] == "삼성전자"
+    assert failed["request_body"] == {
+        "stock_code": "005930",
+        "stock_name": "삼성전자",
+        "order_side": "buy",
+        "order_type": "limit",
+        "limit_price": 100_000,
+        "is_upper_triggered": False,
+        "is_lower_triggered": False,
+        "quantity": 4,
+        "reason": "사요",
+        "thoughts": [{"label": "근거", "body": "사요"}],
+        "holding_weight_after_trade_percent": 40.0,
+        "holding_weight_limit_percent": 60.0,
+    }
+    assert failed["request_body"] == backends[0].request_bodies[-1]
     assert failed["reason"] == "사요"
 
 
