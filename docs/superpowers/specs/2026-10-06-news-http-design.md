@@ -137,10 +137,18 @@ opens one connection.
   `uv export` commands in AGENTS.md.
 - `./services/news-http` added to the `uv pip install` line of `docker/app.Dockerfile`.
 - `compose.dev.yaml`: a `news-http` service with no profile (it is a server, so `up -d` starts
-  it), `ports: ["8000:8000"]`, `NEWS_HTTP_POSTGRES_DSN` pointing at `postgres`,
-  `depends_on: postgres: service_healthy`, `restart: unless-stopped`, and a healthcheck on
-  `/health` using Python's `urllib` (the slim image has no curl).
+  it), `ports: ["127.0.0.1:8000:8000"]` (loopback only, since the API has no auth),
+  `NEWS_HTTP_POSTGRES_DSN` pointing at `postgres`, `depends_on: postgres: service_healthy`,
+  `restart: unless-stopped`, and a healthcheck on `/health` using Python's `urllib` (the slim
+  image has no curl). The AGENTS.md line for `up -d` changes from "dev postgres/questdb/redis" to
+  include news-http.
+- `tach.toml`: `services/news-http/src` in `source_roots` and a `news_http` module depending on
+  `ktb_core`.
+- `.github/workflows/ci-dev.yaml`: `news-http` in the requirements-freshness loop and in the
+  image build matrix.
 - AGENTS.md and README.md: env var rows, the member row, and the run command.
+- Production deployment (`compose.prod.yaml`, `infrastructure/systemd`, `cd.yaml`) is deferred,
+  as noted under Out of scope.
 
 ## Testing
 
