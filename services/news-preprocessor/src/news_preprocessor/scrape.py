@@ -1,5 +1,6 @@
 from typing import NamedTuple
 
+import httpx
 import sqlalchemy as sa
 from ktb_core.logging import get_logger
 
@@ -26,12 +27,14 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
 
     succeed: list[str] = []
     failed: list[str] = []
+    skipped = 0
     for entry in entries:
         if entry.external_id in known:
             continue
         try:
             item = source.article(entry)
         except EmptyBodyError:
+            skipped += 1
             log.warning(
                 "empty_body_article",
                 source=source.source,
@@ -39,7 +42,21 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
                 article_id=entry.external_id,
             )
             continue
-        except Exception:
+        except Exception as error:
+            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in (
+                404,
+                410,
+            ):
+                skipped += 1
+                log.warning(
+                    "article_unavailable",
+                    source=source.source,
+                    url=entry.url,
+                    article_id=entry.external_id,
+                    status=error.response.status_code,
+                    final_url=str(error.response.url),
+                )
+                continue
             log.exception("article_failed", source=source.source, url=entry.url)
             failed.append(entry.external_id)
             continue
@@ -53,5 +70,6 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
         entries=len(entries),
         new_articles=len(succeed),
         failed=len(failed),
+        skipped=skipped,
     )
     return ScrapeResult(succeed=succeed, failed=failed)
