@@ -1,4 +1,4 @@
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 
 import httpx
@@ -47,11 +47,38 @@ class EdailyRSS:
 
     def article(self, entry: FeedEntry) -> NewsItem:
         response = self._client.get(entry.url, headers={"Accept": "text/html"}, timeout=30)
+        url = httpx.URL(entry.url)
+        news_id = next(
+            (value for key, value in url.params.multi_items() if key.lower() == "newsid"), ""
+        )
+        recovered = response.status_code == 404 and bool(news_id)
+        if recovered:
+            response = self._client.get(
+                f"https://tvm.edaily.co.kr/News/NewsRead?Kind=&NewsId={news_id}",
+                headers={"Accept": "text/html"},
+                timeout=30,
+            )
         article = response.raise_for_status().text
-        body = BeautifulSoup(article, "html.parser").select_one(".news_body")
+        body = BeautifulSoup(article, "html.parser").select_one(
+            ".news_text" if recovered else ".news_body"
+        )
         has_image = contains_article_image(body)
         if body:
             for element in body.select("table, .view_ad01, .view_ad02, script, style, iframe"):
                 element.decompose()
         text = " ".join(body.get_text(" ").split()) if body else ""
-        return NewsItem(**asdict(entry), body=body_or_title(entry, text, has_image))
+        if recovered and not text:
+            raise ValueError(f"missing Edaily TV article body: {response.url}")
+
+        if recovered:
+            log.info(
+                "article_url_recovered",
+                source=self.source,
+                url=entry.url,
+                final_url=str(response.url),
+            )
+
+        return NewsItem(
+            **asdict(replace(entry, url=str(response.url))),
+            body=body_or_title(entry, text, has_image),
+        )
