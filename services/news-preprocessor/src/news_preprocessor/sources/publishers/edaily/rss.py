@@ -59,7 +59,9 @@ class EdailyRSS:
                 timeout=30,
             )
         article = response.raise_for_status().text
-        body = BeautifulSoup(article, "html.parser").select_one(".news_text" if recovered else ".news_body")
+        body = BeautifulSoup(article, "html.parser").select_one(
+            ".news_text" if recovered else ".news_body"
+        )
         has_image = contains_article_image(body)
         if body:
             for element in body.select("table, .view_ad01, .view_ad02, script, style, iframe"):
