@@ -4,9 +4,8 @@ from news_preprocessor.embed_pending import EmbedResult
 from news_preprocessor.scrape import ScrapeResult
 
 FEED = "https://www.mk.co.kr/rss/30100041/"
-OK = ScrapeResult(succeed=[], failed=[], skipped=[])
-BROKEN = ScrapeResult(succeed=[], failed=[FEED], skipped=[])
-SKIPPED = ScrapeResult(succeed=[], failed=[], skipped=[FEED])
+OK = ScrapeResult(succeed=[], failed=[])
+BROKEN = ScrapeResult(succeed=[], failed=[FEED])
 
 
 @pytest.fixture
@@ -19,7 +18,6 @@ def env(monkeypatch):
     ("scrape_results", "embed_result", "code"),
     [
         ((OK, OK), EmbedResult(succeed=[], failed=[]), 0),
-        ((OK, SKIPPED), EmbedResult(succeed=[], failed=[]), 0),
         ((OK, BROKEN), EmbedResult(succeed=[], failed=[]), 1),
         ((OK, OK), EmbedResult(succeed=[], failed=[FEED]), 1),
     ],
