@@ -13,6 +13,7 @@ log = get_logger(__name__)
 class ScrapeResult(NamedTuple):
     succeed: list[str]
     failed: list[str]
+    skipped: list[str]
 
 
 def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
@@ -20,21 +21,21 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
         entries = source.entries()
     except Exception:
         log.exception("feed_failed", source=source.source)
-        return ScrapeResult(succeed=[], failed=[source.feed_url])
+        return ScrapeResult(succeed=[], failed=[source.feed_url], skipped=[])
 
     with engine.connect() as conn:
         known = known_external_ids(conn, source.source, [entry.external_id for entry in entries])
 
     succeed: list[str] = []
     failed: list[str] = []
-    skipped = 0
+    skipped: list[str] = []
     for entry in entries:
         if entry.external_id in known:
             continue
         try:
             item = source.article(entry)
         except EmptyBodyError:
-            skipped += 1
+            skipped.append(entry.external_id)
             log.warning(
                 "empty_body_article",
                 source=source.source,
@@ -42,23 +43,25 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
                 article_id=entry.external_id,
             )
             continue
-        except Exception as error:
-            if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in (
-                404,
-                410,
-            ):
-                skipped += 1
+        except httpx.HTTPStatusError as error:
+            status = error.response.status_code
+            if status in (404, 410):
+                skipped.append(entry.external_id)
                 log.warning(
                     "article_unavailable",
                     source=source.source,
                     url=entry.url,
                     article_id=entry.external_id,
-                    status=error.response.status_code,
+                    status=status,
                     final_url=str(error.response.url),
                 )
-                continue
-            log.exception("article_failed", source=source.source, url=entry.url)
+            else:
+                failed.append(entry.external_id)
+                log.exception("article_failed", source=source.source, url=entry.url)
+            continue
+        except Exception:
             failed.append(entry.external_id)
+            log.exception("article_failed", source=source.source, url=entry.url)
             continue
         with engine.begin() as conn:
             if insert_new(conn, item):
@@ -70,6 +73,6 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
         entries=len(entries),
         new_articles=len(succeed),
         failed=len(failed),
-        skipped=skipped,
+        skipped=len(skipped),
     )
-    return ScrapeResult(succeed=succeed, failed=failed)
+    return ScrapeResult(succeed=succeed, failed=failed, skipped=skipped)

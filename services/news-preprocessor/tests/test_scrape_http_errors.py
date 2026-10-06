@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from news_preprocessor import __main__ as entry
 from news_preprocessor import scrape as scraping
 from news_preprocessor.embed_pending import EmbedResult
+from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers import EdailyRSS
 
 FEED_URL = "http://rss.edaily.co.kr/stock_news.xml"
@@ -58,6 +59,7 @@ def test_unavailable_article_is_skipped_and_next_article_is_processed(
 
     assert result.succeed == [AVAILABLE_URL]
     assert result.failed == []
+    assert result.skipped == [MISSING_URL]
     warnings = [record for record in caplog.records if record.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert warnings[0].fields["url"] == MISSING_URL
@@ -67,6 +69,29 @@ def test_unavailable_article_is_skipped_and_next_article_is_processed(
     assert summary.fields["skipped"] == 1
     assert summary.fields["failed"] == 0
     assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
+def test_empty_body_article_is_returned_as_skipped_and_is_not_stored(scrape_engine, monkeypatch):
+    source = _source()
+    fetch_article = source.article
+    stored = []
+
+    def article(entry):
+        if entry.external_id == MISSING_URL:
+            raise EmptyBodyError(entry.url)
+        return fetch_article(entry)
+
+    monkeypatch.setattr(source, "article", article)
+    monkeypatch.setattr(
+        scraping, "insert_new", lambda conn, item: stored.append(item.external_id) or True
+    )
+
+    result = scraping.scrape(scrape_engine, source)
+
+    assert result.skipped == [MISSING_URL]
+    assert result.failed == []
+    assert result.succeed == [AVAILABLE_URL]
+    assert stored == [AVAILABLE_URL]
 
 
 @pytest.fixture

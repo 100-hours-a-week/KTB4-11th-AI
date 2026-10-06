@@ -30,8 +30,9 @@ def main() -> None:
         finally:
             client.close()
             engine.dispose()
-        failed = [result for result in scraped if result.failed] or embedded.failed
-        sys.exit(1 if failed else 0)
+        scrape_failed = any(result.failed for result in scraped)
+        has_failed = scrape_failed or bool(embedded.failed)
+        sys.exit(1 if has_failed else 0)
 
 
 if __name__ == "__main__":

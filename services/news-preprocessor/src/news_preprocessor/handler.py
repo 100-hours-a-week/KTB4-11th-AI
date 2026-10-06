@@ -33,12 +33,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, dict[str, Any]]:
 
         scraped_succeed = [article for result in scraped for article in result.succeed]
         scraped_failed = [article for result in scraped for article in result.failed]
+        scraped_skipped = [article for result in scraped for article in result.skipped]
         report = {
             "scraped": {
                 "succeed": scraped_succeed,
                 "succeed_count": len(scraped_succeed),
                 "failed": scraped_failed,
                 "failed_count": len(scraped_failed),
+                "skipped": scraped_skipped,
+                "skipped_count": len(scraped_skipped),
             },
             "embedded": {
                 "succeed": embedded.succeed,
