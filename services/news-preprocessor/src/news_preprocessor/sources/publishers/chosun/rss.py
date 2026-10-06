@@ -1,13 +1,13 @@
 import json
 from dataclasses import asdict
 from datetime import datetime
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from bs4 import BeautifulSoup
 from ktb_core.logging import get_logger
 
-from news_preprocessor.sources import FeedEntry, NewsItem
+from news_preprocessor.sources import FeedEntry, ImageOnlyArticleError, NewsItem
 from news_preprocessor.sources.article_body import body_or_title
 
 log = get_logger(__name__)
@@ -62,7 +62,24 @@ class ChosunEconomyRSS:
             for element in content.get("content_elements", [])
             if element.get("type") == "text"
         ).strip()
-        has_image = any(
-            element.get("type") == "image" for element in content.get("content_elements", [])
-        )
-        return NewsItem(**asdict(entry), body=body_or_title(entry, body, has_image))
+        images = [
+            element
+            for element in content.get("content_elements", [])
+            if element.get("type") == "image"
+        ]
+        image_urls = []
+        if not body:
+            for image in images:
+                candidate = image.get("url")
+                if not isinstance(candidate, str) or not candidate.strip():
+                    raise ImageOnlyArticleError(len(images))
+                try:
+                    url = urljoin(str(response.url), candidate.strip())
+                    if urlsplit(url).scheme not in ("http", "https"):
+                        raise ValueError("unsupported image URL")
+                except ValueError as error:
+                    raise ImageOnlyArticleError(len(images)) from error
+                if url not in image_urls:
+                    image_urls.append(url)
+        body = body_or_title(entry, body, bool(images), image_urls=image_urls, client=self._client)
+        return NewsItem(**asdict(entry), body=body)

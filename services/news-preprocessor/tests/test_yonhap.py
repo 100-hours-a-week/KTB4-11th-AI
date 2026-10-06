@@ -65,7 +65,8 @@ def test_article_extracts_the_body_only():
     assert item.source == "yonhap_economy"
 
 
-def test_photo_only_article_raises():
+def test_photo_only_article_raises_when_ocr_is_disabled(monkeypatch):
+    monkeypatch.setenv("NEWS_PREPROCESSOR_OCR_ENABLED", "false")
     source = _source(
         '<div class="story-news article"><div class="comp-box photo-group"><img src="photo.jpg"/>'
         "<figcaption>사진 설명</figcaption></div><p></p>"

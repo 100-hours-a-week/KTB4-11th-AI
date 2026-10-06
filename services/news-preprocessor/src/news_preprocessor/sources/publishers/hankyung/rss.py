@@ -6,7 +6,11 @@ from bs4 import BeautifulSoup, Tag
 from ktb_core.logging import get_logger
 
 from news_preprocessor.sources import FeedEntry, NewsItem
-from news_preprocessor.sources.article_body import body_or_title, contains_article_image
+from news_preprocessor.sources.article_body import (
+    article_image_urls,
+    body_or_title,
+    contains_article_image,
+)
 from news_preprocessor.sources.publishers.hankyung.parser import parse_article_body
 
 log = get_logger(__name__)
@@ -52,7 +56,13 @@ class HankyungEconomyRSS:
         article = response.raise_for_status().text
         body = parse_article_body(article)
         content = BeautifulSoup(article, "html.parser").select_one(".article-body")
-        body = body_or_title(entry, body, contains_article_image(content))
+        body = body_or_title(
+            entry,
+            body,
+            contains_article_image(content),
+            image_urls=article_image_urls(content, str(response.url)) if not body else [],
+            client=self._client,
+        )
         return NewsItem(**asdict(entry), body=body)
 
 

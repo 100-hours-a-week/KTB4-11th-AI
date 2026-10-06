@@ -26,6 +26,10 @@ RUN uv pip install --no-deps \
 
 FROM python:3.13-slim-bookworm AS runtime
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 

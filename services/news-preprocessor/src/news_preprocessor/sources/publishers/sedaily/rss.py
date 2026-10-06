@@ -6,7 +6,11 @@ from bs4 import BeautifulSoup
 from ktb_core.logging import get_logger
 
 from news_preprocessor.sources import FeedEntry, NewsItem
-from news_preprocessor.sources.article_body import body_or_title, contains_article_image
+from news_preprocessor.sources.article_body import (
+    article_image_urls,
+    body_or_title,
+    contains_article_image,
+)
 
 log = get_logger(__name__)
 
@@ -54,4 +58,6 @@ class SeoulEconomicRSS:
             for element in body.select(".article-video, script, style, iframe"):
                 element.decompose()
         text = " ".join(body.get_text(" ").split()) if body else ""
-        return NewsItem(**asdict(entry), body=body_or_title(entry, text, has_image))
+        image_urls = article_image_urls(body, str(response.url)) if not text else []
+        text = body_or_title(entry, text, has_image, image_urls=image_urls, client=self._client)
+        return NewsItem(**asdict(entry), body=text)
