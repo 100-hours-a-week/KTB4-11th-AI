@@ -158,6 +158,7 @@ def main() -> None:
                             "user_id": user.user_id,
                             "account_id": account.account_id,
                             "stock_code": order.stock_code,
+                            "stock_name": order.stock_name,
                             "side": order.side,
                             "quantity": order.quantity,
                             "reason": order.explanation.reason,

@@ -219,6 +219,7 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
     failed = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_failed")
     assert (failed["account_id"], failed["status"], failed["body"]) == (12, 409, "bad")
     assert failed["order_type"] == "limit"
+    assert failed["stock_name"] == "삼성전자"
     assert failed["reason"] == "사요"
 
 
