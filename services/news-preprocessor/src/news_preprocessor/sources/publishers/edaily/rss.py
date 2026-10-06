@@ -72,13 +72,13 @@ class EdailyRSS:
 
         if recovered:
             log.info(
-                "article_url_recovered", 
-                source=self.source, 
-                url=entry.url, 
+                "article_url_recovered",
+                source=self.source,
+                url=entry.url,
                 final_url=str(response.url),
             )
 
         return NewsItem(
-            **asdict(replace(entry, url=str(response.url))), 
+            **asdict(replace(entry, url=str(response.url))),
             body=body_or_title(entry, text, has_image),
         )
