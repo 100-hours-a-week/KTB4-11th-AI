@@ -29,7 +29,7 @@ def publishers(
         HankyungEconomyRSS(client),
         MaeilBusinessEconomyRSS(client),
         YonhapEconomyRSS(client),
-        EdailyRSS(client),
+        *(EdailyRSS(client, section) for section in EdailyRSS.sections),
         *(SeoulEconomicRSS(client, section) for section in SeoulEconomicRSS.sections),
         OpenDart(client, dart_api_key, stock_codes),
     )

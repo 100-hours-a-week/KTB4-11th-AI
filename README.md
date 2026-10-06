@@ -370,8 +370,8 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 |---|---|---|---|
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | | 뉴스/기업/포트폴리오 저장소 연결 |
 | `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | | QuestDB 시세 연결 |
-| `PORTFOLIO_BUILDER_OPENROUTER_API_KEY` | 필수 | | OpenRouter 인증. Compose에서는 `OPENROUTER_API_KEY`를 전달 |
-| `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | | OpenRouter 모델 ID |
+| `PORTFOLIO_BUILDER_LLM_API_KEY` | 필수 | | OpenAI API 인증 |
+| `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | | OpenAI API 모델 ID |
 | `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` | 모델 추론 수준 (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`) |
 | `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | | `7` | 분석에 포함할 최근 뉴스 기간(일) |
 | `PORTFOLIO_BUILDER_MAX_TURNS` | | `150` | 포트폴리오 에이전트의 최대 모델 호출 횟수 |

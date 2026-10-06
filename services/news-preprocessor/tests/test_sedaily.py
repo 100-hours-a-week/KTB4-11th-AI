@@ -1,8 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
 import httpx
-import pytest
-from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers import SeoulEconomicRSS, publishers
 
 FEED_URL = "https://m.sedaily.com/rss/business"
@@ -52,7 +50,7 @@ def test_sedaily_feed_and_article(caplog):
     assert source.article(entries[0]).body == "사진 설명 실제 기사 지니언스(263860) 다음 문장"
 
 
-def test_empty_article_raises():
+def test_title_only_article_uses_title_as_body():
     def handler(request):
         return httpx.Response(
             200,
@@ -62,5 +60,5 @@ def test_empty_article_raises():
         )
 
     source = SeoulEconomicRSS(httpx.Client(transport=httpx.MockTransport(handler)), "business")
-    with pytest.raises(EmptyBodyError):
-        source.article(source.entries()[0])
+    entry = source.entries()[0]
+    assert source.article(entry).body == entry.title

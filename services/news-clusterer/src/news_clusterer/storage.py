@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 import numpy as np
 import sqlalchemy as sa
@@ -41,6 +42,17 @@ article_clusters = sa.Table(
 )
 
 
+@dataclass(frozen=True)
+class ClusterWriteStats:
+    clusters_created: int
+    clusters_maintained: int
+    clusters_changed: int
+    clusters_deleted: int
+    mappings_added: int
+    mappings_moved: int
+    mappings_removed: int
+
+
 def load_embeddings(conn: sa.Connection) -> tuple[list[int], np.ndarray]:
     rows = conn.execute(
         sa.select(articles.c.id, articles.c.embedding)
@@ -70,7 +82,7 @@ def write_clusters(
     old: dict[int, set[int]],
     matches: dict[int, int | None],
     unmatched: set[int],
-) -> None:
+) -> ClusterWriteStats:
     cluster_ids: dict[int, int] = {}
     for label, old_id in matches.items():
         if old_id is None:
@@ -106,3 +118,19 @@ def write_clusters(
         conn.execute(sa.delete(article_clusters).where(article_clusters.c.article_id.in_(noise)))
     if unmatched:
         conn.execute(sa.delete(clusters).where(clusters.c.id.in_(unmatched)))
+    return ClusterWriteStats(
+        clusters_created=sum(old_id is None for old_id in matches.values()),
+        clusters_maintained=sum(
+            old_id is not None and new[label] == old[old_id] for label, old_id in matches.items()
+        ),
+        clusters_changed=sum(
+            old_id is not None and new[label] != old[old_id] for label, old_id in matches.items()
+        ),
+        clusters_deleted=len(unmatched),
+        mappings_added=sum(article_id not in previous for article_id in desired),
+        mappings_moved=sum(
+            article_id in previous and previous[article_id] != cluster_id
+            for article_id, cluster_id in desired.items()
+        ),
+        mappings_removed=len(noise),
+    )

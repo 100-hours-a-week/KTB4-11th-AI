@@ -104,3 +104,19 @@ def test_kospi200_stock_codes_reads_only_the_kospi200_rows(pg_conn):
         )
 
     assert kospi200_stock_codes(pg_conn) == {"005930", "000660"}
+
+
+def test_set_embedding_rejects_mismatched_lengths_before_writing():
+    class Connection:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, statement):
+            self.executed.append(statement)
+
+    conn = Connection()
+
+    with pytest.raises(ValueError):
+        set_embedding(conn, [1, 2], [_vector(1.0)])
+
+    assert conn.executed == []
