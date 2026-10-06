@@ -109,13 +109,17 @@ services/news-http/
   src/news_http/
     __main__.py             main(): setup_logging(), uvicorn.run(app, host, port)
     settings.py             NEWS_HTTP_ prefix
-    app.py                  FastAPI app, routes, response models, cursor encode/decode
-    storage.py              SQLAlchemy table definitions (only the columns read) and the two queries
+    controllers.py          FastAPI app, routes, response models, cursor encode/decode, 404
+    repository.py           SQLAlchemy table definitions (only the columns read) and the two queries
   tests/
     conftest.py             engine on KTB_TEST_POSTGRES_DSN, skipped when unset; TRUNCATE between tests
-    test_app.py             TestClient against the seeded database
+    test_controllers.py     TestClient against the seeded database
     test_settings.py
 ```
+
+Two layers: controllers and a repository. There is no service layer, because the endpoints have
+no business logic and a service would only pass arguments through. Add `services.py` when a rule
+appears that is neither HTTP shaping nor a query.
 
 The engine is created once at startup from the settings and stored on `app.state`; each request
 opens one connection.
