@@ -51,14 +51,7 @@ class EdailyRSS:
         news_id = next(
             (value for key, value in url.params.multi_items() if key.lower() == "newsid"), ""
         )
-        recovered = (
-            response.status_code == 404
-            and url.host in ("www.edaily.co.kr", "m.edaily.co.kr", "edaily.co.kr")
-            and url.path.lower() in ("/news/newspath.asp", "/news/read")
-            and len(news_id) == 17
-            and news_id.isascii()
-            and news_id.isdigit()
-        )
+        recovered = response.status_code == 404 and bool(news_id)
         if recovered:
             response = self._client.get(
                 f"https://tvm.edaily.co.kr/News/NewsRead?Kind=&NewsId={news_id}",
@@ -76,10 +69,7 @@ class EdailyRSS:
         text = " ".join(body.get_text(" ").split()) if body else ""
         if recovered and not text:
             raise ValueError(f"missing Edaily TV article body: {response.url}")
-        item = NewsItem(
-            **asdict(replace(entry, url=str(response.url))),
-            body=body_or_title(entry, text, has_image),
-        )
+            
         if recovered:
-            log.info("article_url_recovered", source=self.source, url=entry.url, final_url=item.url)
-        return item
+            log.info("article_url_recovered", source=self.source, url=entry.url, final_url=response.url)
+        return NewsItem(**asdict(replace(entry, url=str(response.url))), body=body_or_title(entry, text, has_image))
