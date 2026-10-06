@@ -71,5 +71,6 @@ class EdailyRSS:
             raise ValueError(f"missing Edaily TV article body: {response.url}")
             
         if recovered:
-            log.info("article_url_recovered", source=self.source, url=entry.url, final_url=response.url)
+            log.info("article_url_recovered", source=self.source, url=entry.url, final_url=str(response.url))
+        
         return NewsItem(**asdict(replace(entry, url=str(response.url))), body=body_or_title(entry, text, has_image))
