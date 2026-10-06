@@ -232,7 +232,7 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
         "is_lower_triggered": False,
         "quantity": 4,
         "reason": "사요",
-        "thoughts": [{"label": "근거", "body": "사요"}],
+        "reasoning": [{"label": "근거", "body": "사요"}],
         "holding_weight_after_trade_percent": 40.0,
         "holding_weight_limit_percent": 60.0,
     }

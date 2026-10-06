@@ -107,7 +107,7 @@ def test_an_order_carries_the_user_token_the_csrf_pair_and_the_explanation():
         "is_lower_triggered": False,
         "quantity": 3,
         "reason": "사요",
-        "thoughts": [{"label": "HBM", "body": "늘었어요."}],
+        "reasoning": [{"label": "HBM", "body": "늘었어요."}],
         "holding_weight_after_trade_percent": 19.5,
         "holding_weight_limit_percent": 24.0,
     }

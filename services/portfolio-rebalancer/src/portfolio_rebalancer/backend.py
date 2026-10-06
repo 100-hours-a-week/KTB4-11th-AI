@@ -21,7 +21,7 @@ class OrderRequest(BaseModel):
     is_lower_triggered: bool
     quantity: int
     reason: str
-    thoughts: list[Reasoning]
+    reasoning: list[Reasoning]
     holding_weight_after_trade_percent: float
     holding_weight_limit_percent: float
 
@@ -38,7 +38,7 @@ def order_request_body(order: Order) -> dict:
         is_lower_triggered=market and order.side == "sell",
         quantity=order.quantity,
         reason=order.explanation.reason,
-        thoughts=order.explanation.reasonings,
+        reasoning=order.explanation.reasonings,
         holding_weight_after_trade_percent=order.holding_weight_after_trade_percent,
         holding_weight_limit_percent=order.holding_weight_limit_percent,
     ).model_dump(mode="json")
