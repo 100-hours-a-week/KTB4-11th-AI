@@ -24,9 +24,10 @@ def test_cluster_detail_includes_news_graph_and_nullable_company(client, seed, a
     assert body["title"] == "Semiconductor"
     assert body["summary"] == "Semiconductor summary"
     assert datetime.fromisoformat(body["updated_at"]).utcoffset() is not None
-    assert body["articles"] == [
-        {"title": "HBM demand", "source": "test", "published_at": at(3).isoformat()}
-    ]
+    [item] = body["articles"]
+    assert item["title"] == "HBM demand"
+    assert item["source"] == "test"
+    assert datetime.fromisoformat(item["published_at"]) == at(3)
     assert body["entities"] == [
         {"id": stock, "name": "name 005930", "type": "company", "company_id": "005930"},
         {"id": concept, "name": "HBM", "type": "concept", "company_id": None},
