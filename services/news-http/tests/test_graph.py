@@ -131,7 +131,9 @@ def test_graph_parameters_are_validated(client):
         assert client.get("/graph/paths", params=params).status_code == 422
 
 
-def test_graph_rejects_names_that_normalize_to_empty(client):
+def test_graph_rejects_names_that_normalize_to_empty(client, seed):
+    seed.entity("company")
+
     assert client.get("/graph/neighborhood", params={"name": "(주)"}).status_code == 422
     assert (
         client.get("/graph/paths", params={"from_name": "company", "to_name": "㈜"}).status_code
