@@ -60,3 +60,12 @@ def engine(pg_engine):
             conn.execute(sa.text(statement))
     yield pg_engine
     _truncate(pg_engine)
+
+
+@pytest.fixture
+def news_client():
+    class Stub:
+        def has_cluster(self, cluster_id):
+            return cluster_id != 404
+
+    return Stub()
