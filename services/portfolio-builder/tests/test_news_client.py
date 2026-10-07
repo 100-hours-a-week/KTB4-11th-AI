@@ -29,7 +29,14 @@ def test_success_decodes_empty_and_recent_news_dates():
             response([]),
             response(
                 {
-                    "clusters": [{"updated_at": "2026-10-07T10:00:00+09:00"}],
+                    "clusters": [
+                        {
+                            "id": 1,
+                            "title": "title",
+                            "summary": "summary",
+                            "updated_at": "2026-10-07T10:00:00+09:00",
+                        }
+                    ],
                     "companies": [],
                     "theme_count": 0,
                 }
@@ -72,6 +79,46 @@ def test_malformed_json_is_fatal():
     with patch("portfolio_builder.news_client.urlopen", return_value=Response(b"{")):
         with pytest.raises(NewsUpstreamError):
             NewsClient("http://news").recent_news(7)
+
+
+@pytest.mark.parametrize(
+    ("method", "payload"),
+    [
+        (lambda client: client.recent_news(7), {"clusters": [], "theme_count": 0}),
+        (
+            lambda client: client.recent_news(7),
+            {
+                "clusters": [{"id": 1, "title": "x", "summary": "y", "updated_at": "bad"}],
+                "companies": [],
+                "theme_count": 0,
+            },
+        ),
+        (
+            lambda client: client.recent_news(7),
+            {
+                "clusters": [],
+                "companies": [{"company_id": "1", "name": "x", "stock_code": "1"}],
+                "theme_count": 0,
+            },
+        ),
+        (lambda client: client.search_clusters("x"), [{"id": 1}]),
+        (lambda client: client.get_cluster(1), {"id": 1, "title": "x"}),
+        (lambda client: client.graph_neighborhood("x", 2), {"nodes": [], "edges": []}),
+        (lambda client: client.graph_paths("x", "y", 2), {"paths": []}),
+    ],
+)
+def test_malformed_success_payloads_are_fatal(method, payload):
+    with patch("portfolio_builder.news_client.urlopen", return_value=response(payload)):
+        with pytest.raises(NewsUpstreamError):
+            method(NewsClient("http://news"))
+
+
+@pytest.mark.parametrize("body", [b"[1]", b'"invalid"', b'{"detail": []}'])
+def test_malformed_graph_error_payload_is_fatal(body):
+    error = HTTPError("http://news", 404, "missing", {}, BytesIO(body))
+    with patch("portfolio_builder.news_client.urlopen", side_effect=error):
+        with pytest.raises(NewsUpstreamError):
+            NewsClient("http://news").graph_neighborhood("x", 2)
 
 
 def test_request_uses_encoded_query_and_configured_timeout():
