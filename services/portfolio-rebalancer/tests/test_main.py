@@ -41,7 +41,6 @@ def account(account_id, stocks=(), pending=(), active=True, cash=1_000_000):
                 "order_status": "pending",
                 "limit_price": 95_000,
                 "quantity": 2,
-                "current_stock_price": 100_000,
             }
             for order_id in pending
         ],

@@ -20,7 +20,6 @@ EXAMPLE = {
                             "order_type": "limit",
                             "limit_price": 250000,
                             "quantity": 2,
-                            "current_stock_price": 200000,
                         }
                     ],
                 }
@@ -38,7 +37,7 @@ def test_the_backend_example_parses():
     assert account.cash_balance == 1000000
     assert account.stocks[0].quantity == 10
     assert account.pending_orders[0].order_side == "sell"
-    assert account.pending_orders[0].current_stock_price == 200000
+    assert account.pending_orders[0].quantity == 2
     assert snapshot.users[1].accounts == []
 
 
