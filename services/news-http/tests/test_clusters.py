@@ -84,3 +84,29 @@ def test_walking_the_cursor_returns_every_cluster_once(client, seed, at):
 @pytest.mark.parametrize("query", ["limit=0", "limit=101", "cursor=!!!"])
 def test_invalid_query_is_a_422(client, query):
     assert client.get(f"/stocks/005930/clusters?{query}").status_code == 422
+
+
+def test_search_matches_every_prefix_and_orders_by_rank(client, seed, at):
+    first = seed.cluster([seed.article(at(1))], title="삼성전자 반도체 실적")
+    second = seed.cluster([seed.article(at(2))], title="삼성전자 반도체 반도체 반도체 전망")
+    seed.cluster([seed.article(at(3))], title="삼성전자 배터리")
+
+    response = client.get("/clusters/search", params={"q": "삼성전자,반도"})
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()] == [second, first]
+    assert response.json()[0]["excerpt"] == "삼성전자 반도체 반도체 반도체 전망 summary"
+    assert response.json()[0]["rank"] > response.json()[1]["rank"]
+    assert set(response.json()[0]) == {"id", "title", "excerpt", "rank"}
+
+
+@pytest.mark.parametrize("query", ["q=삼성전자,", "q=삼성전자%20반도체", "q=,삼성전자"])
+def test_search_rejects_invalid_terms(client, query):
+    assert client.get(f"/clusters/search?{query}").status_code == 422
+
+
+def test_search_with_empty_query_returns_no_results(client):
+    response = client.get("/clusters/search", params={"q": ""})
+
+    assert response.status_code == 200
+    assert response.json() == []

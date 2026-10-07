@@ -1,10 +1,37 @@
-from fastapi import APIRouter
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Path, Query
 
 from news_http.controllers.database import DbConnection
-from news_http.controllers.pagination import Before, Limit, Page, paginate
-from news_http.repositories.clusters import Cluster, find_stock_clusters
+from news_http.controllers.pagination import BIGINT_MAX, Before, Limit, Page, paginate
+from news_http.repositories.clusters import (
+    Cluster,
+    find_stock_clusters,
+    get_cluster_detail,
+    search_clusters,
+)
 
 router = APIRouter()
+
+
+@router.get("/clusters/search")
+def search_cluster_route(q: Annotated[str, Query()], conn: DbConnection) -> list[dict[str, object]]:
+    if not q.strip():
+        return []
+    terms = [term.strip() for term in q.split(",")]
+    if any(not term or not term.isalnum() for term in terms):
+        raise HTTPException(422, "q must contain comma-separated words")
+    return search_clusters(conn, terms)
+
+
+@router.get("/clusters/{cluster_id}")
+def get_cluster_route(
+    cluster_id: Annotated[int, Path(ge=1, le=BIGINT_MAX)], conn: DbConnection
+) -> dict[str, object]:
+    detail = get_cluster_detail(conn, cluster_id)
+    if detail is None:
+        raise HTTPException(404, "cluster not found")
+    return detail
 
 
 @router.get("/stocks/{stock_code}/clusters")
