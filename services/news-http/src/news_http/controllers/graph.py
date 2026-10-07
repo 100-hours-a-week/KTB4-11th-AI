@@ -5,6 +5,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Query
 
 from news_http.controllers.database import DbConnection
+from news_http.controllers.responses import GraphNeighborhood, GraphPaths
 from news_http.repositories.graph import (
     TIMEOUT_MESSAGE,
     InvalidEntityName,
@@ -35,7 +36,7 @@ def _handle_query(operation: Callable[[], dict[str, object]]) -> dict[str, objec
         raise
 
 
-@router.get("/graph/neighborhood")
+@router.get("/graph/neighborhood", response_model=GraphNeighborhood)
 def neighborhood_route(
     name: Annotated[str, Query(min_length=1)],
     conn: DbConnection,
@@ -46,7 +47,7 @@ def neighborhood_route(
     return _handle_query(lambda: get_neighborhood(conn, name, depth))
 
 
-@router.get("/graph/paths")
+@router.get("/graph/paths", response_model=GraphPaths)
 def paths_route(
     from_name: Annotated[str, Query(min_length=1)],
     to_name: Annotated[str, Query(min_length=1)],

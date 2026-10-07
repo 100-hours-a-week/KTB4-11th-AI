@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Path, Query
 
 from news_http.controllers.database import DbConnection
 from news_http.controllers.pagination import BIGINT_MAX, Before, Limit, Page, paginate
+from news_http.controllers.responses import ClusterDetail, ClusterSearchResult
 from news_http.repositories.clusters import (
     Cluster,
     find_stock_clusters,
@@ -14,7 +15,7 @@ from news_http.repositories.clusters import (
 router = APIRouter()
 
 
-@router.get("/clusters/search")
+@router.get("/clusters/search", response_model=list[ClusterSearchResult])
 def search_cluster_route(q: Annotated[str, Query()], conn: DbConnection) -> list[dict[str, object]]:
     if not q.strip():
         raise HTTPException(422, "q must contain comma-separated words")
@@ -24,7 +25,7 @@ def search_cluster_route(q: Annotated[str, Query()], conn: DbConnection) -> list
     return search_clusters(conn, terms)
 
 
-@router.get("/clusters/{cluster_id}")
+@router.get("/clusters/{cluster_id}", response_model=ClusterDetail)
 def get_cluster_route(
     cluster_id: Annotated[int, Path(ge=1, le=BIGINT_MAX)], conn: DbConnection
 ) -> dict[str, object]:
