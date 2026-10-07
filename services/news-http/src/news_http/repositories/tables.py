@@ -48,7 +48,23 @@ corporations = sa.Table(
     "corporations",
     metadata,
     sa.Column("stock_code", sa.Text, primary_key=True),
+    sa.Column("name", sa.Text, nullable=False),
     sa.Column("corp_code", sa.Text, nullable=False),
+)
+
+themes = sa.Table(
+    "themes",
+    metadata,
+    sa.Column("theme_code", sa.Text, primary_key=True),
+    sa.Column("name", sa.Text, nullable=False),
+)
+
+theme_companies = sa.Table(
+    "theme_companies",
+    metadata,
+    sa.Column("theme_code", sa.Text, sa.ForeignKey("themes.theme_code"), primary_key=True),
+    sa.Column("stock_code", sa.Text, sa.ForeignKey("corporations.stock_code"), primary_key=True),
+    sa.Column("is_major", sa.Boolean, nullable=False),
 )
 
 cluster_entities = sa.Table(
