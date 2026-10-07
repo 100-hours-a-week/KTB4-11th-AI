@@ -86,6 +86,47 @@ def test_users_sends_the_service_token_as_a_cookie():
     assert "authorization" not in fake.requests[0].headers
 
 
+@pytest.mark.parametrize(("order_type", "limit_price"), [("limit", 95_000), ("market", None)])
+def test_users_accepts_pending_orders_without_a_current_stock_price(order_type, limit_price):
+    payload = {
+        "users": [
+            {
+                "user_id": 1,
+                "accounts": [
+                    {
+                        "account_id": 11,
+                        "account_name": "AI 계좌",
+                        "is_active": True,
+                        "cash_balance": 1_000_000,
+                        "stocks": [],
+                        "pending_orders": [
+                            {
+                                "order_id": 3,
+                                "stock_code": "066570",
+                                "order_side": "buy",
+                                "order_status": "pending",
+                                "order_type": order_type,
+                                "limit_price": limit_price,
+                                "quantity": 2,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    client = httpx.Client(
+        base_url="http://backend",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)),
+    )
+
+    users = Backend(client, SECRET, ISSUER).users()
+
+    pending = users[0].accounts[0].pending_orders[0]
+    assert (pending.order_id, pending.stock_code, pending.quantity) == (3, "066570", 2)
+    assert (pending.order_type, pending.limit_price) == (order_type, limit_price)
+
+
 def test_an_order_carries_the_user_token_the_csrf_pair_and_the_explanation():
     fake = FakeBackend()
 
