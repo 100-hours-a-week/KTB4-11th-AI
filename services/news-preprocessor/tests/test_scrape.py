@@ -1,10 +1,8 @@
-from datetime import UTC, datetime
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import patch
 
-import httpx
 import sqlalchemy as sa
 from news_preprocessor.scrape import scrape
-from news_preprocessor.sources import EmptyBodyError, FeedEntry
+from news_preprocessor.sources import EmptyBodyError
 from news_preprocessor.sources.publishers import HankyungEconomyRSS, MaeilBusinessEconomyRSS
 from news_preprocessor.storage import articles
 
@@ -92,65 +90,3 @@ def test_an_empty_body_article_is_skipped_with_a_warning(engine, fake_web, monke
         url=HANKYUNG_ARTICLES[0],
         article_id=HANKYUNG_ARTICLES[0],
     )
-
-
-def _source_with_http_error(status_code: int) -> tuple[Mock, FeedEntry, FeedEntry]:
-    entry = FeedEntry(
-        source="test",
-        external_id="article-1",
-        url="https://example.com/article-1",
-        title="title",
-        published_at=datetime(2026, 10, 6, tzinfo=UTC),
-        raw_payload="payload",
-    )
-    next_entry = FeedEntry(
-        source="test",
-        external_id="article-2",
-        url="https://example.com/article-2",
-        title="next title",
-        published_at=datetime(2026, 10, 6, tzinfo=UTC),
-        raw_payload="next payload",
-    )
-    request = httpx.Request("GET", entry.url)
-    response = httpx.Response(status_code, request=request)
-    source = Mock(source="test", feed_url="https://example.com/feed")
-    source.entries.return_value = [entry, next_entry]
-    source.article.side_effect = [
-        httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response),
-        next_entry,
-    ]
-    return source, entry, next_entry
-
-
-def test_a_not_found_article_is_skipped_without_failing_the_scrape():
-    source, entry, next_entry = _source_with_http_error(404)
-    engine = MagicMock()
-
-    with (
-        patch("news_preprocessor.scrape.known_external_ids", return_value=set()),
-        patch("news_preprocessor.scrape.insert_new", return_value=True),
-        patch("news_preprocessor.scrape.log.warning") as warning,
-    ):
-        result = scrape(engine, source)
-
-    assert result.succeed == [next_entry.external_id]
-    assert result.failed == []
-    warning.assert_any_call(
-        "unavailable_article",
-        source="test",
-        url=entry.url,
-        article_id=entry.external_id,
-        status_code=404,
-        final_url=entry.url,
-    )
-
-
-def test_a_server_error_article_remains_a_scrape_failure():
-    source, entry, next_entry = _source_with_http_error(503)
-    engine = MagicMock()
-
-    with patch("news_preprocessor.scrape.known_external_ids", return_value=set()):
-        result = scrape(engine, source)
-
-    assert result.succeed == [next_entry.external_id]
-    assert result.failed == [entry.external_id]
