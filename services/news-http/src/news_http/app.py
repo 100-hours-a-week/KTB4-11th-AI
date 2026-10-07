@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 from fastapi import FastAPI
 
-from news_http.controllers import articles, clusters, news
+from news_http.controllers import articles, clusters, graph, news
 
 
 def create_app(engine: sa.Engine) -> FastAPI:
@@ -10,6 +10,7 @@ def create_app(engine: sa.Engine) -> FastAPI:
     app.include_router(clusters.router)
     app.include_router(articles.router)
     app.include_router(news.router)
+    app.include_router(graph.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
