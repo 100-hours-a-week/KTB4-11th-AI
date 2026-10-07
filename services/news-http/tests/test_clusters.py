@@ -105,8 +105,14 @@ def test_search_rejects_invalid_terms(client, query):
     assert client.get(f"/clusters/search?{query}").status_code == 422
 
 
-def test_search_with_empty_query_returns_no_results(client):
+def test_search_with_empty_query_is_422(client):
     response = client.get("/clusters/search", params={"q": ""})
+
+    assert response.status_code == 422
+
+
+def test_search_with_no_matches_returns_empty_list(client):
+    response = client.get("/clusters/search", params={"q": "unmatched"})
 
     assert response.status_code == 200
     assert response.json() == []

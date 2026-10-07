@@ -17,7 +17,7 @@ router = APIRouter()
 @router.get("/clusters/search")
 def search_cluster_route(q: Annotated[str, Query()], conn: DbConnection) -> list[dict[str, object]]:
     if not q.strip():
-        return []
+        raise HTTPException(422, "q must contain comma-separated words")
     terms = [term.strip() for term in q.split(",")]
     if any(not term or not term.isalnum() for term in terms):
         raise HTTPException(422, "q must contain comma-separated words")
