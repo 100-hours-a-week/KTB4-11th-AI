@@ -3,7 +3,8 @@ from typing import Any
 import sqlalchemy as sa
 
 from portfolio_builder.briefing.dto import Briefing, PreviousPortfolio, RecentNews
-from portfolio_builder.briefing.repository import find_previous_portfolio, find_recent_news
+from portfolio_builder.briefing.repository import find_previous_portfolio
+from portfolio_builder.news_client import NewsClient
 
 
 def _label(company: Any) -> str:
@@ -56,10 +57,24 @@ def _news_lines(news: RecentNews, window_days: int) -> list[str]:
     return lines
 
 
-def load_briefing(engine: sa.Engine, news_window_days: int) -> Briefing:
+def load_briefing(engine: sa.Engine, news_client: NewsClient, news_window_days: int) -> Briefing:
     with engine.connect() as conn:
         previous = find_previous_portfolio(conn)
-        news = find_recent_news(conn, news_window_days)
+    response = news_client.recent_news(news_window_days)
+    clusters = [{"cluster_id": cluster["id"], **cluster} for cluster in response["clusters"]]
+    companies = {
+        company["company_id"]: {
+            "corp_code": company["company_id"],
+            "corp_name": company["name"],
+            "stock_code": company["stock_code"],
+            "clusters": company["cluster_ids"],
+        }
+        for company in response["companies"]
+    }
+    themes_by_company = {
+        company["company_id"]: company["themes"] for company in response["companies"]
+    }
+    news = RecentNews(clusters, companies, themes_by_company, response["theme_count"])
     holdings = previous.holdings if previous is not None else []
     return Briefing(
         previous_portfolio_id=previous.portfolio["id"] if previous is not None else None,

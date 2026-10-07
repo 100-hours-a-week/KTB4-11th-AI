@@ -11,6 +11,7 @@ from portfolio_builder.explain import ExplanationRejected, Explanations
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_BUILDER_QUESTDB_CONF": "ws::addr=localhost:9000;",
+    "PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI": "http://news-http:8000",
     "PORTFOLIO_BUILDER_LLM_API_KEY": "test-openrouter-key",
     "PORTFOLIO_BUILDER_LLM_MODEL": "openai/gpt-5.5",
 }
@@ -25,7 +26,8 @@ def test_ta_lib_is_importable():
 def env(monkeypatch):
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
-    monkeypatch.setattr(entry, "load_briefing", lambda engine, days: BRIEFING)
+    monkeypatch.setattr(entry, "NewsClient", lambda uri: object())
+    monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: BRIEFING)
     calls = {}
     monkeypatch.setattr(entry, "save_trace", lambda engine, pid, trace: calls.update(trace=pid))
     monkeypatch.setattr(entry, "load_unexplained", lambda engine: None)
@@ -91,7 +93,7 @@ def test_a_failure_before_the_agent_raises_after_run_end(env, monkeypatch, capsy
     def broken(engine, days):
         raise RuntimeError("postgres unreachable")
 
-    monkeypatch.setattr(entry, "load_briefing", broken)
+    monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: broken(engine, days))
 
     with pytest.raises(RuntimeError):
         entry.main()
@@ -158,7 +160,7 @@ def test_no_explanation_without_a_saved_portfolio(env, monkeypatch, capsys):
 def test_an_unexplained_portfolio_is_explained_again_without_the_agent(env, monkeypatch, capsys):
     trace = [TraceEntry(turn=1, kind="model", text="삼성 사요")]
     monkeypatch.setattr(entry, "load_unexplained", lambda engine: (5, trace))
-    monkeypatch.setattr(entry, "load_briefing", lambda engine, days: pytest.fail("briefed"))
+    monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: pytest.fail("briefed"))
     monkeypatch.setattr(entry, "run_agent", lambda **kwargs: pytest.fail("agent ran"))
     seen = {}
     monkeypatch.setattr(

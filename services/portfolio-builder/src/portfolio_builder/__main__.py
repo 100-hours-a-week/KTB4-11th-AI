@@ -15,6 +15,7 @@ from portfolio_builder.explain import (
     save_explanations,
 )
 from portfolio_builder.market import QuestDBMarket
+from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
 from portfolio_builder.settings import Settings
 from portfolio_builder.tools.graph.tools import graph_tools
@@ -36,10 +37,11 @@ def main() -> None:
         news_window_days=settings.news_window_days,
     ) as end:
         engine = sa.create_engine(settings.postgres_dsn)
+        news_client = NewsClient(settings.news_http_base_uri)
         try:
             unexplained = load_unexplained(engine)
             if unexplained is None:
-                briefing = load_briefing(engine, settings.news_window_days)
+                briefing = load_briefing(engine, news_client, settings.news_window_days)
                 log.info(
                     "ingestion",
                     previous_portfolio_id=briefing.previous_portfolio_id,
@@ -58,8 +60,8 @@ def main() -> None:
                     reasoning={"effort": settings.thinking_level},
                 )
                 tools = [
-                    *news_tools(engine),
-                    *graph_tools(engine),
+                    *news_tools(news_client),
+                    *graph_tools(news_client),
                     technicals_tool(engine, QuestDBMarket(settings.questdb_conf, engine)),
                     submit_tool(
                         engine,

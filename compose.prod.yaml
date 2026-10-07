@@ -109,6 +109,19 @@ services:
       questdb:
         condition: service_healthy
 
+  news-http:
+    <<: *app
+    command: ["news-http"]
+    mem_limit: 512m
+    environment:
+      NEWS_HTTP_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      NEWS_HTTP_HOST: 0.0.0.0
+      NEWS_HTTP_PORT: 8000
+      NEWS_HTTP_LOG_LEVEL: ${NEWS_HTTP_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   portfolio-rebalancer:
     <<: *app
     profiles: ["jobs"]
@@ -231,6 +244,7 @@ services:
     environment:
       <<: *postgres-environment
       PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI:-http://news-http:8000}
       PORTFOLIO_BUILDER_LLM_API_KEY: ${PORTFOLIO_BUILDER_LLM_API_KEY:-}
       PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
       PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
@@ -242,6 +256,8 @@ services:
         condition: service_healthy
       questdb:
         condition: service_healthy
+      news-http:
+        condition: service_started
 
 volumes:
   postgres-data:
