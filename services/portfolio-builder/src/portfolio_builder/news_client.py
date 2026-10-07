@@ -48,6 +48,18 @@ class NewsClient:
             raise NewsUpstreamError("news-http returned an invalid cluster response")
         return result
 
+    def has_cluster(self, id: int) -> bool:
+        result = self._request(f"/clusters/{id}/articles", {"limit": 1}, not_found=True)
+        if result is None:
+            return False
+        if (
+            not isinstance(result, dict)
+            or not isinstance(result.get("items"), list)
+            or not isinstance(result.get("next_cursor"), (str, type(None)))
+        ):
+            raise NewsUpstreamError("news-http returned an invalid cluster articles response")
+        return True
+
     def recent_news(self, days: int) -> dict:
         result = self._request("/news/recent", {"days": days})
         try:
@@ -122,7 +134,9 @@ class NewsClient:
             raise NewsUpstreamError("news-http returned an invalid graph response")
         return result
 
-    def _request(self, path: str, params: dict | None = None) -> dict | list:
+    def _request(
+        self, path: str, params: dict | None = None, *, not_found: bool = False
+    ) -> dict | list | None:
         url = f"{self.base_uri}{path}"
         if params:
             url = f"{url}?{urlencode(params)}"
@@ -131,6 +145,8 @@ class NewsClient:
             with urlopen(request, timeout=self.timeout) as response:
                 return json.loads(response.read())
         except HTTPError as error:
+            if not_found and error.code == 404:
+                return None
             self._http_error(path, error)
         except (URLError, TimeoutError, OSError, json.JSONDecodeError) as error:
             raise NewsUpstreamError(f"news-http request failed: {error}") from error

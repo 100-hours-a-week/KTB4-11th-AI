@@ -10,6 +10,9 @@ SAMSUNG, HYNIX = "00126380", "00164779"
 
 
 class NewsClientStub:
+    def has_cluster(self, cluster_id):
+        return cluster_id in (1, 2)
+
     def recent_news(self, days):
         assert days in (7, 60)
         clusters = [
@@ -99,8 +102,9 @@ def _submission(company_id, reason, commentary, clusters):
 
 
 def test_the_most_recently_created_portfolio_is_the_previous_one(engine):
-    save_portfolio(engine, _submission(HYNIX, "old", "older", []), "m")
-    latest = save_portfolio(engine, _submission(SAMSUNG, "new", "newer", [1]), "m")
+    client = NewsClientStub()
+    save_portfolio(engine, _submission(HYNIX, "old", "older", []), "m", client)
+    latest = save_portfolio(engine, _submission(SAMSUNG, "new", "newer", [1]), "m", client)
 
     briefing = load_briefing(engine, NewsClientStub(), 7)
 

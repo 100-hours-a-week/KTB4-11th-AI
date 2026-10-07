@@ -130,3 +130,32 @@ def test_request_uses_encoded_query_and_configured_timeout():
         == "http://news/clusters/search?q=%EC%82%BC%EC%84%B1%EC%A0%84%EC%9E%90%2C%EB%B0%98%EB%8F%84%EC%B2%B4"
     )
     assert open_url.call_args.kwargs["timeout"] == 3
+
+
+def test_has_cluster_accepts_an_empty_articles_page_and_uses_limit_one():
+    with patch(
+        "portfolio_builder.news_client.urlopen",
+        return_value=response({"items": [], "next_cursor": None}),
+    ) as open_url:
+        assert NewsClient("http://news").has_cluster(9)
+    request = open_url.call_args.args[0]
+    assert request.full_url == "http://news/clusters/9/articles?limit=1"
+
+
+def test_has_cluster_returns_false_for_a_missing_cluster():
+    error = HTTPError(
+        "http://news/clusters/9/articles?limit=1",
+        404,
+        "missing",
+        {},
+        BytesIO(b'{"detail":"cluster not found"}'),
+    )
+    with patch("portfolio_builder.news_client.urlopen", side_effect=error):
+        assert not NewsClient("http://news").has_cluster(9)
+
+
+def test_has_cluster_propagates_upstream_errors():
+    error = HTTPError("http://news", 500, "error", {}, BytesIO(b'{"detail":"failed"}'))
+    with patch("portfolio_builder.news_client.urlopen", side_effect=error):
+        with pytest.raises(NewsUpstreamError):
+            NewsClient("http://news").has_cluster(9)

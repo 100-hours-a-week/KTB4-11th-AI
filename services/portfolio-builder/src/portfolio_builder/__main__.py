@@ -67,6 +67,7 @@ def main() -> None:
                         engine,
                         briefing.previous_company_ids,
                         f"openrouter/{settings.llm_model}",
+                        news_client,
                         log,
                     ),
                 ]

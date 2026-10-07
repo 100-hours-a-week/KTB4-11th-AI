@@ -40,8 +40,8 @@ def _rows(engine):
         return conn.execute(sa.text("SELECT id, cash_weight FROM portfolios")).all()
 
 
-def test_saves_a_normalised_portfolio_and_returns_its_id_in_state(engine):
-    tool = submit_tool(engine, frozenset(), "openrouter/m", Recorder())
+def test_saves_a_normalised_portfolio_and_returns_its_id_in_state(engine, news_client):
+    tool = submit_tool(engine, frozenset(), "openrouter/m", news_client, Recorder())
 
     command = tool.invoke(_call(VALID))
 
@@ -52,9 +52,9 @@ def test_saves_a_normalised_portfolio_and_returns_its_id_in_state(engine):
     assert cash_weight == pytest.approx(0.25)
 
 
-def test_rejection_lists_every_error_and_logs_it(engine):
+def test_rejection_lists_every_error_and_logs_it(engine, news_client):
     log = Recorder()
-    tool = submit_tool(engine, frozenset(), "m", log)
+    tool = submit_tool(engine, frozenset(), "m", news_client, log)
     bad = {**VALID, "holdings": [{**VALID["holdings"][0], "reason": ""}], "commentary": ""}
 
     with pytest.raises(PortfolioRejected) as rejected:
@@ -68,16 +68,16 @@ def test_rejection_lists_every_error_and_logs_it(engine):
     assert _rows(engine) == []
 
 
-def test_a_save_failure_is_returned_as_a_rejection(engine):
-    tool = submit_tool(engine, frozenset(), "m", Recorder())
+def test_a_save_failure_is_returned_as_a_rejection(engine, news_client):
+    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
     bad = {**VALID, "holdings": [{**VALID["holdings"][0], "cited_cluster_ids": [404]}]}
 
     with pytest.raises(PortfolioRejected, match="cited_cluster_ids not found: 404"):
         tool.invoke(_call(bad))
 
 
-def test_a_second_submit_is_refused(engine):
-    tool = submit_tool(engine, frozenset(), "m", Recorder())
+def test_a_second_submit_is_refused(engine, news_client):
+    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
     tool.invoke(_call(VALID))
 
     with pytest.raises(ToolError, match="already saved"):
@@ -85,8 +85,8 @@ def test_a_second_submit_is_refused(engine):
     assert len(_rows(engine)) == 1
 
 
-def test_concurrent_submits_write_one_portfolio(engine):
-    tool = submit_tool(engine, frozenset(), "m", Recorder())
+def test_concurrent_submits_write_one_portfolio(engine, news_client):
+    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
     outcomes = []
 
     def submit(call_id):
