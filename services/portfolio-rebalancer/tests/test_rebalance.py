@@ -42,7 +42,6 @@ def account(cash, stocks=(), pending=(), active=True):
                 "order_status": "pending",
                 "limit_price": price,
                 "quantity": q,
-                "current_stock_price": price,
             }
             for i, (c, side, q, price) in enumerate(pending)
         ],

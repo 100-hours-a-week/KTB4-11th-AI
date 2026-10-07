@@ -14,7 +14,7 @@ from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.stopwatch import Stopwatch
 
 
-def _tool_messages(result: ToolMessage | Command[object]) -> list[ToolMessage]:
+def tool_messages(result: ToolMessage | Command[object]) -> list[ToolMessage]:
     if isinstance(result, ToolMessage):
         return [result]
     return [
@@ -87,7 +87,7 @@ def run_log(log: StructuredLogger, tools: list[BaseTool]):
                 duration_ms=stopwatch.elapsed_ms,
             )
             raise
-        messages = _tool_messages(result)
+        messages = tool_messages(result)
         is_error = any(message.status == "error" for message in messages)
         trace = TraceEntry(
             turn=fields["turn"],
