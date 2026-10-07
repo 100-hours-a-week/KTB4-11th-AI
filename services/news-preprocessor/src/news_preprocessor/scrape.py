@@ -1,6 +1,5 @@
 from typing import NamedTuple
 
-import httpx
 import sqlalchemy as sa
 from ktb_core.logging import get_logger
 
@@ -39,20 +38,6 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
                 url=entry.url,
                 article_id=entry.external_id,
             )
-            continue
-        except httpx.HTTPStatusError as error:
-            if error.response.status_code == 404:
-                log.warning(
-                    "unavailable_article",
-                    source=source.source,
-                    url=entry.url,
-                    article_id=entry.external_id,
-                    status_code=error.response.status_code,
-                    final_url=str(error.response.url),
-                )
-                continue
-            log.exception("article_failed", source=source.source, url=entry.url)
-            failed.append(entry.external_id)
             continue
         except Exception:
             log.exception("article_failed", source=source.source, url=entry.url)
