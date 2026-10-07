@@ -43,7 +43,6 @@ def get_recent_news(conn: sa.Connection, days: int) -> dict[str, object]:
             .join(entities, entities.c.id == cluster_entities.c.entity_id)
             .join(corporations, corporations.c.stock_code == entities.c.stock_code)
             .where(cluster_entities.c.cluster_id.in_(cluster_ids))
-            .distinct()
             .order_by(corporations.c.corp_code, cluster_entities.c.cluster_id)
         ).mappings()
         for mention in mentions:
@@ -57,8 +56,7 @@ def get_recent_news(conn: sa.Connection, days: int) -> dict[str, object]:
                     "themes": [],
                 },
             )
-            if mention["cluster_id"] not in entry["cluster_ids"]:
-                entry["cluster_ids"].append(mention["cluster_id"])
+            entry["cluster_ids"].append(mention["cluster_id"])
         if companies:
             theme_rows = conn.execute(
                 sa.select(
