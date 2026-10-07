@@ -26,6 +26,12 @@ Add one synchronous HTTP client in portfolio builder, configured with a required
 
 The client maps HTTP `404` on cluster detail to the current missing-cluster tool error, graph `404` to a recoverable tool error with candidates, tool request `422` to a recoverable input error, and graph query `504` to the existing recoverable `GraphTimeout` guidance. Empty successful responses flow through as empty data. Connection errors, client-side timeouts, malformed responses, and other server errors raise an explicit upstream-news error; they must not turn into empty analysis data or cause a portfolio to be saved from an incomplete briefing.
 
+## File structure
+
+Extend `news_http/controllers/clusters.py` and `news_http/repositories/clusters.py` for search and detail. Add `controllers/news.py` and `repositories/news.py` for `/news/recent`, and `controllers/graph.py` and `repositories/graph.py` for graph reads. Extend `repositories/tables.py` only with columns and tables these queries need; register the routes in `app.py`. Keep the existing article endpoint and pagination code in place.
+
+Add `portfolio_builder/news_client.py` for HTTP requests, response checks, and error mapping. Change the existing `tools/news/*.py`, `tools/graph/search.py`, and `tools/graph/paths.py` to call it. Keep `briefing/repository.py` for previous-portfolio SQL and move recent-news loading to the client; `briefing/service.py` combines the two results. Delete `tools/graph/database.py` and `tools/graph/entities.py` when their SQL callers are gone. `settings.py`, `__main__.py`, Compose, README, and affected tests change only as needed for the new URL and behavior.
+
 ## Operations and verification
 
 Configure the portfolio builder service to reach `news-http` in development and production Compose. Keep authentication and production deployment policy within issue 216's scope. Test endpoint response shapes and representative empty/missing cases, consumer HTTP error handling, and the existing portfolio tool and briefing behavior. Run formatter, lint, and affected test suites.
