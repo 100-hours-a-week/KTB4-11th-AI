@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from news_http.controllers.database import DbConnection
 from news_http.repositories.graph import (
     TIMEOUT_MESSAGE,
+    InvalidEntityName,
     MissingEntity,
     get_neighborhood,
     get_paths,
@@ -18,6 +19,8 @@ router = APIRouter()
 def _handle_query(operation: Callable[[], dict[str, object]]) -> dict[str, object]:
     try:
         return operation()
+    except InvalidEntityName as error:
+        raise HTTPException(422, str(error)) from error
     except MissingEntity as error:
         raise HTTPException(
             404,

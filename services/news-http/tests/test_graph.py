@@ -107,7 +107,7 @@ def test_paths_are_bidirectional_simple_and_disconnected_is_empty(client, engine
 
 
 def test_missing_seed_returns_candidates(client, seed):
-    seed.entity("Samsung Electronics")
+    seed.entity("samsung electronics")
 
     response = client.get("/graph/neighborhood", params={"name": "samsung electronix"})
 
@@ -115,7 +115,7 @@ def test_missing_seed_returns_candidates(client, seed):
     assert response.json() == {
         "detail": {
             "message": 'no entity matches "samsung electronix"',
-            "candidates": ["Samsung Electronics"],
+            "candidates": ["samsung electronics"],
         }
     }
 
@@ -129,6 +129,14 @@ def test_graph_parameters_are_validated(client):
         {"from_name": "x", "to_name": "x", "max_depth": 7},
     ):
         assert client.get("/graph/paths", params=params).status_code == 422
+
+
+def test_graph_rejects_names_that_normalize_to_empty(client):
+    assert client.get("/graph/neighborhood", params={"name": "(주)"}).status_code == 422
+    assert (
+        client.get("/graph/paths", params={"from_name": "company", "to_name": "㈜"}).status_code
+        == 422
+    )
 
 
 def test_statement_timeout_returns_gateway_timeout(client, engine, seed):

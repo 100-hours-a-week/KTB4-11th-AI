@@ -14,6 +14,10 @@ class MissingEntity(Exception):
         super().__init__(self.message)
 
 
+class InvalidEntityName(Exception):
+    pass
+
+
 def _set_timeout(conn: sa.Connection) -> None:
     conn.execute(sa.text("SET LOCAL statement_timeout = '10s'"))
 
@@ -25,6 +29,8 @@ def _like_contains(value: str) -> str:
 
 def _seeds(conn: sa.Connection, name: str) -> list[int]:
     normalized = normalize(name)
+    if not normalized:
+        raise InvalidEntityName("entity name must not be empty after normalization")
     seeds = list(
         conn.execute(
             sa.text(
