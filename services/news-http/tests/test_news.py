@@ -1,7 +1,37 @@
 from datetime import UTC, datetime
+from unittest.mock import Mock
 from uuid import uuid4
 
 import sqlalchemy as sa
+from news_http.repositories.news import get_recent_news
+
+
+def test_recent_news_lists_a_cluster_once_for_duplicate_company_entities():
+    updated_at = datetime.now(UTC)
+    mention = {
+        "company_id": "005930",
+        "name": "Samsung",
+        "stock_code": "005930",
+        "cluster_id": 12,
+    }
+
+    conn = Mock()
+    conn.execute.side_effect = [
+        Mock(
+            mappings=Mock(
+                return_value=[
+                    {"id": 12, "title": "title", "summary": "summary", "updated_at": updated_at}
+                ]
+            )
+        ),
+        Mock(mappings=Mock(return_value=[mention, mention])),
+        Mock(mappings=Mock(return_value=[])),
+    ]
+
+    response = get_recent_news(conn, 7)
+
+    assert response["companies"][0]["cluster_ids"] == [12]
+    assert conn.execute.call_args_list[1].args[0]._distinct
 
 
 def test_recent_news_returns_only_recent_clusters_and_aggregates_mentions(client, engine, seed):
