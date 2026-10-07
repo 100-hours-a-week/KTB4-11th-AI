@@ -6,6 +6,7 @@ source_roots = [
     "services/news-preprocessor/src",
     "services/news-clusterer/src",
     "services/news-graph-builder/src",
+    "services/news-http/src",
     "services/portfolio-builder/src",
     "services/portfolio-rebalancer/src",
 ]
@@ -23,6 +24,10 @@ depends_on = ["ktb_core"]
 
 [[modules]]
 path = "news_clusterer"
+depends_on = ["ktb_core"]
+
+[[modules]]
+path = "news_http"
 depends_on = ["ktb_core"]
 
 [[modules]]

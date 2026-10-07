@@ -20,6 +20,7 @@ RUN uv pip install --no-deps \
     ./services/market-syncer \
     ./services/news-clusterer \
     ./services/news-graph-builder \
+    ./services/news-http \
     ./services/news-preprocessor \
     ./services/portfolio-builder \
     ./services/portfolio-rebalancer
