@@ -202,8 +202,6 @@ def test_downgrade_to_0002_copies_summaries_back(pg_dsn, pg_engine, monkeypatch)
     finally:
         command.upgrade(config, "head")
         with pg_engine.begin() as conn:
-            conn.execute(sa.text("TRUNCATE corporations CASCADE"))
-        with pg_engine.begin() as conn:
             conn.execute(sa.text("TRUNCATE clusters CASCADE"))
 
 
@@ -322,6 +320,17 @@ def test_portfolio_reason_ids_backfill_and_reject_null_or_duplicates(
         assert len(ids) == 2 and all(isinstance(value, uuid.UUID) for value in ids)
         assert len(set(ids)) == 2
         assert primary_key == ["portfolio_id", "company_id", "side"]
+        with pg_engine.begin() as conn:
+            generated_id = conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_reasons"
+                    " (portfolio_id, company_id, side, reason, reasonings)"
+                    " VALUES (:p, '00126380', 'sell', 'new', '[]'::jsonb) RETURNING id"
+                ),
+                {"p": portfolio_ids[0]},
+            ).scalar_one()
+        assert isinstance(generated_id, uuid.UUID)
+        assert generated_id not in ids
         with pytest.raises(IntegrityError):
             with pg_engine.begin() as conn:
                 conn.execute(
@@ -344,6 +353,8 @@ def test_portfolio_reason_ids_backfill_and_reject_null_or_duplicates(
                 )
     finally:
         command.upgrade(config, "head")
+        with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE corporations CASCADE"))
 
 
 def test_downgrade_to_0006_removes_reasons_and_trace(pg_dsn, pg_engine, monkeypatch):
