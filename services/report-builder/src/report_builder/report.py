@@ -133,7 +133,3 @@ def build_report(evidence: Evidence, structured: Runnable) -> Report:
     if not thoughts.thoughts:
         raise ValueError("thoughts must not be empty")
     return Report(news=evidence.news, thoughts=thoughts.thoughts)
-
-
-def main() -> None:
-    raise NotImplementedError

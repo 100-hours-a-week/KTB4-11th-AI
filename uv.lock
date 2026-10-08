@@ -22,6 +22,7 @@ members = [
     "news-preprocessor",
     "portfolio-builder",
     "portfolio-rebalancer",
+    "report-builder",
 ]
 
 [manifest.dependency-groups]
@@ -1679,6 +1680,31 @@ wheels = [
 dataframe = [
     { name = "pandas" },
     { name = "pyarrow" },
+]
+
+[[package]]
+name = "report-builder"
+version = "0.1.0"
+source = { editable = "services/report-builder" }
+dependencies = [
+    { name = "ktb-core" },
+    { name = "langchain-core" },
+    { name = "langchain-openrouter" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "ktb-core", editable = "packages/core" },
+    { name = "langchain-core", specifier = ">=1.6.5" },
+    { name = "langchain-openrouter", specifier = ">=0.2.9" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pydantic-settings", specifier = ">=2.7" },
+    { name = "sqlalchemy", specifier = ">=2.0.54" },
 ]
 
 [[package]]
