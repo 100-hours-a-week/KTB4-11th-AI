@@ -11,9 +11,6 @@ from pydantic import BaseModel, Field, StrictInt
 from report_builder.report import build_report, load_evidence, structured_generator
 from report_builder.settings import Settings
 
-PROCESSING_TIMEOUT = 260
-OPENROUTER_TIMEOUT = 240
-BACKEND_TIMEOUT = 10
 logger = get_logger(__name__)
 
 

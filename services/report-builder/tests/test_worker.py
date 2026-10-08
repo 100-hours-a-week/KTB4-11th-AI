@@ -2,7 +2,7 @@ import json
 from unittest.mock import Mock
 
 import pytest
-from report_builder import worker
+from report_builder import report, worker
 from report_builder.report import Evidence, Report, Thought
 
 MESSAGE = {
@@ -134,7 +134,14 @@ def test_delete_failure_propagates(dependencies):
         )
 
 
-def test_processing_timeout_stays_below_visibility_timeout():
-    assert worker.PROCESSING_TIMEOUT < 300
-    assert worker.OPENROUTER_TIMEOUT == 240
-    assert worker.BACKEND_TIMEOUT == 10
+def test_openrouter_uses_one_attempt_with_a_240_second_timeout(monkeypatch):
+    runnable = Mock()
+    model = Mock()
+    model.with_structured_output.return_value = runnable
+    constructor = Mock(return_value=model)
+    monkeypatch.setattr(report, "ChatOpenRouter", constructor)
+
+    result = report.structured_generator("model", "secret", timeout=240)
+
+    assert result is runnable
+    constructor.assert_called_once_with(model="model", api_key="secret", timeout=240, max_retries=0)

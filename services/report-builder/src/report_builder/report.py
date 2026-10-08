@@ -39,9 +39,9 @@ class Report(BaseModel):
 
 
 def structured_generator(model: str, api_key: str, timeout: float) -> Runnable:
-    return ChatOpenRouter(model=model, api_key=api_key, timeout=timeout).with_structured_output(
-        Thoughts
-    )
+    return ChatOpenRouter(
+        model=model, api_key=api_key, timeout=timeout, max_retries=0
+    ).with_structured_output(Thoughts)
 
 
 def load_evidence(engine: sa.Engine, reason_ids: list[UUID]) -> Evidence:
