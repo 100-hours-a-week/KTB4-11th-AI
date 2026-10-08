@@ -213,6 +213,20 @@ services:
         condition: service_healthy
     restart: "no"
 
+  report-builder:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/report-builder.Dockerfile
+    env_file: ai.env
+    environment:
+      REPORT_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REPORT_BUILDER_SQS_QUEUE_URL: stockspoon-v2-dev-report-request
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   questdb-data:

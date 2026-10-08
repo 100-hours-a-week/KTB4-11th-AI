@@ -24,8 +24,8 @@ def test_settings_defaults(monkeypatch):
     settings = Settings()
 
     assert settings.aws_region == "ap-northeast-2"
-    assert settings.llm_timeout == 180
-    assert settings.backend_timeout == 30
+    assert settings.llm_timeout == 240
+    assert settings.backend_timeout == 10
     assert settings.log_level == "INFO"
 
 

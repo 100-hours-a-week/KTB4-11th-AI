@@ -77,6 +77,9 @@ jobs:
           uv run python -c 'import pathlib, tomllib; assert not tomllib.loads(pathlib.Path("packages/core/pyproject.toml").read_text())["project"]["dependencies"]'
           uv run tach check-external -e packages/market-analyzer,services
 
+      - name: Check report-builder isolated import
+        run: uv run --isolated --package report-builder --locked --no-dev python -c 'import report_builder.__main__'
+
       - name: Apply database migrations
         run: uv run alembic upgrade head
 
@@ -113,7 +116,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector portfolio-rebalancer; do
+          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector portfolio-rebalancer report-builder; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done
@@ -135,6 +138,7 @@ jobs:
           - portfolio-builder
           - market-collector
           - portfolio-rebalancer
+          - report-builder
 
     steps:
       - uses: actions/checkout@v7

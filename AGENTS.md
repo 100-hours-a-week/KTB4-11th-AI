@@ -26,6 +26,7 @@ docker compose -f compose.dev.yaml up market-syncer   # needs the Kiwoom and DAR
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
 PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from PORTFOLIO_BUILDER_LLM_API_KEY in .env
 docker compose -f compose.dev.yaml --profile jobs run --rm portfolio-rebalancer   # one tick, then exits
+docker compose -f compose.dev.yaml up report-builder
 
 # tests TRUNCATE tables: point them at a separate database, never at `ktb`
 docker compose -f compose.dev.yaml exec postgres createdb -U ktb ktb_test
@@ -118,6 +119,17 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | portfolio-rebalancer; buys are sized at last close × (1 + this) | `0.02` |
 | `PORTFOLIO_REBALANCER_TEST_MODE` | portfolio-rebalancer; skips the KRX trading-day and -hour check | `false` |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | portfolio-rebalancer | `INFO` |
+| `REPORT_BUILDER_POSTGRES_DSN` | report-builder | required |
+| `REPORT_BUILDER_SQS_QUEUE_URL` | report-builder (queue URL or name) | required |
+| `REPORT_BUILDER_AWS_REGION` | report-builder | `ap-northeast-2` |
+| `REPORT_BUILDER_BACKEND_BASE_URI` | report-builder | required |
+| `REPORT_BUILDER_BACKEND_JWT_SECRET` | report-builder (shared HS256 secret, ≥ 32 bytes) | required |
+| `REPORT_BUILDER_BACKEND_JWT_ISSUER` | report-builder | required |
+| `REPORT_BUILDER_LLM_API_KEY` | report-builder | required |
+| `REPORT_BUILDER_LLM_MODEL` | report-builder | required |
+| `REPORT_BUILDER_LLM_TIMEOUT` | report-builder | `240` |
+| `REPORT_BUILDER_BACKEND_TIMEOUT` | report-builder | `10` |
+| `REPORT_BUILDER_LOG_LEVEL` | report-builder | `INFO` |
 
 Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
 
@@ -135,6 +147,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/market-collector` | service | weekdays 09:55–14:55 and 15:35 KST; single-run KOSPI 200 OHLCV archive | `ktb-core` |
 | `services/portfolio-rebalancer` | service | scheduled job: polls the Backend, decides, sends market orders | `ktb-core` |
+| `services/report-builder` | service | long-running SQS worker: generates competition reports and calls the Backend | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
@@ -142,7 +155,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 - **news-http is the only inbound HTTP surface and is read-only.** The Backend calls it on the private network without authentication for stock clusters and cluster articles, and portfolio-builder calls it for news and graph reads (design: `docs/superpowers/specs/2026-10-07-portfolio-builder-news-http-design.md`). It never writes and runs no migrations. In `compose.dev.yaml` it binds to `127.0.0.1:8000` only.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot. Migration `0002` drops the old `universe_members` table.
-- **Work queue:** SQS in production, Redis in development. No consumer yet.
+- **Work queue:** SQS in production and Redis in development for the general queue; report-builder consumes competition requests from SQS in both environments.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **portfolio-builder runs a LangChain `create_agent` agent on OpenRouter**, reads news and graph data through news-http, and keeps PostgreSQL access for portfolio and company reference data plus QuestDB for prices. It computes technical evidence with TA-Lib directly (not `ktb-market-analyzer`). The OpenRouter key lives only in the environment.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.
