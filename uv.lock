@@ -566,6 +566,16 @@ wheels = [
 name = "ktb-core"
 version = "0.1.0"
 source = { editable = "packages/core" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pyjwt" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28" },
+    { name = "pyjwt", specifier = ">=2.10" },
+]
 
 [[package]]
 name = "ktb-market-analyzer"
@@ -1324,7 +1334,6 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pyjwt" },
     { name = "questdb", extra = ["dataframe"] },
     { name = "sqlalchemy" },
 ]
@@ -1336,7 +1345,6 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.7" },
-    { name = "pyjwt", specifier = ">=2.10" },
     { name = "questdb", extras = ["dataframe"], specifier = ">=5.0" },
     { name = "sqlalchemy", specifier = ">=2.0.54" },
 ]
