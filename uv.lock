@@ -28,6 +28,7 @@ members = [
 dev = [
     { name = "deptry", specifier = ">=0.25.1" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "pyjwt", specifier = ">=2.10" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.14" },
     { name = "scikit-learn", specifier = ">=1.7" },
@@ -1324,7 +1325,6 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "pyjwt" },
     { name = "questdb", extra = ["dataframe"] },
     { name = "sqlalchemy" },
 ]
@@ -1336,7 +1336,6 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.7" },
-    { name = "pyjwt", specifier = ">=2.10" },
     { name = "questdb", extras = ["dataframe"], specifier = ">=5.0" },
     { name = "sqlalchemy", specifier = ">=2.0.54" },
 ]
