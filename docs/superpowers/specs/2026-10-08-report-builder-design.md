@@ -32,7 +32,7 @@ The Backend sends one JSON message to the SQS request queue:
 }
 ```
 
-The callback uses `ktb_core.backend_auth.BackendAuth.request()` from [PR #237](https://github.com/100-hours-a-week/KTB4-11th-AI/pull/237) for the existing AI JWT and CSRF protocol. It passes `str(user_id)` as the JWT subject. The JWT has actor `AI`. `participant_id` remains in the SQS message for request validation and tracing; one AI handles each competition, so it is not part of the callback URL. Authentication code consolidation is outside this spec.
+The callback uses `ktb_core.backend_auth.BackendAuth.request()` from [PR #237](https://github.com/100-hours-a-week/KTB4-11th-AI/pull/237) for the existing AI JWT and CSRF protocol. It passes `str(user_id)` as the JWT subject. The JWT has actor `AI`. `participant_id` remains in the SQS message for request validation; one AI handles each competition, so it is not part of the callback URL. Authentication code consolidation is outside this spec.
 
 ## Reason IDs and orders
 
