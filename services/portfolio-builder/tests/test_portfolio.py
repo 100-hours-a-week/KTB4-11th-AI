@@ -1,3 +1,5 @@
+from unittest.mock import Mock
+
 import pytest
 import sqlalchemy as sa
 from portfolio_builder.errors import PortfolioRejected
@@ -103,8 +105,8 @@ def _count(engine) -> int:
         return conn.execute(sa.text("SELECT count(*) FROM portfolios")).scalar_one()
 
 
-def test_save_writes_the_portfolio_holdings_and_citations(engine):
-    portfolio_id = save_portfolio(engine, SAVED, "openrouter/openai/gpt-5.5")
+def test_save_writes_the_portfolio_holdings_and_citations(engine, news_client):
+    portfolio_id = save_portfolio(engine, SAVED, "openrouter/openai/gpt-5.5", news_client)
 
     with engine.connect() as conn:
         portfolio = conn.execute(
@@ -125,7 +127,7 @@ def test_save_writes_the_portfolio_holdings_and_citations(engine):
     ]
 
 
-def test_save_rolls_back_an_unknown_company_with_a_readable_error(engine):
+def test_save_rolls_back_an_unknown_company_with_a_readable_error(engine, news_client):
     bad = SAVED.model_copy(
         update={
             "holdings": [Holding(company_id="99999999", weight=1, reason="x", cited_cluster_ids=[])]
@@ -133,13 +135,13 @@ def test_save_rolls_back_an_unknown_company_with_a_readable_error(engine):
     )
 
     with pytest.raises(PortfolioRejected) as rejected:
-        save_portfolio(engine, bad, "m")
+        save_portfolio(engine, bad, "m", news_client)
 
     assert "99999999" in " ".join(rejected.value.errors)
     assert _count(engine) == 0
 
 
-def test_save_rolls_back_an_unknown_cited_cluster(engine):
+def test_save_rejects_an_unknown_cited_cluster_before_writing(engine, news_client):
     bad = SAVED.model_copy(
         update={
             "holdings": [
@@ -149,10 +151,26 @@ def test_save_rolls_back_an_unknown_cited_cluster(engine):
     )
 
     with pytest.raises(PortfolioRejected) as rejected:
-        save_portfolio(engine, bad, "m")
+        save_portfolio(engine, bad, "m", news_client)
 
     assert rejected.value.errors == ["cited_cluster_ids not found: 404"]
     assert _count(engine) == 0
+
+
+def test_save_checks_citations_before_opening_the_portfolio_transaction():
+    engine = Mock()
+    news_client = Mock()
+    news_client.has_cluster.return_value = False
+    bad = SAVED.model_copy(
+        update={
+            "holdings": [Holding(company_id=SAMSUNG, weight=1, reason="x", cited_cluster_ids=[404])]
+        }
+    )
+
+    with pytest.raises(PortfolioRejected, match="cited_cluster_ids not found: 404"):
+        save_portfolio(engine, bad, "m", news_client)
+
+    engine.begin.assert_not_called()
 
 
 @pytest.mark.parametrize("weight", [float("inf"), float("nan")])

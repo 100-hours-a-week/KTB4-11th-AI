@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from portfolio_builder.agent.hooks.nudge import Nudge
+from portfolio_builder.agent.hooks.require_technicals import RequireTechnicals
 from portfolio_builder.agent.hooks.run_log import run_log
 from portfolio_builder.agent.hooks.stop_on_save import StopOnSave
 from portfolio_builder.agent.hooks.usage import empty_usage
@@ -39,6 +40,7 @@ def run_agent(
     max_turns: int,
     log: StructuredLogger,
 ) -> RunResult:
+    required_technicals = RequireTechnicals(log)
     agent = create_agent(
         model=model,
         tools=tools,
@@ -46,13 +48,14 @@ def run_agent(
         state_schema=PortfolioState,
         checkpointer=InMemorySaver(),
         middleware=[
-            ToolErrorMiddleware(
-                lambda error, _: str(error) if isinstance(error, ToolError) else None
-            ),
             StopOnSave(),
             Nudge(),
             ModelCallLimitMiddleware(run_limit=max_turns, exit_behavior="error"),
             *run_log(log, tools),
+            required_technicals,
+            ToolErrorMiddleware(
+                lambda error, _: str(error) if isinstance(error, ToolError) else None
+            ),
         ],
     )
     steps_per_turn = len(agent.get_graph().nodes) - 2
@@ -74,6 +77,7 @@ def run_agent(
     if outcome != "max_turns" and portfolio_id is None:
         outcome = "error"
         message = message or "agent stopped without a portfolio"
+    log.info("technical_analysis_summary", **required_technicals.counts)
     return RunResult(
         outcome,
         portfolio_id,

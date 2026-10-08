@@ -1,4 +1,5 @@
 import itertools
+import json
 import logging
 import time
 
@@ -9,6 +10,9 @@ from langchain_core.messages import AIMessage
 from portfolio_builder.agent.hooks.nudge import NUDGE
 from portfolio_builder.agent.run import run_agent
 from portfolio_builder.tools.submit import submit_tool
+from portfolio_builder.tools.technicals import technicals_tool
+
+from .test_technicals import FakeMarket
 
 SAMSUNG = "00126380"
 VALID = {
@@ -56,9 +60,16 @@ class Recorder:
         return [e[0] for e in self.events]
 
 
-def _run(engine, replies, max_turns=10, extra_tools=()):
+@tool("analyze_technicals", description="Return technical evidence")
+def analyze() -> str:
+    return json.dumps(
+        {"bars": 300, "signals": {"trend": {"state": "uptrend", "evidence": {}}}, "unavailable": {}}
+    )
+
+
+def _run(engine, news_client, replies, max_turns=10, extra_tools=(analyze,)):
     log = Recorder()
-    tools = [submit_tool(engine, frozenset(), "m", log), *extra_tools]
+    tools = [submit_tool(engine, frozenset(), "m", news_client, log), *extra_tools]
     result = run_agent(
         model=ScriptedModel(messages=iter(replies)),
         tools=tools,
@@ -75,17 +86,24 @@ def _count(engine):
         return conn.execute(sa.text("SELECT count(*) FROM portfolios")).scalar_one()
 
 
-def test_an_invalid_submission_is_fed_back_and_the_corrected_one_saved(engine):
+def test_an_invalid_submission_is_fed_back_and_the_corrected_one_saved(engine, news_client):
     invalid = {**VALID, "holdings": [{**VALID["holdings"][0], "reason": ""}]}
     result, log = _run(
         engine,
-        [reply("", ("submit_portfolio", invalid)), reply("", ("submit_portfolio", VALID))],
+        news_client,
+        [
+            reply("", ("analyze_technicals", {})),
+            reply("", ("submit_portfolio", invalid)),
+            reply("", ("submit_portfolio", VALID)),
+        ],
     )
 
     assert result.outcome == "saved"
-    assert result.turns == 2
+    assert result.turns == 3
     assert _count(engine) == 1
-    tool_calls = [f for e, _, f in log.events if e == "tool_call"]
+    tool_calls = [
+        f for e, _, f in log.events if e == "tool_call" and f["name"] == "submit_portfolio"
+    ]
     assert tool_calls[0]["is_error"] is True
     assert "needs a reason" in tool_calls[0]["result"]
     assert tool_calls[1]["is_error"] is False
@@ -93,8 +111,10 @@ def test_an_invalid_submission_is_fed_back_and_the_corrected_one_saved(engine):
         assert name in log.names()
 
 
-def test_a_model_that_never_submits_is_nudged_and_ends_at_the_turn_limit(engine):
-    result, log = _run(engine, [reply(f"thinking {i}") for i in range(20)], max_turns=3)
+def test_a_model_that_never_submits_is_nudged_and_ends_at_the_turn_limit(engine, news_client):
+    result, log = _run(
+        engine, news_client, [reply(f"thinking {i}") for i in range(20)], max_turns=3
+    )
 
     assert result.outcome == "max_turns"
     assert result.turns == 3
@@ -104,10 +124,11 @@ def test_a_model_that_never_submits_is_nudged_and_ends_at_the_turn_limit(engine)
     assert requests[1]["message_count"] == 3
 
 
-def test_a_submission_on_the_last_allowed_turn_is_saved(engine):
+def test_a_submission_on_the_last_allowed_turn_is_saved(engine, news_client):
     result, _ = _run(
         engine,
-        [reply("a"), reply("b"), reply("", ("submit_portfolio", VALID))],
+        news_client,
+        [reply("", ("analyze_technicals", {})), reply("b"), reply("", ("submit_portfolio", VALID))],
         max_turns=3,
     )
 
@@ -115,7 +136,7 @@ def test_a_submission_on_the_last_allowed_turn_is_saved(engine):
     assert result.turns == 3
 
 
-def test_a_truncated_tool_call_is_answered_before_the_nudge(engine):
+def test_a_truncated_tool_call_is_answered_before_the_nudge(engine, news_client):
     truncated = AIMessage(
         "",
         id=f"ai-{next(_ids)}",
@@ -129,22 +150,34 @@ def test_a_truncated_tool_call_is_answered_before_the_nudge(engine):
             }
         ],
     )
-    result, log = _run(engine, [truncated, reply("", ("submit_portfolio", VALID))])
+    result, log = _run(
+        engine,
+        news_client,
+        [reply("", ("analyze_technicals", {})), truncated, reply("", ("submit_portfolio", VALID))],
+    )
 
     assert result.outcome == "saved"
     requests = [f for e, _, f in log.events if e == "llm_request"]
-    assert requests[1]["message_count"] == 4
+    assert requests[2]["message_count"] == 6
 
 
-def test_two_submissions_in_one_message_write_one_portfolio(engine):
+def test_two_submissions_in_one_message_write_one_portfolio(engine, news_client):
     result, log = _run(
         engine,
-        [reply("", ("submit_portfolio", VALID), ("submit_portfolio", VALID))],
+        news_client,
+        [
+            reply("", ("analyze_technicals", {})),
+            reply("", ("submit_portfolio", VALID), ("submit_portfolio", VALID)),
+        ],
     )
 
     assert result.outcome == "saved"
     assert _count(engine) == 1
-    results = sorted(f["result"] for e, _, f in log.events if e == "tool_call")
+    results = sorted(
+        f["result"]
+        for e, _, f in log.events
+        if e == "tool_call" and f["name"] == "submit_portfolio"
+    )
     assert results[0].startswith("Saved portfolio")
     assert "already saved" in results[1]
 
@@ -154,8 +187,8 @@ def explode() -> str:
     raise RuntimeError("database is down")
 
 
-def test_an_unexpected_tool_exception_ends_the_run_as_error(engine):
-    result, log = _run(engine, [reply("", ("explode", {}))], extra_tools=[explode])
+def test_an_unexpected_tool_exception_ends_the_run_as_error(engine, news_client):
+    result, log = _run(engine, news_client, [reply("", ("explode", {}))], extra_tools=[explode])
 
     assert result.outcome == "error"
     assert "database is down" in result.error
@@ -169,11 +202,15 @@ def explode_later() -> str:
     raise RuntimeError("questdb is down")
 
 
-def test_a_saved_portfolio_stays_saved_when_a_sibling_tool_crashes(engine):
+def test_a_saved_portfolio_stays_saved_when_a_sibling_tool_crashes(engine, news_client):
     result, _ = _run(
         engine,
-        [reply("", ("submit_portfolio", VALID), ("explode_later", {}))],
-        extra_tools=[explode_later],
+        news_client,
+        [
+            reply("", ("analyze_technicals", {})),
+            reply("", ("submit_portfolio", VALID), ("explode_later", {})),
+        ],
+        extra_tools=[analyze, explode_later],
     )
 
     assert result.outcome == "saved"
@@ -182,13 +219,13 @@ def test_a_saved_portfolio_stays_saved_when_a_sibling_tool_crashes(engine):
     assert _count(engine) == 1
 
 
-def test_usage_totals_accumulate_and_cost_stays_unknown_until_reported(engine):
-    first = reply("thinking")
+def test_usage_totals_accumulate_and_cost_stays_unknown_until_reported(engine, news_client):
+    first = reply("thinking", ("analyze_technicals", {}))
     first.usage_metadata = {"input_tokens": 3, "output_tokens": 2, "total_tokens": 5}
     second = reply("", ("submit_portfolio", VALID))
     second.usage_metadata = {"input_tokens": 4, "output_tokens": 1, "total_tokens": 5}
 
-    result, _ = _run(engine, [first, second])
+    result, _ = _run(engine, news_client, [first, second])
 
     assert result.usage["input"] == 7
     assert result.usage["total"] == 10
@@ -199,26 +236,58 @@ def test_the_nudge_text():
     assert "submit_portfolio" in NUDGE
 
 
-def test_the_trace_records_reasoning_text_and_tool_results_in_order(engine):
+def test_the_trace_records_reasoning_text_and_tool_results_in_order(engine, news_client):
     thinking = AIMessage(
         content=[
             {"type": "reasoning", "reasoning": "HBM 수요가 핵심이다"},
             {"type": "text", "text": "살펴볼게요"},
         ],
         id=f"ai-{next(_ids)}",
+        tool_calls=[{"name": "analyze_technicals", "args": {}, "id": f"call-{next(_ids)}"}],
     )
-    result, _ = _run(engine, [thinking, reply("", ("submit_portfolio", VALID))])
+    result, _ = _run(engine, news_client, [thinking, reply("", ("submit_portfolio", VALID))])
 
-    assert [(e.turn, e.kind) for e in result.trace] == [(1, "model"), (2, "model"), (2, "tool")]
+    assert [(e.turn, e.kind) for e in result.trace] == [
+        (1, "model"),
+        (1, "tool"),
+        (2, "model"),
+        (2, "tool"),
+    ]
     assert result.trace[0].reasoning == "HBM 수요가 핵심이다"
     assert result.trace[0].text == "살펴볼게요"
-    assert result.trace[2].name == "submit_portfolio"
-    assert result.trace[2].args["cash_weight"] == 1
-    assert result.trace[2].result.startswith("Saved portfolio")
+    assert result.trace[3].name == "submit_portfolio"
+    assert result.trace[3].args["cash_weight"] == 1
+    assert result.trace[3].result.startswith("Saved portfolio")
 
 
-def test_the_trace_is_kept_when_the_turn_limit_ends_the_run(engine):
-    result, _ = _run(engine, [reply(f"thinking {i}") for i in range(5)], max_turns=2)
+def test_submission_without_analysis_does_not_write_to_the_database(engine, news_client):
+    result, _ = _run(engine, news_client, [reply("", ("submit_portfolio", VALID))], max_turns=1)
+
+    assert result.outcome == "max_turns"
+    assert _count(engine) == 0
+
+
+def test_real_technical_analysis_allows_database_submission(engine, news_client):
+    market = FakeMarket()
+    result, log = _run(
+        engine,
+        news_client,
+        [
+            reply("", ("analyze_technicals", {"name": SAMSUNG, "timeframe": "1d"})),
+            reply("", ("submit_portfolio", VALID)),
+        ],
+        extra_tools=[technicals_tool(engine, market)],
+    )
+
+    assert result.outcome == "saved"
+    assert market.calls == [("005930", "1d")]
+    assert _count(engine) == 1
+    summary = next(f for e, _, f in log.events if e == "technical_analysis_summary")
+    assert summary == {"calls": 1, "successes": 1, "failures": 0, "unavailable": 0}
+
+
+def test_the_trace_is_kept_when_the_turn_limit_ends_the_run(engine, news_client):
+    result, _ = _run(engine, news_client, [reply(f"thinking {i}") for i in range(5)], max_turns=2)
 
     assert result.outcome == "max_turns"
     assert [e.text for e in result.trace] == ["thinking 0", "thinking 1"]

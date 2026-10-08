@@ -127,6 +127,26 @@ services:
         condition: service_healthy
     restart: "no"
 
+  news-http:
+    build:
+      context: .
+      dockerfile: docker/news-http.Dockerfile
+    environment:
+      NEWS_HTTP_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      NEWS_HTTP_LOG_LEVEL: ${NEWS_HTTP_LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
   market-collector:
     profiles: ["jobs"]
     build:
@@ -156,6 +176,7 @@ services:
     environment:
       PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: http://news-http:8000
       PORTFOLIO_BUILDER_LLM_API_KEY: ${PORTFOLIO_BUILDER_LLM_API_KEY:-}
       PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
       PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
@@ -167,6 +188,8 @@ services:
         condition: service_healthy
       questdb:
         condition: service_healthy
+      news-http:
+        condition: service_started
     restart: "no"
 
   portfolio-rebalancer:

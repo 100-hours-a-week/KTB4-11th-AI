@@ -17,7 +17,6 @@ class PendingOrder(BaseModel):
     order_status: str
     limit_price: int | None
     quantity: int
-    current_stock_price: float
 
 
 class Account(BaseModel):

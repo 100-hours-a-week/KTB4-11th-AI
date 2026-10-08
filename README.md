@@ -19,6 +19,7 @@ flowchart LR
         NC["news-clusterer"]
         MS["market-syncer"]
         NGB["news-graph-builder"]
+        NH["news-http"]
         MC["market-collector"]
         PB["portfolio-builder"]
         PR["portfolio-rebalancer"]
@@ -43,6 +44,8 @@ flowchart LR
     PG -->|clusters, corporations| NGB
     OPENROUTER --> NGB
     NGB -->|summaries, graph| PG
+    PG -->|clusters, articles| NH
+    BE -->|HTTP| NH
 
     PG -->|KOSPI 200 symbols| MC
     KIWOOM --> MC
@@ -95,6 +98,16 @@ flowchart LR
 
 - 클러스터링 된 전체 기사의 제목과 본문 전체를 LLM 서버에 보내 제목과 요약, 지식 데이터를 한 번에 추출함
 
+### `news-http`: 백엔드에 뉴스 데이터 제공하기
+
+- 백엔드가 사설망에서 호출하는 읽기 전용 HTTP API이며 인증은 없음
+- `GET /stocks/{stock_code}/clusters`는 종목을 언급한 뉴스 클러스터를 최신 기사 순으로 반환함
+- `GET /clusters/{cluster_id}/articles`는 클러스터에 속한 기사를 최신 순으로 반환하며, 본문은 포함하지 않음
+- `GET /clusters/search`, `GET /clusters/{cluster_id}`, `GET /news/recent`, `GET /graph/neighborhood`, `GET /graph/paths`로 검색, 요약 뉴스, 지식 그래프를 조회할 수 있음
+- 두 목록 모두 `limit`와 `cursor`로 무한 스크롤을 지원하며 응답의 `next_cursor`가 `null`이면 마지막 페이지임
+- 클러스터링이 다시 실행되면 클러스터가 사라질 수 있어 이전에 받은 클러스터 id에도 404가 올 수 있음
+- 포트폴리오 빌더도 이 API를 통해 뉴스와 그래프 데이터를 조회함
+
 ### `market-collector`: 시장에서 OHLCV 데이터 수집하기
 
 - PostgreSQL의 `corporation_indices`에서 현재 KOSPI 200 종목을 읽어오고, 종목과 시간 단위별 마지막 저장 시점을 확인한 후 키움에서 빠진 데이터를 가져와 QuestDB에 저장함
@@ -102,7 +115,7 @@ flowchart LR
 
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 
-- 이전 포트폴리오, 최근 뉴스 클러스터, 관련 기업과 테마를 묶어 에이전트의 시작 자료를 생성함
+- PostgreSQL의 이전 포트폴리오와 news-http의 최근 뉴스, 관련 기업과 테마를 묶어 에이전트의 시작 자료를 생성함
 - 에이전트는 세 개의 도구(뉴스 검색, 그래프 탐색, QuestDB OHLCV에 대한 기술적 분석)를 호출해 투자 포트폴리오를 생성함
 - 생성된 포트폴리오를 이전 포트폴리오와 비교해 편입 대상과 편출 대상을 선정하고, `portfolios`, `portfolio_holdings`, `portfolio_exits`에 한 버전으로 저장함
 - 기술적 신호는 TA-Lib와 고정 규칙으로 계산함
@@ -134,6 +147,7 @@ KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb
 ### 각 서비스 실행하기
 
 ```bash
+docker compose -f compose.dev.yaml up -d news-http
 docker compose -f compose.dev.yaml run --rm news-preprocessor
 docker compose -f compose.dev.yaml run --rm news-clusterer
 docker compose -f compose.dev.yaml run --rm market-syncer
@@ -340,6 +354,15 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `NEWS_GRAPH_BUILDER_MAX_ENTITIES` | | `30` | 클러스터당 개체 수 상한 |
 | `NEWS_GRAPH_BUILDER_MAX_RELATIONS` | | `50` | 클러스터당 관계 수 상한 |
 
+### news-http (`NEWS_HTTP_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `NEWS_HTTP_POSTGRES_DSN` | 필수 | | 클러스터와 기사 읽기 |
+| `NEWS_HTTP_HOST` | | `0.0.0.0` | 바인드 주소 |
+| `NEWS_HTTP_PORT` | | `8000` | 바인드 포트 |
+| `NEWS_HTTP_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
 ### market-syncer (`MARKET_SYNCER_`)
 
 | 변수 | 필수 | 기본값 | 설명 |
@@ -368,8 +391,9 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 
 | 변수 | 필수 | 기본값 | 조절 대상 |
 |---|---|---|---|
-| `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | | 뉴스/기업/포트폴리오 저장소 연결 |
+| `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | | 기업/포트폴리오 저장소 연결 |
 | `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | | QuestDB 시세 연결 |
+| `PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI` | 필수 | | news-http API 주소 |
 | `PORTFOLIO_BUILDER_LLM_API_KEY` | 필수 | | OpenAI API 인증 |
 | `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | | OpenAI API 모델 ID |
 | `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` | 모델 추론 수준 (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`) |

@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: ci-dev-${{ github.ref }}
@@ -112,7 +113,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder portfolio-builder market-collector portfolio-rebalancer; do
+          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector portfolio-rebalancer; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done
@@ -130,6 +131,7 @@ jobs:
           - news-clusterer
           - market-syncer
           - news-graph-builder
+          - news-http
           - portfolio-builder
           - market-collector
           - portfolio-rebalancer
@@ -150,21 +152,36 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
   build-app-image:
+    needs: lint-and-test
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v7
 
+      - name: Configure AWS credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR Public
+        if: github.event_name == 'push'
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build application image
+      - name: Build and push application image
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/app.Dockerfile
           platforms: linux/amd64
-          push: false
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.sha }}
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
 

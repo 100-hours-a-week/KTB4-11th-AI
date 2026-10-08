@@ -62,8 +62,16 @@ class FakeBackend:
             )
         if request.url.path == "/api/v1/users/ai-server":
             return httpx.Response(200, json={"users": [{"user_id": 1, "accounts": []}]})
+        if request.method == "PATCH" and (
+            not request.content
+            or request.headers.get("content-type") != "application/json"
+            or json.loads(request.content).get("status") != "cancelled"
+        ):
+            return httpx.Response(400, json={"code": "INVALID_REQUEST"})
         if self.order_responses:
             return self.order_responses.pop(0)
+        if request.method == "PATCH":
+            return httpx.Response(204)
         return httpx.Response(201, json={"order_id": 9})
 
 
@@ -84,6 +92,47 @@ def test_users_sends_the_service_token_as_a_cookie():
     assert claims["type"] == "access"
     assert claims["exp"] - claims["iat"] == 300
     assert "authorization" not in fake.requests[0].headers
+
+
+@pytest.mark.parametrize(("order_type", "limit_price"), [("limit", 95_000), ("market", None)])
+def test_users_accepts_pending_orders_without_a_current_stock_price(order_type, limit_price):
+    payload = {
+        "users": [
+            {
+                "user_id": 1,
+                "accounts": [
+                    {
+                        "account_id": 11,
+                        "account_name": "AI 계좌",
+                        "is_active": True,
+                        "cash_balance": 1_000_000,
+                        "stocks": [],
+                        "pending_orders": [
+                            {
+                                "order_id": 3,
+                                "stock_code": "066570",
+                                "order_side": "buy",
+                                "order_status": "pending",
+                                "order_type": order_type,
+                                "limit_price": limit_price,
+                                "quantity": 2,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    client = httpx.Client(
+        base_url="http://backend",
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload)),
+    )
+
+    users = Backend(client, SECRET, ISSUER).users()
+
+    pending = users[0].accounts[0].pending_orders[0]
+    assert (pending.order_id, pending.stock_code, pending.quantity) == (3, "066570", 2)
+    assert (pending.order_type, pending.limit_price) == (order_type, limit_price)
 
 
 def test_an_order_carries_the_user_token_the_csrf_pair_and_the_explanation():
@@ -210,7 +259,7 @@ def test_csrf_retry_clears_cookies_for_https_with_secure_flag():
     assert fake.requests[-1].headers["x-xsrf-token"] == "masked-2"
 
 
-def test_a_cancel_patches_the_order_with_no_body_and_the_csrf_pair():
+def test_a_cancel_patches_the_order_with_cancelled_status_and_the_csrf_pair():
     fake = FakeBackend()
 
     _backend(fake).cancel(7, 11, 42)
@@ -218,7 +267,8 @@ def test_a_cancel_patches_the_order_with_no_body_and_the_csrf_pair():
     patch = fake.requests[-1]
     assert patch.method == "PATCH"
     assert patch.url.path == "/api/v1/accounts/11/orders/42"
-    assert patch.content == b""
+    assert json.loads(patch.content) == {"status": "cancelled"}
+    assert patch.headers["content-type"] == "application/json"
     assert _claims(patch)["sub"] == "7"
     assert patch.headers["x-xsrf-token"] == "masked-1"
 
@@ -230,14 +280,22 @@ def test_a_cancel_retries_once_on_an_invalid_csrf_token():
     _backend(fake).cancel(7, 11, 42)
 
     assert fake.csrf_issued == 2
-    assert fake.requests[-1].method == "PATCH"
+    patches = [r for r in fake.requests if r.method == "PATCH"]
+    assert len(patches) == 2
+    for patch in patches:
+        assert patch.url.path == "/api/v1/accounts/11/orders/42"
+        assert json.loads(patch.content) == {"status": "cancelled"}
+        assert patch.headers["content-type"] == "application/json"
+    assert patches[0].headers["x-xsrf-token"] == "masked-1"
+    assert patches[1].headers["x-xsrf-token"] == "masked-2"
 
 
 def test_a_failed_cancel_raises():
     fake = FakeBackend([httpx.Response(409, json={"code": "ALREADY_FILLED", "message": "m"})])
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(httpx.HTTPStatusError) as error:
         _backend(fake).cancel(7, 11, 42)
+    assert error.value.response.status_code == 409
 
 
 @pytest.mark.parametrize(("side", "upper", "lower"), [("buy", True, False), ("sell", False, True)])
