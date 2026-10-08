@@ -223,6 +223,7 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
     assert failed["order_type"] == "limit"
     assert failed["stock_name"] == "삼성전자"
     assert failed["request_body"] == {
+        "reason_id": str(WHY.id),
         "stock_code": "005930",
         "stock_name": "삼성전자",
         "order_side": "buy",
