@@ -28,6 +28,7 @@ members = [
 dev = [
     { name = "deptry", specifier = ">=0.25.1" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "pyjwt", specifier = ">=2.10" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "ruff", specifier = ">=0.14" },
     { name = "scikit-learn", specifier = ">=1.7" },
@@ -566,16 +567,6 @@ wheels = [
 name = "ktb-core"
 version = "0.1.0"
 source = { editable = "packages/core" }
-dependencies = [
-    { name = "httpx" },
-    { name = "pyjwt" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "httpx", specifier = ">=0.28" },
-    { name = "pyjwt", specifier = ">=2.10" },
-]
 
 [[package]]
 name = "ktb-market-analyzer"
