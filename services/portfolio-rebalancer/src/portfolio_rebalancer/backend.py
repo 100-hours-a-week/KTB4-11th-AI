@@ -108,4 +108,9 @@ class Backend:
         self._send("POST", f"/api/v1/accounts/{account_id}/orders", user_id, body)
 
     def cancel(self, user_id: int, account_id: int, order_id: int) -> None:
-        self._send("PATCH", f"/api/v1/accounts/{account_id}/orders/{order_id}", user_id)
+        self._send(
+            "PATCH",
+            f"/api/v1/accounts/{account_id}/orders/{order_id}",
+            user_id,
+            {"status": "cancelled"},
+        )

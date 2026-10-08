@@ -251,7 +251,7 @@ def test_csrf_retry_clears_cookies_for_https_with_secure_flag():
     assert fake.requests[-1].headers["x-xsrf-token"] == "masked-2"
 
 
-def test_a_cancel_patches_the_order_with_no_body_and_the_csrf_pair():
+def test_a_cancel_patches_the_order_with_cancelled_status_and_the_csrf_pair():
     fake = FakeBackend()
 
     _backend(fake).cancel(7, 11, 42)
@@ -259,19 +259,23 @@ def test_a_cancel_patches_the_order_with_no_body_and_the_csrf_pair():
     patch = fake.requests[-1]
     assert patch.method == "PATCH"
     assert patch.url.path == "/api/v1/accounts/11/orders/42"
-    assert patch.content == b""
+    assert json.loads(patch.content) == {"status": "cancelled"}
     assert _claims(patch)["sub"] == "7"
     assert patch.headers["x-xsrf-token"] == "masked-1"
 
 
-def test_a_cancel_retries_once_on_an_invalid_csrf_token():
+def test_a_cancel_retries_once_with_the_cancelled_status_on_an_invalid_csrf_token():
     invalid = httpx.Response(403, json={"code": "INVALID_CSRF_TOKEN", "message": "m"})
     fake = FakeBackend([invalid])
 
     _backend(fake).cancel(7, 11, 42)
 
+    patches = [request for request in fake.requests if request.method == "PATCH"]
     assert fake.csrf_issued == 2
-    assert fake.requests[-1].method == "PATCH"
+    assert [json.loads(request.content) for request in patches] == [
+        {"status": "cancelled"},
+        {"status": "cancelled"},
+    ]
 
 
 def test_a_failed_cancel_raises():
