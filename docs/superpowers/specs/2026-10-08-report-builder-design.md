@@ -23,7 +23,7 @@ The Backend sends one JSON message to the SQS request queue:
 
 `report-builder` sends one callback after generating the report:
 
-`POST /api/v1/competitions/{competition_id}/report/{participant_id}`
+`POST /api/v1/competitions/{competition_id}/report`
 
 ```json
 {
@@ -32,7 +32,7 @@ The Backend sends one JSON message to the SQS request queue:
 }
 ```
 
-The callback uses `ktb_core.backend_auth.BackendAuth.request()` from [PR #237](https://github.com/100-hours-a-week/KTB4-11th-AI/pull/237) for the existing AI JWT and CSRF protocol. It passes `str(user_id)` as the JWT subject and uses `participant_id` only in the callback URL. The JWT has actor `AI`. Authentication code consolidation is outside this spec.
+The callback uses `ktb_core.backend_auth.BackendAuth.request()` from [PR #237](https://github.com/100-hours-a-week/KTB4-11th-AI/pull/237) for the existing AI JWT and CSRF protocol. It passes `str(user_id)` as the JWT subject. The JWT has actor `AI`. `participant_id` remains in the SQS message for request validation and tracing; one AI handles each competition, so it is not part of the callback URL. Authentication code consolidation is outside this spec.
 
 ## Reason IDs and orders
 
@@ -60,7 +60,7 @@ Add the service to the uv workspace, development and production Compose files, D
 
 - Migration test verifies backfill, uniqueness, non-null IDs, and unchanged composite primary key.
 - Rebalancer tests verify `reason_id` for current and leftover explanations.
-- Report tests verify exact reason selection, cited news deduplication, missing evidence failure, callback JSON with `participant_id` in the path and `user_id` as the JWT subject, and deletion only after callback success.
+- Report tests verify exact reason selection, cited news deduplication, missing evidence failure, callback JSON with the competition-only path and `user_id` as the JWT subject, and deletion only after callback success.
 - Run repo lint, formatting, tests, and isolated service import/image checks.
 
 ## Boundaries

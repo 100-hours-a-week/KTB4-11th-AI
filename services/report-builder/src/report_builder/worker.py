@@ -37,7 +37,7 @@ def process_message(
         report = build_report(evidence, structured)
         auth.request(
             "POST",
-            f"/api/v1/competitions/{request.competition_id}/report/{request.participant_id}",
+            f"/api/v1/competitions/{request.competition_id}/report",
             str(request.user_id),
             json=report.model_dump(mode="json"),
         )

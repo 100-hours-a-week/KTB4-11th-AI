@@ -80,7 +80,7 @@ def test_posts_report_and_deletes_after_success(dependencies):
 
     auth.request.assert_called_once_with(
         "POST",
-        "/api/v1/competitions/12/report/34",
+        "/api/v1/competitions/12/report",
         "56",
         json={"news": [{"title": "N", "summary": "S"}], "thoughts": [{"title": "T", "text": "X"}]},
     )

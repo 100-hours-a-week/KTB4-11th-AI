@@ -14,7 +14,7 @@
 
 - Treat PR #237's `ktb_core.backend_auth.BackendAuth.request(method, path, subject, json=...)` as merged; sync the worktree with that code before implementation. Do not duplicate JWT/CSRF code.
 - SQS queue: `stockspoon-v2-dev-report-request`; region: `ap-northeast-2`; visibility: five minutes; process one message at a time.
-- Callback: `POST /api/v1/competitions/{competition_id}/report/{participant_id}` with `str(user_id)` as JWT subject.
+- Callback: `POST /api/v1/competitions/{competition_id}/report` with `str(user_id)` as JWT subject. `participant_id` remains in the SQS request but is not in the callback path because one AI handles each competition.
 - Delete only after a successful callback. Backend owns callback idempotency and queue dead-letter policy.
 - Configure development from `ai.env` and production from `/etc/stockspoon/ai.env`; commit neither file nor secrets.
 - Preserve the `portfolio_reasons` composite primary key. Authentication consolidation belongs to #236.
