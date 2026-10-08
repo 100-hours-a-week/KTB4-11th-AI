@@ -1,4 +1,5 @@
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -16,7 +17,7 @@ REQUIRED = {
     "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
 }
 WEDNESDAY_NOON = datetime(2026, 10, 14, 12, tzinfo=KST)
-WHY = Explanation(reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
+WHY = Explanation(id=uuid.uuid4(), reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
 PORTFOLIO = Portfolio(
     id=5,
     cash_weight=0.5,

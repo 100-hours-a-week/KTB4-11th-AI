@@ -1,10 +1,16 @@
+import uuid
+
 from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target
 from portfolio_rebalancer.rebalance import Quote, rebalance, whole_shares
 from portfolio_rebalancer.snapshot import Account
 
-BUY = Explanation(reason="사요", reasonings=[{"label": "사요", "body": "사요"}])
-SELL = Explanation(reason="팔아요", reasonings=[{"label": "팔아요", "body": "팔아요"}])
-LEFT = Explanation(reason="예전에 뺐어요", reasonings=[{"label": "정리", "body": "뺐어요"}])
+BUY = Explanation(id=uuid.uuid4(), reason="사요", reasonings=[{"label": "사요", "body": "사요"}])
+SELL = Explanation(
+    id=uuid.uuid4(), reason="팔아요", reasonings=[{"label": "팔아요", "body": "팔아요"}]
+)
+LEFT = Explanation(
+    id=uuid.uuid4(), reason="예전에 뺐어요", reasonings=[{"label": "정리", "body": "뺐어요"}]
+)
 
 
 def hold(code, weight):

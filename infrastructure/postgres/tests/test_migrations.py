@@ -1,6 +1,7 @@
 import configparser
 import importlib
 import pathlib
+import uuid
 
 import pytest
 import sqlalchemy as sa
@@ -8,6 +9,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from sqlalchemy.exc import IntegrityError
 
 REPO_ROOT = next(
     parent
@@ -200,6 +202,8 @@ def test_downgrade_to_0002_copies_summaries_back(pg_dsn, pg_engine, monkeypatch)
     finally:
         command.upgrade(config, "head")
         with pg_engine.begin() as conn:
+            conn.execute(sa.text("TRUNCATE corporations CASCADE"))
+        with pg_engine.begin() as conn:
             conn.execute(sa.text("TRUNCATE clusters CASCADE"))
 
 
@@ -264,6 +268,82 @@ def test_a_reason_side_is_buy_or_sell(pg_dsn, pg_engine, monkeypatch):
         ).scalar_one()
 
     assert "'buy'" in definition and "'sell'" in definition
+
+
+def test_portfolio_reason_ids_backfill_and_reject_null_or_duplicates(
+    pg_dsn, pg_engine, monkeypatch
+):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    command.downgrade(config, "base")
+    command.upgrade(config, "0009")
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO corporations (stock_code, corp_code, name)"
+                    " VALUES ('005930', '00126380', '삼성전자'),"
+                    " ('000660', '00164779', 'SK하이닉스')"
+                )
+            )
+            portfolio_ids = [
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO portfolios (cash_weight, commentary, model)"
+                        " VALUES (0.1, 'c', 'm') RETURNING id"
+                    )
+                ).scalar_one()
+                for _ in range(2)
+            ]
+            for portfolio_id, company_id in zip(
+                portfolio_ids, ("00126380", "00164779"), strict=True
+            ):
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO portfolio_reasons"
+                        " (portfolio_id, company_id, side, reason, reasonings)"
+                        " VALUES (:p, :c, 'buy', 'r', '[]'::jsonb)"
+                    ),
+                    {"p": portfolio_id, "c": company_id},
+                )
+        command.upgrade(config, "0010")
+        with pg_engine.connect() as conn:
+            rows = conn.execute(sa.text("SELECT id FROM portfolio_reasons ORDER BY portfolio_id"))
+            ids = list(rows.scalars())
+            primary_key = conn.execute(
+                sa.text(
+                    "SELECT array_agg(a.attname ORDER BY u.ordinality)"
+                    " FROM pg_constraint c CROSS JOIN LATERAL unnest(c.conkey)"
+                    " WITH ORDINALITY u(attnum, ordinality)"
+                    " JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = u.attnum"
+                    " WHERE c.conrelid = 'portfolio_reasons'::regclass AND c.contype = 'p'"
+                )
+            ).scalar_one()
+        assert len(ids) == 2 and all(isinstance(value, uuid.UUID) for value in ids)
+        assert len(set(ids)) == 2
+        assert primary_key == ["portfolio_id", "company_id", "side"]
+        with pytest.raises(IntegrityError):
+            with pg_engine.begin() as conn:
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO portfolio_reasons"
+                        " (portfolio_id, company_id, side, reason, reasonings, id)"
+                        " VALUES (:p, '00164779', 'sell', 'r', '[]'::jsonb, NULL)"
+                    ),
+                    {"p": portfolio_ids[0]},
+                )
+        with pytest.raises(IntegrityError):
+            with pg_engine.begin() as conn:
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO portfolio_reasons"
+                        " (portfolio_id, company_id, side, reason, reasonings, id)"
+                        " VALUES (:p, '00126380', 'sell', 'r', '[]'::jsonb, :id)"
+                    ),
+                    {"p": portfolio_ids[1], "id": ids[0]},
+                )
+    finally:
+        command.upgrade(config, "head")
 
 
 def test_downgrade_to_0006_removes_reasons_and_trace(pg_dsn, pg_engine, monkeypatch):
