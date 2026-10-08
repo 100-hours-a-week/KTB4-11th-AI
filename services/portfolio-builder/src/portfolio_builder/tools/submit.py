@@ -9,6 +9,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from portfolio_builder.errors import PortfolioRejected, ToolError
+from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import (
     Exit,
     Holding,
@@ -40,6 +41,7 @@ def submit_portfolio(
     engine: sa.Engine,
     previous: frozenset[str],
     model: str,
+    news_client: NewsClient,
     log: StructuredLogger,
     lock: threading.Lock,
     saved: list[int],
@@ -53,7 +55,9 @@ def submit_portfolio(
         errors = validate_portfolio(submission, previous)
         if not errors:
             try:
-                saved.append(save_portfolio(engine, normalize_weights(submission), model))
+                saved.append(
+                    save_portfolio(engine, normalize_weights(submission), model, news_client)
+                )
             except PortfolioRejected as rejected:
                 errors = rejected.errors
         if errors:
@@ -71,7 +75,11 @@ def submit_portfolio(
 
 
 def submit_tool(
-    engine: sa.Engine, previous: frozenset[str], model: str, log: StructuredLogger
+    engine: sa.Engine,
+    previous: frozenset[str],
+    model: str,
+    news_client: NewsClient,
+    log: StructuredLogger,
 ) -> BaseTool:
     return StructuredTool.from_function(
         # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.
@@ -80,6 +88,7 @@ def submit_tool(
             engine=engine,
             previous=previous,
             model=model,
+            news_client=news_client,
             log=log,
             lock=threading.Lock(),
             saved=[],

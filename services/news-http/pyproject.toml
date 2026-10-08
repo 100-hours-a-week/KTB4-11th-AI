@@ -1,0 +1,27 @@
+[project]
+name = "news-http"
+version = "0.1.0"
+description = "Read-only HTTP API over news clusters for the Backend"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "ktb-core",
+    "fastapi>=0.142",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "sqlalchemy>=2.0.54",
+    "uvicorn>=0.54",
+]
+
+[project.scripts]
+news-http = "news_http.__main__:main"
+
+[tool.uv.sources]
+ktb-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["psycopg"]

@@ -241,10 +241,6 @@ def test_edaily_scrape_stores_recovered_url_or_reports_failure(engine, tv_status
         assert result.succeed == [MISSING_URL]
         assert result.failed == []
         assert stored == [(MISSING_URL, TV_URL, "실제 기사 본문")]
-    elif tv_status == 404:
-        assert result.succeed == []
-        assert result.failed == []
-        assert stored == []
     else:
         assert result.succeed == []
         assert result.failed == [MISSING_URL]

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.database import portfolio_exits, portfolio_holdings, portfolios
 from portfolio_builder.errors import PortfolioRejected
+from portfolio_builder.news_client import NewsClient
 
 # No numeric constraints here on purpose: validate_portfolio reports every problem at once,
 # which a Pydantic ValidationError on the first bad field would not.
@@ -90,10 +91,15 @@ def normalize_weights(submission: Submission) -> Submission:
     )
 
 
-def save_portfolio(engine: sa.Engine, submission: Submission, model: str) -> int:
+def save_portfolio(
+    engine: sa.Engine, submission: Submission, model: str, news_client: NewsClient
+) -> int:
     cited = sorted(
         {c for item in [*submission.holdings, *submission.exits] for c in item.cited_cluster_ids}
     )
+    missing = [c for c in cited if not news_client.has_cluster(c)]
+    if missing:
+        raise PortfolioRejected([f"cited_cluster_ids not found: {', '.join(map(str, missing))}"])
     try:
         with engine.begin() as conn:
             portfolio_id = conn.execute(
@@ -114,17 +120,6 @@ def save_portfolio(engine: sa.Engine, submission: Submission, model: str) -> int
                 conn.execute(
                     sa.insert(portfolio_exits),
                     [{"portfolio_id": portfolio_id, **e.model_dump()} for e in submission.exits],
-                )
-            found = set(
-                conn.execute(
-                    sa.text("SELECT id FROM clusters WHERE id = ANY(CAST(:ids AS bigint[]))"),
-                    {"ids": cited},
-                ).scalars()
-            )
-            missing = [c for c in cited if c not in found]
-            if missing:
-                raise PortfolioRejected(
-                    [f"cited_cluster_ids not found: {', '.join(map(str, missing))}"]
                 )
             return portfolio_id
     except sa.exc.IntegrityError as error:

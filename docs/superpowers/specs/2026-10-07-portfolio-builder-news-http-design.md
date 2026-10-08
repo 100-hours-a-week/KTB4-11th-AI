@@ -1,0 +1,37 @@
+# Portfolio builder news HTTP design
+
+## Goal
+
+Portfolio builder reads news through `news-http` and keeps direct PostgreSQL access for portfolios and company reference data, plus QuestDB access for prices. A missing news result remains distinguishable from a failed HTTP request.
+
+## API design
+
+All new routes return JSON and use ISO 8601 timestamps with offsets. IDs identify domain objects and do not expose join-table structure. Graph `company_id` is a string or `null` for entities that are not linked to a corporation. Existing `GET /stocks/{stock_code}/clusters` and `GET /clusters/{cluster_id}/articles` remain unchanged. A successful empty search uses `200` with an empty array; a missing cluster detail uses `404`. Invalid parameters use `422`, and a database failure uses `500`.
+
+| Route | Input | `200` response | Ordering and bounds |
+|---|---|---|---|
+| `GET /clusters/search` | `q`: comma-separated words, e.g. `삼성전자,반도체` | `[{"id": 12, "title": "...", "excerpt": "...", "rank": 0.4}]` | Trim whitespace around each word; all words must match as prefixes. Rank descending, ID descending; at most 10. Empty entries, including `foo,`, and entries containing whitespace are `422`. |
+| `GET /clusters/{cluster_id}` | Positive bigint ID | `{"id": 12, "title": "...", "summary": "...", "updated_at": "...", "articles": [{"title": "...", "source": "...", "published_at": "..."}], "entities": [{"id": 7, "name": "...", "type": "...", "company_id": "..."}], "relations": [{"source": "...", "type": "...", "target": "...", "description": "..."}]}` | Articles newest first, entities by ID, relations by ID. A cluster without a summary is `404`. |
+| `GET /news/recent` | `days`: positive integer | `{"clusters": [{"id": 12, "title": "...", "summary": "...", "updated_at": "..."}], "companies": [{"company_id": "...", "name": "...", "stock_code": "...", "cluster_ids": [12], "themes": ["theme (main)"]}], "theme_count": 1}` | Clusters updated within the window, newest first; companies by ID; themes major first then name. Empty window returns empty arrays and zero. |
+| `GET /graph/neighborhood` | `name`: nonempty entity name; `depth`: 1–3, default 2 | `{"nodes": [{"id": 7, "hop": 0, "name": "...", "type": "...", "company_id": "..."}], "edges": [{"id": 8, "source": "...", "type": "...", "target": "...", "description": "...", "cluster_id": 12, "hop": 0}], "truncated": false}` | Bidirectional traversal; nodes by hop then ID, max 100; edges by hop then ID, max 200. |
+| `GET /graph/paths` | `from_name`, `to_name`: nonempty entity names; `max_depth`: 1–6, default 4 | `{"paths": [{"length": 1, "steps": [{"from": "...", "to": "...", "type": "...", "direction": "forward", "description": "...", "cluster_id": 12}]}], "truncated": false}` | Shortest simple bidirectional paths first, max 20. |
+
+Graph lookup with no matching entity returns `404` as `{"detail": {"message": "no entity matches ...", "candidates": ["..."]}}`, preserving the agent's ability to refine the name. A valid pair of entities with no connecting path returns `200` with `paths: []`. Database query timeout returns `504` as `{"detail": "graph query timed out; use a smaller depth or a more specific name"}`, distinct from an empty graph result. The API owns full-text normalization, alias matching, and graph traversal; portfolio builder does not construct SQL or PostgreSQL search syntax for news. Register `/clusters/search` before `/clusters/{cluster_id}` so the static route wins. `/clusters/{cluster_id}` and the existing `/clusters/{cluster_id}/articles` have distinct path lengths and do not overlap.
+
+The recent-news response contains mentioned companies and their themes so portfolio builder can render the same briefing. `news-http` owns queries against news tables; it may join company reference data to identify mentions and themes. Portfolio builder continues to query company reference data for its non-news work.
+
+## Consumer
+
+Add one synchronous HTTP client in portfolio builder, configured with a required `PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI` and a finite timeout. Wire it into the four news and graph tools and briefing loading. Keep the existing tool names and JSON result shapes where possible to avoid changing agent behavior. Update the search tool's argument description and examples to request comma-separated words. Remove news-table SQL, graph transactions, and the associated news-only helpers from portfolio builder. The existing PostgreSQL engine remains because portfolio storage and company reference reads still use it.
+
+The client maps HTTP `404` on cluster detail to the current missing-cluster tool error, graph `404` to a recoverable tool error with candidates, tool request `422` to a recoverable input error, and graph query `504` to the existing recoverable `GraphTimeout` guidance. Empty successful responses flow through as empty data. Connection errors, client-side timeouts, malformed responses, and other server errors raise an explicit upstream-news error; they must not turn into empty analysis data or cause a portfolio to be saved from an incomplete briefing.
+
+## File structure
+
+Extend `news_http/controllers/clusters.py` and `news_http/repositories/clusters.py` for search and detail. Add `controllers/news.py` and `repositories/news.py` for `/news/recent`, and `controllers/graph.py` and `repositories/graph.py` for graph reads. Extend `repositories/tables.py` only with columns and tables these queries need; register the routes in `app.py`. Keep the existing article endpoint and pagination code in place.
+
+Add `portfolio_builder/news_client.py` for HTTP requests, response checks, and error mapping. Change the existing `tools/news/*.py`, `tools/graph/search.py`, and `tools/graph/paths.py` to call it. Keep `briefing/repository.py` for previous-portfolio SQL and move recent-news loading to the client; `briefing/service.py` combines the two results. Delete `tools/graph/database.py` and `tools/graph/entities.py` when their SQL callers are gone. `settings.py`, `__main__.py`, Compose, README, and affected tests change only as needed for the new URL and behavior.
+
+## Operations and verification
+
+Configure the portfolio builder service to reach `news-http` in development and production Compose. Keep authentication and production deployment policy within issue 216's scope. Test endpoint response shapes and representative empty/missing cases, consumer HTTP error handling, and the existing portfolio tool and briefing behavior. Run formatter, lint, and affected test suites.
