@@ -23,12 +23,17 @@ flowchart LR
         MC["market-collector"]
         PB["portfolio-builder"]
         PR["portfolio-rebalancer"]
+        RB["report-builder"]
         PG[("PostgreSQL")]
         QDB[("QuestDB")]
     end
 
     subgraph BACKEND["KTB4-11th-BE"]
         BE["Backend"]
+    end
+
+    subgraph AWS["AWS"]
+        SQS["SQS"]
     end
 
     NEWS --> NP
@@ -58,6 +63,11 @@ flowchart LR
     QDB -->|last close| PR
     BE -->|users, accounts| PR
     PR -->|limit or market orders| BE
+    BE -->|report request| SQS
+    SQS -->|report request| RB
+    PG -->|reasons and cited summaries| RB
+    OPENROUTER --> RB
+    RB -->|HTTP report callback| BE
 ```
 
 ## 서비스 실행 의존 관계
@@ -129,6 +139,12 @@ flowchart LR
 - 경계는 위, 아래로 두 개 생성하며, 매도일 때는 높은 가격에 시도 후 낮은 가격에 도달하면 시장가 매도, 매수일 때는 낮은 가격에 시도 후 높은 가격에 도달하면 시장가 매수를 진행함
 - 주문마다 `portfolio_reasons`을 백엔드에 보냄
 
+### `report-builder`: 대회 종료 투자 리포트 생성하기
+
+- SQS에서 대회 참가자의 주문에 연결된 투자 이유 ID를 하나씩 받아 처리함
+- 선택된 이유와 해당 포트폴리오 설명, 인용된 뉴스 요약만으로 한국어 thoughts를 생성함
+- Backend에 결과를 전달한 뒤에만 SQS 메시지를 삭제함
+
 ## 개발 환경에서 실행
 
 저장소 루트에서 `.env.example`을 `.env`로 복사해 해당 작업의 필수 값을 환경에 설정합니다.
@@ -136,7 +152,7 @@ flowchart LR
 ### 스키마 적용하기
 
 ```bash
-docker compose -f compose.dev.yaml up -d postgres questdb redis
+docker compose -f compose.dev.yaml up -d postgres questdb
 uv run alembic upgrade head
 KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 ```
@@ -152,6 +168,7 @@ docker compose -f compose.dev.yaml run --rm news-graph-builder
 docker compose -f compose.dev.yaml run --rm market-collector
 docker compose -f compose.dev.yaml run --rm portfolio-builder
 docker compose -f compose.dev.yaml run --rm portfolio-rebalancer
+docker compose -f compose.dev.yaml up report-builder
 ```
 
 ## 데이터베이스 (ERD): [mermaid.live](https://mermaid.live/edit#pako:eNrNWO9P20YY_ldO_tRqAZGkUMg3BFSbQG1VWk2akKyLfSRubV90Pq-EUIlVpKItnboNWraGDW3VqlZMCj_GMqn9h-LL_7A7_4pjx4ZoH7Z88_l97n2f9973uddpSApWkVSSEJnXYIVAY8UE_AcJ1RQdWWBjY2wMbwTPsqLbFkXEAiWwIvW-OXN-OWLP3va22oA92WFPXoArTrPDDs7Y79vOs13Qe_UUsNdP2MHO1RXJ2zncQey80Ri-c_fPI7Z1DLqdNnt8NBTJY_KfZcs2DEg05EHZT7ts79NwTCPEIJNqNIS86nQ7T0G33WInZ2lIgnRINWz6kHNuuw-iGQiA4dZZLtOMB71Y2CYKupwthaSCaBg9JjVM_NdBIP01GeoatPxYnNMt9vcfl0VqpqopQeLebbJtnoVvO-znZvoGG2CAuzjV103AC8X5oZXlllaRwQsDGzVoxhPnvsu09GuI_dp0PrwPYNwHXcW6hkNouCJXsa5qZsWvbZfTCGi0ptE-9Lw1ApQgaIWF5aL4kQC29db50MzKT0rowlQWbX05bD_wEYHRsAegMQlpeM_iV9YqmkmBpoLbi_1VitYo8God3FsM6x58BvgLREyoyxzBWofs4GMQWoiLmtyLb2oTPbbC61BHsbUyVuuRJY0XFoVGja6Dml3WNauKVBlScTgHHefFMW_3RBQEPpRrsK5jqAq7Ny-d0w64s7wM2N4Wl8NeszUAibhYRVQJHfDW4MBu-3tg4odXrkYxXyOFYiIXJiYmADLKSBUHziGmreuwrKMc-Pzm8peAfdrlkskDBYlgH8WE7eJziYRp11RIwzCj8txtbwKnvets7jjvz7iIHrPnhzGXCY1Pug5M3BBy4MZiwiLQUW5xQxTJrZtgfmFp4e4CmJtdnpudXxjOM3I9NLL29Lxm7ZtZQ56XlDIK3Awk0buoentcKZ632OFLdrAfns143zKtbnxa657RAPFo1zbicVKsPHA7lTMO9YZXTUSLQ-Owq722nJ-9cxd0Tw95Jzon2739TgJgQiOeGB7kAyT4Lt5avv1Fsn3NiixQkUpOZVw3lUy24a0WJ-2ue3xNTAz-uI5A96TdPU3qSSRBQREO8RTcgpnpHSxj9z3HoTWPsBuOmxTe07HaDe_Ly2mnUB8_iXwq4dMWEPLT-67FO3ToGV0mEbReQ1m5id_kzrudHOj-xYXnxw64eW9pKaUfM7iN3I4-zt2yHtcO329_TLowmaMqTQTjXVlyP5IhCuaNaCk2aTlXkaUQrSYYDNDyB6B4AQaTUNDfvcdv2ZtNdxnKFdHO6kVde2HLxaetzBguraqJ1rkw8xjrCJpAs2QD3sdEsG3uOO-2Afvto1BXV9r498eRc74ZK8bIODbSNajwoYdmjgMq5jMDAgq0qvJDpFWqNCGqhsFLYPCycJWSU4-MK_f5cFUGlEAl2YaQ2hYPAK3VdGh6ilRDppgIcrzeoVrPgei7VajpSE1LQX96TKaibzTaFekVR30AFb2XxhOzZiR3Q9PmTZsp14QXrQwJgXWgaOKE-k1spdD2Bt__mnOE3L_kE8zj_wtGlhYoUNmuA96cFtL1C3l7Ne-tior0mUo5qUI0VSpRYqOcZCB-dYlHyaXKv32F4KxI4kOEINVeG1P50DGmYB0T4VLgOY-vMDaCLQi2K1WptAp1iz9505b_B0howhsKkTlsm1Qq5SfcLaRSQ1qTSsWZifHidHE6ny_kpyYLk4WcVJdKk9PjhcLE1PS1wvXizMz1fOFRTlp3fRbHr_EXk8XJ6fxUfqYwVbj-6B_sZiCG) 에서 보기
@@ -290,6 +307,7 @@ erDiagram
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
 | `portfolios.status` | `portfolio-builder` | `0008` |
+| `portfolio_reasons.id` | `portfolio-builder` | `0010` |
 
 ## 환경 변수
 
@@ -413,6 +431,24 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
 | `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` | `true`면 KRX 거래일/시간 검사 생략 |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+### report-builder (`REPORT_BUILDER_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `REPORT_BUILDER_POSTGRES_DSN` | 필수 | | 투자 이유와 뉴스 요약 조회 |
+| `REPORT_BUILDER_SQS_QUEUE_URL` | 필수 | | SQS 요청 큐 URL 또는 이름 |
+| `REPORT_BUILDER_AWS_REGION` | | `ap-northeast-2` | SQS 리전 |
+| `REPORT_BUILDER_BACKEND_BASE_URI` | 필수 | | 보고서 콜백 Backend 주소 |
+| `REPORT_BUILDER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 JWT 서명 비밀값 (32바이트 이상) |
+| `REPORT_BUILDER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 JWT 발급자 |
+| `REPORT_BUILDER_LLM_API_KEY` | 필수 | | OpenRouter API 키 |
+| `REPORT_BUILDER_LLM_MODEL` | 필수 | | 보고서 생성 모델 ID |
+| `REPORT_BUILDER_LLM_TIMEOUT` | | `240` | OpenRouter 요청 제한 시간(초) |
+| `REPORT_BUILDER_BACKEND_TIMEOUT` | | `10` | Backend 요청 제한 시간(초) |
+| `REPORT_BUILDER_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+개발 환경에서는 `ai.env`에서 Backend/OpenRouter 설정을 읽고 `stockspoon-v2-dev-report-request` 큐를 사용합니다. 운영에서는 `/etc/stockspoon/ai.env`에 서비스 설정을 둡니다. AWS 인증 정보는 AWS 기본 인증 체인으로 공급합니다.
 
 ### 설정 변경과 검증
 

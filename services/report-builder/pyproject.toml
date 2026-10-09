@@ -1,0 +1,29 @@
+[project]
+name = "report-builder"
+version = "0.1.0"
+description = "Competition report generator"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "ktb-core",
+    "boto3>=1.35",
+    "httpx>=0.28",
+    "langchain-core>=1.6.5",
+    "langchain-openrouter>=0.2.9",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "psycopg[binary]>=3.3.6",
+    "sqlalchemy>=2.0.54",
+]
+
+[project.scripts]
+report-builder = "report_builder.__main__:main"
+
+[tool.uv.sources]
+ktb-core = { workspace = true }
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["psycopg"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
