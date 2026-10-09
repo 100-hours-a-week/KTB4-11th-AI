@@ -19,7 +19,7 @@ def test_defaults(monkeypatch):
 
     assert settings.band == 0.05
     assert settings.buy_buffer == 0.02
-    assert settings.drain_seconds == 30.0
+    assert settings.drain_seconds == 60.0
     assert settings.log_level == "INFO"
 
 
@@ -56,3 +56,29 @@ def test_a_whitespace_queue_url_is_refused(monkeypatch):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_the_server_order_queue_variable_is_accepted(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL")
+    monkeypatch.setenv("ORDER_QUEUE_URL", "https://sqs.local/server-order.fifo")
+
+    assert Settings().order_queue_url == "https://sqs.local/server-order.fifo"
+
+
+def test_a_standard_order_queue_is_rejected(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL", "https://sqs.local/order")
+
+    with pytest.raises(ValidationError, match="FIFO"):
+        Settings()
+
+
+def test_the_server_order_queue_wins_over_the_legacy_variable(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("ORDER_QUEUE_URL", "https://sqs.local/server-order.fifo")
+
+    assert Settings().order_queue_url == "https://sqs.local/server-order.fifo"

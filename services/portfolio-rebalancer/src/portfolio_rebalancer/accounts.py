@@ -1,5 +1,6 @@
 import json
 from time import monotonic
+from typing import NoReturn
 
 from ktb_core.logging import StructuredLogger
 from ktb_core.queue import Queue
@@ -12,7 +13,7 @@ SNAPSHOT_TYPE = "account.snapshot"
 FAILURE_TYPE = "account.snapshot.rejected"
 FETCH_FAILURE_TYPE = "account.snapshot.failed"
 FAILURE_GROUP = "ai-server"
-POLL_SECONDS = 1
+POLL_SECONDS = 20
 
 
 class AccountsError(RuntimeError):
@@ -58,6 +59,8 @@ class Accounts:
                 messages = self._queue.receive(wait=POLL_SECONDS)
             except Exception as error:
                 raise self._failure("receive_failed", f"{type(error).__name__}: {error}") from error
+            if monotonic() >= deadline:
+                raise self._failure("drain_budget_exceeded", f"budget_seconds={self._budget}")
             if not messages:
                 break
             for message in messages:
@@ -74,8 +77,6 @@ class Accounts:
                         ) from error
                     log.info("snapshot_acknowledged", result="acknowledged")
         if not self._users:
-            if self.rejected:
-                raise AccountsError("snapshot_missing: no valid snapshot")
             raise self._failure("snapshot_missing", "no valid snapshot received for this tick")
         return self._users
 
@@ -148,11 +149,11 @@ class Accounts:
 
     def _reject(
         self, log: StructuredLogger, reason: str, detail: str, event_id: str | None
-    ) -> bool:
+    ) -> NoReturn:
         self.rejected += 1
         if not self._report(log, reason, detail, event_id, failure_type=FAILURE_TYPE):
             raise AccountsError("snapshot_rejection_unreported")
-        return True
+        raise AccountsError(f"snapshot_rejected: {reason}")
 
     def _accept(self, message_id: str, body: str) -> tuple[bool, StructuredLogger, str | None]:
         log = self._log.bind(sqs_message_id=message_id)
@@ -165,13 +166,15 @@ class Accounts:
                 if isinstance(error, ValidationError)
                 else str(error)
             )
-            return self._reject(log, "malformed_envelope", detail, None), log, None
+            self._reject(log, "malformed_envelope", detail, None)
         log = log.bind(
             event_id=message.event_id, correlation_id=message.correlation_id or self._correlation_id
         )
         if message.type != SNAPSHOT_TYPE:
             log.warning("snapshot_ignored", result="failed", type=message.type)
-            return False, log, message.event_id
+            self._reject(
+                log, "unsupported_type", "unsupported snapshot event type", message.event_id
+            )
         if message.event_id in self._seen:
             log.info("snapshot_duplicate", result="duplicate")
             return True, log, message.event_id
@@ -179,17 +182,9 @@ class Accounts:
             snapshot = Snapshot.model_validate(message.payload)
         except ValidationError as error:
             detail = json.dumps(error.errors(include_input=False, include_url=False))
-            return (
-                self._reject(log, "malformed_payload", detail, message.event_id),
-                log,
-                message.event_id,
-            )
+            self._reject(log, "malformed_payload", detail, message.event_id)
         if not snapshot.users:
-            return (
-                self._reject(log, "empty_snapshot", "no users in the snapshot", message.event_id),
-                log,
-                message.event_id,
-            )
+            self._reject(log, "empty_snapshot", "no users in the snapshot", message.event_id)
         self._seen.add(message.event_id)
         self._users = snapshot.users
         log.info(

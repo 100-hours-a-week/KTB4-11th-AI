@@ -16,7 +16,7 @@ masking in `ktb_core.logging` and dev deployment configuration.
 | Setting | Direction | Event types | FIFO group |
 |---|---|---|---|
 | `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | consume | `account.snapshot` | Backend uses one shared group for full snapshots |
-| `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL` | publish | `order.cancel`, `order.place` | account id |
+| `ORDER_QUEUE_URL` | publish | `order.cancel`, `order.place` | account id |
 | `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | publish | `account.snapshot.rejected`, `account.snapshot.failed` | `ai-server` |
 
 An envelope contains `eventId`, `correlationId`, `occurredAt`, `type`, and `payload`.
@@ -38,7 +38,7 @@ There is no durable cache, request queue, or on-demand HTTP fallback. Successful
 acknowledges snapshots; if the process later fails, the Backend must republish for retry.
 Missing state is an explicit failed run rather than a successful no-op.
 
-Drain with one-second long polls until an empty receive or the configured drain budget.
+Drain with twenty-second long polls until an empty receive or the configured drain budget.
 The last valid full snapshot is used. Duplicate event ids are ignored within this invocation;
 this is not durable order idempotency across invocations. Budget exhaustion aborts instead
 of placing orders with a potentially incomplete drain.
@@ -53,25 +53,37 @@ have not been satisfied; FIFO delivery by itself is not a trading transaction.
 
 | Type | Reason |
 |---|---|
-| `account.snapshot.rejected` | `malformed_envelope`, `malformed_payload`, `empty_snapshot` |
+| `account.snapshot.rejected` | `malformed_envelope`, `malformed_payload`, `empty_snapshot`, `unsupported_type` |
 | `account.snapshot.failed` | `receive_failed`, `acknowledgement_failed`, `drain_budget_exceeded`, `snapshot_missing` |
 
 Every report contains `reason`, `detail`, and `rejected_event_id` (null without a source
-message). Invalid messages are acknowledged only after the rejection was published.
-If failure reporting cannot publish, log the failed notification and abort; never
-acknowledge its original message. Unknown event types are not acknowledged and can redrive
-to the queue's DLQ. This service neither publishes directly to nor consumes a DLQ.
+message). Invalid messages are never acknowledged, regardless of rejection publication.
+Report the failure and abort before processing later messages in the same FIFO batch.
+If failure reporting cannot publish, log the failed notification and abort. Unsupported
+event types follow the same rejection policy and can redrive to the queue's DLQ. This service neither publishes directly to nor consumes a DLQ.
 
-A receive or acknowledgement failure aborts the run. If all messages were rejected, their
-rejection reports already notify the Backend and the run exits with no valid snapshot.
+A receive, acknowledgement, or validation failure aborts the run. The rejection report
+already notifies the Backend, so no additional missing-state report is sent.
 An absent snapshot is separately reported, including after restarting the process.
 
 ## Configuration and Logging
 
-Development and production Compose pass `AWS_DEFAULT_REGION` (default `ap-northeast-2`)
-and require all three queue URLs. Development explicitly interpolates `.env` values for
-queue URLs and optional AWS credentials; production uses its AWS IAM role. Queue URL
-settings reject empty and whitespace-only values.
+Development and production Compose pass `AWS_DEFAULT_REGION` (default `ap-northeast-2`).
+Development maps `ORDER_QUEUE_URL` from `.env`; production loads `/etc/stockspoon/ai.env`
+as the service's env file without overriding its order URL in `environment`.
+The confirmed development order URL is
+`https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-dev-order.fifo`.
+Direct execution also accepts `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL`; the generic name wins.
+Account and failure URLs remain separately required. Reject blank URLs and non-FIFO order URLs.
+The default drain budget is 60 seconds. Boto3 uses the default credential chain and EC2 IAM
+Role; neither Compose file passes access keys. Containers must be able to reach instance
+role metadata. No credentials are stored in source.
+
+The Standard `stockspoon-v2-dev-report-request` queue, report idempotency store, and
+five-minute visibility extension belong to the other developer's report consumer.
+Do not reuse Report for account snapshots. The snapshot consumer acknowledges successful
+validation and in-memory state application, before separate order work. It has no durable
+inbox; its per-run duplicate check is not a restart-safe processing guarantee.
 
 Reuse `setup_logging`, `get_logger`, `StructuredLogger.bind`, `set_logger_level`, and
 `start_logging`. No new common logging API is required. Retain the merged OpenDART masking
@@ -86,7 +98,10 @@ output so request signatures do not appear when application logging is DEBUG.
 ## Backend and Infrastructure Dependencies
 
 Agree the envelope, payload, new failure event types, and queue names with the Backend.
-Provision FIFO queues, redrive policies, and IAM permissions externally. The AI role needs
-receive/delete on the account queue and send on order/failure queues. Configure regular
-and post-order full-snapshot publishing, order consumption, idempotency, and cancellation
+Provision account/failure FIFO queues, redrive policies, and IAM permissions externally.
+The application failure queue must be distinct from every DLQ. The AI role needs
+receive/delete on the account queue and send on order/failure queues.
+Backend order consumption uses 20-second polling, deletes only after successful processing,
+and persists event ids to prevent repeated execution beyond FIFO deduplication windows.
+Configure regular and post-order full-snapshot publishing, order consumption, idempotency, and cancellation
 prerequisite checks before deploying this transport.

@@ -7,11 +7,6 @@ from portfolio_rebalancer.accounts import FAILURE_TYPE, SNAPSHOT_TYPE, Accounts,
 LOG = get_logger("test")
 
 
-@pytest.fixture(autouse=True)
-def logging(capsys):
-    setup_logging("INFO", service_name="portfolio-rebalancer")
-
-
 def snapshot(cash=1_000_000, pending=(), user_id=1):
     return {
         "users": [
@@ -95,6 +90,7 @@ class FailureQueue:
 
 
 def _accounts(*batches, budget=5, failures=None):
+    setup_logging("INFO", service_name="portfolio-rebalancer")
     queue = FakeQueue(*batches)
     failures = failures if failures is not None else FailureQueue()
     return Accounts(queue, failures, LOG, "run-1", budget=budget), queue, failures
@@ -137,37 +133,39 @@ def test_a_redelivered_event_is_acknowledged_without_being_applied_again():
 
 
 @pytest.mark.parametrize("body", ["not json", '{"eventId": "e1"}', '{"type": "x"}'])
-def test_a_malformed_message_is_reported_and_then_deleted(body):
+def test_a_malformed_message_is_reported_and_left_for_retry(body):
     accounts, queue, failures = _accounts([Msg(body)])
 
-    with pytest.raises(AccountsError, match="snapshot_missing"):
+    with pytest.raises(AccountsError, match="snapshot_rejected"):
         accounts.users()
     assert accounts.rejected == 1
     sent = failures.sent[0]["body"]
     assert sent["type"] == FAILURE_TYPE
     assert sent["payload"]["reason"] == "malformed_envelope"
     assert sent["correlationId"] == "run-1"
-    assert queue.deleted == ["r1"]
+    assert queue.deleted == []
 
 
 def test_an_empty_snapshot_is_reported_and_leaves_no_users():
     accounts, queue, failures = _accounts([Msg(envelope({"users": []}))])
 
-    with pytest.raises(AccountsError, match="snapshot_missing"):
+    with pytest.raises(AccountsError, match="snapshot_rejected"):
         accounts.users()
     assert failures.sent[0]["body"]["payload"]["reason"] == "empty_snapshot"
     assert failures.sent[0]["body"]["payload"]["rejected_event_id"] == "e1"
-    assert queue.deleted == ["r1"]
+    assert queue.deleted == []
 
 
 def test_an_empty_snapshot_does_not_replace_a_good_one():
-    accounts, _, failures = _accounts(
+    accounts, queue, failures = _accounts(
         [Msg(envelope(snapshot(cash=900)))],
         [Msg(envelope({"users": []}, event_id="e2"), id="m2", receipt="r2")],
     )
 
-    assert accounts.users()[0].accounts[0].cash_balance == 900
+    with pytest.raises(AccountsError, match="snapshot_rejected"):
+        accounts.users()
     assert accounts.rejected == 1
+    assert queue.deleted == ["r1"]
 
 
 def test_a_rejection_that_cannot_be_published_leaves_the_message():
@@ -178,23 +176,23 @@ def test_a_rejection_that_cannot_be_published_leaves_the_message():
     assert queue.deleted == []
 
 
-def test_an_unknown_event_type_is_left_alone_without_a_rejection():
+def test_an_unknown_event_type_is_reported_and_left_for_retry():
     accounts, queue, failures = _accounts([Msg(envelope(snapshot(), type="account.closed"))])
 
-    with pytest.raises(AccountsError, match="snapshot_missing"):
+    with pytest.raises(AccountsError, match="snapshot_rejected"):
         accounts.users()
     assert queue.deleted == []
-    assert failures.sent[0]["body"]["type"] == "account.snapshot.failed"
-    assert accounts.rejected == 0
+    assert failures.sent[0]["body"]["type"] == "account.snapshot.rejected"
+    assert accounts.rejected == 1
 
 
-def test_a_payload_that_is_not_a_snapshot_is_reported_and_deleted():
+def test_a_payload_that_is_not_a_snapshot_is_reported_and_left_for_retry():
     accounts, queue, failures = _accounts([Msg(envelope({"users": "nope"}))])
 
-    with pytest.raises(AccountsError, match="snapshot_missing"):
+    with pytest.raises(AccountsError, match="snapshot_rejected"):
         accounts.users()
     assert failures.sent[0]["body"]["payload"]["reason"] == "malformed_payload"
-    assert queue.deleted == ["r1"]
+    assert queue.deleted == []
 
 
 def test_an_empty_queue_reports_a_failed_snapshot_fetch():
@@ -333,4 +331,48 @@ def test_failure_notification_logs_identify_the_publish_and_preserve_source(boom
     assert event["correlation_id"] == "run-1"
     assert event["sqs_message_id"] == (None if boom else "f1")
     assert event["failure_result"] == ("failed" if boom else "published")
-    assert queue.deleted == ([] if boom else ["r1"])
+    assert queue.deleted == []
+
+
+@pytest.mark.parametrize(
+    "body", [envelope({"users": []}), envelope(snapshot(), type="account.closed")]
+)
+def test_a_failure_stops_processing_later_messages_in_the_same_fifo_batch(body):
+    accounts, queue, failures = _accounts(
+        [
+            Msg(body),
+            Msg(envelope(snapshot(), event_id="e2"), id="m2", receipt="r2"),
+        ]
+    )
+
+    with pytest.raises(AccountsError, match="snapshot_rejected"):
+        accounts.users()
+
+    assert queue.deleted == []
+    assert len(failures.sent) == 1
+
+
+def test_accounts_use_twenty_second_long_polling(monkeypatch):
+    accounts, queue, _ = _accounts([Msg(envelope(snapshot()))])
+    waits = []
+    receive = queue.receive
+
+    def record(*, limit=10, wait=20):
+        waits.append(wait)
+        return receive(limit=limit, wait=wait)
+
+    monkeypatch.setattr(queue, "receive", record)
+    accounts.users()
+    assert waits == [20, 20]
+
+
+def test_a_long_poll_cannot_apply_messages_after_the_drain_deadline(monkeypatch):
+    ticks = iter([0.0, 0.0, 61.0])
+    monkeypatch.setattr("portfolio_rebalancer.accounts.monotonic", lambda: next(ticks))
+    accounts, queue, failures = _accounts([Msg(envelope(snapshot()))], budget=60)
+
+    with pytest.raises(AccountsError, match="drain_budget_exceeded"):
+        accounts.users()
+
+    assert queue.deleted == []
+    assert failures.sent[0]["body"]["payload"]["reason"] == "drain_budget_exceeded"
