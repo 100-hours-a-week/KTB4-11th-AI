@@ -32,6 +32,7 @@ flowchart LR
     end
 
     NEWS --> NP
+    DART --> NP
     EMB --> NP
     NP -->|articles, embeddings| PG
     PG -->|embedded articles| NC
@@ -68,6 +69,7 @@ flowchart LR
 flowchart LR
     NP["news-preprocessor"] --> NC["news-clusterer"] --> NGB["news-graph-builder"] --> PB["portfolio-builder"] --> PR["portfolio-rebalancer"]
     MS["market-syncer"] --> NGB
+    MS --> NP
     MS --> MC["market-collector"] --> PB
 ```
 
@@ -76,6 +78,7 @@ flowchart LR
 ### `news-preprocessor`: 뉴스 가져와서 저장하기
 
 - 경제 뉴스 RSS를 읽고 각 사이트의 본문 구조에 맞게 기사 추출
+- OpenDART에서 `corporation_indices`의 KOSPI 200 종목 공시를 읽어 기사처럼 저장함. 정기보고서·감사보고서·증권신고서처럼 긴 공시는 제외하고, 문서가 비어 있거나 없는 공시는 제목만 저장함
 - 기사 제목과 본문을 PostgreSQL `articles`에 저장 후 임베딩 시도
 - 임베딩은 OpenAI API와 호완되는 서버로 요청을 보내며 2000차원으로 임베딩
 
@@ -326,6 +329,7 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` | | `100` | 한 번에 처리할 미임베딩 기사 수 |
 | `NEWS_PREPROCESSOR_USER_AGENT` | | `ktb-ai/0.1` | 뉴스 요청의 User-Agent |
 | `NEWS_PREPROCESSOR_LOG_LEVEL` | | `INFO` | 로그 수준 |
+| `NEWS_PREPROCESSOR_DART_API_KEY` | 필수 | | OpenDART API 키. Compose도 같은 이름을 사용 |
 
 ### news-clusterer (`NEWS_CLUSTERER_`)
 

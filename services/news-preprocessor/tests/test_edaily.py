@@ -34,7 +34,9 @@ def test_edaily_feed_and_article(caplog):
         )
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    edaily = [item for item in publishers(client) if isinstance(item, EdailyRSS)]
+    edaily = [
+        item for item in publishers(client, "dart-key", {"005930"}) if isinstance(item, EdailyRSS)
+    ]
     assert [item.feed_url for item in edaily] == [
         "http://rss.edaily.co.kr/economy_news.xml",
         "http://rss.edaily.co.kr/stock_news.xml",
