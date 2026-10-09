@@ -1,4 +1,3 @@
-import time
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -8,8 +7,7 @@ from ktb_core.logging import get_logger
 from langchain_core.runnables import Runnable
 from pydantic import BaseModel, Field, StrictInt
 
-from report_builder.report import build_report, load_evidence, structured_generator
-from report_builder.settings import Settings
+from report_builder.report import build_report, load_evidence
 
 logger = get_logger(__name__)
 
@@ -47,4 +45,3 @@ def process_message(
     sqs.delete_message(
         QueueUrl=str(message["_queue_url"]), ReceiptHandle=str(message["ReceiptHandle"])
     )
-    

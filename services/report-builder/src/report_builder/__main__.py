@@ -1,12 +1,20 @@
-from report_builder.worker import process_message
+import time
+
 import boto3
 import httpx
+import sqlalchemy as sa
 from botocore.config import Config
-from ktb_core.logging import setup_logging
+from ktb_core.backend_auth import BackendAuth
+from ktb_core.logging import get_logger, setup_logging
+
+from report_builder.report import structured_generator
+from report_builder.settings import Settings
+from report_builder.worker import process_message
 
 logger = get_logger(__name__)
 
-if __name__ == "__main__":
+
+def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="report-builder")
     logger.info("worker_started")
@@ -50,3 +58,7 @@ if __name__ == "__main__":
                     time.sleep(1)
         finally:
             engine.dispose()
+
+
+if __name__ == "__main__":
+    main()
