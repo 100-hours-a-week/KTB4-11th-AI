@@ -148,7 +148,7 @@ flowchart LR
 ### 스키마 적용하기
 
 ```bash
-docker compose -f compose.dev.yaml up -d postgres questdb redis
+docker compose -f compose.dev.yaml up -d postgres questdb
 uv run alembic upgrade head
 KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 ```
