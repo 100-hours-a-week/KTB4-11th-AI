@@ -32,6 +32,10 @@ flowchart LR
         BE["Backend"]
     end
 
+    subgraph AWS["AWS"]
+        SQS["SQS"]
+    end
+
     NEWS --> NP
     EMB --> NP
     NP -->|articles, embeddings| PG
@@ -59,10 +63,11 @@ flowchart LR
     QDB -->|last close| PR
     BE -->|users, accounts| PR
     PR -->|limit or market orders| BE
-    BE -->|SQS report requests| RB
+    BE -->|report request| SQS
+    SQS -->|report request| RB
     PG -->|reasons and cited summaries| RB
     OPENROUTER --> RB
-    RB -->|competition report callback| BE
+    RB -->|HTTP report callback| BE
 ```
 
 ## 서비스 실행 의존 관계
@@ -74,7 +79,6 @@ flowchart LR
     NP["news-preprocessor"] --> NC["news-clusterer"] --> NGB["news-graph-builder"] --> PB["portfolio-builder"] --> PR["portfolio-rebalancer"]
     MS["market-syncer"] --> NGB
     MS --> MC["market-collector"] --> PB
-    BE["Backend"] --> RB["report-builder"]
 ```
 
 ## 서비스별 역할
