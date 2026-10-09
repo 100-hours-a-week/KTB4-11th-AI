@@ -406,9 +406,10 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 |---|---|---|---|
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | | 최신 포트폴리오와 설명 읽기 |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | | 최근 종가 읽기 |
-| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | 계좌 조회/주문 전송 주소 |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
+| `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL` | 필수 | | 취소·주문을 발행하는 FIFO 큐 (`stockspoon-v2-dev-order.fifo`) |
+| `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | 필수 | | Backend가 계좌 스냅샷을 발행하는 FIFO 큐 |
+| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 스냅샷을 반려했을 때 실패를 알리는 큐 |
+| `PORTFOLIO_REBALANCER_DRAIN_SECONDS` | | `30` | 계좌 큐를 비우는 데 쓰는 시간 상한 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
 | `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` | `true`면 KRX 거래일/시간 검사 생략 |

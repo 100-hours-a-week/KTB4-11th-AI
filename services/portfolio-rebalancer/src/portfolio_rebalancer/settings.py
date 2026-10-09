@@ -1,4 +1,4 @@
-from pydantic import Field, SecretStr
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,9 +9,10 @@ class Settings(BaseSettings):
 
     postgres_dsn: str
     questdb_conf: str
-    backend_url: str
-    backend_jwt_secret: SecretStr = Field(min_length=32)
-    backend_jwt_issuer: str = Field(min_length=1)
+    order_queue_url: str = Field(min_length=1)
+    account_queue_url: str = Field(min_length=1)
+    failure_queue_url: str = Field(min_length=1)
+    drain_seconds: float = Field(default=30.0, gt=0)
     band: float = Field(default=0.05, gt=0, lt=1)
     buy_buffer: float = Field(default=0.02, ge=0, lt=1)
     test_mode: bool = False

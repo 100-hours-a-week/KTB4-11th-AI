@@ -1,12 +1,9 @@
 from typing import Literal
 
-import httpx
-from ktb_core.backend_auth import BackendAuth
 from pydantic import BaseModel
 
 from portfolio_rebalancer.portfolio import Reasoning
 from portfolio_rebalancer.rebalance import Order
-from portfolio_rebalancer.snapshot import Snapshot, User
 
 
 class OrderRequest(BaseModel):
@@ -40,24 +37,3 @@ def order_request_body(order: Order) -> dict:
         holding_weight_after_trade_percent=order.holding_weight_after_trade_percent,
         holding_weight_limit_percent=order.holding_weight_limit_percent,
     ).model_dump(mode="json")
-
-
-class Backend:
-    def __init__(self, client: httpx.Client, secret: str, issuer: str) -> None:
-        self._auth = BackendAuth(client, secret, issuer)
-
-    def users(self) -> list[User]:
-        response = self._auth.get("/api/v1/users/ai-server", "ai-server")
-        return Snapshot.model_validate(response.json()).users
-
-    def place(self, user_id: int, account_id: int, order: Order, body: dict | None = None) -> None:
-        body = order_request_body(order) if body is None else body
-        self._auth.request("POST", f"/api/v1/accounts/{account_id}/orders", str(user_id), json=body)
-
-    def cancel(self, user_id: int, account_id: int, order_id: int) -> None:
-        self._auth.request(
-            "PATCH",
-            f"/api/v1/accounts/{account_id}/orders/{order_id}",
-            str(user_id),
-            json={"status": "cancelled"},
-        )
