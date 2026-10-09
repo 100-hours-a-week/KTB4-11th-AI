@@ -4,7 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="PORTFOLIO_REBALANCER_", extra="ignore", hide_input_in_errors=True
+        env_prefix="PORTFOLIO_REBALANCER_",
+        extra="ignore",
+        hide_input_in_errors=True,
+        str_strip_whitespace=True,
     )
 
     postgres_dsn: str

@@ -47,3 +47,12 @@ def test_a_blank_queue_url_is_refused(monkeypatch):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_a_whitespace_queue_url_is_refused(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL", "   ")
+
+    with pytest.raises(ValidationError):
+        Settings()

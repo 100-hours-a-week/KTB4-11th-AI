@@ -32,6 +32,7 @@ flowchart LR
     end
 
     NEWS --> NP
+    DART --> NP
     EMB --> NP
     NP -->|articles, embeddings| PG
     PG -->|embedded articles| NC
@@ -56,8 +57,8 @@ flowchart LR
 
     PG -->|model portfolio, reasons| PR
     QDB -->|last close| PR
-    BE -->|users, accounts| PR
-    PR -->|limit or market orders| BE
+    BE -->|SQS account.snapshot| PR
+    PR -->|SQS orders and failures| BE
 ```
 
 ## 서비스 실행 의존 관계
@@ -68,6 +69,7 @@ flowchart LR
 flowchart LR
     NP["news-preprocessor"] --> NC["news-clusterer"] --> NGB["news-graph-builder"] --> PB["portfolio-builder"] --> PR["portfolio-rebalancer"]
     MS["market-syncer"] --> NGB
+    MS --> NP
     MS --> MC["market-collector"] --> PB
 ```
 
@@ -76,6 +78,7 @@ flowchart LR
 ### `news-preprocessor`: 뉴스 가져와서 저장하기
 
 - 경제 뉴스 RSS를 읽고 각 사이트의 본문 구조에 맞게 기사 추출
+- OpenDART에서 `corporation_indices`의 KOSPI 200 종목 공시를 읽어 기사처럼 저장함. 정기보고서·감사보고서·증권신고서처럼 긴 공시는 제외하고, 문서가 비어 있거나 없는 공시는 제목만 저장함
 - 기사 제목과 본문을 PostgreSQL `articles`에 저장 후 임베딩 시도
 - 임베딩은 OpenAI API와 호완되는 서버로 요청을 보내며 2000차원으로 임베딩
 
@@ -326,6 +329,7 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` | | `100` | 한 번에 처리할 미임베딩 기사 수 |
 | `NEWS_PREPROCESSOR_USER_AGENT` | | `ktb-ai/0.1` | 뉴스 요청의 User-Agent |
 | `NEWS_PREPROCESSOR_LOG_LEVEL` | | `INFO` | 로그 수준 |
+| `NEWS_PREPROCESSOR_DART_API_KEY` | 필수 | | OpenDART API 키. Compose도 같은 이름을 사용 |
 
 ### news-clusterer (`NEWS_CLUSTERER_`)
 
@@ -408,7 +412,8 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | | 최근 종가 읽기 |
 | `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL` | 필수 | | 취소·주문을 발행하는 FIFO 큐 (`stockspoon-v2-dev-order.fifo`) |
 | `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | 필수 | | Backend가 계좌 스냅샷을 발행하는 FIFO 큐 |
-| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 스냅샷을 반려했을 때 실패를 알리는 큐 |
+| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 스냅샷 반려·수신·삭제·미수신 실패를 알리는 FIFO 큐 |
+| `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Boto3의 SQS 리전; 개발·운영 Compose에서 전달 |
 | `PORTFOLIO_REBALANCER_DRAIN_SECONDS` | | `30` | 계좌 큐를 비우는 데 쓰는 시간 상한 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
@@ -426,3 +431,25 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 ```
 
 운영용 Compose 검증에는 배포 환경의 `APP_IMAGE`와 필수 DB/Backend 환경 변수가 필요합니다. `config --quiet`는 컨테이너를 시작하지 않고 설정만 검사합니다.
+
+### 리밸런서 SQS 연동
+
+`portfolio-rebalancer`는 계좌 조회, 주문 생성, 주문 취소에 HTTP를 사용하지 않습니다.
+세 FIFO 큐의 URL을 `.env`에 설정합니다. 개발 Compose는 `.env`의 AWS 임시 자격증명도
+컨테이너에 전달하며, 운영에서는 인스턴스 또는 태스크 IAM 역할을 사용합니다.
+
+- 백엔드는 **매 09~15시 실행 전에** 전체 `{"users": [...]}` 스냅샷을 발행하고,
+  주문 접수·체결·취소 후에도 갱신된 스냅샷을 발행해야 합니다. 실행마다 메모리는 초기화됩니다.
+- 계좌 큐의 스냅샷은 전체 상태이므로 하나의 FIFO 그룹에서 발행합니다.
+  주문·취소는 계좌 ID별 그룹으로 발행하고, 취소 payload는 `status: cancelled`를 포함합니다.
+- 취소 메시지 발행만으로 대기 주문을 제거하지 않습니다. 새 스냅샷에서 대기 주문이
+  없어졌을 때 최신 잔고와 보유량으로 재계산하며, 확인되지 않은 계좌는 이번 실행에서 건너뜁니다.
+- 잘못된 JSON·payload·빈 스냅샷은 `account.snapshot.rejected`로 보고합니다.
+  수신·삭제 오류, 시간 상한 초과, 유효 스냅샷 미수신은 `account.snapshot.failed`로 보고하고
+  실행을 오류 종료합니다. 실패 보고 발행도 실패하면 원본 메시지를 삭제하지 않고 오류 로그를 남깁니다.
+- 실패 큐 payload는 `reason`, `detail`, `rejected_event_id`이고, 메시지 envelope는
+  `eventId`, `correlationId`, `occurredAt`, `type`, `payload`입니다.
+- 로그는 `ktb_core.logging`의 JSON 형식이며 `run_id`, 메시지·이벤트·상관관계 ID,
+  큐 역할, 처리 결과와 실패 원인을 기록합니다. 전체 스냅샷 입력과 SDK의 서명 디버그 로그는 출력하지 않습니다.
+
+메시지 계약과 큐 URL·IAM 권한, 백엔드 소비·발행 구현은 백엔드 및 인프라에서 함께 구성해야 합니다.

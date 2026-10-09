@@ -9,7 +9,15 @@ PLACE_TYPE = "order.place"
 
 
 class PublishError(Exception):
-    pass
+    def __init__(
+        self, message: str, *, event_id: str | None = None, correlation_id: str | None = None
+    ) -> None:
+        super().__init__(message)
+        self.fields = {
+            "event_id": event_id,
+            "correlation_id": correlation_id,
+            "sqs_message_id": None,
+        }
 
 
 def envelope(event_type: str, payload: dict, correlation_id: str) -> tuple[str, str]:
@@ -37,14 +45,27 @@ class Orders:
         try:
             message_id = self._queue.send(body, group=str(account_id), dedup=event_id)
         except Exception as error:
-            raise PublishError(f"{type(error).__name__}: {error}") from error
-        return {"event_id": event_id, "sqs_message_id": message_id}
+            raise PublishError(
+                f"{type(error).__name__}: {error}",
+                event_id=event_id,
+                correlation_id=self._correlation_id,
+            ) from error
+        return {
+            "event_id": event_id,
+            "sqs_message_id": message_id,
+            "correlation_id": self._correlation_id,
+        }
 
     def cancel(self, user_id: int, account_id: int, order_id: int) -> dict[str, str]:
         return self._publish(
             CANCEL_TYPE,
             account_id,
-            {"user_id": user_id, "account_id": account_id, "order_id": order_id},
+            {
+                "user_id": user_id,
+                "account_id": account_id,
+                "order_id": order_id,
+                "status": "cancelled",
+            },
         )
 
     def place(

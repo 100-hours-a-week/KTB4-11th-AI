@@ -4,10 +4,16 @@ from datetime import UTC, datetime
 
 import boto3
 import sqlalchemy as sa
-from ktb_core.logging import StructuredLogger, get_logger, setup_logging, start_logging
+from ktb_core.logging import (
+    StructuredLogger,
+    get_logger,
+    set_logger_level,
+    setup_logging,
+    start_logging,
+)
 from ktb_core.queue import SqsQueue
 
-from portfolio_rebalancer.accounts import Accounts
+from portfolio_rebalancer.accounts import Accounts, AccountsError
 from portfolio_rebalancer.backend import order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
@@ -20,6 +26,7 @@ from portfolio_rebalancer.snapshot import Account
 TOTALS = (
     "cancelled",
     "cancel_failed",
+    "deferred",
     "sent",
     "failed",
     "limit",
@@ -49,7 +56,15 @@ def _cancel_all(
             published = orders.cancel(user_id, account.account_id, pending.order_id)
         except PublishError as error:
             counts["cancel_failed"] += 1
-            log.error("cancel_failed", **fields, result="failed", error=str(error))
+            log.error(
+                "cancel_failed",
+                **fields,
+                **error.fields,
+                result="failed",
+                error=str(error),
+                queue_role="orders",
+                direction="publish",
+            )
             return False
         counts["cancelled"] += 1
         cancelled.add(pending.order_id)
@@ -58,6 +73,8 @@ def _cancel_all(
             **fields,
             **published,
             result="published",
+            queue_role="orders",
+            direction="publish",
             order_type=pending.order_type,
             limit_price=pending.limit_price,
             quantity=pending.quantity,
@@ -68,6 +85,7 @@ def _cancel_all(
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="portfolio-rebalancer")
+    set_logger_level("botocore", "WARNING")
     run_id = str(uuid.uuid4())
     log = get_logger(__name__, run_id=run_id)
     with start_logging(log, band=settings.band, buy_buffer=settings.buy_buffer) as end:
@@ -107,25 +125,35 @@ def main() -> None:
             run_id,
             budget=settings.drain_seconds,
         )
-        users = accounts.users()
-        log.info("users_received", user_count=len(users))
         failed_cancels: set[int] = set()
         cancelled_by_account: dict[int, set[int]] = defaultdict(set)
-        for user in users:
-            for account in user.accounts:
-                if account.is_active and not _cancel_all(
-                    orders,
-                    log,
-                    user.user_id,
-                    account,
-                    counts,
-                    cancelled_by_account[account.account_id],
-                ):
-                    failed_cancels.add(account.account_id)
-        if counts["cancelled"]:
-            accounts.forget(set().union(*cancelled_by_account.values()))
+        try:
             users = accounts.users()
             log.info("users_received", user_count=len(users))
+            for user in users:
+                for account in user.accounts:
+                    if account.is_active and not _cancel_all(
+                        orders,
+                        log,
+                        user.user_id,
+                        account,
+                        counts,
+                        cancelled_by_account[account.account_id],
+                    ):
+                        failed_cancels.add(account.account_id)
+            if counts["cancelled"]:
+                users = accounts.users()
+                log.info("users_received", user_count=len(users))
+        except AccountsError as error:
+            end.update(
+                outcome="account_snapshot_failed",
+                error=str(error),
+                portfolio_id=portfolio.id,
+                snapshot_rejected=accounts.rejected,
+                snapshot_failed=accounts.failed,
+                **{key: counts[key] for key in TOTALS},
+            )
+            raise SystemExit(1) from error
         codes = {t.stock_code for t in portfolio.targets} | {
             s.stock_code for u in users for a in u.accounts for s in a.stocks
         }
@@ -143,11 +171,13 @@ def main() -> None:
                     continue
                 replaced = sorted(cancelled_by_account[account.account_id])
                 if account.pending_orders:
+                    counts["deferred"] += 1
                     log.warning(
                         "pending_after_cancel",
                         user_id=user.user_id,
                         account_id=account.account_id,
                         order_ids=[o.order_id for o in account.pending_orders],
+                        result="deferred",
                     )
                     continue
                 if stranded := sorted(
@@ -188,15 +218,35 @@ def main() -> None:
                         )
                     except PublishError as error:
                         counts["failed"] += 1
-                        log.error("order_failed", **fields, result="failed", error=str(error))
+                        log.error(
+                            "order_failed",
+                            **fields,
+                            **error.fields,
+                            result="failed",
+                            error=str(error),
+                            queue_role="orders",
+                            direction="publish",
+                        )
                         continue
                     counts["sent"] += 1
                     counts[order.pricing.order_type] += 1
                     if order.pricing.trigger in ("upper", "lower"):
                         counts[f"{order.pricing.trigger}_triggered"] += 1
-                    log.info("order_sent", **fields, **published, result="published")
+                    log.info(
+                        "order_sent",
+                        **fields,
+                        **published,
+                        result="published",
+                        queue_role="orders",
+                        direction="publish",
+                    )
 
-        end.update(portfolio_id=portfolio.id, **{key: counts[key] for key in TOTALS})
+        end.update(
+            portfolio_id=portfolio.id,
+            snapshot_rejected=accounts.rejected,
+            snapshot_failed=accounts.failed,
+            **{key: counts[key] for key in TOTALS},
+        )
         raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)
 
 

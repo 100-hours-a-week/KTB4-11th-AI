@@ -33,7 +33,12 @@ def test_a_cancel_carries_the_order_it_cancels_and_the_run_as_correlation():
     sent = queue.sent[0]
     assert sent["body"]["type"] == CANCEL_TYPE
     assert sent["body"]["correlationId"] == RUN
-    assert sent["body"]["payload"] == {"user_id": 7, "account_id": 11, "order_id": 77}
+    assert sent["body"]["payload"] == {
+        "user_id": 7,
+        "account_id": 11,
+        "order_id": 77,
+        "status": "cancelled",
+    }
     assert published["sqs_message_id"] == "m1"
     assert published["event_id"] == sent["body"]["eventId"]
 
@@ -103,3 +108,25 @@ def test_a_send_failure_becomes_a_publish_error(call):
 
     with pytest.raises(PublishError, match="RuntimeError: no network"):
         orders.cancel(7, 11, 77) if call == "cancel" else orders.place(7, 11, BODY, [])
+
+
+def test_a_failed_publish_keeps_the_event_identity_for_logging():
+    with pytest.raises(PublishError) as error:
+        Orders(FakeQueue(boom=True), RUN).cancel(7, 11, 77)
+
+    assert error.value.fields["event_id"]
+    assert error.value.fields["correlation_id"] == RUN
+    assert error.value.fields["sqs_message_id"] is None
+
+
+def test_a_published_order_keeps_the_correlation_identity_for_logging():
+    published = Orders(FakeQueue(), RUN).place(7, 11, BODY, [])
+
+    assert published["correlation_id"] == RUN
+
+
+def test_cancel_carries_the_backend_cancelled_status_contract():
+    queue = FakeQueue()
+    Orders(queue, RUN).cancel(7, 11, 77)
+
+    assert queue.sent[0]["body"]["payload"]["status"] == "cancelled"

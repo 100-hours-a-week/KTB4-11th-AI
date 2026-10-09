@@ -129,15 +129,13 @@ class FakeAccounts:
         self._snapshots = [snapshots, refreshed or snapshots]
         self._reads = 0
         self.calls = calls
-        self.forgotten = []
+        self.rejected = 0
+        self.failed = 0
 
     def users(self):
         self.calls.append(("users",))
         self._reads += 1
         return self._snapshots[min(self._reads - 1, 1)]
-
-    def forget(self, order_ids):
-        self.forgotten.append(set(order_ids))
 
 
 def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
@@ -284,16 +282,6 @@ def test_default_mode_skips_a_market_holiday(env, monkeypatch, capsys):
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "market_closed"
 
 
-def test_an_empty_user_response_is_logged_as_zero(env, monkeypatch, capsys):
-    _use(monkeypatch, users=[])
-
-    assert _main() == 0
-
-    events = _events(capsys.readouterr().out)
-    received = [e for e in events if e["message"] == "users_received"]
-    assert [e["user_count"] for e in received] == [0]
-
-
 def test_a_calendar_ending_within_a_month_is_warned(env, monkeypatch, capsys):
     monkeypatch.setattr(entry, "COVERED_THROUGH", WEDNESDAY_NOON.date() + timedelta(days=10))
     _use(monkeypatch)
@@ -378,3 +366,58 @@ def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, 
         e for e in _events(capsys.readouterr().out) if e["message"] == "pending_after_cancel"
     )
     assert (warn["account_id"], warn["order_ids"]) == (11, [79])
+
+
+def test_a_cancel_publish_without_a_new_snapshot_never_places_a_replacement(
+    env, monkeypatch, capsys
+):
+    from ktb_core.logging import get_logger
+    from portfolio_rebalancer.accounts import Accounts
+
+    initial = users(account(11, pending=[77]))
+    body = json.dumps(
+        {
+            "eventId": "e1",
+            "type": "account.snapshot",
+            "payload": {"users": [u.model_dump() for u in initial]},
+        }
+    )
+    batches = [[SimpleNamespace(id="m1", receipt="r1", body=body)]]
+    queue = SimpleNamespace(
+        receive=lambda **kwargs: batches.pop(0) if batches else [], delete=lambda receipt: None
+    )
+    actual = Accounts(queue, None, get_logger("test"), "run-1", budget=5)
+    backends = _use(monkeypatch, users=initial)
+    monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
+
+    assert _main() == 0
+    assert backends[0].cancelled == [(1, 11, 77)]
+    assert backends[0].placed == []
+    events = _events(capsys.readouterr().out)
+    assert any(e["message"] == "pending_after_cancel" for e in events)
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_an_account_queue_failure_reports_failure_and_exits_one(env, monkeypatch, capsys, missing):
+    from ktb_core.logging import get_logger
+    from portfolio_rebalancer.accounts import Accounts
+
+    failures = []
+
+    def unavailable(**kwargs):
+        if missing:
+            return []
+        raise RuntimeError("SQS unavailable")
+
+    queue = SimpleNamespace(receive=unavailable)
+    failure_queue = SimpleNamespace(
+        send=lambda body, **kwargs: failures.append(json.loads(body)) or "f1"
+    )
+    actual = Accounts(queue, failure_queue, get_logger("test"), "run-1", budget=5)
+    backends = _use(monkeypatch)
+    monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
+
+    assert _main() == 1
+    assert backends[0].placed == []
+    assert failures[0]["payload"]["reason"] == ("snapshot_missing" if missing else "receive_failed")
+    assert _events(capsys.readouterr().out)[-1]["outcome"] == "account_snapshot_failed"
