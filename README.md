@@ -57,8 +57,8 @@ flowchart LR
 
     PG -->|model portfolio, reasons| PR
     QDB -->|last close| PR
-    BE -->|users, accounts| PR
-    PR -->|limit or market orders| BE
+    BE -->|SQS account.snapshot| PR
+    PR -->|SQS orders and failures| BE
 ```
 
 ## 서비스 실행 의존 관계
@@ -410,9 +410,11 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 |---|---|---|---|
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | | 최신 포트폴리오와 설명 읽기 |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | | 최근 종가 읽기 |
-| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | 계좌 조회/주문 전송 주소 |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
+| `ORDER_QUEUE_URL` | 필수 | | 취소·주문을 발행하는 FIFO 큐 (`stockspoon-v2-dev-order.fifo`) |
+| `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | 필수 | | Backend가 계좌 스냅샷을 발행하는 FIFO 큐 |
+| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 스냅샷 반려·수신·삭제·미수신 실패를 알리는 FIFO 큐 |
+| `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Boto3의 SQS 리전; 개발·운영 Compose에서 전달 |
+| `PORTFOLIO_REBALANCER_DRAIN_SECONDS` | | `60` | 계좌 큐를 비우는 데 쓰는 시간 상한 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
 | `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` | `true`면 KRX 거래일/시간 검사 생략 |
@@ -429,3 +431,46 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 ```
 
 운영용 Compose 검증에는 배포 환경의 `APP_IMAGE`와 필수 DB/Backend 환경 변수가 필요합니다. `config --quiet`는 컨테이너를 시작하지 않고 설정만 검사합니다.
+
+### 리밸런서 SQS 연동
+
+`portfolio-rebalancer`는 계좌 조회, 주문 생성, 주문 취소에 HTTP를 사용하지 않습니다.
+다른 서비스와 동일하게 개발·운영 Compose가 `.env`의 큐 URL을 컨테이너 환경변수로 전달하고,
+`portfolio_rebalancer.settings.Settings`가 읽습니다. 별도 파일 경로를 코드에 고정하지 않습니다.
+운영 배포 디렉터리의 `.env`에 `ORDER_QUEUE_URL`, `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL`,
+`PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL`을 설정합니다. 기존 `/etc/stockspoon/ai.env`의 주문 URL도
+이 `.env`에 반영해야 합니다. 주문 큐는
+`https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-dev-order.fifo`입니다.
+직접 실행할 때는 `uv run --env-file .env portfolio-rebalancer`로 환경을 주입합니다.
+`Settings` 자체는 `.env` 파일을 자동으로 열지 않습니다.
+기존 `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL`도 지원하며 `ORDER_QUEUE_URL`이 우선합니다.
+AWS SDK 기본 자격 증명 체인으로 EC2 IAM Role을 사용합니다. Access Key와 Secret Key는 저장하거나
+Compose에서 전달하지 않습니다. 인스턴스 역할의 메타데이터에 컨테이너에서 접근 가능해야 합니다.
+
+계정·실패 FIFO 큐는 별도 URL을 설정해야 합니다. Report 큐는 다른 담당자의 리포트 생성 요청용이며
+계정 큐로 재사용하지 않습니다. 실패 큐는 일반 애플리케이션 큐이고 DLQ와 구분합니다.
+
+- 백엔드는 **매 09~15시 실행 전에** 전체 `{"users": [...]}` 스냅샷을 발행하고,
+  주문 접수·체결·취소 후에도 갱신된 스냅샷을 발행해야 합니다. 실행마다 메모리는 초기화됩니다.
+- 계좌 큐는 `WaitTimeSeconds=20`으로 long polling하고 검증·상태 반영에 성공한 메시지만 삭제합니다.
+  계좌 스냅샷은 전체 상태이므로 하나의 FIFO 그룹에서 발행합니다.
+  주문·취소는 계좌 ID를 `MessageGroupId`, `eventId`를 `MessageDeduplicationId`로 발행하고,
+  취소 payload는 `status: cancelled`를 포함합니다. 백엔드는 20초 polling·성공 후 삭제와
+  `eventId`의 영속 멱등 처리를 구현해야 합니다. FIFO의 중복 발행 방지만으로 대체할 수 없습니다.
+- 취소 메시지 발행만으로 대기 주문을 제거하지 않습니다. 새 스냅샷에서 대기 주문이
+  없어졌을 때 최신 잔고와 보유량으로 재계산하며, 확인되지 않은 계좌는 이번 실행에서 건너뜁니다.
+- 잘못된 JSON·payload·빈 스냅샷·지원하지 않는 이벤트는 `account.snapshot.rejected`로 보고합니다.
+  수신·삭제 오류, 시간 상한 초과, 유효 스냅샷 미수신은 `account.snapshot.failed`로 보고하고
+  실행을 오류 종료합니다. 잘못된 메시지는 실패 보고 발행 여부와 무관하게 삭제하지 않고
+  재시도·DLQ redrive에 맡기며, 같은 FIFO 배치의 후속 메시지 처리도 중단합니다.
+- 실패 큐 payload는 `reason`, `detail`, `rejected_event_id`이고, 메시지 envelope는
+  `eventId`, `correlationId`, `occurredAt`, `type`, `payload`입니다.
+- 로그는 `ktb_core.logging`의 JSON 형식이며 `run_id`, 메시지·이벤트·상관관계 ID,
+  큐 역할, 처리 결과와 실패 원인을 기록합니다. 전체 스냅샷 입력과 SDK의 서명 디버그 로그는 출력하지 않습니다.
+
+DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다. 계좌 메시지 처리 범위는 스냅샷 검증과
+상태 반영이며, 완료 후 실행하는 주문 발행은 별도 작업입니다. 계좌 중복 검사는 실행 내에서만
+유효하므로 프로세스 재시작 이후의 영속 멱등 처리를 보장하지 않습니다. Report의 5분 visibility와
+`ChangeMessageVisibility`는 별도 리포트 소비자의 범위입니다.
+
+메시지 계약과 추가 큐 URL·IAM 권한, 백엔드 소비·발행 구현은 백엔드 및 인프라에서 함께 구성해야 합니다.

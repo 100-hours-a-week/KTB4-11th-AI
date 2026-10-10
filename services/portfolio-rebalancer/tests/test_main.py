@@ -1,19 +1,20 @@
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
-import httpx
 import pytest
 from portfolio_rebalancer import __main__ as entry
 from portfolio_rebalancer.holidays import KST
+from portfolio_rebalancer.orders import PublishError
 from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target, Unready
 from portfolio_rebalancer.snapshot import User
 
 REQUIRED = {
     "PORTFOLIO_REBALANCER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_REBALANCER_QUESTDB_CONF": "ws::addr=localhost:9000;",
-    "PORTFOLIO_REBALANCER_BACKEND_URL": "http://backend",
-    "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
-    "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
+    "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
+    "PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL": "https://sqs.local/account.fifo",
+    "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL": "https://sqs.local/failure.fifo",
 }
 WEDNESDAY_NOON = datetime(2026, 10, 14, 12, tzinfo=KST)
 WHY = Explanation(reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
@@ -57,50 +58,39 @@ def users(*accounts):
 USERS = users(account(11, stocks=[("000660", 1)]), account(12))
 
 
-class FakeBackend:
-    def __init__(
-        self,
-        client,
-        secret,
-        issuer,
-        users=USERS,
-        refreshed=None,
-        fail_account=None,
-        fail_cancel=None,
-    ):
-        self.calls = []
+class FakeOrders:
+    def __init__(self, calls, fail_account=None, fail_cancel=None):
+        self.calls = calls
         self.placed = []
         self.request_bodies = []
         self.cancelled = []
-        self._snapshots = [users, refreshed or users]
+        self.replaced = []
         self.fail_account = fail_account
         self.fail_cancel = fail_cancel
-
-    def users(self):
-        self.calls.append(("users",))
-        return self._snapshots[min(len(self.calls_of("users")) - 1, 1)]
+        self._published = 0
 
     def calls_of(self, kind):
         return [c for c in self.calls if c[0] == kind]
 
-    def _boom(self, method):
-        request = httpx.Request(method, "http://backend")
-        raise httpx.HTTPStatusError(
-            "boom", request=request, response=httpx.Response(409, text="bad", request=request)
-        )
+    def _ids(self):
+        self._published += 1
+        return {"event_id": f"e{self._published}", "sqs_message_id": f"m{self._published}"}
 
     def cancel(self, user_id, account_id, order_id):
         if order_id == self.fail_cancel:
-            self._boom("PATCH")
+            raise PublishError("RuntimeError: boom")
         self.calls.append(("cancel", account_id, order_id))
         self.cancelled.append((user_id, account_id, order_id))
+        return self._ids()
 
-    def place(self, user_id, account_id, order, body=None):
+    def place(self, user_id, account_id, body, replaces):
         self.request_bodies.append(body)
         if account_id == self.fail_account:
-            self._boom("POST")
-        self.calls.append(("place", account_id, order.stock_code))
-        self.placed.append((user_id, account_id, order.stock_code, order.quantity))
+            raise PublishError("RuntimeError: boom")
+        self.calls.append(("place", account_id, body["stock_code"]))
+        self.placed.append((user_id, account_id, body["stock_code"], body["quantity"]))
+        self.replaced.append((account_id, replaces))
+        return self._ids()
 
 
 def clock(monkeypatch, now):
@@ -134,16 +124,33 @@ def _events(out):
     return [json.loads(line) for line in out.splitlines()]
 
 
-def _use(monkeypatch, **kwargs):
-    backends = []
+class FakeAccounts:
+    def __init__(self, snapshots, refreshed, calls):
+        self._snapshots = [snapshots, refreshed or snapshots]
+        self._reads = 0
+        self.calls = calls
+        self.rejected = 0
+        self.failed = 0
 
-    def make(client, secret, issuer):
-        backend = FakeBackend(client, secret, issuer, **kwargs)
-        backends.append(backend)
-        return backend
+    def users(self):
+        self.calls.append(("users",))
+        self._reads += 1
+        return self._snapshots[min(self._reads - 1, 1)]
 
-    monkeypatch.setattr(entry, "Backend", make)
-    return backends
+
+def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
+    calls = []
+    accounts = FakeAccounts(users, refreshed, calls)
+    orders = FakeOrders(calls, **kwargs)
+    orders.accounts = accounts
+
+    monkeypatch.setattr(entry, "boto3", SimpleNamespace(client=lambda name: None))
+    monkeypatch.setattr(entry, "SqsQueue", lambda client, url: url)
+    monkeypatch.setattr(entry, "Orders", lambda queue, correlation_id: orders)
+    monkeypatch.setattr(
+        entry, "Accounts", lambda queue, failures, log, correlation_id, budget: accounts
+    )
+    return [orders]
 
 
 def _main():
@@ -189,6 +196,11 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
     assert [e["user_count"] for e in received] == [2, 2]
     kinds = [c[0] for c in backends[0].calls]
     assert kinds == ["users", "cancel", "cancel", "users", "place"]
+    assert backends[0].replaced == [(11, [77, 78])]
+    assert all({"event_id", "sqs_message_id"} <= e.keys() for e in cancelled)
+    assert [e["result"] for e in cancelled] == ["published", "published"]
+    sent = next(e for e in events if e["message"] == "order_sent")
+    assert (sent["result"], sent["event_id"], sent["sqs_message_id"]) == ("published", "e3", "m3")
 
 
 def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsys):
@@ -200,7 +212,8 @@ def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsy
     assert backends[0].placed == [(1, 12, "005930", 4)]
     events = _events(capsys.readouterr().out)
     failed = next(e for e in events if e["message"] == "cancel_failed")
-    assert (failed["account_id"], failed["order_id"], failed["status"]) == (11, 77, 409)
+    assert (failed["account_id"], failed["order_id"]) == (11, 77)
+    assert (failed["result"], failed["error"]) == ("failed", "RuntimeError: boom")
     assert events[-1]["cancel_failed"] == 1
 
 
@@ -218,7 +231,8 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
     assert _main() == 1
     assert backends[0].placed == [(1, 11, "005930", 4)]
     failed = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_failed")
-    assert (failed["account_id"], failed["status"], failed["body"]) == (12, 409, "bad")
+    assert (failed["account_id"], failed["result"]) == (12, "failed")
+    assert failed["error"] == "RuntimeError: boom"
     assert failed["order_type"] == "limit"
     assert failed["stock_name"] == "삼성전자"
     assert failed["request_body"] == {
@@ -264,18 +278,8 @@ def test_default_mode_skips_a_market_holiday(env, monkeypatch, capsys):
     backends = _use(monkeypatch)
 
     assert _main() == 0
-    assert backends == []
+    assert backends[0].calls == []
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "market_closed"
-
-
-def test_an_empty_user_response_is_logged_as_zero(env, monkeypatch, capsys):
-    _use(monkeypatch, users=[])
-
-    assert _main() == 0
-
-    events = _events(capsys.readouterr().out)
-    received = [e for e in events if e["message"] == "users_received"]
-    assert [e["user_count"] for e in received] == [0]
 
 
 def test_a_calendar_ending_within_a_month_is_warned(env, monkeypatch, capsys):
@@ -293,7 +297,7 @@ def test_no_explained_portfolio_exits_zero_without_calling_the_backend(env, monk
     backends = _use(monkeypatch)
 
     assert _main() == 0
-    assert backends == []
+    assert backends[0].calls == []
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "no_portfolio"
 
 
@@ -309,7 +313,7 @@ def test_an_unready_latest_portfolio_sends_nothing(env, monkeypatch, capsys, sta
         entry.main()
 
     assert exit_.value.code == code
-    assert backends == []
+    assert backends[0].calls == []
     last = _events(capsys.readouterr().out)[-1]
     assert (last["outcome"], last["portfolio_id"], last["level"]) == (status, 8, level)
 
@@ -362,3 +366,58 @@ def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, 
         e for e in _events(capsys.readouterr().out) if e["message"] == "pending_after_cancel"
     )
     assert (warn["account_id"], warn["order_ids"]) == (11, [79])
+
+
+def test_a_cancel_publish_without_a_new_snapshot_never_places_a_replacement(
+    env, monkeypatch, capsys
+):
+    from ktb_core.logging import get_logger
+    from portfolio_rebalancer.accounts import Accounts
+
+    initial = users(account(11, pending=[77]))
+    body = json.dumps(
+        {
+            "eventId": "e1",
+            "type": "account.snapshot",
+            "payload": {"users": [u.model_dump() for u in initial]},
+        }
+    )
+    batches = [[SimpleNamespace(id="m1", receipt="r1", body=body)]]
+    queue = SimpleNamespace(
+        receive=lambda **kwargs: batches.pop(0) if batches else [], delete=lambda receipt: None
+    )
+    actual = Accounts(queue, None, get_logger("test"), "run-1", budget=5)
+    backends = _use(monkeypatch, users=initial)
+    monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
+
+    assert _main() == 0
+    assert backends[0].cancelled == [(1, 11, 77)]
+    assert backends[0].placed == []
+    events = _events(capsys.readouterr().out)
+    assert any(e["message"] == "pending_after_cancel" for e in events)
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_an_account_queue_failure_reports_failure_and_exits_one(env, monkeypatch, capsys, missing):
+    from ktb_core.logging import get_logger
+    from portfolio_rebalancer.accounts import Accounts
+
+    failures = []
+
+    def unavailable(**kwargs):
+        if missing:
+            return []
+        raise RuntimeError("SQS unavailable")
+
+    queue = SimpleNamespace(receive=unavailable)
+    failure_queue = SimpleNamespace(
+        send=lambda body, **kwargs: failures.append(json.loads(body)) or "f1"
+    )
+    actual = Accounts(queue, failure_queue, get_logger("test"), "run-1", budget=5)
+    backends = _use(monkeypatch)
+    monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
+
+    assert _main() == 1
+    assert backends[0].placed == []
+    assert failures[0]["payload"]["reason"] == ("snapshot_missing" if missing else "receive_failed")
+    assert _events(capsys.readouterr().out)[-1]["outcome"] == "account_snapshot_failed"
