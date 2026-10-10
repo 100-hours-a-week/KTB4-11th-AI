@@ -435,10 +435,15 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 ### 리밸런서 SQS 연동
 
 `portfolio-rebalancer`는 계좌 조회, 주문 생성, 주문 취소에 HTTP를 사용하지 않습니다.
-개발 Compose에는 `.env`의 `ORDER_QUEUE_URL`을 전달하고, 운영 Compose는
-`/etc/stockspoon/ai.env`의 `ORDER_QUEUE_URL`을 직접 읽습니다. 주문 큐는
+다른 서비스와 동일하게 개발·운영 Compose가 `.env`의 큐 URL을 컨테이너 환경변수로 전달하고,
+`portfolio_rebalancer.settings.Settings`가 읽습니다. 별도 파일 경로를 코드에 고정하지 않습니다.
+운영 배포 디렉터리의 `.env`에 `ORDER_QUEUE_URL`, `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL`,
+`PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL`을 설정합니다. 기존 `/etc/stockspoon/ai.env`의 주문 URL도
+이 `.env`에 반영해야 합니다. 주문 큐는
 `https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-dev-order.fifo`입니다.
-직접 실행 시 기존 `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL`도 지원하며 `ORDER_QUEUE_URL`이 우선합니다.
+직접 실행할 때는 `uv run --env-file .env portfolio-rebalancer`로 환경을 주입합니다.
+`Settings` 자체는 `.env` 파일을 자동으로 열지 않습니다.
+기존 `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL`도 지원하며 `ORDER_QUEUE_URL`이 우선합니다.
 AWS SDK 기본 자격 증명 체인으로 EC2 IAM Role을 사용합니다. Access Key와 Secret Key는 저장하거나
 Compose에서 전달하지 않습니다. 인스턴스 역할의 메타데이터에 컨테이너에서 접근 가능해야 합니다.
 

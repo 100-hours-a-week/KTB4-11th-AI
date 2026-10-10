@@ -126,13 +126,12 @@ services:
     <<: *app
     profiles: ["jobs"]
     command: ["portfolio-rebalancer"]
-    env_file:
-      - /etc/stockspoon/ai.env
     mem_limit: 384m
     stop_grace_period: 2m
     environment:
       <<: *postgres-environment
       PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
+      ORDER_QUEUE_URL: ${ORDER_QUEUE_URL:?ORDER_QUEUE_URL must be set}
       PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL: ${PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL:?PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL must be set}
       PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL: ${PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL:?PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL must be set}
       PORTFOLIO_REBALANCER_DRAIN_SECONDS: ${PORTFOLIO_REBALANCER_DRAIN_SECONDS:-60}

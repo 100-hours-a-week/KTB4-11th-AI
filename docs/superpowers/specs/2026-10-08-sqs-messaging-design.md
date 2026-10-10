@@ -69,8 +69,12 @@ An absent snapshot is separately reported, including after restarting the proces
 ## Configuration and Logging
 
 Development and production Compose pass `AWS_DEFAULT_REGION` (default `ap-northeast-2`).
-Development maps `ORDER_QUEUE_URL` from `.env`; production loads `/etc/stockspoon/ai.env`
-as the service's env file without overriding its order URL in `environment`.
+Both Compose files interpolate queue URLs from `.env` and pass them in `environment`,
+matching the other services. `Settings` uses `pydantic-settings` to read that environment;
+it does not open dotenv files itself. Direct execution uses
+`uv run --env-file .env portfolio-rebalancer`. No separate server env-file path is hard-coded.
+Move `ORDER_QUEUE_URL` from the existing `/etc/stockspoon/ai.env` into the deployment `.env`
+alongside the account/failure queue URLs before deploying this change.
 The confirmed development order URL is
 `https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-dev-order.fifo`.
 Direct execution also accepts `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL`; the generic name wins.
