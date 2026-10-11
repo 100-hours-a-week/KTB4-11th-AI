@@ -1,4 +1,5 @@
 import json
+import uuid
 
 import httpx
 import jwt
@@ -25,7 +26,11 @@ ORDER = Order(
     stock_name="삼성전자",
     side="buy",
     quantity=3,
-    explanation=Explanation(reason="사요", reasonings=[{"label": "HBM", "body": "늘었어요."}]),
+    explanation=Explanation(
+        id=uuid.UUID("550e8400-e29b-41d4-a716-446655440000"),
+        reason="사요",
+        reasonings=[{"label": "HBM", "body": "늘었어요."}],
+    ),
     pricing=PRICING,
     holding_weight_after_trade_percent=19.5,
     holding_weight_limit_percent=24.0,
@@ -156,6 +161,7 @@ def test_an_order_carries_the_user_token_the_csrf_pair_and_the_explanation():
         "is_lower_triggered": False,
         "quantity": 3,
         "reason": "사요",
+        "reason_id": "550e8400-e29b-41d4-a716-446655440000",
         "reasoning": [{"label": "HBM", "body": "늘었어요."}],
         "holding_weight_after_trade_percent": 19.5,
         "holding_weight_limit_percent": 24.0,

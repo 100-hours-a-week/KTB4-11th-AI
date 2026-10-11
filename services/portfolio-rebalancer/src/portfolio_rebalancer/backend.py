@@ -1,4 +1,5 @@
 from typing import Literal
+from uuid import UUID
 
 import httpx
 from ktb_core.backend_auth import BackendAuth
@@ -10,6 +11,7 @@ from portfolio_rebalancer.snapshot import Snapshot, User
 
 
 class OrderRequest(BaseModel):
+    reason_id: UUID
     stock_code: str
     stock_name: str
     order_side: Literal["buy", "sell"]
@@ -27,6 +29,7 @@ class OrderRequest(BaseModel):
 def order_request_body(order: Order) -> dict:
     market = order.pricing.order_type == "market"
     return OrderRequest(
+        reason_id=order.explanation.id,
         stock_code=order.stock_code,
         stock_name=order.stock_name,
         order_side=order.side,

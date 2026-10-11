@@ -23,7 +23,8 @@ RUN uv pip install --no-deps \
     ./services/news-http \
     ./services/news-preprocessor \
     ./services/portfolio-builder \
-    ./services/portfolio-rebalancer
+    ./services/portfolio-rebalancer \
+    ./services/report-builder
 
 FROM python:3.13-slim-bookworm AS runtime
 

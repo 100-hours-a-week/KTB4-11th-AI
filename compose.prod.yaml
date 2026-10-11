@@ -20,6 +20,7 @@ x-postgres-environment: &postgres-environment
   MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
   PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
   PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  REPORT_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 services:
   postgres:
@@ -142,6 +143,19 @@ services:
       postgres:
         condition: service_healthy
       questdb:
+        condition: service_healthy
+
+  report-builder:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["report-builder"]
+    env_file: /etc/stockspoon/ai.env
+    mem_limit: 512m
+    restart: unless-stopped
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      postgres:
         condition: service_healthy
 
   news-preprocessor:
