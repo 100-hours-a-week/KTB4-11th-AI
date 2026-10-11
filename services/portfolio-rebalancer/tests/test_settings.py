@@ -82,3 +82,21 @@ def test_the_server_order_queue_wins_over_the_legacy_variable(monkeypatch):
     monkeypatch.setenv("ORDER_QUEUE_URL", "https://sqs.local/server-order.fifo")
 
     assert Settings().order_queue_url == "https://sqs.local/server-order.fifo"
+
+
+def test_snapshot_ttl_is_loaded_from_the_service_environment(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_SNAPSHOT_MAX_AGE_SECONDS", "600")
+
+    assert Settings().snapshot_max_age_seconds == 600
+
+
+@pytest.mark.parametrize("key", ["ACCOUNT", "FAILURE"])
+def test_all_rebalancer_queues_require_fifo(monkeypatch, key):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv(f"PORTFOLIO_REBALANCER_{key}_QUEUE_URL", "https://sqs.local/standard")
+
+    with pytest.raises(ValidationError, match="FIFO"):
+        Settings()

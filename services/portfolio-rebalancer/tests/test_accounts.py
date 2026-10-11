@@ -1,6 +1,8 @@
 import json
+from datetime import UTC, datetime, timedelta
 
 import pytest
+import sqlalchemy as sa
 from ktb_core.logging import get_logger, setup_logging
 from portfolio_rebalancer.accounts import FAILURE_TYPE, SNAPSHOT_TYPE, Accounts, AccountsError
 
@@ -37,12 +39,12 @@ def snapshot(cash=1_000_000, pending=(), user_id=1):
     }
 
 
-def envelope(payload, event_id="e1", type=SNAPSHOT_TYPE):
+def envelope(payload, event_id="e1", type=SNAPSHOT_TYPE, occurred_at=None):
     return json.dumps(
         {
             "eventId": event_id,
             "correlationId": "c1",
-            "occurredAt": "2026-10-09T00:00:00Z",
+            "occurredAt": occurred_at or datetime.now(UTC).isoformat(),
             "type": type,
             "payload": payload,
         }
@@ -89,11 +91,23 @@ class FailureQueue:
         raise AssertionError("the failure queue is publish-only")
 
 
-def _accounts(*batches, budget=5, failures=None):
+def _accounts(*batches, budget=5, failures=None, state=None, max_age=900):
+    from portfolio_rebalancer.snapshot_store import SnapshotStore, metadata, states
+
+    if state is None:
+        engine = sa.create_engine("sqlite://")
+        metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(states.insert().values(id=1, usable=False))
+        state = SnapshotStore(engine)
     setup_logging("INFO", service_name="portfolio-rebalancer")
     queue = FakeQueue(*batches)
     failures = failures if failures is not None else FailureQueue()
-    return Accounts(queue, failures, LOG, "run-1", budget=budget), queue, failures
+    return (
+        Accounts(queue, failures, LOG, "run-1", budget=budget, state=state, max_age=max_age),
+        queue,
+        failures,
+    )
 
 
 def test_a_snapshot_becomes_the_users_the_tick_trades():
@@ -146,30 +160,22 @@ def test_a_malformed_message_is_reported_and_left_for_retry(body):
     assert queue.deleted == []
 
 
-def test_an_empty_snapshot_is_reported_and_leaves_no_users():
-    accounts, queue, failures = _accounts([Msg(envelope({"users": []}))])
-
-    with pytest.raises(AccountsError, match="snapshot_rejected"):
-        accounts.users()
-    assert failures.sent[0]["body"]["payload"]["reason"] == "empty_snapshot"
-    assert failures.sent[0]["body"]["payload"]["rejected_event_id"] == "e1"
-    assert queue.deleted == []
-
-
-def test_an_empty_snapshot_does_not_replace_a_good_one():
+def test_an_empty_snapshot_replaces_a_previous_nonempty_snapshot():
     accounts, queue, failures = _accounts(
         [Msg(envelope(snapshot(cash=900)))],
         [Msg(envelope({"users": []}, event_id="e2"), id="m2", receipt="r2")],
     )
 
-    with pytest.raises(AccountsError, match="snapshot_rejected"):
-        accounts.users()
-    assert accounts.rejected == 1
-    assert queue.deleted == ["r1"]
+    assert accounts.users() == []
+    assert accounts.rejected == 0
+    assert queue.deleted == ["r1", "r2"]
+    assert failures.sent == []
 
 
 def test_a_rejection_that_cannot_be_published_leaves_the_message():
-    accounts, queue, _ = _accounts([Msg(envelope({"users": []}))], failures=FailureQueue(boom=True))
+    accounts, queue, _ = _accounts(
+        [Msg(envelope({"users": "invalid"}))], failures=FailureQueue(boom=True)
+    )
 
     with pytest.raises(AccountsError, match="snapshot_rejection_unreported"):
         accounts.users()
@@ -281,15 +287,13 @@ def test_no_snapshot_is_reported_instead_of_succeeding_with_no_accounts():
     assert queue.deleted == []
 
 
-def test_a_new_tick_requires_a_new_snapshot():
+def test_a_new_tick_recovers_an_unused_snapshot():
     accounts, queue, failures = _accounts([Msg(envelope(snapshot()))])
     assert accounts.users()
-    next_tick = Accounts(queue, failures, LOG, "run-2", budget=5)
+    next_tick = Accounts(queue, failures, LOG, "run-2", budget=5, state=accounts._state)
 
-    with pytest.raises(RuntimeError, match="snapshot_missing"):
-        next_tick.users()
-
-    assert failures.sent[-1]["body"]["correlationId"] == "run-2"
+    assert next_tick.users() == accounts.users()
+    assert failures.sent == []
 
 
 def test_validation_failures_do_not_echo_the_snapshot_input(capsys):
@@ -310,7 +314,7 @@ def test_validation_failures_do_not_echo_the_snapshot_input(capsys):
 def test_failure_notification_logs_identify_the_publish_and_preserve_source(boom, capsys):
     setup_logging("INFO", service_name="portfolio-rebalancer")
     accounts, queue, failures = _accounts(
-        [Msg(envelope({"users": []}))], failures=FailureQueue(boom=boom)
+        [Msg(envelope({"users": "invalid"}))], failures=FailureQueue(boom=boom)
     )
 
     with pytest.raises(AccountsError):
@@ -335,7 +339,7 @@ def test_failure_notification_logs_identify_the_publish_and_preserve_source(boom
 
 
 @pytest.mark.parametrize(
-    "body", [envelope({"users": []}), envelope(snapshot(), type="account.closed")]
+    "body", [envelope({"users": "invalid"}), envelope(snapshot(), type="account.closed")]
 )
 def test_a_failure_stops_processing_later_messages_in_the_same_fifo_batch(body):
     accounts, queue, failures = _accounts(
@@ -376,3 +380,187 @@ def test_a_long_poll_cannot_apply_messages_after_the_drain_deadline(monkeypatch)
 
     assert queue.deleted == []
     assert failures.sent[0]["body"]["payload"]["reason"] == "drain_budget_exceeded"
+
+
+def test_empty_users_is_a_valid_acknowledged_snapshot():
+    accounts, queue, failures = _accounts([Msg(envelope({"users": []}))])
+
+    assert accounts.users() == []
+    assert queue.deleted == ["r1"]
+    assert failures.sent == []
+
+
+def test_claimed_snapshot_is_not_restored_after_restart():
+    first, _, _ = _accounts([Msg(envelope(snapshot()))])
+    first.users()
+    first.before_publish()
+    second, queue, failures = _accounts(state=first._state)
+
+    with pytest.raises(AccountsError, match="snapshot_missing"):
+        second.users()
+    assert queue.deleted == []
+    assert failures.sent[-1]["body"]["payload"]["reason"] == "snapshot_missing"
+
+
+def test_duplicate_snapshot_does_not_rearm_claimed_state_after_restart():
+    body = envelope(snapshot())
+    first, _, _ = _accounts([Msg(body)])
+    first.users()
+    first.before_publish()
+    second, queue, _ = _accounts([Msg(body, receipt="r2")], state=first._state)
+
+    with pytest.raises(AccountsError, match="snapshot_missing"):
+        second.users()
+    assert queue.deleted == ["r2"]
+
+
+def test_storage_failure_does_not_acknowledge_snapshot(monkeypatch):
+    accounts, queue, failures = _accounts([Msg(envelope(snapshot()))])
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("DB unavailable")
+
+    monkeypatch.setattr(accounts._state, "accept", fail)
+    with pytest.raises(AccountsError, match="snapshot_store_failed"):
+        accounts.users()
+    assert queue.deleted == []
+    assert failures.sent[-1]["body"]["payload"]["reason"] == "snapshot_store_failed"
+
+
+def test_recovery_failure_is_reported(monkeypatch):
+    accounts, queue, failures = _accounts()
+
+    def fail():
+        raise RuntimeError("DB unavailable")
+
+    monkeypatch.setattr(accounts._state, "load", fail)
+    with pytest.raises(AccountsError, match="snapshot_restore_failed"):
+        accounts.users()
+    assert failures.sent[-1]["body"]["payload"]["reason"] == "snapshot_restore_failed"
+
+
+@pytest.mark.parametrize("offset", [-901, 31])
+def test_out_of_window_snapshot_is_rejected_without_ack(offset):
+    at = (datetime.now(UTC) + timedelta(seconds=offset)).isoformat()
+    accounts, queue, failures = _accounts([Msg(envelope(snapshot(), occurred_at=at))])
+
+    with pytest.raises(AccountsError, match="snapshot_time_invalid"):
+        accounts.users()
+    assert queue.deleted == []
+    assert failures.sent[0]["body"]["payload"]["reason"] == "snapshot_time_invalid"
+
+
+@pytest.mark.parametrize("at", [None, "2026-10-11T01:00:00", "invalid"])
+def test_snapshot_requires_a_timezone_aware_timestamp(at):
+    data = json.loads(envelope(snapshot()))
+    data["occurredAt"] = at
+    accounts, queue, _ = _accounts([Msg(json.dumps(data))])
+
+    with pytest.raises(AccountsError, match="malformed_envelope"):
+        accounts.users()
+    assert queue.deleted == []
+
+
+def test_expired_recovery_reports_failure():
+    first, _, _ = _accounts([Msg(envelope(snapshot()))])
+    first.users()
+    second, _, failures = _accounts(state=first._state, max_age=0)
+
+    with pytest.raises(AccountsError, match="snapshot_expired"):
+        second.users()
+    assert failures.sent[-1]["body"]["payload"]["reason"] == "snapshot_expired"
+
+
+def test_a_late_snapshot_cannot_roll_back_account_state():
+    now = datetime.now(UTC)
+    newer = envelope(snapshot(cash=900), "new", occurred_at=now.isoformat())
+    older = envelope(
+        snapshot(cash=100), "old", occurred_at=(now - timedelta(seconds=1)).isoformat()
+    )
+    accounts, queue, _ = _accounts([Msg(newer), Msg(older, receipt="r2")])
+
+    assert accounts.users()[0].accounts[0].cash_balance == 900
+    assert queue.deleted == ["r1", "r2"]
+
+
+def test_another_process_claiming_state_prevents_publish():
+    accounts, _, failures = _accounts([Msg(envelope(snapshot()))])
+    accounts.users()
+    assert accounts._state.claim("e1")
+
+    with pytest.raises(AccountsError, match="snapshot_claim_failed"):
+        accounts.before_publish()
+    assert failures.sent[-1]["body"]["payload"]["reason"] == "snapshot_claim_failed"
+
+
+def test_same_process_can_publish_multiple_orders_from_one_claim():
+    accounts, _, failures = _accounts([Msg(envelope(snapshot()))])
+    accounts.users()
+    accounts.before_publish()
+    accounts.before_publish()
+
+    assert not accounts._state.load().usable
+    assert failures.sent == []
+
+
+def test_failure_payload_identifies_source_message_and_correlation():
+    accounts, _, failures = _accounts([Msg(envelope({"users": "invalid"}))])
+    with pytest.raises(AccountsError):
+        accounts.users()
+
+    payload = failures.sent[-1]["body"]["payload"]
+    assert payload["source_sqs_message_id"] == "m1"
+    assert payload["source_correlation_id"] == "c1"
+
+
+def test_explicit_unsupported_schema_version_is_rejected():
+    data = json.loads(envelope(snapshot()))
+    data["schemaVersion"] = 2
+    accounts, queue, _ = _accounts([Msg(json.dumps(data))])
+
+    with pytest.raises(AccountsError, match="malformed_envelope"):
+        accounts.users()
+    assert queue.deleted == []
+
+
+def test_expired_committed_duplicate_is_acknowledged_before_fresh_state(monkeypatch):
+    base = datetime.now(UTC)
+    old = envelope(snapshot(cash=100), "old", occurred_at=base.isoformat())
+    first, queue, _ = _accounts([Msg(old)])
+
+    def fail(receipt):
+        raise RuntimeError("delete failed")
+
+    monkeypatch.setattr(queue, "delete", fail)
+    with pytest.raises(AccountsError, match="acknowledgement_failed"):
+        first.users()
+
+    advanced = base + timedelta(seconds=901)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return advanced.astimezone(tz)
+
+    monkeypatch.setattr("portfolio_rebalancer.accounts.datetime", Clock)
+    fresh = envelope(snapshot(cash=900), "new", occurred_at=advanced.isoformat())
+    second, redelivered, failures = _accounts(
+        [Msg(old, receipt="duplicate"), Msg(fresh, receipt="fresh")], state=first._state
+    )
+
+    assert second.users()[0].accounts[0].cash_balance == 900
+    assert redelivered.deleted == ["duplicate", "fresh"]
+    assert failures.sent == []
+
+
+def test_expired_outdated_snapshot_is_acknowledged_without_rollback():
+    now = datetime.now(UTC)
+    newer = envelope(snapshot(cash=900), "new", occurred_at=now.isoformat())
+    older = envelope(
+        snapshot(cash=100), "old", occurred_at=(now - timedelta(seconds=901)).isoformat()
+    )
+    accounts, queue, failures = _accounts([Msg(newer), Msg(older, receipt="old")])
+
+    assert accounts.users()[0].accounts[0].cash_balance == 900
+    assert queue.deleted == ["r1", "old"]
+    assert failures.sent == []

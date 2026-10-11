@@ -22,3 +22,15 @@ def engine(pg_engine):
         )
     yield pg_engine
     _truncate(pg_engine)
+
+
+@pytest.fixture
+def snapshot_state():
+    from portfolio_rebalancer.snapshot_store import SnapshotStore, metadata, states
+
+    database = sa.create_engine("sqlite://")
+    metadata.create_all(database)
+    with database.begin() as conn:
+        conn.execute(states.insert().values(id=1, usable=False))
+    yield SnapshotStore(database)
+    database.dispose()

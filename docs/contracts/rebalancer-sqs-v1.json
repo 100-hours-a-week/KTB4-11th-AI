@@ -1,0 +1,107 @@
+[
+  {
+    "schemaVersion": 1,
+    "eventId": "snapshot-1",
+    "correlationId": "backend-run-1",
+    "occurredAt": "2026-10-11T01:00:00Z",
+    "type": "account.snapshot",
+    "payload": {
+      "users": [
+        {
+          "user_id": 1,
+          "accounts": [
+            {
+              "account_id": 11,
+              "is_active": true,
+              "cash_balance": 1000000,
+              "stocks": [],
+              "pending_orders": []
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "eventId": "snapshot-empty",
+    "correlationId": "backend-run-1",
+    "occurredAt": "2026-10-11T01:00:00Z",
+    "type": "account.snapshot",
+    "payload": {
+      "users": []
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "eventId": "cancel-1",
+    "correlationId": "ai-run-1",
+    "occurredAt": "2026-10-11T01:00:00Z",
+    "type": "order.cancel",
+    "payload": {
+      "user_id": 1,
+      "account_id": 11,
+      "order_id": 77,
+      "status": "cancelled"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "eventId": "place-1",
+    "correlationId": "ai-run-1",
+    "occurredAt": "2026-10-11T01:00:00Z",
+    "type": "order.place",
+    "payload": {
+      "user_id": 1,
+      "account_id": 11,
+      "replaces_order_ids": [
+        77
+      ],
+      "stock_code": "005930",
+      "stock_name": "삼성전자",
+      "order_side": "buy",
+      "order_type": "limit",
+      "limit_price": 100000,
+      "is_upper_triggered": false,
+      "is_lower_triggered": false,
+      "quantity": 4,
+      "reason": "편입 비중 조정",
+      "reasoning": [
+        {
+          "label": "비중",
+          "body": "목표 비중을 반영"
+        }
+      ],
+      "holding_weight_after_trade_percent": 40.0,
+      "holding_weight_limit_percent": 60.0
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "eventId": "account.snapshot.rejected-1",
+    "correlationId": "ai-run-1",
+    "occurredAt": "2026-10-11T01:00:00Z",
+    "type": "account.snapshot.rejected",
+    "payload": {
+      "reason": "malformed_payload",
+      "detail": "publish a fresh valid snapshot",
+      "rejected_event_id": "snapshot-1",
+      "source_sqs_message_id": "sqs-message-1",
+      "source_correlation_id": "backend-run-1"
+    }
+  },
+  {
+    "schemaVersion": 1,
+    "eventId": "account.snapshot.failed-1",
+    "correlationId": "ai-run-1",
+    "occurredAt": "2026-10-11T01:00:00Z",
+    "type": "account.snapshot.failed",
+    "payload": {
+      "reason": "snapshot_missing",
+      "detail": "publish a fresh valid snapshot",
+      "rejected_event_id": null,
+      "source_sqs_message_id": null,
+      "source_correlation_id": "ai-run-1"
+    }
+  }
+]

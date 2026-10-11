@@ -20,14 +20,15 @@ class Settings(BaseSettings):
     account_queue_url: str = Field(min_length=1)
     failure_queue_url: str = Field(min_length=1)
     drain_seconds: float = Field(default=60.0, gt=0)
+    snapshot_max_age_seconds: float = Field(default=900.0, gt=0)
     band: float = Field(default=0.05, gt=0, lt=1)
     buy_buffer: float = Field(default=0.02, ge=0, lt=1)
     test_mode: bool = False
     log_level: str = "INFO"
 
-    @field_validator("order_queue_url")
+    @field_validator("order_queue_url", "account_queue_url", "failure_queue_url")
     @classmethod
-    def order_queue_is_fifo(cls, value: str) -> str:
+    def queue_is_fifo(cls, value: str) -> str:
         if not value.endswith(".fifo"):
-            raise ValueError("order queue must be FIFO")
+            raise ValueError("queue must be FIFO")
         return value

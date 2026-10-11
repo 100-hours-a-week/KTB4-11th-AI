@@ -1,13 +1,15 @@
 import json
+from datetime import UTC, datetime
 from time import monotonic
-from typing import NoReturn
+from typing import Literal, NoReturn
 
 from ktb_core.logging import StructuredLogger
 from ktb_core.queue import Queue
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
 
 from portfolio_rebalancer.orders import envelope
 from portfolio_rebalancer.snapshot import Snapshot, User
+from portfolio_rebalancer.snapshot_store import SnapshotStore, StoredSnapshot
 
 SNAPSHOT_TYPE = "account.snapshot"
 FAILURE_TYPE = "account.snapshot.rejected"
@@ -21,11 +23,12 @@ class AccountsError(RuntimeError):
 
 
 class Envelope(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, str_strip_whitespace=True)
 
     event_id: str = Field(alias="eventId", min_length=1)
     correlation_id: str | None = Field(default=None, alias="correlationId")
-    occurred_at: str | None = Field(default=None, alias="occurredAt")
+    occurred_at: AwareDatetime = Field(alias="occurredAt")
+    schema_version: Literal[1] = Field(default=1, alias="schemaVersion")
     type: str
     payload: dict[str, object]
 
@@ -39,6 +42,8 @@ class Accounts:
         correlation_id: str,
         *,
         budget: float,
+        state: SnapshotStore,
+        max_age: float = 900,
     ) -> None:
         self._queue = queue
         self._failures = failures
@@ -46,11 +51,28 @@ class Accounts:
         self._correlation_id = correlation_id
         self._budget = budget
         self._users: list[User] = []
-        self._seen: set[str] = set()
+        self._state = state
+        self._max_age = max_age
+        self._current: StoredSnapshot | None = None
+        self._claimed: set[str] = set()
         self.rejected = 0
         self.failed = 0
 
     def users(self) -> list[User]:
+        if self._current is None:
+            try:
+                saved = self._state.load()
+                if saved is not None and saved.usable:
+                    self._users = Snapshot.model_validate(saved.payload).users
+                    self._current = saved
+                    self._log.info(
+                        "snapshot_restored",
+                        event_id=saved.event_id,
+                        correlation_id=saved.correlation_id,
+                        result="restored",
+                    )
+            except Exception as error:
+                raise self._failure("snapshot_restore_failed", type(error).__name__) from error
         deadline = monotonic() + self._budget
         while True:
             if monotonic() >= deadline:
@@ -76,9 +98,34 @@ class Accounts:
                             event_id,
                         ) from error
                     log.info("snapshot_acknowledged", result="acknowledged")
-        if not self._users:
-            raise self._failure("snapshot_missing", "no valid snapshot received for this tick")
+        if self._current is None:
+            raise self._failure(
+                "snapshot_missing", "no fresh reusable snapshot; publish a new snapshot"
+            )
+        if (datetime.now(UTC) - self._current.occurred_at).total_seconds() > self._max_age:
+            raise self._failure("snapshot_expired", "publish a fresh snapshot")
         return self._users
+
+    def before_publish(self) -> None:
+        if self._current is None:
+            raise self._failure("snapshot_missing", "cannot publish without a snapshot")
+        if (datetime.now(UTC) - self._current.occurred_at).total_seconds() > self._max_age:
+            raise self._failure("snapshot_expired", "publish a fresh snapshot")
+        if self._current.event_id in self._claimed:
+            return
+        try:
+            claimed = self._state.claim(self._current.event_id)
+        except Exception as error:
+            raise self._failure("snapshot_claim_failed", type(error).__name__) from error
+        if not claimed:
+            raise self._failure("snapshot_claim_failed", "snapshot already used or superseded")
+        self._claimed.add(self._current.event_id)
+        self._log.info(
+            "snapshot_claimed",
+            event_id=self._current.event_id,
+            correlation_id=self._current.correlation_id,
+            result="claimed",
+        )
 
     def _report(
         self,
@@ -89,7 +136,13 @@ class Accounts:
         *,
         failure_type: str,
     ) -> bool:
-        payload = {"reason": reason, "detail": detail, "rejected_event_id": event_id}
+        payload = {
+            "reason": reason,
+            "detail": detail,
+            "rejected_event_id": event_id,
+            "source_sqs_message_id": log.bound.get("sqs_message_id"),
+            "source_correlation_id": log.bound.get("correlation_id"),
+        }
         failure_id, body = envelope(failure_type, payload, self._correlation_id)
         fields = {
             "queue_role": "failures",
@@ -175,17 +228,35 @@ class Accounts:
             self._reject(
                 log, "unsupported_type", "unsupported snapshot event type", message.event_id
             )
-        if message.event_id in self._seen:
-            log.info("snapshot_duplicate", result="duplicate")
-            return True, log, message.event_id
         try:
             snapshot = Snapshot.model_validate(message.payload)
         except ValidationError as error:
             detail = json.dumps(error.errors(include_input=False, include_url=False))
             self._reject(log, "malformed_payload", detail, message.event_id)
-        if not snapshot.users:
-            self._reject(log, "empty_snapshot", "no users in the snapshot", message.event_id)
-        self._seen.add(message.event_id)
+        age = (datetime.now(UTC) - message.occurred_at).total_seconds()
+        try:
+            saved, result = self._state.accept(
+                message.event_id,
+                message.occurred_at,
+                snapshot.model_dump(),
+                message.correlation_id,
+                valid_time=-30 <= age <= self._max_age,
+            )
+        except Exception as error:
+            raise self._failure(
+                "snapshot_store_failed", type(error).__name__, log, message.event_id
+            ) from error
+        if result == "invalid_time":
+            self._reject(
+                log, "snapshot_time_invalid", "timestamp outside freshness window", message.event_id
+            )
+        if result != "applied":
+            log.info(f"snapshot_{result}", result=result)
+            if saved is not None and saved.usable:
+                self._current = saved
+                self._users = Snapshot.model_validate(saved.payload).users
+            return True, log, message.event_id
+        self._current = saved
         self._users = snapshot.users
         log.info(
             "snapshot_applied",

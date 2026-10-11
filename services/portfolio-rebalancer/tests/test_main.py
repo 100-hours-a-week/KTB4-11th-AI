@@ -132,6 +132,9 @@ class FakeAccounts:
         self.rejected = 0
         self.failed = 0
 
+    def before_publish(self):
+        self.calls.append(("claim",))
+
     def users(self):
         self.calls.append(("users",))
         self._reads += 1
@@ -147,8 +150,9 @@ def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
     monkeypatch.setattr(entry, "boto3", SimpleNamespace(client=lambda name: None))
     monkeypatch.setattr(entry, "SqsQueue", lambda client, url: url)
     monkeypatch.setattr(entry, "Orders", lambda queue, correlation_id: orders)
+    monkeypatch.setattr(entry, "SnapshotStore", lambda engine: None, raising=False)
     monkeypatch.setattr(
-        entry, "Accounts", lambda queue, failures, log, correlation_id, budget: accounts
+        entry, "Accounts", lambda queue, failures, log, correlation_id, **kwargs: accounts
     )
     return [orders]
 
@@ -194,7 +198,7 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
     assert events[-1]["cancelled"] == 2
     received = [e for e in events if e["message"] == "users_received"]
     assert [e["user_count"] for e in received] == [2, 2]
-    kinds = [c[0] for c in backends[0].calls]
+    kinds = [c[0] for c in backends[0].calls if c[0] != "claim"]
     assert kinds == ["users", "cancel", "cancel", "users", "place"]
     assert backends[0].replaced == [(11, [77, 78])]
     assert all({"event_id", "sqs_message_id"} <= e.keys() for e in cancelled)
@@ -369,7 +373,7 @@ def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, 
 
 
 def test_a_cancel_publish_without_a_new_snapshot_never_places_a_replacement(
-    env, monkeypatch, capsys
+    env, monkeypatch, capsys, snapshot_state
 ):
     from ktb_core.logging import get_logger
     from portfolio_rebalancer.accounts import Accounts
@@ -379,6 +383,7 @@ def test_a_cancel_publish_without_a_new_snapshot_never_places_a_replacement(
         {
             "eventId": "e1",
             "type": "account.snapshot",
+            "occurredAt": datetime.now(UTC).isoformat(),
             "payload": {"users": [u.model_dump() for u in initial]},
         }
     )
@@ -386,7 +391,7 @@ def test_a_cancel_publish_without_a_new_snapshot_never_places_a_replacement(
     queue = SimpleNamespace(
         receive=lambda **kwargs: batches.pop(0) if batches else [], delete=lambda receipt: None
     )
-    actual = Accounts(queue, None, get_logger("test"), "run-1", budget=5)
+    actual = Accounts(queue, None, get_logger("test"), "run-1", budget=5, state=snapshot_state)
     backends = _use(monkeypatch, users=initial)
     monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
 
@@ -398,7 +403,9 @@ def test_a_cancel_publish_without_a_new_snapshot_never_places_a_replacement(
 
 
 @pytest.mark.parametrize("missing", [False, True])
-def test_an_account_queue_failure_reports_failure_and_exits_one(env, monkeypatch, capsys, missing):
+def test_an_account_queue_failure_reports_failure_and_exits_one(
+    env, monkeypatch, capsys, missing, snapshot_state
+):
     from ktb_core.logging import get_logger
     from portfolio_rebalancer.accounts import Accounts
 
@@ -413,7 +420,9 @@ def test_an_account_queue_failure_reports_failure_and_exits_one(env, monkeypatch
     failure_queue = SimpleNamespace(
         send=lambda body, **kwargs: failures.append(json.loads(body)) or "f1"
     )
-    actual = Accounts(queue, failure_queue, get_logger("test"), "run-1", budget=5)
+    actual = Accounts(
+        queue, failure_queue, get_logger("test"), "run-1", budget=5, state=snapshot_state
+    )
     backends = _use(monkeypatch)
     monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
 
@@ -421,3 +430,111 @@ def test_an_account_queue_failure_reports_failure_and_exits_one(env, monkeypatch
     assert backends[0].placed == []
     assert failures[0]["payload"]["reason"] == ("snapshot_missing" if missing else "receive_failed")
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "account_snapshot_failed"
+
+
+def test_snapshot_is_claimed_before_any_cancel_or_order(env, monkeypatch):
+    backends = _use(
+        monkeypatch, users=users(account(11, pending=[77])), refreshed=users(account(11))
+    )
+
+    assert _main() == 0
+    calls = backends[0].calls
+    cancel = next(i for i, call in enumerate(calls) if call[0] == "cancel")
+    place = next(i for i, call in enumerate(calls) if call[0] == "place")
+    assert calls[cancel - 1] == ("claim",)
+    assert calls[place - 1] == ("claim",)
+
+
+def test_claim_failure_prevents_all_outbound_orders(env, monkeypatch):
+    backends = _use(monkeypatch)
+
+    def fail():
+        raise entry.AccountsError("snapshot_claim_failed")
+
+    monkeypatch.setattr(backends[0].accounts, "before_publish", fail)
+    assert _main() == 1
+    assert backends[0].placed == []
+    assert backends[0].cancelled == []
+
+
+class SimulatedSqs:
+    def __init__(self, state, pending=(77,)):
+        self.state = state
+        self.sent = []
+        self.deleted = []
+        self.waits = []
+        self.version = 0
+        self.batches = []
+        self.snapshot(pending)
+
+    def snapshot(self, pending):
+        self.version += 1
+        data = {
+            "schemaVersion": 1,
+            "eventId": f"snapshot-{self.version}",
+            "correlationId": "backend-run",
+            "occurredAt": datetime.now(UTC).isoformat(),
+            "type": "account.snapshot",
+            "payload": {"users": [u.model_dump() for u in users(account(11, pending=pending))]},
+        }
+        self.batches.append(
+            [
+                {
+                    "MessageId": f"m{self.version}",
+                    "ReceiptHandle": f"r{self.version}",
+                    "Body": json.dumps(data),
+                }
+            ]
+        )
+        self.batches.append([])
+
+    def receive_message(self, **kwargs):
+        self.waits.append(kwargs["WaitTimeSeconds"])
+        return {"Messages": self.batches.pop(0) if self.batches else []}
+
+    def delete_message(self, **kwargs):
+        assert self.state.load() is not None
+        self.deleted.append(kwargs["ReceiptHandle"])
+
+    def send_message(self, **kwargs):
+        assert not self.state.load().usable
+        data = json.loads(kwargs["MessageBody"])
+        assert kwargs["MessageDeduplicationId"] == data["eventId"]
+        assert kwargs["MessageGroupId"] == "11"
+        self.sent.append(data)
+        if data["type"] == "order.cancel":
+            self.snapshot(())
+        return {"MessageId": f"out{len(self.sent)}"}
+
+
+def test_sqs_lifecycle_cancels_refreshes_and_narrows_replacement(
+    env, monkeypatch, snapshot_state, capsys
+):
+    sqs = SimulatedSqs(snapshot_state)
+    monkeypatch.setattr(entry.boto3, "client", lambda name: sqs)
+    monkeypatch.setattr(entry, "SnapshotStore", lambda engine: snapshot_state)
+    monkeypatch.setattr(entry, "daily_closes", lambda *args: {"005930": [90_000, 110_000] * 10})
+
+    assert _main() == 0
+    first = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_sent")
+    assert [m["type"] for m in sqs.sent] == ["order.cancel", "order.place"]
+    assert sqs.sent[1]["payload"]["replaces_order_ids"] == [77]
+    assert sqs.deleted == ["r1", "r2"]
+    assert set(sqs.waits) == {20}
+    assert not snapshot_state.load().usable
+
+    clock(monkeypatch, WEDNESDAY_NOON + timedelta(hours=1))
+    sqs.snapshot((88,))
+    assert _main() == 0
+    second = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_sent")
+    assert [m["type"] for m in sqs.sent] == [
+        "order.cancel",
+        "order.place",
+        "order.cancel",
+        "order.place",
+    ]
+    assert sqs.sent[-1]["payload"]["replaces_order_ids"] == [88]
+    assert second["alpha"] < first["alpha"]
+    assert second["upper_bound"] < first["upper_bound"]
+    assert second["lower_bound"] > first["lower_bound"]
+    assert len({m["eventId"] for m in sqs.sent}) == 4
