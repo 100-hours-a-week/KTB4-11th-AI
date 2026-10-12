@@ -85,7 +85,7 @@ def test_the_server_order_queue_wins_over_the_legacy_variable(monkeypatch):
 
 
 @pytest.mark.parametrize("key", ["BACKEND_URL", "BACKEND_JWT_SECRET", "BACKEND_JWT_ISSUER"])
-def test_cancel_http_settings_are_required(monkeypatch, key):
+def test_lookup_http_settings_are_required(monkeypatch, key):
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("PORTFOLIO_REBALANCER_" + key)

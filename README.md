@@ -64,9 +64,8 @@ flowchart LR
     QDB -->|last close| PR
     PR -->|HTTP user lookup| BE
     BE -->|HTTP account state| PR
-    PR -->|order requests and failures| SQS
-    SQS -->|order requests and failures| BE
-    PR -->|HTTP cancellation| BE
+    PR -->|order cancellations, placements and failures| SQS
+    SQS -->|order cancellations, placements and failures| BE
     BE -->|report request| SQS
     SQS -->|report request| RB
     PG -->|reasons and cited summaries| RB
@@ -139,7 +138,7 @@ flowchart LR
 
 - 가장 최근 포트폴리오가 `ready` 일 때 거래 시작
 - 기존 HTTP API로 백엔드의 사용자·계좌·현금·보유 종목·미체결 주문을 조회함
-- 미체결 주문은 기존 HTTP로 취소하고, HTTP로 최신 계좌 상태를 다시 조회한 뒤 필요한 매수·매도를 계산해 SQS로 주문 생성 요청을 발행함
+- 미체결 주문 취소 요청은 주문 생성과 같은 SQS FIFO 큐로 발행하고, HTTP 재조회에서 취소 반영을 확인한 뒤 필요한 매수·매도를 계산해 재주문 요청을 발행함
 - 기존 보유 종목의 보유량이 목표와의 차이가 `PORTFOLIO_REBALANCER_BAND`를 넘을 때 거래
 - QuestDB의 최근 1분봉 가격과 20개 일봉으로 주간 가격 경계를 계산
 - 경계는 위, 아래로 두 개 생성하며, 매도일 때는 높은 가격에 시도 후 낮은 가격에 도달하면 시장가 매도, 매수일 때는 낮은 가격에 시도 후 높은 가격에 도달하면 시장가 매수를 진행함
@@ -431,10 +430,10 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 |---|---|---|---|
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | | 최신 포트폴리오와 설명 읽기 |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | | 최근 종가 읽기 |
-| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | HTTP 주문 취소를 요청할 Backend 주소 |
+| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | HTTP 사용자·계좌 정보를 조회할 Backend 주소 |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
-| `ORDER_QUEUE_URL` | 필수 | | 주문 생성 요청을 발행하는 FIFO 큐 |
+| `ORDER_QUEUE_URL` | 필수 | | 주문 취소·생성 요청을 발행하는 FIFO 큐 |
 | `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 조회·검증 실패 알림을 발행하는 일반 FIFO 큐; DLQ와 구분 |
 | `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Compose에서 AWS SDK로 전달하는 리전 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
@@ -479,12 +478,13 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 |---|---|
 | 사용자·계좌 정보 조회 | 기존 HTTP `GET /api/v1/users/ai-server` |
 | 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
-| 주문 취소 | 기존 HTTP `PATCH /api/v1/accounts/{account_id}/orders/{order_id}` |
+| 주문 취소 요청 | AI → 같은 Order FIFO 큐; `order.cancel` |
 | HTTP 조회·응답 검증 실패 알림 | AI → 일반 Failure FIFO 큐; `account.snapshot.failed` |
 
-매 실행마다 HTTP로 사용자 정보를 조회합니다. 대기 주문 취소에 성공하면 같은 HTTP API로
-잔고·보유량·대기 주문을 다시 조회하고 남은 실행 횟수로 범위를 좁혀 재주문합니다.
-취소 실패 또는 갱신 조회에서 대기 주문이 남은 계좌에는 신규 주문을 보내지 않습니다.
+매 실행마다 HTTP로 사용자 정보를 조회합니다. 대기 주문 취소 요청을 SQS로 발행하면 같은 HTTP API로
+잔고·보유량·대기 주문을 다시 조회하고 취소 반영이 확인된 계좌만 남은 실행 횟수로 범위를 좁혀 재주문합니다.
+취소 요청 발행 실패 또는 갱신 조회에서 대기 주문이 남은 계좌에는 신규 주문을 보내지 않습니다.
+취소·재주문은 같은 계좌 FIFO 그룹을 사용하지만 취소 메시지 발행 성공은 취소 완료가 아닙니다.
 조회 실패나 잘못된 응답은 일반 실패 큐로 알리고 주문 요청 없이 종료합니다.
 `users: []`는 정상 응답입니다.
 
@@ -493,7 +493,7 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계산한 주문은 새 이벤트입니다.
 계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
 
-HTTP 인증은 기존 `ktb_core.backend_auth`의 JWT 쿠키·CSRF를 사용합니다.
+HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용합니다.
 큐 URL과 HTTP 설정은 다른 서비스처럼 배포 `.env`에서 Compose `environment`를 거쳐
 Settings로 읽습니다. 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
 SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.

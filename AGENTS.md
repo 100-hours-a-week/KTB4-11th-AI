@@ -113,10 +113,10 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_COLLECTOR_LOG_LEVEL` | market-collector | `INFO` |
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | portfolio-rebalancer | required |
-| `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer; HTTP user lookup/cancellation endpoint base | required |
+| `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer; HTTP user lookup endpoint base | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | portfolio-rebalancer (HS256 secret shared with the Backend, ≥ 32 bytes; signs a token for any user) | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | portfolio-rebalancer; must equal the Backend's `JWT_ISSUER`, which its decoder validates | required |
-| `ORDER_QUEUE_URL` | portfolio-rebalancer; FIFO queue for order creation requests | required |
+| `ORDER_QUEUE_URL` | portfolio-rebalancer; FIFO queue for order cancellation/creation requests | required |
 | `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | portfolio-rebalancer; ordinary FIFO application failure queue, never a DLQ | required |
 | `AWS_DEFAULT_REGION` | portfolio-rebalancer; AWS SDK region passed by Compose | `ap-northeast-2` |
 | `PORTFOLIO_REBALANCER_BAND` | portfolio-rebalancer; a kept stock trades only when its weight is off target by more than this | `0.05` |
@@ -150,7 +150,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-http` | service | long-running HTTP server (uvicorn) | `ktb-core` |
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/market-collector` | service | weekdays 09:55–14:55 and 15:35 KST; single-run KOSPI 200 OHLCV archive | `ktb-core` |
-| `services/portfolio-rebalancer` | service | scheduled job: polls/cancels over HTTP, publishes SQS order requests | `ktb-core` |
+| `services/portfolio-rebalancer` | service | scheduled job: polls users over HTTP, publishes SQS cancellation/order requests | `ktb-core` |
 | `services/report-builder` | service | long-running SQS worker: generates competition reports and calls the Backend | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
@@ -159,7 +159,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 - **news-http is the only inbound HTTP surface and is read-only.** The Backend calls it on the private network without authentication for stock clusters and cluster articles, and portfolio-builder calls it for news and graph reads (design: `docs/superpowers/specs/2026-10-07-portfolio-builder-news-http-design.md`). It never writes and runs no migrations. In `compose.dev.yaml` it binds to `127.0.0.1:8000` only.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot. Migration `0002` drops the old `universe_members` table.
-- **Work queue:** `ktb_core.queue` provides an injected-client SQS transport without third-party core dependencies. Rebalancer keeps dev's HTTP `Backend.users()` and `Backend.cancel()` methods and publishes only order creation requests and HTTP fetch failure notifications. Refresh account state over HTTP after successful cancellation, then recalculate replacement orders; pending orders still present defer the account. Order creation uses account ID as FIFO group, eventId as deduplication ID; failures use `ai-server`. No account snapshot consumer, persistence tables or migration. Existing logging and backend_auth handle JSON logs/JWT/CSRF. Settings are passed through deployment `.env` and Compose; AWS uses the default credential chain/EC2 IAM Role. Never directly publish to or normally consume a DLQ. Report-builder's separate Standard queue workflow is unchanged. Contract: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
+- **Work queue:** `ktb_core.queue` provides injected-client SQS transport without third-party core dependencies. Rebalancer retains dev's HTTP `Backend.users()` and publishes cancellations/placements to the same Order FIFO queue, using account ID as group and eventId as deduplication ID. Cancel publication is a request, not completion; logs/counters say `order_cancel_requested`/`cancel_requested`. After any successful cancel send, refresh state through HTTP and only place recalculated replacements if no pending orders remain. A failed/partial cancel send skips that account. HTTP fetch failures publish to ordinary Failure FIFO (`ai-server` group); notification outage exits before placing orders. No account snapshot consumer/state/migration. Existing backend_auth handles lookup JWT and logging records MessageId/eventId/correlationId/result. AWS default chain/EC2 IAM Role and deployment .env/Compose settings remain. Never directly publish to or normally consume DLQs. Report-builder is unchanged. Contract: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **portfolio-builder runs a LangChain `create_agent` agent on OpenRouter**, reads news and graph data through news-http, and keeps PostgreSQL access for portfolio and company reference data plus QuestDB for prices. It computes technical evidence with TA-Lib directly (not `ktb-market-analyzer`). The OpenRouter key lives only in the environment.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.

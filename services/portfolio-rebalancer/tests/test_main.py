@@ -89,21 +89,24 @@ class FakeOrders:
         self.replaced.append((account_id, replaces))
         return self._ids()
 
+    def cancel(self, user_id, account_id, order_id):
+        if order_id == self.fail_cancel:
+            raise PublishError("cancel send failed")
+        self.calls.append(("cancel", account_id, order_id))
+        self.cancelled.append((user_id, account_id, order_id))
+        return {
+            "event_id": f"cancel-{order_id}",
+            "sqs_message_id": f"cancel-message-{order_id}",
+            "correlation_id": "run",
+        }
 
-class FakeCancelBackend:
+
+class FakeBackend:
     def __init__(self, orders):
         self.orders = orders
 
     def users(self):
         return self.orders.accounts.users()
-
-    def cancel(self, user_id, account_id, order_id):
-        if order_id == self.orders.fail_cancel:
-            request = httpx.Request("PATCH", "http://backend")
-            response = httpx.Response(409, request=request)
-            raise httpx.HTTPStatusError("cancel rejected", request=request, response=response)
-        self.orders.calls.append(("cancel", account_id, order_id))
-        self.orders.cancelled.append((user_id, account_id, order_id))
 
 
 def clock(monkeypatch, now):
@@ -160,7 +163,7 @@ def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
     monkeypatch.setattr(entry, "boto3", SimpleNamespace(client=lambda name: None))
     monkeypatch.setattr(entry, "SqsQueue", lambda client, url: url)
     monkeypatch.setattr(entry, "Orders", lambda queue, correlation_id: orders)
-    monkeypatch.setattr(entry, "Backend", lambda *args: FakeCancelBackend(orders), raising=False)
+    monkeypatch.setattr(entry, "Backend", lambda *args: FakeBackend(orders), raising=False)
     return [orders]
 
 
@@ -197,12 +200,12 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
     assert _main() == 0
     assert backends[0].cancelled == [(1, 11, 77), (1, 11, 78)]
     events = _events(capsys.readouterr().out)
-    cancelled = [e for e in events if e["message"] == "order_cancelled"]
+    cancelled = [e for e in events if e["message"] == "order_cancel_requested"]
     assert [(e["order_id"], e["limit_price"], e["quantity"]) for e in cancelled] == [
         (77, 95_000, 2),
         (78, 95_000, 2),
     ]
-    assert events[-1]["cancelled"] == 2
+    assert events[-1]["cancel_requested"] == 2
     received = [e for e in events if e["message"] == "users_received"]
     assert [e["user_count"] for e in received] == [2, 2]
     kinds = [c[0] for c in backends[0].calls]
@@ -222,7 +225,8 @@ def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsy
     events = _events(capsys.readouterr().out)
     failed = next(e for e in events if e["message"] == "cancel_failed")
     assert (failed["account_id"], failed["order_id"]) == (11, 77)
-    assert failed["status"] == 409
+    assert failed["result"] == "failed"
+    assert failed["error"] == "cancel send failed"
     assert events[-1]["cancel_failed"] == 1
 
 
@@ -391,6 +395,11 @@ def test_http_user_fetch_failure_reports_sqs_and_stops_orders(
     class Sqs:
         def send_message(self, **kwargs):
             body = json.loads(kwargs["MessageBody"])
+            if body["type"] == "order.cancel":
+                assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
+                assert kwargs["MessageGroupId"] == "11"
+                assert kwargs["MessageDeduplicationId"] == body["eventId"]
+                return {"MessageId": "cancel-id"}
             assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL"]
             assert kwargs["MessageGroupId"] == "ai-server"
             assert kwargs["MessageDeduplicationId"] == body["eventId"]
@@ -402,14 +411,7 @@ def test_http_user_fetch_failure_reports_sqs_and_stops_orders(
     def respond(request):
         nonlocal reads
         requests.append(request)
-        if request.url.path == "/api/v1/auth/csrf":
-            return httpx.Response(
-                200,
-                json={"token": "masked", "header_name": "X-CSRF"},
-                headers={"set-cookie": "XSRF-TOKEN=raw; Path=/"},
-            )
-        if request.method == "PATCH":
-            return httpx.Response(204)
+        assert request.method == "GET"
         assert request.url.path == "/api/v1/users/ai-server"
         reads += 1
         if refresh_failure and reads == 1:
@@ -453,7 +455,7 @@ def test_http_user_fetch_failure_reports_sqs_and_stops_orders(
     assert _events(out)[-1]["sent"] == 0
 
 
-def test_users_http_then_cancel_http_then_refresh_http_then_order_sqs(env, monkeypatch):
+def test_users_http_then_cancel_sqs_then_refresh_http_then_place_sqs(env, monkeypatch):
     sent = []
     phases = []
     reads = 0
@@ -465,7 +467,17 @@ def test_users_http_then_cancel_http_then_refresh_http_then_order_sqs(env, monke
             assert kwargs["MessageGroupId"] == "11"
             assert kwargs["MessageDeduplicationId"] == body["eventId"]
             sent.append(body)
-            phases.append("place")
+            if body["type"] == "order.cancel":
+                assert body["payload"] == {
+                    "user_id": 1,
+                    "account_id": 11,
+                    "order_id": 77,
+                    "status": "cancelled",
+                }
+                phases.append("cancel")
+            else:
+                assert body["type"] == "order.place"
+                phases.append("place")
             return {"MessageId": "order-id"}
 
     def respond(request):
@@ -478,17 +490,7 @@ def test_users_http_then_cancel_http_then_refresh_http_then_order_sqs(env, monke
                 users(account(11, pending=[77])) if reads == 1 else users(account(11, cash=777_000))
             )
             return httpx.Response(200, json={"users": [u.model_dump() for u in snapshot]})
-        if request.url.path == "/api/v1/auth/csrf":
-            return httpx.Response(
-                200,
-                json={"token": "masked", "header_name": "X-CSRF"},
-                headers={"set-cookie": "XSRF-TOKEN=raw; Path=/"},
-            )
-        assert request.method == "PATCH"
-        assert request.url.path == "/api/v1/accounts/11/orders/77"
-        assert json.loads(request.content) == {"status": "cancelled"}
-        phases.append("cancel")
-        return httpx.Response(204)
+        raise AssertionError("only user lookup uses HTTP")
 
     client_type = httpx.Client
     monkeypatch.setattr(
@@ -499,12 +501,34 @@ def test_users_http_then_cancel_http_then_refresh_http_then_order_sqs(env, monke
     monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
     assert _main() == 0
     assert phases == ["users", "cancel", "users", "place"]
-    assert sent[0]["payload"]["reason_id"] == str(WHY.id)
-    assert sent[0]["payload"]["replaces_order_ids"] == [77]
-    assert sent[0]["payload"]["quantity"] == 3
+    assert sent[1]["payload"]["reason_id"] == str(WHY.id)
+    assert sent[1]["payload"]["replaces_order_ids"] == [77]
+    assert sent[1]["payload"]["quantity"] == 3
 
 
 def test_empty_http_users_are_valid_and_publish_nothing(env, monkeypatch):
     backends = _use(monkeypatch, users=[])
     assert _main() == 0
     assert backends[0].placed == []
+
+
+def test_a_partial_cancel_publish_failure_does_not_place_replacements(env, monkeypatch, capsys):
+    backends = _use(
+        monkeypatch,
+        users=users(account(11, pending=[77, 78]), account(12)),
+        refreshed=users(account(11), account(12)),
+        fail_cancel=78,
+    )
+    assert _main() == 1
+    assert backends[0].cancelled == [(1, 11, 77)]
+    assert all(order[1] != 11 for order in backends[0].placed)
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["cancel_requested"] == 1
+    assert events[-1]["cancel_failed"] == 1
+    requested = next(e for e in events if e["message"] == "order_cancel_requested")
+    assert (
+        requested["sqs_message_id"],
+        requested["event_id"],
+        requested["correlation_id"],
+        requested["result"],
+    ) == ("cancel-message-77", "cancel-77", "run", "published")

@@ -52,11 +52,3 @@ class Backend:
     def users(self) -> list[User]:
         response = self._auth.get("/api/v1/users/ai-server", "ai-server")
         return Snapshot.model_validate(response.json()).users
-
-    def cancel(self, user_id: int, account_id: int, order_id: int) -> None:
-        self._auth.request(
-            "PATCH",
-            f"/api/v1/accounts/{account_id}/orders/{order_id}",
-            str(user_id),
-            json={"status": "cancelled"},
-        )
