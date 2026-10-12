@@ -32,3 +32,7 @@
 
 ## Execution
 Existing isolated worktrees are reused. Publication is authorized by the ongoing PR-edit task. Snapshot event persistence is obsolete once the inbound event stream is removed; fresh HTTP polling supplies each tick and post-cancellation state.
+
+## Final scope correction (2026-10-12)
+
+The latest user instruction supersedes failure-notification parts above. User lookup remains HTTP with structured error logs and exit 1. No failure queue URL, notification publisher, failure contract, DLQ resources or failure-queue alarms are required. SQS carries only order.cancel/order.place.

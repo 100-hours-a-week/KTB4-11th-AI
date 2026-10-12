@@ -40,7 +40,7 @@ class Orders:
         self._queue = queue
         self._correlation_id = correlation_id
 
-    def _publish(self, event_type: str, account_id: int | str, payload: dict) -> dict[str, str]:
+    def _publish(self, event_type: str, account_id: int, payload: dict) -> dict[str, str]:
         event_id, body = envelope(event_type, payload, self._correlation_id)
         try:
             message_id = self._queue.send(body, group=str(account_id), dedup=event_id)
@@ -79,18 +79,5 @@ class Orders:
                 "account_id": account_id,
                 "order_id": order_id,
                 "status": "cancelled",
-            },
-        )
-
-    def report_failure(self, reason: str, detail: str) -> dict[str, str]:
-        return self._publish(
-            "account.snapshot.failed",
-            "ai-server",
-            {
-                "reason": reason,
-                "detail": detail,
-                "rejected_event_id": None,
-                "source_sqs_message_id": None,
-                "source_correlation_id": self._correlation_id,
             },
         )

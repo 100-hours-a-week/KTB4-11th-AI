@@ -29,3 +29,7 @@
 - [ ] Update main, remove unused HTTP cancellation and adapt end-to-end tests.
 - [ ] Update shared contracts/docs and PR descriptions, review, publish and verify full CI.
 - [ ] Deliver a sourced comment draft only.
+
+## Final scope correction (2026-10-12)
+
+The latest user instruction supersedes failure-notification parts above. User lookup remains HTTP with structured error logs and exit 1. No failure queue URL, notification publisher, failure contract, DLQ resources or failure-queue alarms are required. SQS carries only order.cancel/order.place.

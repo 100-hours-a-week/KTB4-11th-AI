@@ -30,22 +30,3 @@ def test_published_order_payloads_match_the_shared_backend_examples():
         expected = next(m for m in EXAMPLES if m["type"] == published["type"])
         assert published["payload"] == expected["payload"]
         assert published["correlationId"] == expected["correlationId"]
-
-
-def test_published_http_failure_matches_the_shared_backend_example():
-    sent = []
-
-    class Queue:
-        def send(self, body, *, group, dedup):
-            message = json.loads(body)
-            assert group == "ai-server"
-            assert dedup == message["eventId"]
-            sent.append(message)
-            return "failure-id"
-
-    expected = next(m for m in EXAMPLES if m["type"] == "account.snapshot.failed")
-    Orders(Queue(), "ai-run-1").report_failure(
-        expected["payload"]["reason"], expected["payload"]["detail"]
-    )
-    assert sent[0]["payload"] == expected["payload"]
-    assert sent[0]["correlationId"] == expected["correlationId"]

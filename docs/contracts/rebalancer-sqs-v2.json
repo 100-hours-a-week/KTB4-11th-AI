@@ -43,19 +43,5 @@
       "holding_weight_limit_percent": 60.0,
       "reason_id": "550e8400-e29b-41d4-a716-446655440000"
     }
-  },
-  {
-    "schemaVersion": 1,
-    "eventId": "account.snapshot.failed-1",
-    "correlationId": "ai-run-1",
-    "occurredAt": "2026-10-11T01:00:00Z",
-    "type": "account.snapshot.failed",
-    "payload": {
-      "reason": "users_fetch_failed",
-      "detail": "HTTPStatusError: HTTP 503",
-      "rejected_event_id": null,
-      "source_sqs_message_id": null,
-      "source_correlation_id": "ai-run-1"
-    }
   }
 ]

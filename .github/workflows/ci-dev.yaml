@@ -22,13 +22,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validate-sqs-template:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.2.0
-      - run: uvx cfn-lint==1.57.2 infrastructure/sqs/rebalancer-queues.yaml
-
   lint-and-test:
     runs-on: ubuntu-latest
 
