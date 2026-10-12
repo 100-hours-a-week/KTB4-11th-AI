@@ -1,7 +1,9 @@
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from portfolio_rebalancer import __main__ as entry
 from portfolio_rebalancer.holidays import KST
@@ -12,12 +14,15 @@ from portfolio_rebalancer.snapshot import User
 REQUIRED = {
     "PORTFOLIO_REBALANCER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_REBALANCER_QUESTDB_CONF": "ws::addr=localhost:9000;",
+    "PORTFOLIO_REBALANCER_BACKEND_URL": "http://backend",
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
     "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
     "PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL": "https://sqs.local/account.fifo",
     "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL": "https://sqs.local/failure.fifo",
 }
 WEDNESDAY_NOON = datetime(2026, 10, 14, 12, tzinfo=KST)
-WHY = Explanation(reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
+WHY = Explanation(id=uuid.uuid4(), reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
 PORTFOLIO = Portfolio(
     id=5,
     cash_weight=0.5,
@@ -76,13 +81,6 @@ class FakeOrders:
         self._published += 1
         return {"event_id": f"e{self._published}", "sqs_message_id": f"m{self._published}"}
 
-    def cancel(self, user_id, account_id, order_id):
-        if order_id == self.fail_cancel:
-            raise PublishError("RuntimeError: boom")
-        self.calls.append(("cancel", account_id, order_id))
-        self.cancelled.append((user_id, account_id, order_id))
-        return self._ids()
-
     def place(self, user_id, account_id, body, replaces):
         self.request_bodies.append(body)
         if account_id == self.fail_account:
@@ -91,6 +89,23 @@ class FakeOrders:
         self.placed.append((user_id, account_id, body["stock_code"], body["quantity"]))
         self.replaced.append((account_id, replaces))
         return self._ids()
+
+
+class FakeCancelAuth:
+    def __init__(self, orders):
+        self.orders = orders
+
+    def request(self, method, path, subject, json=None):
+        assert method == "PATCH"
+        assert json == {"status": "cancelled"}
+        account_id = int(path.split("/")[4])
+        order_id = int(path.split("/")[6])
+        if order_id == self.orders.fail_cancel:
+            request = httpx.Request(method, "http://backend" + path)
+            response = httpx.Response(409, request=request)
+            raise httpx.HTTPStatusError("cancel rejected", request=request, response=response)
+        self.orders.calls.append(("cancel", account_id, order_id))
+        self.orders.cancelled.append((int(subject), account_id, order_id))
 
 
 def clock(monkeypatch, now):
@@ -147,6 +162,7 @@ def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
     monkeypatch.setattr(entry, "boto3", SimpleNamespace(client=lambda name: None))
     monkeypatch.setattr(entry, "SqsQueue", lambda client, url: url)
     monkeypatch.setattr(entry, "Orders", lambda queue, correlation_id: orders)
+    monkeypatch.setattr(entry, "BackendAuth", lambda *args: FakeCancelAuth(orders), raising=False)
     monkeypatch.setattr(
         entry, "Accounts", lambda queue, failures, log, correlation_id, budget: accounts
     )
@@ -197,10 +213,10 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
     kinds = [c[0] for c in backends[0].calls]
     assert kinds == ["users", "cancel", "cancel", "users", "place"]
     assert backends[0].replaced == [(11, [77, 78])]
-    assert all({"event_id", "sqs_message_id"} <= e.keys() for e in cancelled)
-    assert [e["result"] for e in cancelled] == ["published", "published"]
+    assert [e["result"] for e in cancelled] == ["cancelled", "cancelled"]
+    assert [e["transport"] for e in cancelled] == ["http", "http"]
     sent = next(e for e in events if e["message"] == "order_sent")
-    assert (sent["result"], sent["event_id"], sent["sqs_message_id"]) == ("published", "e3", "m3")
+    assert (sent["result"], sent["event_id"], sent["sqs_message_id"]) == ("published", "e1", "m1")
 
 
 def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsys):
@@ -213,7 +229,7 @@ def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsy
     events = _events(capsys.readouterr().out)
     failed = next(e for e in events if e["message"] == "cancel_failed")
     assert (failed["account_id"], failed["order_id"]) == (11, 77)
-    assert (failed["result"], failed["error"]) == ("failed", "RuntimeError: boom")
+    assert (failed["result"], failed["status"]) == ("failed", 409)
     assert events[-1]["cancel_failed"] == 1
 
 
@@ -236,6 +252,7 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
     assert failed["order_type"] == "limit"
     assert failed["stock_name"] == "삼성전자"
     assert failed["request_body"] == {
+        "reason_id": str(WHY.id),
         "stock_code": "005930",
         "stock_name": "삼성전자",
         "order_side": "buy",
@@ -421,3 +438,80 @@ def test_an_account_queue_failure_reports_failure_and_exits_one(env, monkeypatch
     assert backends[0].placed == []
     assert failures[0]["payload"]["reason"] == ("snapshot_missing" if missing else "receive_failed")
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "account_snapshot_failed"
+
+
+def test_cancel_http_then_snapshot_sqs_then_order_sqs(env, monkeypatch):
+    requests = []
+    published = []
+    deleted = []
+    phases = []
+
+    def snapshot_message(event_id, pending=(), cash=1_000_000):
+        return {
+            "MessageId": event_id,
+            "ReceiptHandle": event_id,
+            "Body": json.dumps(
+                {
+                    "eventId": event_id,
+                    "correlationId": "backend-run",
+                    "type": "account.snapshot",
+                    "payload": {
+                        "users": [
+                            u.model_dump() for u in users(account(11, pending=pending, cash=cash))
+                        ]
+                    },
+                }
+            ),
+        }
+
+    batches = [[snapshot_message("before", pending=[77])], []]
+
+    class Sqs:
+        def receive_message(self, **kwargs):
+            assert kwargs["WaitTimeSeconds"] == 20
+            return {"Messages": batches.pop(0) if batches else []}
+
+        def delete_message(self, **kwargs):
+            deleted.append(kwargs["ReceiptHandle"])
+            phases.append(kwargs["ReceiptHandle"])
+
+        def send_message(self, **kwargs):
+            body = json.loads(kwargs["MessageBody"])
+            assert body["type"] == "order.place"
+            assert kwargs["MessageGroupId"] == "11"
+            assert kwargs["MessageDeduplicationId"] == body["eventId"]
+            published.append(body)
+            phases.append("place")
+            return {"MessageId": "order-message"}
+
+    def respond(request):
+        requests.append(request)
+        if request.url.path == "/api/v1/auth/csrf":
+            return httpx.Response(
+                200,
+                json={"token": "masked", "header_name": "X-XSRF-TOKEN"},
+                headers={"set-cookie": "XSRF-TOKEN=raw; Path=/"},
+            )
+        assert request.method == "PATCH"
+        assert request.url.path == "/api/v1/accounts/11/orders/77"
+        assert json.loads(request.content) == {"status": "cancelled"}
+        phases.append("cancel")
+        batches.extend([[snapshot_message("after", cash=777_000)], []])
+        return httpx.Response(204)
+
+    client_type = httpx.Client
+    monkeypatch.setattr(
+        entry.httpx,
+        "Client",
+        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
+    )
+    monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
+
+    assert _main() == 0
+    assert phases == ["before", "cancel", "after", "place"]
+    assert deleted == ["before", "after"]
+    assert len(published) == 1
+    assert published[0]["payload"]["reason_id"] == str(WHY.id)
+    assert published[0]["payload"]["replaces_order_ids"] == [77]
+    assert published[0]["payload"]["quantity"] == 3
+    assert all("users/ai-server" not in request.url.path for request in requests)

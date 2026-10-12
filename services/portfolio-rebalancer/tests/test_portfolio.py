@@ -1,8 +1,9 @@
 import json
+import uuid
 
 import pytest
 import sqlalchemy as sa
-from portfolio_rebalancer.portfolio import Explanation, Unready, load_portfolio
+from portfolio_rebalancer.portfolio import Unready, load_portfolio
 
 SAMSUNG, HYNIX, LGES = "00126380", "00164779", "01515323"
 
@@ -99,14 +100,20 @@ def test_the_latest_ready_portfolio_is_loaded_with_every_earlier_exit_reason(eng
     assert by_code["005930"].weight == 0.6
     assert by_code["005930"].exiting is False
     assert by_code["005930"].buy.reason == "삼성 사요"
+    assert isinstance(by_code["005930"].buy.id, uuid.UUID)
     assert by_code["005930"].sell.reason == "삼성 줄여요"
     assert by_code["000660"].exiting is True
     assert by_code["000660"].buy is None
     assert by_code["000660"].sell.reasonings[0].body == "하이닉스 팔아요"
-    assert portfolio.leftovers == {
-        "373220": Explanation.model_validate(_explanation("LG엔솔 팔아요")),
-        "000660": Explanation.model_validate(_explanation("하이닉스 팔아요")),
-    }
+    assert isinstance(by_code["000660"].sell.id, uuid.UUID)
+    assert isinstance(portfolio.leftovers["373220"].id, uuid.UUID)
+    with engine.connect() as conn:
+        stored_ids = dict(conn.execute(sa.text("SELECT reason, id FROM portfolio_reasons")).all())
+    assert portfolio.leftovers["373220"].id == stored_ids["LG엔솔 팔아요"]
+    assert portfolio.leftovers["000660"].id == stored_ids["하이닉스 팔아요"]
+    assert by_code["005930"].buy.id == stored_ids["삼성 사요"]
+    assert by_code["005930"].sell.id == stored_ids["삼성 줄여요"]
+    assert by_code["000660"].sell.id == stored_ids["하이닉스 팔아요"]
     assert portfolio.names == {
         "005930": "삼성전자",
         "000660": "SK하이닉스",

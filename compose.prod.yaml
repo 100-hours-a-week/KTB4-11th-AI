@@ -20,6 +20,7 @@ x-postgres-environment: &postgres-environment
   MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
   PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
   PORTFOLIO_REBALANCER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+  REPORT_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 services:
   postgres:
@@ -132,6 +133,9 @@ services:
       <<: *postgres-environment
       PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
       ORDER_QUEUE_URL: ${ORDER_QUEUE_URL:?ORDER_QUEUE_URL must be set}
+      PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL:?PORTFOLIO_REBALANCER_BACKEND_URL must be set}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET:?PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET must be set}
+      PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER: ${PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER:?PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER must be set}
       PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL: ${PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL:?PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL must be set}
       PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL: ${PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL:?PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL must be set}
       PORTFOLIO_REBALANCER_DRAIN_SECONDS: ${PORTFOLIO_REBALANCER_DRAIN_SECONDS:-60}
@@ -144,6 +148,19 @@ services:
       postgres:
         condition: service_healthy
       questdb:
+        condition: service_healthy
+
+  report-builder:
+    <<: *app
+    profiles: ["jobs"]
+    command: ["report-builder"]
+    env_file: /etc/stockspoon/ai.env
+    mem_limit: 512m
+    restart: unless-stopped
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      postgres:
         condition: service_healthy
 
   news-preprocessor:

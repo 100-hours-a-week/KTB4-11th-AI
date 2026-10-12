@@ -1,111 +1,79 @@
-# SQS Messaging Design
+# Rebalancer SQS and HTTP contract
 
 ## Scope
 
-`portfolio-rebalancer` exchanges all account state, order placements, and cancellations
-with the Backend through SQS. The confirmed scope includes all three paths; the HTTP-only
-order criterion still present in #231 is outdated. Other services' HTTP clients and the
-shared `ktb_core.backend_auth` remain available.
+Confirmed on 2026-10-12: account snapshots arrive through SQS, order creation requests
+are published to SQS, and cancellations retain the existing Backend HTTP endpoint.
+The latest dev changes, including #237 common authentication and #239 reason_id/report
+builder, are included. Keep schedules, portfolio calculations and QuestDB reads.
+No new database migration is introduced by this transport change; the merged #239
+migration adds portfolio reason IDs and remains required by the latest dev schema.
 
-The 09:00–15:00 KST schedule, portfolio calculation, QuestDB reads, and database schema
-stay the same. This branch includes the latest dev changes, including OpenDART query-key
-masking in `ktb_core.logging` and dev deployment configuration.
+## Transport
 
-## Queue Contract
-
-| Setting | Direction | Event types | FIFO group |
-|---|---|---|---|
-| `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | consume | `account.snapshot` | Backend uses one shared group for full snapshots |
-| `ORDER_QUEUE_URL` | publish | `order.cancel`, `order.place` | account id |
-| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | publish | `account.snapshot.rejected`, `account.snapshot.failed` | `ai-server` |
-
-An envelope contains `eventId`, `correlationId`, `occurredAt`, `type`, and `payload`.
-Published `eventId` equals `MessageDeduplicationId`; `correlationId` is the run id.
-Incoming correlation ids are preserved in consumption logs; failure reports carry the
-current run id and identify their source with `rejected_event_id`.
-
-`account.snapshot` payload is the complete `{"users": [...]}` response that the old
-HTTP endpoint returned. The pending-order model does not require `current_stock_price`.
-`order.cancel` payload contains `user_id`, `account_id`, `order_id`, and `status: cancelled`,
-matching the status contract from #229. `order.place` contains user and account ids,
-`replaces_order_ids`, and the existing `order_request_body` fields.
-
-## State and Cancellation
-
-Each invocation starts without account state. The Backend must publish a complete snapshot
-before **every** hourly invocation and after order acceptance, fills, and cancellations.
-There is no durable cache, request queue, or on-demand HTTP fallback. Successful consumption
-acknowledges snapshots; if the process later fails, the Backend must republish for retry.
-Missing state is an explicit failed run rather than a successful no-op.
-
-Drain with twenty-second long polls until an empty receive or the configured drain budget.
-The last valid full snapshot is used. Duplicate event ids are ignored within this invocation;
-this is not durable order idempotency across invocations. Budget exhaustion aborts instead
-of placing orders with a potentially incomplete drain.
-
-Publish pending-order cancellations first. Publishing a cancellation does **not** remove
-it from local state. Drain again and calculate replacements only from the refreshed
-snapshot. An account that still has pending orders is logged and deferred. The Backend
-must enforce order idempotency and reject replacements whose cancellation prerequisites
-have not been satisfied; FIFO delivery by itself is not a trading transaction.
-
-## Failure Reporting
-
-| Type | Reason |
+| Operation | Contract |
 |---|---|
-| `account.snapshot.rejected` | `malformed_envelope`, `malformed_payload`, `empty_snapshot`, `unsupported_type` |
-| `account.snapshot.failed` | `receive_failed`, `acknowledgement_failed`, `drain_budget_exceeded`, `snapshot_missing` |
+| Account snapshot | Account FIFO queue → AI; `account.snapshot`; one shared Backend group |
+| Order creation | AI → ORDER_QUEUE_URL FIFO; `order.place`; account ID group |
+| Cancellation | HTTP PATCH `/api/v1/accounts/{account_id}/orders/{order_id}`; `{"status":"cancelled"}` |
+| Snapshot failure | AI → ordinary Failure FIFO queue; `account.snapshot.rejected` / `.failed`; `ai-server` group |
 
-Every report contains `reason`, `detail`, and `rejected_event_id` (null without a source
-message). Invalid messages are never acknowledged, regardless of rejection publication.
-Report the failure and abort before processing later messages in the same FIFO batch.
-If failure reporting cannot publish, log the failed notification and abort. Unsupported
-event types follow the same rejection policy and can redrive to the queue's DLQ. This service neither publishes directly to nor consumes a DLQ.
+`ktb_core.backend_auth.BackendAuth` handles the cancellation JWT cookie and CSRF pair,
+including a single refresh/retry for INVALID_CSRF_TOKEN. Rebalancer and report-builder
+share that authentication implementation. Do not duplicate token or CSRF code locally.
+No HTTP user/account lookup remains. HTTP cancellation timeout remains ten seconds.
 
-A receive, acknowledgement, or validation failure aborts the run. The rejection report
-already notifies the Backend, so no additional missing-state report is sent.
-An absent snapshot is separately reported, including after restarting the process.
+The queue envelope has eventId, correlationId, occurredAt, type and payload. Outgoing
+MessageDeduplicationId equals eventId; correlationId is the AI run ID. SDK retry retains
+the same event and body. Creation payload keeps user_id/account_id/replaces_order_ids
+and the existing order_request_body, including the latest reason_id UUID as a string.
+There is no order.cancel queue event in this flow. Backend order creation and Report
+requests belong to separate queues. Core transport takes an injected boto3 client and
+keeps core free of external dependencies; report-builder owns its separate worker lifecycle.
 
-## Configuration and Logging
+## Snapshot and replacement
 
-Development and production Compose pass `AWS_DEFAULT_REGION` (default `ap-northeast-2`).
-Both Compose files interpolate queue URLs from `.env` and pass them in `environment`,
-matching the other services. `Settings` uses `pydantic-settings` to read that environment;
-it does not open dotenv files itself. Direct execution uses
-`uv run --env-file .env portfolio-rebalancer`. No separate server env-file path is hard-coded.
-Move `ORDER_QUEUE_URL` from the existing `/etc/stockspoon/ai.env` into the deployment `.env`
-alongside the account/failure queue URLs before deploying this change.
-The confirmed development order URL is
-`https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-dev-order.fifo`.
-Direct execution also accepts `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL`; the generic name wins.
-Account and failure URLs remain separately required. Reject blank URLs and non-FIFO order URLs.
-The default drain budget is 60 seconds. Boto3 uses the default credential chain and EC2 IAM
-Role; neither Compose file passes access keys. Containers must be able to reach instance
-role metadata. No credentials are stored in source.
+Full account.snapshot payload is the existing {"users": [...]} response. Pending orders
+do not require current_stock_price. Each process starts without cached state, so the
+Backend publishes before every tick and after acceptance, fills and cancellations.
+Drain using WaitTimeSeconds=20 until empty or the configured budget. Validation and
+in-memory state application succeed before DeleteMessage. Duplicate event IDs are
+acknowledged without applying again within this run. Durable recovery belongs to #241.
 
-The Standard `stockspoon-v2-dev-report-request` queue, report idempotency store, and
-five-minute visibility extension belong to the other developer's report consumer.
-Do not reuse Report for account snapshots. The snapshot consumer acknowledges successful
-validation and in-memory state application, before separate order work. It has no durable
-inbox; its per-run duplicate check is not a restart-safe processing guarantee.
+First cancel pending orders over HTTP. A successful PATCH does not locally erase
+pending orders. Read updated SQS state again, and place replacements only for accounts
+whose pending orders have cleared. Recalculate quantities using current cash/holdings
+and narrow the price ladder using remaining weekly runs. Failed cancellations and
+unconfirmed state defer the account to prevent overlapping orders. Record cancelled
+IDs in replaces_order_ids for the generated creation request.
 
-Reuse `setup_logging`, `get_logger`, `StructuredLogger.bind`, `set_logger_level`, and
-`start_logging`. No new common logging API is required. Retain the merged OpenDART masking
-feature. Queue logs carry `run_id`, `sqs_message_id`, `event_id`, `correlation_id`, queue
-role, direction, and result when applicable. Notification logs also identify the failure
-message and its correlation. Failed order publishes retain their attempted event identity.
+## Errors and logs
 
-Run summaries include rejection/fetch failure counts, cancellation and placement counts,
-and deferred accounts. Validation details omit input values. Suppress Botocore DEBUG
-output so request signatures do not appear when application logging is DEBUG.
+Invalid envelopes/payloads, empty snapshots and unsupported types report
+account.snapshot.rejected and stop the FIFO batch without deleting the source message.
+Receive/delete errors, budget exhaustion and missing state report account.snapshot.failed
+and exit 1. Failure payload has reason, detail and rejected_event_id. Failure publishing
+errors also abort and log the attempted notification ID. Never send to a DLQ directly
+or attach a normal consumer to it; SQS redrive isolates repeated failures.
 
-## Backend and Infrastructure Dependencies
+HTTP cancellation errors log status when available and skip new orders for that account.
+Creation publish failures preserve the attempted event/correlation IDs in logs. Reuse
+ktb_core.logging and existing OpenDART sensitive-key masking without new common logging
+APIs. Suppress botocore DEBUG logs. Run summary includes cancellations, creation requests,
+failed snapshots and deferred accounts. Do not log full snapshot input or credentials.
 
-Agree the envelope, payload, new failure event types, and queue names with the Backend.
-Provision account/failure FIFO queues, redrive policies, and IAM permissions externally.
-The application failure queue must be distinct from every DLQ. The AI role needs
-receive/delete on the account queue and send on order/failure queues.
-Backend order consumption uses 20-second polling, deletes only after successful processing,
-and persists event ids to prevent repeated execution beyond FIFO deduplication windows.
-Configure regular and post-order full-snapshot publishing, order consumption, idempotency, and cancellation
-prerequisite checks before deploying this transport.
+## Settings and deployment
+
+Both Compose files interpolate ORDER_QUEUE_URL, ACCOUNT_QUEUE_URL/FAILURE_QUEUE_URL
+with the PORTFOLIO_REBALANCER_ prefix, and BACKEND_URL/BACKEND_JWT_SECRET/BACKEND_JWT_ISSUER
+with the same prefix from the deployment .env. Settings uses the normal service environment;
+direct execution uses `uv run --env-file .env portfolio-rebalancer`. The legacy prefixed
+order queue URL is accepted, with ORDER_QUEUE_URL taking precedence. Drain budget is
+60 seconds and AWS_DEFAULT_REGION defaults to ap-northeast-2 in Compose.
+
+Boto3 uses its default credential chain/EC2 IAM Role; no AWS access keys are stored or
+passed by Compose. The existing shared HTTP signing secret and issuer remain required
+for cancellation. Account/failure queue provisioning and actual Backend SQS compatibility
+are external acceptance steps. AI needs account receive/delete and order/failure send;
+Backend publishes full snapshots and consumes creation/failure events. Production FIFO
+redrive and Backend execution are not proven by local mock transport tests.

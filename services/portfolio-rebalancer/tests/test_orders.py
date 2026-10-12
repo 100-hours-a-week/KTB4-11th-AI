@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from portfolio_rebalancer.orders import CANCEL_TYPE, PLACE_TYPE, Orders, PublishError
+from portfolio_rebalancer.orders import PLACE_TYPE, Orders, PublishError
 
 RUN = "run-1"
 BODY = {"stock_code": "005930", "order_side": "buy", "order_type": "limit", "quantity": 3}
@@ -25,24 +25,6 @@ class FakeQueue:
         raise AssertionError("the order queue is publish-only")
 
 
-def test_a_cancel_carries_the_order_it_cancels_and_the_run_as_correlation():
-    queue = FakeQueue()
-
-    published = Orders(queue, RUN).cancel(7, 11, 77)
-
-    sent = queue.sent[0]
-    assert sent["body"]["type"] == CANCEL_TYPE
-    assert sent["body"]["correlationId"] == RUN
-    assert sent["body"]["payload"] == {
-        "user_id": 7,
-        "account_id": 11,
-        "order_id": 77,
-        "status": "cancelled",
-    }
-    assert published["sqs_message_id"] == "m1"
-    assert published["event_id"] == sent["body"]["eventId"]
-
-
 def test_a_place_carries_the_request_body_and_what_it_replaces():
     queue = FakeQueue()
 
@@ -58,20 +40,19 @@ def test_a_place_carries_the_request_body_and_what_it_replaces():
 def test_the_dedup_id_is_the_event_id():
     queue = FakeQueue()
 
-    Orders(queue, RUN).cancel(7, 11, 77)
+    Orders(queue, RUN).place(7, 11, BODY, [])
 
     assert queue.sent[0]["dedup"] == queue.sent[0]["body"]["eventId"]
 
 
-def test_the_group_is_the_account_so_a_cancel_orders_before_its_replacement():
+def test_orders_for_one_account_share_a_fifo_group():
     queue = FakeQueue()
     orders = Orders(queue, RUN)
-
-    orders.cancel(7, 11, 77)
+    orders.place(7, 11, BODY, [])
     orders.place(7, 11, BODY, [77])
 
     assert [sent["group"] for sent in queue.sent] == ["11", "11"]
-    assert [sent["body"]["type"] for sent in queue.sent] == [CANCEL_TYPE, PLACE_TYPE]
+    assert [sent["body"]["type"] for sent in queue.sent] == [PLACE_TYPE, PLACE_TYPE]
 
 
 def test_two_accounts_land_in_different_groups():
@@ -88,8 +69,8 @@ def test_every_message_gets_its_own_event_id():
     queue = FakeQueue()
     orders = Orders(queue, RUN)
 
-    orders.cancel(7, 11, 77)
-    orders.cancel(7, 11, 78)
+    orders.place(7, 11, BODY, [])
+    orders.place(7, 11, BODY, [77])
 
     assert queue.sent[0]["dedup"] != queue.sent[1]["dedup"]
 
@@ -102,17 +83,16 @@ def test_a_korean_reason_is_not_escaped():
     assert queue.sent[0]["body"]["payload"]["reason"] == "사요"
 
 
-@pytest.mark.parametrize("call", ["cancel", "place"])
-def test_a_send_failure_becomes_a_publish_error(call):
+def test_a_send_failure_becomes_a_publish_error():
     orders = Orders(FakeQueue(boom=True), RUN)
 
     with pytest.raises(PublishError, match="RuntimeError: no network"):
-        orders.cancel(7, 11, 77) if call == "cancel" else orders.place(7, 11, BODY, [])
+        orders.place(7, 11, BODY, [])
 
 
 def test_a_failed_publish_keeps_the_event_identity_for_logging():
     with pytest.raises(PublishError) as error:
-        Orders(FakeQueue(boom=True), RUN).cancel(7, 11, 77)
+        Orders(FakeQueue(boom=True), RUN).place(7, 11, BODY, [])
 
     assert error.value.fields["event_id"]
     assert error.value.fields["correlation_id"] == RUN
@@ -123,10 +103,3 @@ def test_a_published_order_keeps_the_correlation_identity_for_logging():
     published = Orders(FakeQueue(), RUN).place(7, 11, BODY, [])
 
     assert published["correlation_id"] == RUN
-
-
-def test_cancel_carries_the_backend_cancelled_status_contract():
-    queue = FakeQueue()
-    Orders(queue, RUN).cancel(7, 11, 77)
-
-    assert queue.sent[0]["body"]["payload"]["status"] == "cancelled"

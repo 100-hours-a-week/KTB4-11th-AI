@@ -1,7 +1,16 @@
+from collections import Counter
+from uuid import UUID
+
+import httpx
+import jwt
 import pytest
+from ktb_core.backend_auth import BackendAuth
+from ktb_core.logging import get_logger
+from portfolio_rebalancer.__main__ import _cancel_all
 from portfolio_rebalancer.backend import order_request_body
 from portfolio_rebalancer.portfolio import Explanation
 from portfolio_rebalancer.rebalance import Order, Pricing
+from portfolio_rebalancer.snapshot import Account
 
 PRICING = Pricing(
     order_type="limit",
@@ -19,7 +28,11 @@ ORDER = Order(
     stock_name="삼성전자",
     side="buy",
     quantity=3,
-    explanation=Explanation(reason="사요", reasonings=[{"label": "HBM", "body": "늘었어요."}]),
+    explanation=Explanation(
+        id=UUID("550e8400-e29b-41d4-a716-446655440000"),
+        reason="사요",
+        reasonings=[{"label": "HBM", "body": "늘었어요."}],
+    ),
     pricing=PRICING,
     holding_weight_after_trade_percent=19.5,
     holding_weight_limit_percent=24.0,
@@ -34,6 +47,7 @@ def test_a_limit_buy_carries_its_price_quantity_and_explanation():
     assert (body["limit_price"], body["quantity"]) == (74_100, 3)
     assert (body["is_upper_triggered"], body["is_lower_triggered"]) == (False, False)
     assert body["reason"] == "사요"
+    assert body["reason_id"] == "550e8400-e29b-41d4-a716-446655440000"
     assert body["reasoning"] == [{"label": "HBM", "body": "늘었어요."}]
 
 
@@ -68,3 +82,63 @@ def test_a_market_order_flags_the_bound_its_side_escapes_through(side, upper, lo
 
     assert (body["order_type"], body["limit_price"]) == ("market", None)
     assert (body["is_upper_triggered"], body["is_lower_triggered"]) == (upper, lower)
+
+
+@pytest.mark.parametrize("invalid_csrf", [False, True])
+def test_cancel_uses_existing_http_auth_and_status_contract(invalid_csrf):
+    requests = []
+    csrf_issued = 0
+    patch_count = 0
+
+    def respond(request):
+        nonlocal csrf_issued, patch_count
+        requests.append(request)
+        if request.url.path == "/api/v1/auth/csrf":
+            csrf_issued += 1
+            return httpx.Response(
+                200,
+                json={"token": f"masked-{csrf_issued}", "header_name": "X-XSRF-TOKEN"},
+                headers={"set-cookie": f"XSRF-TOKEN=raw-{csrf_issued}; Path=/; Secure"},
+            )
+        assert request.method == "PATCH"
+        assert request.url.path == "/api/v1/accounts/11/orders/77"
+        patch_count += 1
+        if invalid_csrf and patch_count == 1:
+            return httpx.Response(403, json={"code": "INVALID_CSRF_TOKEN"})
+        return httpx.Response(204)
+
+    account = Account.model_validate(
+        {
+            "account_id": 11,
+            "is_active": True,
+            "cash_balance": 100,
+            "stocks": [],
+            "pending_orders": [
+                {
+                    "order_id": 77,
+                    "stock_code": "005930",
+                    "order_side": "buy",
+                    "order_type": "limit",
+                    "order_status": "pending",
+                    "limit_price": 100,
+                    "quantity": 1,
+                }
+            ],
+        }
+    )
+    counts = Counter()
+    cancelled = set()
+    with httpx.Client(base_url="http://backend", transport=httpx.MockTransport(respond)) as client:
+        auth = BackendAuth(client, "s" * 32, "river-be")
+        assert _cancel_all(auth, get_logger("test"), 7, account, counts, cancelled)
+
+    assert counts["cancelled"] == 1
+    assert cancelled == {77}
+    assert csrf_issued == (2 if invalid_csrf else 1)
+    patch = requests[-1]
+    assert patch.content == b'{"status":"cancelled"}'
+    cookies = dict(part.strip().split("=", 1) for part in patch.headers["cookie"].split(";"))
+    claims = jwt.decode(cookies["access_token"], "s" * 32, algorithms=["HS256"], issuer="river-be")
+    assert (claims["sub"], claims["actor"]) == ("7", "AI")
+    assert patch.headers["x-xsrf-token"] == f"masked-{csrf_issued}"
+    assert all("users/ai-server" not in r.url.path for r in requests)
