@@ -5,11 +5,13 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from kiwoom import KiwoomAuth, KiwoomWebSocketClient
+from kiwoom.core.errors import normalize_return_code
 from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
 from kiwoom.realtime import build_reg_packet
 from ktb_core.logging import get_logger
 from redis.asyncio import Redis
+from websockets.asyncio.client import ClientConnection, connect
 
 from market_streamer.settings import Settings
 from market_streamer.symbols import load_codes
@@ -21,6 +23,10 @@ log = get_logger(__name__)
 
 WEBSOCKET_PATH = "/api/dostk/websocket"
 MAX_BACKOFF = 30.0
+
+
+async def connect_kiwoom(uri: str, timeout_seconds: int) -> ClientConnection:
+    return await connect(uri, open_timeout=timeout_seconds, ping_interval=20, ping_timeout=20)
 
 
 def parse_tick(entry: dict[str, Any], today: date) -> dict[str, object]:
@@ -67,7 +73,7 @@ async def stream_prices(client: KiwoomWebSocketClient, valkey: Redis, codes: lis
             async for message in client.iter_messages():
                 trnm = message.get("trnm")
                 if trnm == "REG":
-                    if int(message.get("return_code", 0)) != 0:
+                    if (normalize_return_code(message.get("return_code")) or 0) != 0:
                         raise RuntimeError(f"REG rejected: {message.get('return_msg')}")
                     delay = 1.0
                     log.info("kiwoom_registered", codes=len(codes))
@@ -93,16 +99,21 @@ async def run(settings: Settings, now: datetime) -> None:
     codes = load_codes(settings.postgres_dsn, settings.index_name)
     auth = KiwoomAuth(
         settings.kiwoom_mode,
-        StaticSecretProvider(settings.kiwoom_app_key, settings.kiwoom_secret_key),
+        StaticSecretProvider(
+            settings.kiwoom_app_key.get_secret_value(),
+            settings.kiwoom_secret_key.get_secret_value(),
+        ),
         MemoryTokenStore(),
     )
-    client = KiwoomWebSocketClient(auth)
+    client = KiwoomWebSocketClient(auth, connect_factory=connect_kiwoom)
     valkey = connect_valkey(settings)
     try:
-        async with asyncio.timeout(seconds_until(settings.stop_at, now)):
-            await stream_prices(client, valkey, codes)
-    except TimeoutError:
-        log.info("market_streamer_stopped", stop_at=settings.stop_at.isoformat())
+        await valkey.ping()
+        try:
+            async with asyncio.timeout(seconds_until(settings.stop_at, now)):
+                await stream_prices(client, valkey, codes)
+        except TimeoutError:
+            log.info("market_streamer_stopped", stop_at=settings.stop_at.isoformat())
     finally:
         await client.close()
         await valkey.aclose()

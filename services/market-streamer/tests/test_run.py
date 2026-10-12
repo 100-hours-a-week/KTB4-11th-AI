@@ -11,6 +11,7 @@ from market_streamer.stream import KST
 LOGIN_OK = {"trnm": "LOGIN", "return_code": 0, "return_msg": "ok"}
 REG_OK = {"trnm": "REG", "return_code": 0, "return_msg": "ok"}
 REG_REJECTED = {"trnm": "REG", "return_code": 1, "return_msg": "rejected"}
+REG_OK_STRING = {"trnm": "REG", "return_code": "0", "return_msg": "ok"}
 REAL = {
     "trnm": "REAL",
     "data": [
@@ -106,6 +107,78 @@ def test_rejected_registration_backs_off_exponentially(monkeypatch):
     assert delays == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0]
 
 
+def test_registration_ack_with_string_return_code_resets_backoff(monkeypatch):
+    _, delays = _record(monkeypatch)
+    sockets = [
+        FakeSocket([LOGIN_OK, REG_REJECTED]),
+        FakeSocket([LOGIN_OK, REG_OK_STRING]),
+        FakeSocket([LOGIN_OK]),
+    ]
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(stream.stream_prices(_client(sockets), object(), ["005930"]))
+
+    assert delays == [1.0, 1.0, 2.0]
+
+
+def _set_env(monkeypatch):
+    monkeypatch.setenv("MARKET_STREAMER_POSTGRES_DSN", "postgresql+psycopg://x@localhost/x")
+    monkeypatch.setenv("MARKET_STREAMER_KIWOOM_APP_KEY", "app")
+    monkeypatch.setenv("MARKET_STREAMER_KIWOOM_SECRET_KEY", "secret")
+    monkeypatch.setenv("MARKET_STREAMER_VALKEY_HOST", "localhost")
+
+
+def test_run_builds_the_client_with_the_keepalive_connect_factory(monkeypatch):
+    _set_env(monkeypatch)
+    built = []
+
+    class RecordingClient:
+        def __init__(self, auth, **kwargs):
+            built.append(kwargs)
+
+        async def close(self):
+            pass
+
+    async def forever(client, valkey, codes):
+        await asyncio.Event().wait()
+
+    class FakeValkey:
+        async def ping(self):
+            return True
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(stream, "KiwoomWebSocketClient", RecordingClient)
+    monkeypatch.setattr(stream, "load_codes", lambda dsn, index_name: ["005930"])
+    monkeypatch.setattr(stream, "connect_valkey", lambda settings: FakeValkey())
+    monkeypatch.setattr(stream, "stream_prices", forever)
+
+    asyncio.run(stream.run(Settings(), datetime(2026, 10, 13, 16, 0, tzinfo=KST)))
+
+    assert built == [{"connect_factory": stream.connect_kiwoom}]
+
+
+def test_run_fails_when_valkey_is_unreachable_and_still_closes_it(monkeypatch):
+    _set_env(monkeypatch)
+    closed = []
+
+    class FakeValkey:
+        async def ping(self):
+            raise ConnectionError("denied")
+
+        async def aclose(self):
+            closed.append("valkey")
+
+    monkeypatch.setattr(stream, "load_codes", lambda dsn, index_name: ["005930"])
+    monkeypatch.setattr(stream, "connect_valkey", lambda settings: FakeValkey())
+
+    with pytest.raises(ConnectionError, match="denied"):
+        asyncio.run(stream.run(Settings(), datetime(2026, 10, 13, 16, 0, tzinfo=KST)))
+
+    assert closed == ["valkey"]
+
+
 @pytest.mark.parametrize(
     "now",
     [
@@ -114,13 +187,13 @@ def test_rejected_registration_backs_off_exponentially(monkeypatch):
     ],
 )
 def test_run_exits_cleanly_at_the_stop_time(monkeypatch, now):
-    monkeypatch.setenv("MARKET_STREAMER_POSTGRES_DSN", "postgresql+psycopg://x@localhost/x")
-    monkeypatch.setenv("MARKET_STREAMER_KIWOOM_APP_KEY", "app")
-    monkeypatch.setenv("MARKET_STREAMER_KIWOOM_SECRET_KEY", "secret")
-    monkeypatch.setenv("MARKET_STREAMER_VALKEY_HOST", "localhost")
+    _set_env(monkeypatch)
     closed = []
 
     class FakeValkey:
+        async def ping(self):
+            return True
+
         async def aclose(self):
             closed.append("valkey")
 

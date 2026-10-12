@@ -936,6 +936,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "redis" },
     { name = "sqlalchemy" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -948,6 +949,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "redis", specifier = ">=6.4" },
     { name = "sqlalchemy", specifier = ">=2.0.54" },
+    { name = "websockets", specifier = ">=15.0" },
 ]
 
 [[package]]

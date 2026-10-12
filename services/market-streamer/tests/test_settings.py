@@ -42,3 +42,10 @@ def test_iam_needs_username_and_cache_name(monkeypatch):
 
     with pytest.raises(ValidationError, match="valkey_username"):
         Settings()
+
+
+def test_empty_kiwoom_app_key_is_rejected(monkeypatch):
+    _populate(monkeypatch, MARKET_STREAMER_KIWOOM_APP_KEY="")
+
+    with pytest.raises(ValidationError, match="kiwoom_app_key"):
+        Settings()

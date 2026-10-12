@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.7",
     "redis>=6.4",
     "sqlalchemy>=2.0.54",
+    "websockets>=15.0",
 ]
 
 [project.scripts]

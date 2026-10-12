@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     )
 
     questdb_conf: str
-    valkey_host: str
+    valkey_host: str = Field(min_length=1)
     valkey_port: int = 6379
     valkey_username: str | None = None
     valkey_cache_name: str | None = None

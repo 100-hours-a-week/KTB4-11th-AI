@@ -1101,6 +1101,7 @@ websockets==16.1.1 \
     #   kwcli
     #   langgraph-sdk
     #   langsmith
+    #   market-streamer
 xxhash==4.0.1 \
     --hash=sha256:08ed8da18cd4fd0a6a5d6a444852d8fbd0e565388a74a4937085451b5f1a312a \
     --hash=sha256:1749f0688020209fe0d357ce1e1cd9ec9c6161ed0405ea949d24581c4c43fa91 \
