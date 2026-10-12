@@ -10,7 +10,7 @@ This is a uv workspace (Python 3.13, also CI-tested against 3.14). Run everythin
 uv sync --all-packages --group migrations   # install every member + alembic/psycopg into one .venv
 uv run ruff check .                         # lint (E, F, I, UP, B; line length 100)
 uv run ruff format --check .                # CI fails on unformatted code
-uv run pytest                               # all tests (packages/, services/, infrastructure/)
+KTB_TEST_VALKEY_URL=redis://localhost:6379/0 uv run pytest   # all tests (packages/, services/, infrastructure/)
 uv run pytest services/news-clusterer       # one member
 uv run pytest packages/market-analyzer/tests/test_indicators.py::test_rsi_matches_the_input_length
 uv run news-clusterer                       # run a service by its console script
@@ -23,6 +23,8 @@ docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALT
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
 docker compose -f compose.dev.yaml up news-clusterer
 docker compose -f compose.dev.yaml up market-syncer   # needs the Kiwoom and DART keys below; run before news-graph-builder
+docker compose -f compose.dev.yaml up -d valkey market-http   # http://127.0.0.1:8001
+docker compose -f compose.dev.yaml up market-streamer          # needs MARKET_STREAMER_KIWOOM_* keys
 docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
 PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from PORTFOLIO_BUILDER_LLM_API_KEY in .env
 docker compose -f compose.dev.yaml --profile jobs run --rm portfolio-rebalancer   # one tick, then exits
@@ -59,6 +61,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `KTB_QUESTDB_CONF` | QuestDB migrations | required to migrate |
 | `KTB_POSTGRES_DSN` | alembic migrations | required to migrate |
 | `KTB_TEST_POSTGRES_DSN` | DB tests (skipped when unset); point it at `ktb_test`, never `ktb` | — |
+| `KTB_TEST_VALKEY_URL` | Valkey tests (skipped when unset); they FLUSHDB, so use a dedicated instance | — |
 | `KTB_EMBEDDING_BASE_URI` | news-preprocessor (OpenAI-compatible, includes `/v1`) | required |
 | `KTB_EMBEDDING_API_KEY` | news-preprocessor; sent as `Authorization: Bearer` when set (e.g. OpenRouter at `https://openrouter.ai/api/v1`; leave unset for a keyless local server) | — |
 | `KTB_EMBEDDING_MODEL` | news-preprocessor | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` |
@@ -94,7 +97,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_SYNCER_DART_API_KEY` | market-syncer; Compose uses the same name | required |
 | `MARKET_SYNCER_LOG_LEVEL` | market-syncer | `INFO` |
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | portfolio-builder | required |
-| `PORTFOLIO_BUILDER_QUESTDB_CONF` | portfolio-builder (official client config, e.g. `ws::addr=localhost:9000;`) | required |
+| `PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI` | portfolio-builder (market-http base URI, e.g. `http://market-http:8000`) | required |
 | `PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI` | portfolio-builder (news-http base URI, e.g. `http://news-http:8000`) | required |
 | `PORTFOLIO_BUILDER_LLM_API_KEY` | portfolio-builder | required |
 | `PORTFOLIO_BUILDER_LLM_MODEL` | portfolio-builder (OpenRouter model id) | required |
@@ -109,7 +112,32 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | market-collector | required |
 | `MARKET_COLLECTOR_KIWOOM_MODE` | market-collector | `real` |
 | `MARKET_COLLECTOR_INDEX_NAME` | market-collector | `KOSPI200` |
-| `MARKET_COLLECTOR_REQUEST_INTERVAL` | market-collector | `1.3` |
+| `MARKET_COLLECTOR_REQUEST_INTERVAL` | market-collector | `1.3` (production Compose `0.25`) |
+| `MARKET_STREAMER_POSTGRES_DSN` | market-streamer (reads `corporation_indices`) | required |
+| `MARKET_STREAMER_KIWOOM_APP_KEY` | market-streamer | required |
+| `MARKET_STREAMER_KIWOOM_SECRET_KEY` | market-streamer | required |
+| `MARKET_STREAMER_KIWOOM_MODE` | market-streamer (`real` or `demo`) | `real` |
+| `MARKET_STREAMER_INDEX_NAME` | market-streamer (index whose members are subscribed) | `KOSPI200` |
+| `MARKET_STREAMER_STOP_AT` | market-streamer (KST `HH:MM`; a process started at or after it exits at once) | `15:40` |
+| `MARKET_STREAMER_VALKEY_HOST` | market-streamer (price cache host) | required |
+| `MARKET_STREAMER_VALKEY_PORT` | market-streamer | `6379` |
+| `MARKET_STREAMER_VALKEY_USERNAME` | market-streamer (required with `iam`) | — |
+| `MARKET_STREAMER_VALKEY_CACHE_NAME` | market-streamer (ElastiCache serverless cache name; required with `iam`) | — |
+| `MARKET_STREAMER_VALKEY_TLS` | market-streamer (production Compose `true`) | `false` |
+| `MARKET_STREAMER_VALKEY_AUTH_MODE` | market-streamer (`none` or `iam`) | `none` |
+| `MARKET_STREAMER_AWS_REGION` | market-streamer (IAM token signing region) | `ap-northeast-2` |
+| `MARKET_STREAMER_LOG_LEVEL` | market-streamer | `INFO` |
+| `MARKET_HTTP_QUESTDB_CONF` | market-http (official client config, e.g. `ws::addr=localhost:9000;`) | required |
+| `MARKET_HTTP_VALKEY_HOST` | market-http (price cache host) | required |
+| `MARKET_HTTP_VALKEY_PORT` | market-http | `6379` |
+| `MARKET_HTTP_VALKEY_USERNAME` | market-http (required with `iam`) | — |
+| `MARKET_HTTP_VALKEY_CACHE_NAME` | market-http (ElastiCache serverless cache name; required with `iam`) | — |
+| `MARKET_HTTP_VALKEY_TLS` | market-http (production Compose `true`) | `false` |
+| `MARKET_HTTP_VALKEY_AUTH_MODE` | market-http (`none` or `iam`) | `none` |
+| `MARKET_HTTP_AWS_REGION` | market-http (IAM token signing region) | `ap-northeast-2` |
+| `MARKET_HTTP_HOST` | market-http | `0.0.0.0` |
+| `MARKET_HTTP_PORT` | market-http | `8000` |
+| `MARKET_HTTP_LOG_LEVEL` | market-http | `INFO` |
 | `MARKET_COLLECTOR_LOG_LEVEL` | market-collector | `INFO` |
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | portfolio-rebalancer | required |
@@ -146,21 +174,23 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-http` | service | long-running HTTP server (uvicorn) | `ktb-core` |
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
-| `services/market-collector` | service | weekdays 09:55–14:55 and 15:35 KST; single-run KOSPI 200 OHLCV archive | `ktb-core` |
+| `services/market-collector` | service | every minute 09:00–15:30 KST, plus 15:35 for daily bars | `ktb-core` |
+| `services/market-streamer` | service | weekdays 08:50 KST until STOP_AT; one Kiwoom 0B WebSocket | `ktb-core` |
+| `services/market-http` | service | long-running public HTTP server (uvicorn) | `ktb-core` |
 | `services/portfolio-rebalancer` | service | scheduled job: polls the Backend, decides, sends market orders | `ktb-core` |
 | `services/report-builder` | service | long-running SQS worker: generates competition reports and calls the Backend | `ktb-core` |
 | `packages/core` (`ktb_core`) | library | — | nothing third-party |
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
-- **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, including KOSPI 200 OpenDART disclosures through its `opendart` publisher (design: `docs/superpowers/specs/2026-09-29-opendart-publisher-design.md`); news-clusterer reads articles and writes `clusters` / `article_clusters`; market-syncer writes Kiwoom and OpenDART reference data (`corporations`, `corporation_aliases`, KOSPI 200 membership in `corporation_indices`, `themes`, `theme_companies`; design: `docs/superpowers/specs/2026-09-29-market-syncer-design.md`) and runs before news-preprocessor, news-graph-builder, and market-collector; news-graph-builder reads clusters and corporations and writes `cluster_summaries` and the knowledge graph (`entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`); market-collector reads its symbols from `corporation_indices` and writes OHLCV to QuestDB; portfolio-builder reads news and graph data through news-http, company reference data and portfolios from PostgreSQL, and market bars from QuestDB. It writes `portfolios` (with the run's `trace`), `portfolio_holdings`, `portfolio_exits`, and, with one more LLM call, a buy and a sell explanation per stock in `portfolio_reasons`, moving `portfolios.status` from `explanation_pending` to `ready` or `explanation_failed`; when the latest portfolio is not `ready` and has a trace, a run re-explains it instead of building a new one (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself. portfolio-rebalancer has no inbound surface and nothing calls it: it reads the latest portfolio from PostgreSQL and trades only when its `status` is `ready` (never an older one) and the last close from QuestDB, polls the Backend for accounts, and sends it one market order per stock, carrying `portfolio_reasons` as `reason` and `thoughts` (design: `docs/superpowers/specs/2026-10-02-portfolio-rebalancer-design.md`).
-- **news-http is the only inbound HTTP surface and is read-only.** The Backend calls it on the private network without authentication for stock clusters and cluster articles, and portfolio-builder calls it for news and graph reads (design: `docs/superpowers/specs/2026-10-07-portfolio-builder-news-http-design.md`). It never writes and runs no migrations. In `compose.dev.yaml` it binds to `127.0.0.1:8000` only.
+- **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, including KOSPI 200 OpenDART disclosures through its `opendart` publisher (design: `docs/superpowers/specs/2026-09-29-opendart-publisher-design.md`); news-clusterer reads articles and writes `clusters` / `article_clusters`; market-syncer writes Kiwoom and OpenDART reference data (`corporations`, `corporation_aliases`, KOSPI 200 membership in `corporation_indices`, `themes`, `theme_companies`; design: `docs/superpowers/specs/2026-09-29-market-syncer-design.md`) and runs before news-preprocessor, news-graph-builder, and market-collector; news-graph-builder reads clusters and corporations and writes `cluster_summaries` and the knowledge graph (`entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`); market-collector reads its symbols from `corporation_indices` and writes OHLCV to QuestDB; market-streamer writes the latest price per KOSPI 200 stock to Valkey (`SET` and `PUBLISH price:{code}`; design: `docs/superpowers/specs/2026-10-13-market-streamer-http-design.md`); portfolio-builder reads news and graph data through news-http, company reference data and portfolios from PostgreSQL, and market bars through market-http. It writes `portfolios` (with the run's `trace`), `portfolio_holdings`, `portfolio_exits`, and, with one more LLM call, a buy and a sell explanation per stock in `portfolio_reasons`, moving `portfolios.status` from `explanation_pending` to `ready` or `explanation_failed`; when the latest portfolio is not `ready` and has a trace, a run re-explains it instead of building a new one (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself. portfolio-rebalancer has no inbound surface and nothing calls it: it reads the latest portfolio from PostgreSQL and trades only when its `status` is `ready` (never an older one) and the last close from QuestDB, polls the Backend for accounts, and sends it one market order per stock, carrying `portfolio_reasons` as `reason` and `thoughts` (design: `docs/superpowers/specs/2026-10-02-portfolio-rebalancer-design.md`).
+- **news-http and market-http are the inbound HTTP surfaces.** news-http is read-only. The Backend calls it on the private network without authentication for stock clusters and cluster articles, and portfolio-builder calls it for news and graph reads (design: `docs/superpowers/specs/2026-10-07-portfolio-builder-news-http-design.md`). It never writes and runs no migrations. In `compose.dev.yaml` it binds to `127.0.0.1:8000` only. market-http is public with no authentication; it serves `/prices`, `/prices/stream` (SSE) and `/bars/{code}`, reads QuestDB and Valkey, and writes Valkey only to fill a missing price with `SET NX`. In `compose.dev.yaml` it binds to `127.0.0.1:8001`.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot. Migration `0002` drops the old `universe_members` table.
 - **Work queue:** Use SQS for the general queue; report-builder consumes competition requests from SQS.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
-- **portfolio-builder runs a LangChain `create_agent` agent on OpenRouter**, reads news and graph data through news-http, and keeps PostgreSQL access for portfolio and company reference data plus QuestDB for prices. It computes technical evidence with TA-Lib directly (not `ktb-market-analyzer`). The OpenRouter key lives only in the environment.
+- **portfolio-builder runs a LangChain `create_agent` agent on OpenRouter**, reads news and graph data through news-http, keeps PostgreSQL access for portfolio and company reference data, and reads bars through market-http. It computes technical evidence with TA-Lib directly (not `ktb-market-analyzer`). The OpenRouter key lives only in the environment.
 - **`core` holds only code that is common to several services.** Connection factories, the Queue protocol, and so on move into core only once a real caller exists.
-- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `MARKET_COLLECTOR_`, `MARKET_SYNCER_`, `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_HTTP_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`, `PORTFOLIO_REBALANCER_`). There is deliberately no shared base class in core.
+- **Each service has its own `settings.py`** (`pydantic-settings`, env prefix `MARKET_COLLECTOR_`, `MARKET_HTTP_`, `MARKET_STREAMER_`, `MARKET_SYNCER_`, `NEWS_CLUSTERER_`, `NEWS_GRAPH_BUILDER_`, `NEWS_HTTP_`, `NEWS_PREPROCESSOR_`, `PORTFOLIO_BUILDER_`, `PORTFOLIO_REBALANCER_`). There is deliberately no shared base class in core.
 - Every service's `main()` calls `ktb_core.logging.setup_logging()` first, which emits JSON logs on stdout.
 - **Postgres migrations** live in `infrastructure/postgres/migrations/`, with `alembic.ini` at the repo root. The DSN comes only from `KTB_POSTGRES_DSN`, and a test asserts that no `sqlalchemy.url` is committed. A dedicated job runs migrations. Services never run them at boot.
 - **Docker:** there is one image per service (`docker/<svc>.Dockerfile`) and the build context is the repo root. Each Dockerfile installs third-party deps from `docker/requirements/<svc>.txt`, then installs first-party members from source with `--no-deps`. When a service gains a new workspace dependency, add a `COPY` line and put the dependency on the `uv pip install` line of that service's Dockerfile. Production (`compose.prod.yaml`) runs every service from the single `docker/app.Dockerfile` image, so a new service also goes on its `uv pip install` line.
