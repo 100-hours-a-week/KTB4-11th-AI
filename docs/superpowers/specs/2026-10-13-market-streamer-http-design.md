@@ -221,9 +221,12 @@ Datastore tests use a real instance when their variable is set and skip otherwis
 
 ### Check against the live API before implementation
 
-1. One Kiwoom key is used by two processes. Confirm that market-collector issuing a token does not end market-streamer's WebSocket session, and the reverse.
-2. Confirm the `0B` formats for KOSPI: integer prices, and FID 20 as `HHMMSS` in KST.
-3. Confirm one `REG` with 200 codes delivers ticks for all 200.
+1. Confirm the `0B` formats for KOSPI: integer prices, and FID 20 as `HHMMSS` in KST.
+2. Confirm one `REG` with 200 codes delivers ticks for all 200.
+
+### Shared key, checked on 2026-10-13
+
+With the real key, a REST call succeeded, then a WebSocket LOGIN succeeded. A second process requested a token and Kiwoom returned the same token value. REST calls kept succeeding and the WebSocket stayed open, answering four heartbeats over 45 seconds. Token expiry and forced refresh were not tested; if either ends the WebSocket session, market-streamer's reconnect path logs in again with a fresh token.
 
 ## Boundaries
 
