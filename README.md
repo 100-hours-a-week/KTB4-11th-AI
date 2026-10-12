@@ -64,8 +64,8 @@ flowchart LR
     QDB -->|last close| PR
     PR -->|HTTP user lookup| BE
     BE -->|HTTP account state| PR
-    PR -->|order cancellations, placements and failures| SQS
-    SQS -->|order cancellations, placements and failures| BE
+    PR -->|order cancellations and placements| SQS
+    SQS -->|order cancellations and placements| BE
     BE -->|report request| SQS
     SQS -->|report request| RB
     PG -->|reasons and cited summaries| RB
@@ -434,7 +434,6 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
 | `ORDER_QUEUE_URL` | 필수 | | 주문 취소·생성 요청을 발행하는 FIFO 큐 |
-| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 조회·검증 실패 알림을 발행하는 일반 FIFO 큐; DLQ와 구분 |
 | `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Compose에서 AWS SDK로 전달하는 리전 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
@@ -479,13 +478,13 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 | 사용자·계좌 정보 조회 | 기존 HTTP `GET /api/v1/users/ai-server` |
 | 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
 | 주문 취소 요청 | AI → 같은 Order FIFO 큐; `order.cancel` |
-| HTTP 조회·응답 검증 실패 알림 | AI → 일반 Failure FIFO 큐; `account.snapshot.failed` |
+| HTTP 조회·응답 검증 실패 | 구조화 로그 기록 후 실패 종료 |
 
 매 실행마다 HTTP로 사용자 정보를 조회합니다. 대기 주문 취소 요청을 SQS로 발행하면 같은 HTTP API로
 잔고·보유량·대기 주문을 다시 조회하고 취소 반영이 확인된 계좌만 남은 실행 횟수로 범위를 좁혀 재주문합니다.
 취소 요청 발행 실패 또는 갱신 조회에서 대기 주문이 남은 계좌에는 신규 주문을 보내지 않습니다.
 취소·재주문은 같은 계좌 FIFO 그룹을 사용하지만 취소 메시지 발행 성공은 취소 완료가 아닙니다.
-조회 실패나 잘못된 응답은 일반 실패 큐로 알리고 주문 요청 없이 종료합니다.
+조회 실패나 잘못된 응답은 기존 구조화 로그로 기록하고 주문 요청 없이 종료합니다.
 `users: []`는 정상 응답입니다.
 
 주문 생성에는 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
@@ -498,5 +497,5 @@ HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용�
 Settings로 읽습니다. 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
 SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
 기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
-리밸런서는 주문·실패 큐에 발행만 하며 소비·DeleteMessage를 수행하지 않습니다.
+리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
 DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.

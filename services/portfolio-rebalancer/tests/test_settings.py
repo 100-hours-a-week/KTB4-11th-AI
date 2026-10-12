@@ -9,7 +9,6 @@ REQUIRED = {
     "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
     "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
     "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
-    "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL": "https://sqs.local/failure.fifo",
 }
 
 
@@ -28,7 +27,6 @@ def test_defaults(monkeypatch):
     "name",
     [
         "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL",
-        "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL",
     ],
 )
 def test_every_queue_url_is_required(monkeypatch, name):
@@ -53,7 +51,7 @@ def test_a_whitespace_queue_url_is_refused(monkeypatch):
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
 
-    monkeypatch.setenv("PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL", "   ")
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL", "   ")
     with pytest.raises(ValidationError):
         Settings()
 
@@ -91,3 +89,10 @@ def test_lookup_http_settings_are_required(monkeypatch, key):
     monkeypatch.delenv("PORTFOLIO_REBALANCER_" + key)
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_http_lookup_does_not_require_a_failure_queue(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL", raising=False)
+    assert Settings().order_queue_url == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]

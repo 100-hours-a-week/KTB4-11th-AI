@@ -112,7 +112,6 @@ def main() -> None:
         counts: Counter[str] = Counter()
         sqs = boto3.client("sqs")
         orders = Orders(SqsQueue(sqs, settings.order_queue_url), run_id)
-        failures = Orders(SqsQueue(sqs, settings.failure_queue_url), run_id)
         with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:
             backend = Backend(
                 client, settings.backend_jwt_secret.get_secret_value(), settings.backend_jwt_issuer
@@ -144,26 +143,6 @@ def main() -> None:
                 if isinstance(error, httpx.HTTPStatusError):
                     detail += f": HTTP {error.response.status_code}"
                 log.error("users_fetch_failed", reason=reason, error=detail, result="failed")
-                try:
-                    published = failures.report_failure(reason, detail)
-                except PublishError as publish_error:
-                    log.error(
-                        "account_failure_report_failed",
-                        **publish_error.fields,
-                        result="failed",
-                        error=str(publish_error),
-                        queue_role="failures",
-                        direction="publish",
-                    )
-                else:
-                    log.info(
-                        "account_failure_reported",
-                        **published,
-                        reason=reason,
-                        result="published",
-                        queue_role="failures",
-                        direction="publish",
-                    )
                 end.update(
                     outcome="users_fetch_failed",
                     error=detail,

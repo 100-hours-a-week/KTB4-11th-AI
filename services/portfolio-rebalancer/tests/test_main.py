@@ -18,7 +18,6 @@ REQUIRED = {
     "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
     "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
     "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
-    "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL": "https://sqs.local/failure.fifo",
 }
 WEDNESDAY_NOON = datetime(2026, 10, 14, 12, tzinfo=KST)
 WHY = Explanation(id=uuid.uuid4(), reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
@@ -382,11 +381,10 @@ def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, 
     assert (warn["account_id"], warn["order_ids"]) == (11, [79])
 
 
-@pytest.mark.parametrize("notification_failure", [False, True])
 @pytest.mark.parametrize("refresh_failure", [False, True])
 @pytest.mark.parametrize("failure", ["timeout", "status", "invalid", "json"])
-def test_http_user_fetch_failure_reports_sqs_and_stops_orders(
-    env, monkeypatch, capsys, failure, refresh_failure, notification_failure
+def test_http_user_fetch_failure_logs_and_stops_orders(
+    env, monkeypatch, capsys, failure, refresh_failure
 ):
     sent = []
     requests = []
@@ -395,18 +393,12 @@ def test_http_user_fetch_failure_reports_sqs_and_stops_orders(
     class Sqs:
         def send_message(self, **kwargs):
             body = json.loads(kwargs["MessageBody"])
-            if body["type"] == "order.cancel":
-                assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
-                assert kwargs["MessageGroupId"] == "11"
-                assert kwargs["MessageDeduplicationId"] == body["eventId"]
-                return {"MessageId": "cancel-id"}
-            assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL"]
-            assert kwargs["MessageGroupId"] == "ai-server"
+            assert body["type"] == "order.cancel"
+            assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
+            assert kwargs["MessageGroupId"] == "11"
             assert kwargs["MessageDeduplicationId"] == body["eventId"]
             sent.append(body)
-            if notification_failure:
-                raise RuntimeError("failure queue unavailable")
-            return {"MessageId": "failure-id"}
+            return {"MessageId": "cancel-id"}
 
     def respond(request):
         nonlocal reads
@@ -434,25 +426,17 @@ def test_http_user_fetch_failure_reports_sqs_and_stops_orders(
     )
     monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
     assert _main() == 1
-    assert len(sent) == 1
-    assert sent[0]["type"] == "account.snapshot.failed"
-    assert sent[0]["payload"]["source_sqs_message_id"] is None
-    assert sent[0]["payload"]["reason"] == (
-        "users_fetch_failed" if failure in {"timeout", "status"} else "users_payload_invalid"
-    )
+    assert len(sent) == (1 if refresh_failure else 0)
     assert reads == (2 if refresh_failure else 1)
     out = capsys.readouterr().out
     assert "private" not in out
-    event = next(
-        e
-        for e in _events(out)
-        if e["message"]
-        == ("account_failure_report_failed" if notification_failure else "account_failure_reported")
+    event = next(e for e in _events(out) if e["message"] == "users_fetch_failed")
+    assert event["reason"] == (
+        "users_fetch_failed" if failure in {"timeout", "status"} else "users_payload_invalid"
     )
-    assert event["sqs_message_id"] == (None if notification_failure else "failure-id")
-    assert event["event_id"] == sent[0]["eventId"]
-    assert event["correlation_id"] == sent[0]["correlationId"]
+    assert event["result"] == "failed"
     assert _events(out)[-1]["sent"] == 0
+    assert _events(out)[-1]["outcome"] == "users_fetch_failed"
 
 
 def test_users_http_then_cancel_sqs_then_refresh_http_then_place_sqs(env, monkeypatch):

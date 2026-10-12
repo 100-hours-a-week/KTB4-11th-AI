@@ -105,18 +105,6 @@ def test_a_published_order_keeps_the_correlation_identity_for_logging():
     assert published["correlation_id"] == RUN
 
 
-def test_http_user_fetch_failure_is_sent_to_the_normal_failure_queue():
-    queue = FakeQueue()
-    published = Orders(queue, RUN).report_failure("users_fetch_failed", "ReadTimeout")
-    sent = queue.sent[0]
-    assert sent["group"] == "ai-server"
-    assert sent["dedup"] == sent["body"]["eventId"]
-    assert sent["body"]["type"] == "account.snapshot.failed"
-    assert sent["body"]["payload"]["reason"] == "users_fetch_failed"
-    assert sent["body"]["payload"]["source_sqs_message_id"] is None
-    assert published["sqs_message_id"] == "m1"
-
-
 def test_cancel_then_replace_share_the_account_fifo_group():
     queue = FakeQueue()
     orders = Orders(queue, RUN)
