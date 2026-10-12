@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
-from market_http.controllers import bars
+from market_http.controllers import bars, prices
 
 
 def create_app(valkey: Redis, questdb_conf: str) -> FastAPI:
@@ -10,6 +10,7 @@ def create_app(valkey: Redis, questdb_conf: str) -> FastAPI:
     app.state.valkey = valkey
     app.state.questdb_conf = questdb_conf
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"])
+    app.include_router(prices.router)
     app.include_router(bars.router)
 
     @app.get("/health")
