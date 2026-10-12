@@ -3,6 +3,7 @@ source_roots = [
     "packages/market-analyzer/src",
     "services/market-syncer/src",
     "services/market-collector/src",
+    "services/market-streamer/src",
     "services/news-preprocessor/src",
     "services/news-clusterer/src",
     "services/news-graph-builder/src",
@@ -88,4 +89,8 @@ depends_on = ["ktb_core"]
 
 [[modules]]
 path = "portfolio_rebalancer"
+depends_on = ["ktb_core"]
+
+[[modules]]
+path = "market_streamer"
 depends_on = ["ktb_core"]

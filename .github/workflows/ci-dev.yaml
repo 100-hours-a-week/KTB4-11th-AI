@@ -48,10 +48,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
+      valkey:
+        image: valkey/valkey:8.1.4
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     env:
       KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
       KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
       KTB_TEST_QUESTDB_CONF: ws::addr=localhost:9000;
+      KTB_TEST_VALKEY_URL: redis://localhost:6379/0
 
     steps:
       - uses: actions/checkout@v7
