@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 
 from ktb_core.queue import Queue
 
-CANCEL_TYPE = "order.cancel"
 PLACE_TYPE = "order.place"
 
 
@@ -55,18 +54,6 @@ class Orders:
             "sqs_message_id": message_id,
             "correlation_id": self._correlation_id,
         }
-
-    def cancel(self, user_id: int, account_id: int, order_id: int) -> dict[str, str]:
-        return self._publish(
-            CANCEL_TYPE,
-            account_id,
-            {
-                "user_id": user_id,
-                "account_id": account_id,
-                "order_id": order_id,
-                "status": "cancelled",
-            },
-        )
 
     def place(
         self, user_id: int, account_id: int, body: dict, replaces: list[int]

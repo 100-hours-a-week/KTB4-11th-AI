@@ -25,13 +25,15 @@ beautifulsoup4==4.15.0 \
     # via
     #   news-preprocessor
     #   opendartreader
-boto3==1.43.110 \
-    --hash=sha256:0251b67d99cc0e7b958db48e7dd149094d453377fcd03299fde7329f975db2e6 \
-    --hash=sha256:74b811e6def4b30d685d4539a9ead3796f0e03a2112f00134e0f5e583ad8b098
-    # via portfolio-rebalancer
-botocore==1.43.110 \
-    --hash=sha256:888cd54d59502e2195dac30805e5c08dd1be5416932a3793373e81b8f463e006 \
-    --hash=sha256:9f5ae5685b4d7129e32f6084ae8683d5857a1d60d77528b8da77bb53b9dff48f
+boto3==1.43.109 \
+    --hash=sha256:703a81baed186d31e27cf50065d25a9faeb704f009e7c56b0f002ca52a328896 \
+    --hash=sha256:c829bc3352e1e3922d8fe1db10b697182ac411b64ce5fc3acb0a06a29837417e
+    # via
+    #   portfolio-rebalancer
+    #   report-builder
+botocore==1.43.109 \
+    --hash=sha256:46b15bea4d942aaea6d7ab7c4b8a3a7290305064a3b41a6cb271cde9da3ba371 \
+    --hash=sha256:cd00edff465264fb448e36acc9ee29a828f738fff3746270b3f685a19194a5a6
     # via
     #   boto3
     #   s3transfer
@@ -222,6 +224,8 @@ httpx==0.28.1 \
     #   news-graph-builder
     #   news-preprocessor
     #   openrouter
+    #   portfolio-rebalancer
+    #   report-builder
 httpx2==2.13.1 \
     --hash=sha256:6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4 \
     --hash=sha256:e48744a19e3af5ee48313d0ce5fe941d5422fae5705ea922a4aabf94d7800dfa
@@ -299,10 +303,13 @@ langchain-core==1.6.5 \
     #   langgraph-prebuilt
     #   langgraph-sdk
     #   portfolio-builder
+    #   report-builder
 langchain-openrouter==0.2.9 \
     --hash=sha256:375a79a4a849069d2254627185210b2f2b9fe84c69326e10d71c3d48f8b41f06 \
     --hash=sha256:e3c130bfc58a517811044b6cb56e13b2e7d1ee219c38e025f4522aa0400f9c8e
-    # via portfolio-builder
+    # via
+    #   portfolio-builder
+    #   report-builder
 langchain-protocol==0.0.19 \
     --hash=sha256:4cdf879a492a35980fd859ae792d3c65458ccaae504e183c9a10d7eac1f0720f \
     --hash=sha256:79d90a1425122ac87e8052e2ec054fbd09c3edbf341bdfb6397112a495c7bf8c
@@ -613,6 +620,7 @@ psycopg==3.3.6 \
     #   news-preprocessor
     #   portfolio-builder
     #   portfolio-rebalancer
+    #   report-builder
 psycopg-binary==3.3.6 ; implementation_name != 'pypy' \
     --hash=sha256:05a83ac9fd52b9bca7cb5ab04b3691163170bd16f53defa27216ea3aa07ee781 \
     --hash=sha256:0bf08b749cc144f33b44a91b78e3f71c60eb07963746a0df5a100b36ce3d7475 \
@@ -680,6 +688,7 @@ pydantic==2.13.5 \
     #   portfolio-builder
     #   portfolio-rebalancer
     #   pydantic-settings
+    #   report-builder
 pydantic-core==2.46.5 \
     --hash=sha256:03b9666e41e35d8909852ba191a0607520f81b74eaf12ccf8737005dbb313821 \
     --hash=sha256:045ab3b6d308439e32b81cc173bba5b9018bc6ed896afd0c65b3b009b1699af5 \
@@ -740,6 +749,7 @@ pydantic-settings==2.15.0 \
     #   news-preprocessor
     #   portfolio-builder
     #   portfolio-rebalancer
+    #   report-builder
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
     --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
@@ -890,6 +900,7 @@ sqlalchemy==2.1.1 \
     #   news-preprocessor
     #   portfolio-builder
     #   portfolio-rebalancer
+    #   report-builder
 starlette==1.7.0 \
     --hash=sha256:67f8e99895493dd2911a03f11314af6ceebeae4e704bb9f43dfc6a9db151c93e \
     --hash=sha256:c79f74ea63cff761804fbbfb182f1e0b440c2d07b164d24700c5a1bab5d6ff5d

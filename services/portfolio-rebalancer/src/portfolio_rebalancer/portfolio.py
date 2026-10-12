@@ -1,3 +1,5 @@
+from uuid import UUID
+
 import sqlalchemy as sa
 from pydantic import BaseModel
 
@@ -8,6 +10,7 @@ class Reasoning(BaseModel):
 
 
 class Explanation(BaseModel):
+    id: UUID
     reason: str
     reasonings: list[Reasoning]
 
@@ -48,13 +51,13 @@ WHERE e.portfolio_id = :id
 """
 
 REASONS = """
-SELECT c.stock_code, r.side, r.reason, r.reasonings
+SELECT c.stock_code, r.side, r.id, r.reason, r.reasonings
 FROM portfolio_reasons r JOIN corporations c ON c.corp_code = r.company_id
 WHERE r.portfolio_id = :id
 """
 
 LEFTOVERS = """
-SELECT DISTINCT ON (c.stock_code) c.stock_code, c.name, r.reason, r.reasonings
+SELECT DISTINCT ON (c.stock_code) c.stock_code, c.name, r.id, r.reason, r.reasonings
 FROM portfolio_reasons r
 JOIN portfolio_exits e ON e.portfolio_id = r.portfolio_id AND e.company_id = r.company_id
 JOIN corporations c ON c.corp_code = r.company_id
@@ -73,7 +76,9 @@ def load_portfolio(engine: sa.Engine) -> Portfolio | Unready | None:
         portfolio_id = latest.id
         cash_weight = conn.execute(sa.text(CASH_WEIGHT), {"id": portfolio_id}).scalar_one()
         reasons = {
-            (row.stock_code, row.side): Explanation(reason=row.reason, reasonings=row.reasonings)
+            (row.stock_code, row.side): Explanation(
+                id=row.id, reason=row.reason, reasonings=row.reasonings
+            )
             for row in conn.execute(sa.text(REASONS), {"id": portfolio_id})
         }
         target_rows = conn.execute(sa.text(TARGETS), {"id": portfolio_id}).all()
@@ -89,7 +94,7 @@ def load_portfolio(engine: sa.Engine) -> Portfolio | Unready | None:
         for row in target_rows
     ]
     leftovers = {
-        row.stock_code: Explanation(reason=row.reason, reasonings=row.reasonings)
+        row.stock_code: Explanation(id=row.id, reason=row.reason, reasonings=row.reasonings)
         for row in leftover_rows
     }
     names = {row.stock_code: row.name for row in [*target_rows, *leftover_rows]}

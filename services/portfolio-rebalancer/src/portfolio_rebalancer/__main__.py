@@ -1,8 +1,10 @@
 import uuid
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from typing import Any
 
 import boto3
+import httpx
 import sqlalchemy as sa
 from ktb_core.logging import (
     StructuredLogger,
@@ -14,7 +16,7 @@ from ktb_core.logging import (
 from ktb_core.queue import SqsQueue
 
 from portfolio_rebalancer.accounts import Accounts, AccountsError
-from portfolio_rebalancer.backend import order_request_body
+from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
 from portfolio_rebalancer.orders import Orders, PublishError
@@ -37,14 +39,14 @@ TOTALS = (
 )
 
 
+def _failure(error: httpx.HTTPError) -> dict[str, Any]:
+    if isinstance(error, httpx.HTTPStatusError):
+        return {"status": error.response.status_code, "body": error.response.text}
+    return {"error": str(error)}
+
+
 def _cancel_all(
-    orders: Orders,
-    accounts: Accounts,
-    log: StructuredLogger,
-    user_id: int,
-    account: Account,
-    counts: Counter[str],
-    cancelled: set[int],
+    backend: Backend, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
 ) -> bool:
     for pending in account.pending_orders:
         fields = {
@@ -54,30 +56,16 @@ def _cancel_all(
             "side": pending.order_side,
             "order_id": pending.order_id,
         }
-        accounts.before_publish()
         try:
-            published = orders.cancel(user_id, account.account_id, pending.order_id)
-        except PublishError as error:
+            backend.cancel(user_id, account.account_id, pending.order_id)
+        except httpx.HTTPError as error:
             counts["cancel_failed"] += 1
-            log.error(
-                "cancel_failed",
-                **fields,
-                **error.fields,
-                result="failed",
-                error=str(error),
-                queue_role="orders",
-                direction="publish",
-            )
+            log.error("cancel_failed", **fields, **_failure(error))
             return False
         counts["cancelled"] += 1
-        cancelled.add(pending.order_id)
         log.info(
             "order_cancelled",
             **fields,
-            **published,
-            result="published",
-            queue_role="orders",
-            direction="publish",
             order_type=pending.order_type,
             limit_price=pending.limit_price,
             quantity=pending.quantity,
@@ -128,131 +116,136 @@ def main() -> None:
                 state=SnapshotStore(engine),
                 max_age=settings.snapshot_max_age_seconds,
             )
-            failed_cancels: set[int] = set()
-            cancelled_by_account: dict[int, set[int]] = defaultdict(set)
-            try:
-                users = accounts.users()
-                log.info("users_received", user_count=len(users))
-                for user in users:
-                    for account in user.accounts:
-                        if account.is_active and not _cancel_all(
-                            orders,
-                            accounts,
-                            log,
-                            user.user_id,
-                            account,
-                            counts,
-                            cancelled_by_account[account.account_id],
-                        ):
-                            failed_cancels.add(account.account_id)
-                if counts["cancelled"]:
+            with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:
+                backend = Backend(
+                    client,
+                    settings.backend_jwt_secret.get_secret_value(),
+                    settings.backend_jwt_issuer,
+                )
+                failed_cancels: set[int] = set()
+                cancelled_by_account: dict[int, set[int]] = defaultdict(set)
+                try:
                     users = accounts.users()
                     log.info("users_received", user_count=len(users))
-                codes = {t.stock_code for t in portfolio.targets} | {
-                    s.stock_code for u in users for a in u.accounts for s in a.stocks
-                }
-                closes = daily_closes(settings.questdb_conf, codes, now)
-                prices = latest_prices(settings.questdb_conf, codes)
-                if missing := sorted(codes - closes.keys()):
-                    log.warning("no_price", stock_codes=missing, missing="daily_closes")
-                if missing := sorted(codes - prices.keys()):
-                    log.warning("no_price", stock_codes=missing, missing="latest_price")
-                quotes = {c: quote(closes[c], prices[c]) for c in closes.keys() & prices.keys()}
-                named = {t.stock_code for t in portfolio.targets}
-                for user in users:
-                    for account in user.accounts:
-                        if not account.is_active or account.account_id in failed_cancels:
-                            continue
-                        replaced = sorted(cancelled_by_account[account.account_id])
-                        if account.pending_orders:
-                            counts["deferred"] += 1
-                            log.warning(
-                                "pending_after_cancel",
-                                user_id=user.user_id,
-                                account_id=account.account_id,
-                                order_ids=[o.order_id for o in account.pending_orders],
-                                result="deferred",
-                            )
-                            continue
-                        if stranded := sorted(
-                            {s.stock_code for s in account.stocks if s.quantity > 0}
-                            - named
-                            - portfolio.leftovers.keys()
-                        ):
-                            log.warning(
-                                "leftover_without_reason",
-                                user_id=user.user_id,
-                                account_id=account.account_id,
-                                stock_codes=stranded,
-                            )
-                        for order in rebalance(
-                            portfolio,
-                            account,
-                            quotes,
-                            settings.band,
-                            settings.buy_buffer,
-                            runs_left,
-                            week_runs,
-                        ):
-                            request_body = order_request_body(order)
-                            fields = {
-                                "user_id": user.user_id,
-                                "account_id": account.account_id,
-                                "stock_code": order.stock_code,
-                                "stock_name": order.stock_name,
-                                "request_body": request_body,
-                                "side": order.side,
-                                "quantity": order.quantity,
-                                "reason": order.explanation.reason,
-                                **order.pricing.model_dump(),
-                            }
-                            accounts.before_publish()
-                            try:
-                                published = orders.place(
-                                    user.user_id, account.account_id, request_body, replaced
+                    for user in users:
+                        for account in user.accounts:
+                            if account.is_active:
+                                if account.pending_orders:
+                                    accounts.before_publish()
+                                if _cancel_all(backend, log, user.user_id, account, counts):
+                                    cancelled_by_account[account.account_id].update(
+                                        pending.order_id for pending in account.pending_orders
+                                    )
+                                else:
+                                    failed_cancels.add(account.account_id)
+                    if counts["cancelled"]:
+                        users = accounts.users()
+                        log.info("users_received", user_count=len(users))
+                    codes = {t.stock_code for t in portfolio.targets} | {
+                        s.stock_code for u in users for a in u.accounts for s in a.stocks
+                    }
+                    closes = daily_closes(settings.questdb_conf, codes, now)
+                    prices = latest_prices(settings.questdb_conf, codes)
+                    if missing := sorted(codes - closes.keys()):
+                        log.warning("no_price", stock_codes=missing, missing="daily_closes")
+                    if missing := sorted(codes - prices.keys()):
+                        log.warning("no_price", stock_codes=missing, missing="latest_price")
+                    quotes = {c: quote(closes[c], prices[c]) for c in closes.keys() & prices.keys()}
+                    named = {t.stock_code for t in portfolio.targets}
+                    for user in users:
+                        for account in user.accounts:
+                            if not account.is_active or account.account_id in failed_cancels:
+                                continue
+                            replaced = sorted(cancelled_by_account[account.account_id])
+                            if account.pending_orders:
+                                counts["deferred"] += 1
+                                log.warning(
+                                    "pending_after_cancel",
+                                    user_id=user.user_id,
+                                    account_id=account.account_id,
+                                    order_ids=[o.order_id for o in account.pending_orders],
+                                    result="deferred",
                                 )
-                            except PublishError as error:
-                                counts["failed"] += 1
-                                log.error(
-                                    "order_failed",
+                                continue
+                            if stranded := sorted(
+                                {s.stock_code for s in account.stocks if s.quantity > 0}
+                                - named
+                                - portfolio.leftovers.keys()
+                            ):
+                                log.warning(
+                                    "leftover_without_reason",
+                                    user_id=user.user_id,
+                                    account_id=account.account_id,
+                                    stock_codes=stranded,
+                                )
+                            for order in rebalance(
+                                portfolio,
+                                account,
+                                quotes,
+                                settings.band,
+                                settings.buy_buffer,
+                                runs_left,
+                                week_runs,
+                            ):
+                                request_body = order_request_body(order)
+                                fields = {
+                                    "user_id": user.user_id,
+                                    "account_id": account.account_id,
+                                    "stock_code": order.stock_code,
+                                    "stock_name": order.stock_name,
+                                    "request_body": request_body,
+                                    "side": order.side,
+                                    "quantity": order.quantity,
+                                    "reason": order.explanation.reason,
+                                    **order.pricing.model_dump(),
+                                }
+                                accounts.before_publish()
+                                try:
+                                    published = orders.place(
+                                        user.user_id, account.account_id, request_body, replaced
+                                    )
+                                except PublishError as error:
+                                    counts["failed"] += 1
+                                    log.error(
+                                        "order_failed",
+                                        **fields,
+                                        **error.fields,
+                                        result="failed",
+                                        error=str(error),
+                                        queue_role="orders",
+                                        direction="publish",
+                                    )
+                                    continue
+                                counts["sent"] += 1
+                                counts[order.pricing.order_type] += 1
+                                if order.pricing.trigger in ("upper", "lower"):
+                                    counts[f"{order.pricing.trigger}_triggered"] += 1
+                                log.info(
+                                    "order_sent",
                                     **fields,
-                                    **error.fields,
-                                    result="failed",
-                                    error=str(error),
+                                    **published,
+                                    result="published",
                                     queue_role="orders",
                                     direction="publish",
                                 )
-                                continue
-                            counts["sent"] += 1
-                            counts[order.pricing.order_type] += 1
-                            if order.pricing.trigger in ("upper", "lower"):
-                                counts[f"{order.pricing.trigger}_triggered"] += 1
-                            log.info(
-                                "order_sent",
-                                **fields,
-                                **published,
-                                result="published",
-                                queue_role="orders",
-                                direction="publish",
-                            )
 
-                end.update(
-                    portfolio_id=portfolio.id,
-                    snapshot_rejected=accounts.rejected,
-                    snapshot_failed=accounts.failed,
-                    **{key: counts[key] for key in TOTALS},
-                )
-                raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)
-            except AccountsError as error:
-                end.update(
-                    outcome="account_snapshot_failed",
-                    error=str(error),
-                    portfolio_id=portfolio.id,
-                    snapshot_rejected=accounts.rejected,
-                    snapshot_failed=accounts.failed,
-                    **{key: counts[key] for key in TOTALS},
-                )
-                raise SystemExit(1) from error
+                    end.update(
+                        portfolio_id=portfolio.id,
+                        snapshot_rejected=accounts.rejected,
+                        snapshot_failed=accounts.failed,
+                        **{key: counts[key] for key in TOTALS},
+                    )
+                    raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)
+                except AccountsError as error:
+                    end.update(
+                        outcome="account_snapshot_failed",
+                        error=str(error),
+                        portfolio_id=portfolio.id,
+                        snapshot_rejected=accounts.rejected,
+                        snapshot_failed=accounts.failed,
+                        **{key: counts[key] for key in TOTALS},
+                    )
+                    raise SystemExit(1) from error
         finally:
             engine.dispose()
 

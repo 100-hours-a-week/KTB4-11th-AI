@@ -31,7 +31,7 @@ stack output의 `AccountQueueUrl`, `FailureQueueUrl`을 다른 서비스와 같�
 
 기존 AI role에는 Account ARN의 `sqs:ReceiveMessage`, `sqs:DeleteMessage`, Order/Failure ARN의 `sqs:SendMessage`만 필요합니다. 큐 URL이 주어지므로 GetQueueUrl은 필요하지 않습니다. Backend role은 Account SendMessage, Order/Failure ReceiveMessage/DeleteMessage가 필요합니다. 애플리케이션 role에는 DLQ 발행·소비 권한을 부여하지 않습니다. 실제 role 연결과 정책 변경은 해당 인프라 관리 저장소에서 적용합니다.
 
-배포 전 `KTB_POSTGRES_DSN`을 설정하고 `uv run alembic upgrade head`를 실행해 0010 마이그레이션을 적용합니다. 애플리케이션은 부팅 시 테이블을 만들지 않습니다. 운영에서는 `.env` 반영 뒤 기존 단일 호스트 스케줄러와 flock을 유지합니다.
+배포 전 `KTB_POSTGRES_DSN`을 설정하고 `uv run alembic upgrade head`를 실행해 0011 마이그레이션까지 적용합니다. 애플리케이션은 부팅 시 테이블을 만들지 않습니다. 운영에서는 `.env` 반영 뒤 기존 단일 호스트 스케줄러와 flock을 유지합니다.
 
 ## dev 실패·격리·복구 확인
 

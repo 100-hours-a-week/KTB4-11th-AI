@@ -12,7 +12,7 @@ Interfaces: SnapshotStore accepts validated event/time/payload, returns latest s
 
 Tests first: empty snapshot, acknowledged state survives restart, late old state cannot roll back, duplicate after restart, expired/future/missing timestamp, failed persist leaves message, failed restore reports failure, claimed state cannot recover, concurrent/changed claim cannot publish. SQLite-backed unit tests exercise the real SQL layer; PostgreSQL tests exercise migration and locking. Expected initial tests fail on missing store/empty rejection; final service suite passes.
 
-Implement service snapshot_store.py and Alembic 0010. Wire store into main, keep engine disposal on every exit. Add TTL env through both Compose files and update architecture/settings documentation.
+Implement service snapshot_store.py and Alembic 0011 after the merged 0010 reason IDs. Wire store into main, keep engine disposal on every exit. Add TTL env through both Compose files and update architecture/settings documentation.
 
 ## Task 2: contracts and integration
 
@@ -39,3 +39,8 @@ Tasks 1–3 implemented. Fresh review found one substantive defect: a committed 
 Validation: 768 tests passed / 219 skipped without PostgreSQL/QuestDB. The first full run had 12 unrelated HTTP-client failures caused by the workspace SOCKS proxy requiring absent socksio; removing proxy variables for offline unit tests resolved them without repository changes. Service/core tests: 194 passed / 6 skipped. Ruff, formatting, Tach module/external boundaries, touched-module ty check, isolated service import and cfn-lint 1.57.2 pass. PostgreSQL migration/locking tests are included for PR CI; local managed environment cannot switch to the non-root account required by PostgreSQL, so no local DB result is claimed. Actual AWS deployment/Backend compatibility remain #244/#243 acceptance work.
 
 Rulings: preserve #240 and publish its full changes plus fixes as a new dev-targeted PR because #240 is still unmerged. Do not mark #243/#244 closed before external acceptance. Retain default snapshot TTL 900s and strictly increasing UTC occurredAt as the proposed v1 contract pending Backend confirmation; mismatch would reject/delay state rather than trade stale input. No new core logging API or runtime dependency was needed.
+
+
+## 2026-10-12 integration update
+
+Confirmed transport: creation requests use SQS; cancellation uses HTTP with common BackendAuth. Merged #240/latest dev, retaining #239 reason_id and Report builder. State claim runs before either HTTP cancellation or SQS publication. The user-renamed V2 example path is preserved; message schemaVersion remains 1, matching runtime and fixture. CI's missing v1.json reference is fixed. Renumbered state migration to 0011 after the merged reason-ID 0010; added unique migration head verification. #245 remains draft as the user set it.

@@ -8,11 +8,11 @@ from portfolio_rebalancer.orders import Orders
 from portfolio_rebalancer.snapshot import Snapshot
 
 ROOT = next(p for p in Path(__file__).resolve().parents if (p / "docs/contracts").is_dir())
-EXAMPLES = json.loads((ROOT / "docs/contracts/rebalancer-sqs-v1.json").read_text())
+EXAMPLES = json.loads((ROOT / "docs/contracts/rebalancer-sqs-v2.json").read_text())
 
 
 @pytest.mark.parametrize("message", EXAMPLES)
-def test_shared_examples_match_the_v1_envelope(message):
+def test_shared_examples_match_the_message_envelope(message):
     accepted = Envelope.model_validate(message)
 
     assert accepted.schema_version == 1
@@ -59,7 +59,6 @@ def test_published_order_payloads_match_the_shared_backend_examples():
             return "sqs-id"
 
     orders = Orders(Queue(), "ai-run-1")
-    orders.cancel(1, 11, 77)
     place = next(m for m in EXAMPLES if m["type"] == "order.place")["payload"]
     body = {
         k: v for k, v in place.items() if k not in {"user_id", "account_id", "replaces_order_ids"}

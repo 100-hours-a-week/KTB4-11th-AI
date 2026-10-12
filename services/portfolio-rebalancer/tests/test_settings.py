@@ -5,6 +5,9 @@ from pydantic import ValidationError
 REQUIRED = {
     "PORTFOLIO_REBALANCER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_REBALANCER_QUESTDB_CONF": "ws::addr=localhost:9000;",
+    "PORTFOLIO_REBALANCER_BACKEND_URL": "http://backend",
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
+    "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
     "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
     "PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL": "https://sqs.local/account.fifo",
     "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL": "https://sqs.local/failure.fifo",
@@ -84,11 +87,19 @@ def test_the_server_order_queue_wins_over_the_legacy_variable(monkeypatch):
     assert Settings().order_queue_url == "https://sqs.local/server-order.fifo"
 
 
+@pytest.mark.parametrize("key", ["BACKEND_URL", "BACKEND_JWT_SECRET", "BACKEND_JWT_ISSUER"])
+def test_cancel_http_settings_are_required(monkeypatch, key):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("PORTFOLIO_REBALANCER_" + key)
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 def test_snapshot_ttl_is_loaded_from_the_service_environment(monkeypatch):
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("PORTFOLIO_REBALANCER_SNAPSHOT_MAX_AGE_SECONDS", "600")
-
     assert Settings().snapshot_max_age_seconds == 600
 
 
@@ -97,6 +108,5 @@ def test_all_rebalancer_queues_require_fifo(monkeypatch, key):
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv(f"PORTFOLIO_REBALANCER_{key}_QUEUE_URL", "https://sqs.local/standard")
-
     with pytest.raises(ValidationError, match="FIFO"):
         Settings()

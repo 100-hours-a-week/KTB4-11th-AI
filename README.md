@@ -23,12 +23,17 @@ flowchart LR
         MC["market-collector"]
         PB["portfolio-builder"]
         PR["portfolio-rebalancer"]
+        RB["report-builder"]
         PG[("PostgreSQL")]
         QDB[("QuestDB")]
     end
 
     subgraph BACKEND["KTB4-11th-BE"]
         BE["Backend"]
+    end
+
+    subgraph AWS["AWS"]
+        SQS["SQS"]
     end
 
     NEWS --> NP
@@ -57,8 +62,16 @@ flowchart LR
 
     PG -->|model portfolio, reasons| PR
     QDB -->|last close| PR
-    BE -->|SQS account.snapshot| PR
-    PR -->|SQS orders and failures| BE
+    BE -->|account snapshots| SQS
+    SQS -->|account snapshots| PR
+    PR -->|order requests and failures| SQS
+    SQS -->|order requests and failures| BE
+    PR -->|HTTP cancellation| BE
+    BE -->|report request| SQS
+    SQS -->|report request| RB
+    PG -->|reasons and cited summaries| RB
+    OPENROUTER --> RB
+    RB -->|HTTP report callback| BE
 ```
 
 ## 서비스 실행 의존 관계
@@ -125,12 +138,18 @@ flowchart LR
 ### `portfolio-rebalancer`: 생성된 투자 포트폴리오를 기반으로 유저의 투자 포트폴리오 업데이트하기
 
 - 가장 최근 포트폴리오가 `ready` 일 때 거래 시작
-- 백엔드에서 유저의 계좌, 현금, 보유 종목, 미체결 주문을 가져옴
-- 미체결 주문을 모두 취소한 뒤 계좌 상태를 다시 읽고 목표 비중과 비교해 필요한 매수와 매도를 계산
+- SQS에서 백엔드가 발행한 전체 계좌·현금·보유 종목·미체결 주문 스냅샷을 수신함
+- 미체결 주문은 기존 HTTP로 취소하고, 갱신된 SQS 스냅샷을 확인한 뒤 필요한 매수·매도를 계산해 SQS로 주문 생성 요청을 발행함
 - 기존 보유 종목의 보유량이 목표와의 차이가 `PORTFOLIO_REBALANCER_BAND`를 넘을 때 거래
 - QuestDB의 최근 1분봉 가격과 20개 일봉으로 주간 가격 경계를 계산
 - 경계는 위, 아래로 두 개 생성하며, 매도일 때는 높은 가격에 시도 후 낮은 가격에 도달하면 시장가 매도, 매수일 때는 낮은 가격에 시도 후 높은 가격에 도달하면 시장가 매수를 진행함
 - 주문마다 `portfolio_reasons`을 백엔드에 보냄
+
+### `report-builder`: 대회 종료 투자 리포트 생성하기
+
+- SQS에서 대회 참가자의 주문에 연결된 투자 이유 ID를 하나씩 받아 처리함
+- 선택된 이유와 해당 포트폴리오 설명, 인용된 뉴스 요약만으로 한국어 thoughts를 생성함
+- Backend에 결과를 전달한 뒤에만 SQS 메시지를 삭제함
 
 ## 개발 환경에서 실행
 
@@ -139,7 +158,7 @@ flowchart LR
 ### 스키마 적용하기
 
 ```bash
-docker compose -f compose.dev.yaml up -d postgres questdb redis
+docker compose -f compose.dev.yaml up -d postgres questdb
 uv run alembic upgrade head
 KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 ```
@@ -155,6 +174,7 @@ docker compose -f compose.dev.yaml run --rm news-graph-builder
 docker compose -f compose.dev.yaml run --rm market-collector
 docker compose -f compose.dev.yaml run --rm portfolio-builder
 docker compose -f compose.dev.yaml run --rm portfolio-rebalancer
+docker compose -f compose.dev.yaml up report-builder
 ```
 
 ## 데이터베이스 (ERD): [mermaid.live](https://mermaid.live/edit#pako:eNrNWO9P20YY_ldO_tRqAZGkUMg3BFSbQG1VWk2akKyLfSRubV90Pq-EUIlVpKItnboNWraGDW3VqlZMCj_GMqn9h-LL_7A7_4pjx4ZoH7Z88_l97n2f9973uddpSApWkVSSEJnXYIVAY8UE_AcJ1RQdWWBjY2wMbwTPsqLbFkXEAiWwIvW-OXN-OWLP3va22oA92WFPXoArTrPDDs7Y79vOs13Qe_UUsNdP2MHO1RXJ2zncQey80Ri-c_fPI7Z1DLqdNnt8NBTJY_KfZcs2DEg05EHZT7ts79NwTCPEIJNqNIS86nQ7T0G33WInZ2lIgnRINWz6kHNuuw-iGQiA4dZZLtOMB71Y2CYKupwthaSCaBg9JjVM_NdBIP01GeoatPxYnNMt9vcfl0VqpqopQeLebbJtnoVvO-znZvoGG2CAuzjV103AC8X5oZXlllaRwQsDGzVoxhPnvsu09GuI_dp0PrwPYNwHXcW6hkNouCJXsa5qZsWvbZfTCGi0ptE-9Lw1ApQgaIWF5aL4kQC29db50MzKT0rowlQWbX05bD_wEYHRsAegMQlpeM_iV9YqmkmBpoLbi_1VitYo8God3FsM6x58BvgLREyoyxzBWofs4GMQWoiLmtyLb2oTPbbC61BHsbUyVuuRJY0XFoVGja6Dml3WNauKVBlScTgHHefFMW_3RBQEPpRrsK5jqAq7Ny-d0w64s7wM2N4Wl8NeszUAibhYRVQJHfDW4MBu-3tg4odXrkYxXyOFYiIXJiYmADLKSBUHziGmreuwrKMc-Pzm8peAfdrlkskDBYlgH8WE7eJziYRp11RIwzCj8txtbwKnvets7jjvz7iIHrPnhzGXCY1Pug5M3BBy4MZiwiLQUW5xQxTJrZtgfmFp4e4CmJtdnpudXxjOM3I9NLL29Lxm7ZtZQ56XlDIK3Awk0buoentcKZ632OFLdrAfns143zKtbnxa657RAPFo1zbicVKsPHA7lTMO9YZXTUSLQ-Owq722nJ-9cxd0Tw95Jzon2739TgJgQiOeGB7kAyT4Lt5avv1Fsn3NiixQkUpOZVw3lUy24a0WJ-2ue3xNTAz-uI5A96TdPU3qSSRBQREO8RTcgpnpHSxj9z3HoTWPsBuOmxTe07HaDe_Ly2mnUB8_iXwq4dMWEPLT-67FO3ToGV0mEbReQ1m5id_kzrudHOj-xYXnxw64eW9pKaUfM7iN3I4-zt2yHtcO329_TLowmaMqTQTjXVlyP5IhCuaNaCk2aTlXkaUQrSYYDNDyB6B4AQaTUNDfvcdv2ZtNdxnKFdHO6kVde2HLxaetzBguraqJ1rkw8xjrCJpAs2QD3sdEsG3uOO-2Afvto1BXV9r498eRc74ZK8bIODbSNajwoYdmjgMq5jMDAgq0qvJDpFWqNCGqhsFLYPCycJWSU4-MK_f5cFUGlEAl2YaQ2hYPAK3VdGh6ilRDppgIcrzeoVrPgei7VajpSE1LQX96TKaibzTaFekVR30AFb2XxhOzZiR3Q9PmTZsp14QXrQwJgXWgaOKE-k1spdD2Bt__mnOE3L_kE8zj_wtGlhYoUNmuA96cFtL1C3l7Ne-tior0mUo5qUI0VSpRYqOcZCB-dYlHyaXKv32F4KxI4kOEINVeG1P50DGmYB0T4VLgOY-vMDaCLQi2K1WptAp1iz9505b_B0howhsKkTlsm1Qq5SfcLaRSQ1qTSsWZifHidHE6ny_kpyYLk4WcVJdKk9PjhcLE1PS1wvXizMz1fOFRTlp3fRbHr_EXk8XJ6fxUfqYwVbj-6B_sZiCG) 에서 보기
@@ -293,6 +313,7 @@ erDiagram
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
 | `portfolios.status` | `portfolio-builder` | `0008` |
+| `portfolio_reasons.id` | `portfolio-builder` | `0010` |
 
 ## 환경 변수
 
@@ -410,16 +431,37 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 |---|---|---|---|
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | | 최신 포트폴리오와 설명 읽기 |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | | 최근 종가 읽기 |
-| `ORDER_QUEUE_URL` | 필수 | | 취소·주문을 발행하는 FIFO 큐 (`stockspoon-v2-dev-order.fifo`) |
-| `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | 필수 | | Backend가 계좌 스냅샷을 발행하는 FIFO 큐 |
-| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 스냅샷 반려·수신·삭제·미수신 실패를 알리는 FIFO 큐 |
-| `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Boto3의 SQS 리전; 개발·운영 Compose에서 전달 |
-| `PORTFOLIO_REBALANCER_DRAIN_SECONDS` | | `60` | 계좌 큐를 비우는 데 쓰는 시간 상한 |
-| `PORTFOLIO_REBALANCER_SNAPSHOT_MAX_AGE_SECONDS` | | `900` | DB 복구 및 주문 발행에 사용할 스냅샷 유효기간(초) |
+| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | HTTP 주문 취소를 요청할 Backend 주소 |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
+| `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
+| `ORDER_QUEUE_URL` | 필수 | | 주문 생성 요청을 발행하는 FIFO 큐 |
+| `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | 필수 | | 전체 계좌 스냅샷을 수신하는 FIFO 큐 |
+| `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 조회·검증 실패 알림을 발행하는 일반 FIFO 큐; DLQ와 구분 |
+| `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Compose에서 AWS SDK로 전달하는 리전 |
+| `PORTFOLIO_REBALANCER_SNAPSHOT_MAX_AGE_SECONDS` | | `900` | 재시작 복구·주문 처리에 사용할 스냅샷 최대 나이(초) |
+| `PORTFOLIO_REBALANCER_DRAIN_SECONDS` | | `60` | 계좌 큐 소비 시간 상한(초) |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
 | `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` | `true`면 KRX 거래일/시간 검사 생략 |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+### report-builder (`REPORT_BUILDER_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `REPORT_BUILDER_POSTGRES_DSN` | 필수 | | 투자 이유와 뉴스 요약 조회 |
+| `REPORT_BUILDER_SQS_QUEUE_URL` | 필수 | | SQS 요청 큐 URL 또는 이름 |
+| `REPORT_BUILDER_AWS_REGION` | | `ap-northeast-2` | SQS 리전 |
+| `REPORT_BUILDER_BACKEND_BASE_URI` | 필수 | | 보고서 콜백 Backend 주소 |
+| `REPORT_BUILDER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 JWT 서명 비밀값 (32바이트 이상) |
+| `REPORT_BUILDER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 JWT 발급자 |
+| `REPORT_BUILDER_LLM_API_KEY` | 필수 | | OpenRouter API 키 |
+| `REPORT_BUILDER_LLM_MODEL` | 필수 | | 보고서 생성 모델 ID |
+| `REPORT_BUILDER_LLM_TIMEOUT` | | `240` | OpenRouter 요청 제한 시간(초) |
+| `REPORT_BUILDER_BACKEND_TIMEOUT` | | `10` | Backend 요청 제한 시간(초) |
+| `REPORT_BUILDER_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+개발 환경에서는 `ai.env`에서 Backend/OpenRouter 설정을 읽고 `stockspoon-v2-dev-report-request` 큐를 사용합니다. 운영에서는 `/etc/stockspoon/ai.env`에 서비스 설정을 둡니다. AWS 인증 정보는 AWS 기본 인증 체인으로 공급합니다.
 
 ### 설정 변경과 검증
 
@@ -433,51 +475,34 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 
 운영용 Compose 검증에는 배포 환경의 `APP_IMAGE`와 필수 DB/Backend 환경 변수가 필요합니다. `config --quiet`는 컨테이너를 시작하지 않고 설정만 검사합니다.
 
-### 리밸런서 SQS 연동
 
-`portfolio-rebalancer`는 계좌 조회, 주문 생성, 주문 취소에 HTTP를 사용하지 않습니다.
-다른 서비스와 동일하게 개발·운영 Compose가 `.env`의 큐 URL을 컨테이너 환경변수로 전달하고,
-`portfolio_rebalancer.settings.Settings`가 읽습니다. 별도 파일 경로를 코드에 고정하지 않습니다.
-운영 배포 디렉터리의 `.env`에 `ORDER_QUEUE_URL`, `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL`,
-`PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL`을 설정합니다. 기존 `/etc/stockspoon/ai.env`의 주문 URL도
-이 `.env`에 반영해야 합니다. 주문 큐는
-`https://sqs.ap-northeast-2.amazonaws.com/250832562715/stockspoon-v2-dev-order.fifo`입니다.
-직접 실행할 때는 `uv run --env-file .env portfolio-rebalancer`로 환경을 주입합니다.
-`Settings` 자체는 `.env` 파일을 자동으로 열지 않습니다.
-기존 `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL`도 지원하며 `ORDER_QUEUE_URL`이 우선합니다.
-AWS SDK 기본 자격 증명 체인으로 EC2 IAM Role을 사용합니다. Access Key와 Secret Key는 저장하거나
-Compose에서 전달하지 않습니다. 인스턴스 역할의 메타데이터에 컨테이너에서 접근 가능해야 합니다.
+### 리밸런서 통신 경로
 
-계정·실패 FIFO 큐는 별도 URL을 설정해야 합니다. Report 큐는 다른 담당자의 리포트 생성 요청용이며
-계정 큐로 재사용하지 않습니다. 실패 큐는 일반 애플리케이션 큐이고 DLQ와 구분합니다.
+| 작업 | 경로 |
+|---|---|
+| 사용자·계좌 정보 수신 | Account FIFO 큐 → AI; `/users/ai-server` HTTP 조회 제거 |
+| 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
+| 주문 취소 | AI → Backend HTTP `PATCH /api/v1/accounts/{account_id}/orders/{order_id}` |
+| 계좌 조회·검증 실패 알림 | AI → 일반 Failure FIFO 큐 |
 
-- 백엔드는 **매 09~15시 실행 전에** 전체 `{"users": [...]}` 스냅샷을 발행하고,
-  주문 접수·체결·취소 후에도 갱신된 스냅샷을 발행해야 합니다. 상태는 삭제 전에 PostgreSQL에 커밋하며,
-  주문 발행을 시작하지 않은 유효 스냅샷만 재시작 때 복구합니다. 0010 마이그레이션을 먼저 적용해야 합니다.
-- 계좌 큐는 `WaitTimeSeconds=20`으로 long polling하고 검증·상태 반영에 성공한 메시지만 삭제합니다.
-  계좌 스냅샷은 전체 상태이므로 하나의 FIFO 그룹에서 발행합니다.
-  주문·취소는 계좌 ID를 `MessageGroupId`, `eventId`를 `MessageDeduplicationId`로 발행하고,
-  취소 payload는 `status: cancelled`를 포함합니다. 백엔드는 20초 polling·성공 후 삭제와
-  `eventId`의 영속 멱등 처리를 구현해야 합니다. FIFO의 중복 발행 방지만으로 대체할 수 없습니다.
-- 취소 메시지 발행만으로 대기 주문을 제거하지 않습니다. 새 스냅샷에서 대기 주문이
-  없어졌을 때 최신 잔고와 보유량으로 재계산하며, 확인되지 않은 계좌는 이번 실행에서 건너뜁니다.
-- `users: []`는 정상 스냅샷입니다. 잘못된 JSON·payload·시각·지원하지 않는 이벤트는 `account.snapshot.rejected`로 보고합니다.
-  수신·삭제 오류, 시간 상한 초과, 유효 스냅샷 미수신은 `account.snapshot.failed`로 보고하고
-  실행을 오류 종료합니다. 잘못된 메시지는 실패 보고 발행 여부와 무관하게 삭제하지 않고
-  재시도·DLQ redrive에 맡기며, 같은 FIFO 배치의 후속 메시지 처리도 중단합니다.
-- 실패 큐 payload는 `reason`, `detail`, `rejected_event_id`, `source_sqs_message_id`, `source_correlation_id`이고, 메시지 envelope는
-  `eventId`, `correlationId`, `occurredAt`, `type`, `payload`입니다.
-- 로그는 `ktb_core.logging`의 JSON 형식이며 `run_id`, 메시지·이벤트·상관관계 ID,
-  큐 역할, 처리 결과와 실패 원인을 기록합니다. 전체 스냅샷 입력과 SDK의 서명 디버그 로그는 출력하지 않습니다.
+주문 생성에는 최신 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
+`MessageDeduplicationId`로 사용합니다. 취소는 리포트 서비스와 같은 `ktb_core.backend_auth`로
+사용자 JWT 쿠키와 CSRF를 처리합니다. 기존 `backend_url`, JWT secret/issuer 설정이 필요합니다.
+취소 후 갱신 스냅샷에서 대기 주문이 사라져야 최신 잔고·보유량과 남은 실행 횟수로 좁힌 범위를
+계산해 재주문합니다. 취소 실패 또는 미확인 계좌에는 새 주문을 보내지 않습니다.
 
-DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다. 계좌 메시지 처리 범위는 스냅샷 검증과
-상태 반영이며, 완료 후 실행하는 주문 발행은 별도 작업입니다. 계좌 이벤트 ID와 상태 시각은 PostgreSQL에 저장하여
-재시작 이후에도 중복·역순 상태 반영을 차단합니다. `occurredAt`은 시간대가 있는 단조 증가 시각이며,
-기본 900초를 넘긴 상태나 30초 초과 미래 시각으로는 거래하지 않습니다. 첫 취소·주문 발행 전에 상태를
-claim하므로 이후 장애에서는 새 스냅샷이 필요합니다. 발행하지 못한 주문은 다음 최신 상태로 재계산합니다. Report의 5분 visibility와
-`ChangeMessageVisibility`는 별도 리포트 소비자의 범위입니다.
+큐 URL과 취소 HTTP 설정은 다른 서비스처럼 배포 `.env`에서 Compose `environment`를 거쳐
+Settings로 읽습니다. 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
+SQS 인증은 SDK 기본 체인과 EC2 IAM Role을 사용하며 HTTP 취소 인증과 구분합니다.
+백엔드는 매 실행 전과 주문 접수·체결·취소 후에 전체 스냅샷을 발행해야 합니다.
 
-메시지 계약과 추가 큐 URL·IAM 권한, 백엔드 소비·발행 구현은 백엔드 및 인프라에서 함께 구성해야 합니다.
+계좌 큐는 20초 long polling하며 검증·상태 반영에 성공한 메시지만 삭제합니다. 잘못된 메시지는
+실패 큐로 알리고 삭제하지 않습니다. 로그는 기존 `ktb_core.logging`의 JSON 형식을 사용하고,
+SQS 메시지·이벤트·correlation ID 및 HTTP 취소 결과를 기록합니다. DLQ에 직접 발행하거나
+일반 소비자를 연결하지 않습니다. 스냅샷과 처리한 이벤트 ID를 삭제 전에 PostgreSQL에 커밋하며, 최신 미사용 상태만 재시작 때 복구합니다.
+첫 HTTP 취소·SQS 주문 생성 요청 전에 상태를 claim하여 재시작 중복 실행을 막습니다.
+실행 전 0011 마이그레이션까지 적용해야 합니다. 자세한 계약은 [SQS 설계](docs/superpowers/specs/2026-10-08-sqs-messaging-design.md)를 참고합니다.
 
-메시지 예제와 dev 연동 확인 항목은 [SQS 계약 v1](docs/contracts/rebalancer-sqs-v1.md),
-큐·DLQ·알람 설정과 배포 절차는 [SQS 배포](infrastructure/sqs/README.md)를 참고합니다.
+스냅샷은 기본 900초까지 유효하며 늦게 도착한 과거 상태로 되돌아가지 않습니다.
+`users: []`는 정상 상태입니다. 계약·공유 예제는 [StockSpoon V2 통신 계약](docs/contracts/rebalancer-sqs-v2.md),
+큐·DLQ·알람 배포 절차는 [SQS 배포](infrastructure/sqs/README.md)를 참고합니다.
