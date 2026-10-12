@@ -2589,3 +2589,6 @@ These are from the spec's live-API checklist and need market hours, so they are 
 1. Run `market-streamer` against the real key for a few minutes after 09:00 and confirm `0B` prices are integers and FID 20 is `HHMMSS` KST (`valkey-cli GET price:005930`).
 2. Count distinct codes received: `valkey-cli --scan --pattern 'price:*' | wc -l` should reach 200 shortly after the open.
 3. Production infrastructure outside this repo: the instance role needs `elasticache:Connect` on the serverless cache and its user, and the ALB target group points at host port `8001`.
+4. Run `MGET`-free smoke: `GET /prices?codes=005930,000660` against the real cache returns both.
+5. Security group admits host port 8001 only from the ALB security group.
+6. prod `.env` defines `MARKET_HTTP_VALKEY_*` and `MARKET_STREAMER_VALKEY_*`/`KIWOOM_*` before the first deploy.

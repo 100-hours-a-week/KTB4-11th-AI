@@ -61,7 +61,7 @@ flowchart LR
     MC -->|OHLCV| QDB
     PG -->|KOSPI 200 symbols| MSTR
     MSTR -->|latest price| Valkey
-    MH -->|prices, bars| Valkey
+    Valkey -->|prices| MH
     MH -->|bars| QDB
 
     PG <-->|model portfolio| PB

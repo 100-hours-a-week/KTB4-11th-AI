@@ -17,7 +17,7 @@ uv run news-clusterer                       # run a service by its console scrip
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb uv run alembic upgrade head
 KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 
-docker compose -f compose.dev.yaml up -d    # dev postgres/questdb and news-http (the -f flag is required)
+docker compose -f compose.dev.yaml up -d    # dev postgres/questdb and news-http; also starts valkey and market-http (the -f flag is required)
 # once, on a volume created before the rename:
 docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
 KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
@@ -113,6 +113,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_COLLECTOR_KIWOOM_MODE` | market-collector | `real` |
 | `MARKET_COLLECTOR_INDEX_NAME` | market-collector | `KOSPI200` |
 | `MARKET_COLLECTOR_REQUEST_INTERVAL` | market-collector | `1.3` (production Compose `0.25`) |
+| `MARKET_COLLECTOR_LOG_LEVEL` | market-collector | `INFO` |
 | `MARKET_STREAMER_POSTGRES_DSN` | market-streamer (reads `corporation_indices`) | required |
 | `MARKET_STREAMER_KIWOOM_APP_KEY` | market-streamer | required |
 | `MARKET_STREAMER_KIWOOM_SECRET_KEY` | market-streamer | required |
@@ -138,7 +139,6 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_HTTP_HOST` | market-http | `0.0.0.0` |
 | `MARKET_HTTP_PORT` | market-http | `8000` |
 | `MARKET_HTTP_LOG_LEVEL` | market-http | `INFO` |
-| `MARKET_COLLECTOR_LOG_LEVEL` | market-collector | `INFO` |
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | portfolio-rebalancer | required |
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer | required |
@@ -174,7 +174,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-http` | service | long-running HTTP server (uvicorn) | `ktb-core` |
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
-| `services/market-collector` | service | every minute 09:00–15:30 KST, plus 15:35 for daily bars | `ktb-core` |
+| `services/market-collector` | service | weekdays, every minute 09:00–15:30 KST, plus 15:35 for daily bars | `ktb-core` |
 | `services/market-streamer` | service | weekdays 08:50 KST until STOP_AT; one Kiwoom 0B WebSocket | `ktb-core` |
 | `services/market-http` | service | long-running public HTTP server (uvicorn) | `ktb-core` |
 | `services/portfolio-rebalancer` | service | scheduled job: polls the Backend, decides, sends market orders | `ktb-core` |
