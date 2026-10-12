@@ -28,7 +28,7 @@ flowchart TB
     K -->|REST 1m, 1d after close| MC
     MS -->|SET + PUBLISH price:code| V
     MC -->|UPSERT bars| Q
-    V -->|MGET, SUBSCRIBE| MH
+    V -->|pipelined GET per key (cluster-mode safe), SUBSCRIBE| MH
     Q -->|bars, price fill on miss| MH
     MH -->|SET NX on miss| V
     MH -->|REST| BE
@@ -138,10 +138,10 @@ A FastAPI service laid out like news-http (`app.py`, `controllers/`, `__main__.p
 
 ### `GET /prices?codes=005930,000660`
 
-1. `MGET price:{code}` for every code.
+1. Pipelined `GET price:{code}` per code (cluster-mode safe).
 2. For codes with no value, query QuestDB.
 3. `SET NX` each QuestDB result. The write fails when market-streamer set the key in the meantime, which is expected.
-4. `MGET` the missed codes again and return those values, so a streamed price wins over the QuestDB one.
+4. Pipelined `GET` for the missed codes again and return those values, so a streamed price wins over the QuestDB one.
 
 Codes with no data in QuestDB either are left out. Response: a list of price objects.
 
