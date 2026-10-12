@@ -1,39 +1,6 @@
 [
   {
     "schemaVersion": 1,
-    "eventId": "snapshot-1",
-    "correlationId": "backend-run-1",
-    "occurredAt": "2026-10-11T01:00:00Z",
-    "type": "account.snapshot",
-    "payload": {
-      "users": [
-        {
-          "user_id": 1,
-          "accounts": [
-            {
-              "account_id": 11,
-              "is_active": true,
-              "cash_balance": 1000000,
-              "stocks": [],
-              "pending_orders": []
-            }
-          ]
-        }
-      ]
-    }
-  },
-  {
-    "schemaVersion": 1,
-    "eventId": "snapshot-empty",
-    "correlationId": "backend-run-1",
-    "occurredAt": "2026-10-11T01:00:00Z",
-    "type": "account.snapshot",
-    "payload": {
-      "users": []
-    }
-  },
-  {
-    "schemaVersion": 1,
     "eventId": "place-1",
     "correlationId": "ai-run-1",
     "occurredAt": "2026-10-11T01:00:00Z",
@@ -66,27 +33,13 @@
   },
   {
     "schemaVersion": 1,
-    "eventId": "account.snapshot.rejected-1",
-    "correlationId": "ai-run-1",
-    "occurredAt": "2026-10-11T01:00:00Z",
-    "type": "account.snapshot.rejected",
-    "payload": {
-      "reason": "malformed_payload",
-      "detail": "publish a fresh valid snapshot",
-      "rejected_event_id": "snapshot-1",
-      "source_sqs_message_id": "sqs-message-1",
-      "source_correlation_id": "backend-run-1"
-    }
-  },
-  {
-    "schemaVersion": 1,
     "eventId": "account.snapshot.failed-1",
     "correlationId": "ai-run-1",
     "occurredAt": "2026-10-11T01:00:00Z",
     "type": "account.snapshot.failed",
     "payload": {
-      "reason": "snapshot_missing",
-      "detail": "publish a fresh valid snapshot",
+      "reason": "users_fetch_failed",
+      "detail": "HTTPStatusError: HTTP 503",
       "rejected_event_id": null,
       "source_sqs_message_id": null,
       "source_correlation_id": "ai-run-1"

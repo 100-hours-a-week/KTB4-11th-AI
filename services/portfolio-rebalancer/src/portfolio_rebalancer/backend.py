@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from portfolio_rebalancer.portfolio import Reasoning
 from portfolio_rebalancer.rebalance import Order
+from portfolio_rebalancer.snapshot import Snapshot, User
 
 
 class OrderRequest(BaseModel):
@@ -47,6 +48,10 @@ def order_request_body(order: Order) -> dict:
 class Backend:
     def __init__(self, client: httpx.Client, secret: str, issuer: str) -> None:
         self._auth = BackendAuth(client, secret, issuer)
+
+    def users(self) -> list[User]:
+        response = self._auth.get("/api/v1/users/ai-server", "ai-server")
+        return Snapshot.model_validate(response.json()).users
 
     def cancel(self, user_id: int, account_id: int, order_id: int) -> None:
         self._auth.request(

@@ -1,7 +1,4 @@
-import json as json_module
 from collections import Counter
-from datetime import UTC, datetime
-from types import SimpleNamespace
 from uuid import UUID
 
 import httpx
@@ -9,7 +6,6 @@ import jwt
 import pytest
 from ktb_core.logging import get_logger
 from portfolio_rebalancer.__main__ import _cancel_all
-from portfolio_rebalancer.accounts import Accounts
 from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.portfolio import Explanation
 from portfolio_rebalancer.rebalance import Order, Pricing
@@ -88,14 +84,13 @@ def test_a_market_order_flags_the_bound_its_side_escapes_through(side, upper, lo
 
 
 @pytest.mark.parametrize("invalid_csrf", [False, True])
-def test_cancel_uses_existing_http_auth_and_status_contract(invalid_csrf, snapshot_state):
+def test_cancel_uses_existing_http_auth_and_status_contract(invalid_csrf):
     requests = []
     csrf_issued = 0
     patch_count = 0
 
     def respond(request):
         nonlocal csrf_issued, patch_count
-        assert not snapshot_state.load().usable
         requests.append(request)
         if request.url.path == "/api/v1/auth/csrf":
             csrf_issued += 1
@@ -130,29 +125,7 @@ def test_cancel_uses_existing_http_auth_and_status_contract(invalid_csrf, snapsh
             ],
         }
     )
-    messages = [
-        [
-            SimpleNamespace(
-                id="snapshot",
-                receipt="receipt",
-                body=json_module.dumps(
-                    {
-                        "eventId": "snapshot",
-                        "type": "account.snapshot",
-                        "occurredAt": datetime.now(UTC).isoformat(),
-                        "payload": {"users": [{"user_id": 7, "accounts": [account.model_dump()]}]},
-                    }
-                ),
-            )
-        ]
-    ]
-    queue = SimpleNamespace(
-        receive=lambda **kwargs: messages.pop(0) if messages else [], delete=lambda receipt: None
-    )
-    accounts = Accounts(queue, None, get_logger("test"), "run", budget=5, state=snapshot_state)
-    accounts.users()
     counts = Counter()
-    accounts.before_publish()
     with httpx.Client(base_url="http://backend", transport=httpx.MockTransport(respond)) as client:
         backend = Backend(client, "s" * 32, "river-be")
         assert _cancel_all(backend, get_logger("test"), 7, account, counts)

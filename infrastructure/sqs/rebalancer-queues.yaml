@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: StockSpoon rebalancer account and failure FIFO queues
+Description: StockSpoon rebalancer HTTP fetch failure FIFO queue
 Parameters:
   Environment:
     Type: String
@@ -29,86 +29,6 @@ Parameters:
 Conditions:
   HasAlarmTopic: !Not [!Equals [!Ref AlarmTopicArn, '']]
 Resources:
-  AccountDlq:
-    Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      QueueName: !Sub stockspoon-v2-${Environment}-account-snapshot-dlq.fifo
-      FifoQueue: true
-      ContentBasedDeduplication: false
-      SqsManagedSseEnabled: true
-      MessageRetentionPeriod: 1209600
-      RedriveAllowPolicy:
-        redrivePermission: byQueue
-        sourceQueueArns:
-          - !Sub arn:${AWS::Partition}:sqs:${AWS::Region}:${AWS::AccountId}:stockspoon-v2-${Environment}-account-snapshot.fifo
-  AccountQueue:
-    Type: AWS::SQS::Queue
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      QueueName: !Sub stockspoon-v2-${Environment}-account-snapshot.fifo
-      FifoQueue: true
-      ContentBasedDeduplication: false
-      SqsManagedSseEnabled: true
-      ReceiveMessageWaitTimeSeconds: 20
-      VisibilityTimeout: !Ref VisibilitySeconds
-      MessageRetentionPeriod: 345600
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt AccountDlq.Arn
-        maxReceiveCount: !Ref MaxReceiveCount
-  AccountBacklogAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub stockspoon-v2-${Environment}-account-snapshot-backlog
-      Namespace: AWS/SQS
-      MetricName: ApproximateNumberOfMessagesVisible
-      Dimensions:
-        - Name: QueueName
-          Value: !GetAtt AccountQueue.QueueName
-      Statistic: Maximum
-      Unit: Count
-      Period: 60
-      EvaluationPeriods: 3
-      Threshold: !Ref BacklogThreshold
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref 'AWS::NoValue']
-  AccountAgeAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub stockspoon-v2-${Environment}-account-snapshot-age
-      Namespace: AWS/SQS
-      MetricName: ApproximateAgeOfOldestMessage
-      Dimensions:
-        - Name: QueueName
-          Value: !GetAtt AccountQueue.QueueName
-      Statistic: Maximum
-      Unit: Seconds
-      Period: 60
-      EvaluationPeriods: 3
-      Threshold: !Ref AgeThresholdSeconds
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref 'AWS::NoValue']
-  AccountDeadLetterAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub stockspoon-v2-${Environment}-account-snapshot-deadletter
-      Namespace: AWS/SQS
-      MetricName: ApproximateNumberOfMessagesVisible
-      Dimensions:
-        - Name: QueueName
-          Value: !GetAtt AccountDlq.QueueName
-      Statistic: Maximum
-      Unit: Count
-      Period: 60
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions: !If [HasAlarmTopic, [!Ref AlarmTopicArn], !Ref 'AWS::NoValue']
   FailureDlq:
     Type: AWS::SQS::Queue
     DeletionPolicy: Retain
@@ -192,29 +112,22 @@ Resources:
   QueueTransportPolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
-      Queues: [!Ref AccountQueue, !Ref FailureQueue, !Ref AccountDlq, !Ref FailureDlq]
+      Queues: [!Ref FailureQueue, !Ref FailureDlq]
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
           - Effect: Deny
             Principal: '*'
             Action: sqs:*
-            Resource: [!GetAtt AccountQueue.Arn, !GetAtt FailureQueue.Arn, !GetAtt AccountDlq.Arn, !GetAtt FailureDlq.Arn]
+            Resource: [!GetAtt FailureQueue.Arn, !GetAtt FailureDlq.Arn]
             Condition:
               Bool:
                 aws:SecureTransport: 'false'
 Outputs:
-  AccountQueueUrl:
-    Description: PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL
-    Value: !Ref AccountQueue
   FailureQueueUrl:
     Description: PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL
     Value: !Ref FailureQueue
-  AccountQueueArn:
-    Value: !GetAtt AccountQueue.Arn
   FailureQueueArn:
     Value: !GetAtt FailureQueue.Arn
-  AccountDlqArn:
-    Value: !GetAtt AccountDlq.Arn
   FailureDlqArn:
     Value: !GetAtt FailureDlq.Arn

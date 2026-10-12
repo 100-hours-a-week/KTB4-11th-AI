@@ -89,10 +89,6 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
     ("module", "owned_tables"),
     [
         ("news_preprocessor.storage", {"articles"}),
-        (
-            "portfolio_rebalancer.snapshot_store",
-            {"rebalancer_account_state", "rebalancer_snapshot_events"},
-        ),
         ("news_clusterer.storage", {"clusters", "article_clusters"}),
         (
             "market_syncer.database",

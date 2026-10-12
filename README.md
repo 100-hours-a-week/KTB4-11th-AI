@@ -62,8 +62,8 @@ flowchart LR
 
     PG -->|model portfolio, reasons| PR
     QDB -->|last close| PR
-    BE -->|account snapshots| SQS
-    SQS -->|account snapshots| PR
+    PR -->|HTTP user lookup| BE
+    BE -->|HTTP account state| PR
     PR -->|order requests and failures| SQS
     SQS -->|order requests and failures| BE
     PR -->|HTTP cancellation| BE
@@ -138,8 +138,8 @@ flowchart LR
 ### `portfolio-rebalancer`: 생성된 투자 포트폴리오를 기반으로 유저의 투자 포트폴리오 업데이트하기
 
 - 가장 최근 포트폴리오가 `ready` 일 때 거래 시작
-- SQS에서 백엔드가 발행한 전체 계좌·현금·보유 종목·미체결 주문 스냅샷을 수신함
-- 미체결 주문은 기존 HTTP로 취소하고, 갱신된 SQS 스냅샷을 확인한 뒤 필요한 매수·매도를 계산해 SQS로 주문 생성 요청을 발행함
+- 기존 HTTP API로 백엔드의 사용자·계좌·현금·보유 종목·미체결 주문을 조회함
+- 미체결 주문은 기존 HTTP로 취소하고, HTTP로 최신 계좌 상태를 다시 조회한 뒤 필요한 매수·매도를 계산해 SQS로 주문 생성 요청을 발행함
 - 기존 보유 종목의 보유량이 목표와의 차이가 `PORTFOLIO_REBALANCER_BAND`를 넘을 때 거래
 - QuestDB의 최근 1분봉 가격과 20개 일봉으로 주간 가격 경계를 계산
 - 경계는 위, 아래로 두 개 생성하며, 매도일 때는 높은 가격에 시도 후 낮은 가격에 도달하면 시장가 매도, 매수일 때는 낮은 가격에 시도 후 높은 가격에 도달하면 시장가 매수를 진행함
@@ -435,11 +435,8 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
 | `ORDER_QUEUE_URL` | 필수 | | 주문 생성 요청을 발행하는 FIFO 큐 |
-| `PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL` | 필수 | | 전체 계좌 스냅샷을 수신하는 FIFO 큐 |
 | `PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL` | 필수 | | 조회·검증 실패 알림을 발행하는 일반 FIFO 큐; DLQ와 구분 |
 | `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Compose에서 AWS SDK로 전달하는 리전 |
-| `PORTFOLIO_REBALANCER_SNAPSHOT_MAX_AGE_SECONDS` | | `900` | 재시작 복구·주문 처리에 사용할 스냅샷 최대 나이(초) |
-| `PORTFOLIO_REBALANCER_DRAIN_SECONDS` | | `60` | 계좌 큐 소비 시간 상한(초) |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
 | `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` | `true`면 KRX 거래일/시간 검사 생략 |
@@ -480,29 +477,29 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 
 | 작업 | 경로 |
 |---|---|
-| 사용자·계좌 정보 수신 | Account FIFO 큐 → AI; `/users/ai-server` HTTP 조회 제거 |
+| 사용자·계좌 정보 조회 | 기존 HTTP `GET /api/v1/users/ai-server` |
 | 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
-| 주문 취소 | AI → Backend HTTP `PATCH /api/v1/accounts/{account_id}/orders/{order_id}` |
-| 계좌 조회·검증 실패 알림 | AI → 일반 Failure FIFO 큐 |
+| 주문 취소 | 기존 HTTP `PATCH /api/v1/accounts/{account_id}/orders/{order_id}` |
+| HTTP 조회·응답 검증 실패 알림 | AI → 일반 Failure FIFO 큐; `account.snapshot.failed` |
 
-주문 생성에는 최신 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
-`MessageDeduplicationId`로 사용합니다. 취소는 리포트 서비스와 같은 `ktb_core.backend_auth`로
-사용자 JWT 쿠키와 CSRF를 처리합니다. 기존 `backend_url`, JWT secret/issuer 설정이 필요합니다.
-취소 후 갱신 스냅샷에서 대기 주문이 사라져야 최신 잔고·보유량과 남은 실행 횟수로 좁힌 범위를
-계산해 재주문합니다. 취소 실패 또는 미확인 계좌에는 새 주문을 보내지 않습니다.
+매 실행마다 HTTP로 사용자 정보를 조회합니다. 대기 주문 취소에 성공하면 같은 HTTP API로
+잔고·보유량·대기 주문을 다시 조회하고 남은 실행 횟수로 범위를 좁혀 재주문합니다.
+취소 실패 또는 갱신 조회에서 대기 주문이 남은 계좌에는 신규 주문을 보내지 않습니다.
+조회 실패나 잘못된 응답은 일반 실패 큐로 알리고 주문 요청 없이 종료합니다.
+`users: []`는 정상 응답입니다.
 
-큐 URL과 취소 HTTP 설정은 다른 서비스처럼 배포 `.env`에서 Compose `environment`를 거쳐
+주문 생성에는 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
+`MessageDeduplicationId`로 사용합니다. SDK 재시도는 동일 eventId와 본문을 유지합니다.
+FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계산한 주문은 새 이벤트입니다.
+계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
+
+HTTP 인증은 기존 `ktb_core.backend_auth`의 JWT 쿠키·CSRF를 사용합니다.
+큐 URL과 HTTP 설정은 다른 서비스처럼 배포 `.env`에서 Compose `environment`를 거쳐
 Settings로 읽습니다. 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
-SQS 인증은 SDK 기본 체인과 EC2 IAM Role을 사용하며 HTTP 취소 인증과 구분합니다.
-백엔드는 매 실행 전과 주문 접수·체결·취소 후에 전체 스냅샷을 발행해야 합니다.
+SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
+기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
+리밸런서는 주문·실패 큐에 발행만 하며 소비·DeleteMessage를 수행하지 않습니다.
+DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.
 
-계좌 큐는 20초 long polling하며 검증·상태 반영에 성공한 메시지만 삭제합니다. 잘못된 메시지는
-실패 큐로 알리고 삭제하지 않습니다. 로그는 기존 `ktb_core.logging`의 JSON 형식을 사용하고,
-SQS 메시지·이벤트·correlation ID 및 HTTP 취소 결과를 기록합니다. DLQ에 직접 발행하거나
-일반 소비자를 연결하지 않습니다. 스냅샷과 처리한 이벤트 ID를 삭제 전에 PostgreSQL에 커밋하며, 최신 미사용 상태만 재시작 때 복구합니다.
-첫 HTTP 취소·SQS 주문 생성 요청 전에 상태를 claim하여 재시작 중복 실행을 막습니다.
-실행 전 0011 마이그레이션까지 적용해야 합니다. 자세한 계약은 [SQS 설계](docs/superpowers/specs/2026-10-08-sqs-messaging-design.md)를 참고합니다.
-
-스냅샷은 기본 900초까지 유효하며 늦게 도착한 과거 상태로 되돌아가지 않습니다.
-`users: []`는 정상 상태입니다. 계약·공유 예제는 [StockSpoon V2 통신 계약](docs/contracts/rebalancer-sqs-v2.md),
-큐·DLQ·알람 배포 절차는 [SQS 배포](infrastructure/sqs/README.md)를 참고합니다.
+계약·예제: [StockSpoon V2 통신 계약](docs/contracts/rebalancer-sqs-v2.md).
+실패 큐 배포: [SQS 배포](infrastructure/sqs/README.md).
