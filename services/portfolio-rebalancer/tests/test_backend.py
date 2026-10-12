@@ -4,10 +4,9 @@ from uuid import UUID
 import httpx
 import jwt
 import pytest
-from ktb_core.backend_auth import BackendAuth
 from ktb_core.logging import get_logger
 from portfolio_rebalancer.__main__ import _cancel_all
-from portfolio_rebalancer.backend import order_request_body
+from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.portfolio import Explanation
 from portfolio_rebalancer.rebalance import Order, Pricing
 from portfolio_rebalancer.snapshot import Account
@@ -127,13 +126,11 @@ def test_cancel_uses_existing_http_auth_and_status_contract(invalid_csrf):
         }
     )
     counts = Counter()
-    cancelled = set()
     with httpx.Client(base_url="http://backend", transport=httpx.MockTransport(respond)) as client:
-        auth = BackendAuth(client, "s" * 32, "river-be")
-        assert _cancel_all(auth, get_logger("test"), 7, account, counts, cancelled)
+        backend = Backend(client, "s" * 32, "river-be")
+        assert _cancel_all(backend, get_logger("test"), 7, account, counts)
 
     assert counts["cancelled"] == 1
-    assert cancelled == {77}
     assert csrf_issued == (2 if invalid_csrf else 1)
     patch = requests[-1]
     assert patch.content == b'{"status":"cancelled"}'

@@ -1,11 +1,11 @@
 import uuid
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from typing import Any
 
 import boto3
 import httpx
 import sqlalchemy as sa
-from ktb_core.backend_auth import BackendAuth
 from ktb_core.logging import (
     StructuredLogger,
     get_logger,
@@ -16,7 +16,7 @@ from ktb_core.logging import (
 from ktb_core.queue import SqsQueue
 
 from portfolio_rebalancer.accounts import Accounts, AccountsError
-from portfolio_rebalancer.backend import order_request_body
+from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
 from portfolio_rebalancer.orders import Orders, PublishError
@@ -38,13 +38,14 @@ TOTALS = (
 )
 
 
+def _failure(error: httpx.HTTPError) -> dict[str, Any]:
+    if isinstance(error, httpx.HTTPStatusError):
+        return {"status": error.response.status_code, "body": error.response.text}
+    return {"error": str(error)}
+
+
 def _cancel_all(
-    auth: BackendAuth,
-    log: StructuredLogger,
-    user_id: int,
-    account: Account,
-    counts: Counter[str],
-    cancelled: set[int],
+    backend: Backend, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
 ) -> bool:
     for pending in account.pending_orders:
         fields = {
@@ -55,33 +56,15 @@ def _cancel_all(
             "order_id": pending.order_id,
         }
         try:
-            auth.request(
-                "PATCH",
-                f"/api/v1/accounts/{account.account_id}/orders/{pending.order_id}",
-                str(user_id),
-                json={"status": "cancelled"},
-            )
+            backend.cancel(user_id, account.account_id, pending.order_id)
         except httpx.HTTPError as error:
             counts["cancel_failed"] += 1
-            log.error(
-                "cancel_failed",
-                **fields,
-                result="failed",
-                error=str(error),
-                error_type=type(error).__name__,
-                status=error.response.status_code
-                if isinstance(error, httpx.HTTPStatusError)
-                else None,
-                transport="http",
-            )
+            log.error("cancel_failed", **fields, **_failure(error))
             return False
         counts["cancelled"] += 1
-        cancelled.add(pending.order_id)
         log.info(
             "order_cancelled",
             **fields,
-            result="cancelled",
-            transport="http",
             order_type=pending.order_type,
             limit_price=pending.limit_price,
             quantity=pending.quantity,
@@ -133,7 +116,7 @@ def main() -> None:
             budget=settings.drain_seconds,
         )
         with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:
-            auth = BackendAuth(
+            backend = Backend(
                 client, settings.backend_jwt_secret.get_secret_value(), settings.backend_jwt_issuer
             )
             failed_cancels: set[int] = set()
@@ -143,15 +126,13 @@ def main() -> None:
                 log.info("users_received", user_count=len(users))
                 for user in users:
                     for account in user.accounts:
-                        if account.is_active and not _cancel_all(
-                            auth,
-                            log,
-                            user.user_id,
-                            account,
-                            counts,
-                            cancelled_by_account[account.account_id],
-                        ):
-                            failed_cancels.add(account.account_id)
+                        if account.is_active:
+                            if _cancel_all(backend, log, user.user_id, account, counts):
+                                cancelled_by_account[account.account_id].update(
+                                    pending.order_id for pending in account.pending_orders
+                                )
+                            else:
+                                failed_cancels.add(account.account_id)
                 if counts["cancelled"]:
                     users = accounts.users()
                     log.info("users_received", user_count=len(users))

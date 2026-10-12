@@ -1,6 +1,8 @@
 from typing import Literal
 from uuid import UUID
 
+import httpx
+from ktb_core.backend_auth import BackendAuth
 from pydantic import BaseModel
 
 from portfolio_rebalancer.portfolio import Reasoning
@@ -40,3 +42,16 @@ def order_request_body(order: Order) -> dict:
         holding_weight_after_trade_percent=order.holding_weight_after_trade_percent,
         holding_weight_limit_percent=order.holding_weight_limit_percent,
     ).model_dump(mode="json")
+
+
+class Backend:
+    def __init__(self, client: httpx.Client, secret: str, issuer: str) -> None:
+        self._auth = BackendAuth(client, secret, issuer)
+
+    def cancel(self, user_id: int, account_id: int, order_id: int) -> None:
+        self._auth.request(
+            "PATCH",
+            f"/api/v1/accounts/{account_id}/orders/{order_id}",
+            str(user_id),
+            json={"status": "cancelled"},
+        )

@@ -91,21 +91,17 @@ class FakeOrders:
         return self._ids()
 
 
-class FakeCancelAuth:
+class FakeCancelBackend:
     def __init__(self, orders):
         self.orders = orders
 
-    def request(self, method, path, subject, json=None):
-        assert method == "PATCH"
-        assert json == {"status": "cancelled"}
-        account_id = int(path.split("/")[4])
-        order_id = int(path.split("/")[6])
+    def cancel(self, user_id, account_id, order_id):
         if order_id == self.orders.fail_cancel:
-            request = httpx.Request(method, "http://backend" + path)
+            request = httpx.Request("PATCH", "http://backend")
             response = httpx.Response(409, request=request)
             raise httpx.HTTPStatusError("cancel rejected", request=request, response=response)
         self.orders.calls.append(("cancel", account_id, order_id))
-        self.orders.cancelled.append((int(subject), account_id, order_id))
+        self.orders.cancelled.append((user_id, account_id, order_id))
 
 
 def clock(monkeypatch, now):
@@ -162,7 +158,7 @@ def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
     monkeypatch.setattr(entry, "boto3", SimpleNamespace(client=lambda name: None))
     monkeypatch.setattr(entry, "SqsQueue", lambda client, url: url)
     monkeypatch.setattr(entry, "Orders", lambda queue, correlation_id: orders)
-    monkeypatch.setattr(entry, "BackendAuth", lambda *args: FakeCancelAuth(orders), raising=False)
+    monkeypatch.setattr(entry, "Backend", lambda *args: FakeCancelBackend(orders), raising=False)
     monkeypatch.setattr(
         entry, "Accounts", lambda queue, failures, log, correlation_id, budget: accounts
     )
@@ -213,8 +209,6 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
     kinds = [c[0] for c in backends[0].calls]
     assert kinds == ["users", "cancel", "cancel", "users", "place"]
     assert backends[0].replaced == [(11, [77, 78])]
-    assert [e["result"] for e in cancelled] == ["cancelled", "cancelled"]
-    assert [e["transport"] for e in cancelled] == ["http", "http"]
     sent = next(e for e in events if e["message"] == "order_sent")
     assert (sent["result"], sent["event_id"], sent["sqs_message_id"]) == ("published", "e1", "m1")
 
@@ -229,7 +223,7 @@ def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsy
     events = _events(capsys.readouterr().out)
     failed = next(e for e in events if e["message"] == "cancel_failed")
     assert (failed["account_id"], failed["order_id"]) == (11, 77)
-    assert (failed["result"], failed["status"]) == ("failed", 409)
+    assert failed["status"] == 409
     assert events[-1]["cancel_failed"] == 1
 
 
