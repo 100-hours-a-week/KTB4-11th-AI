@@ -120,7 +120,7 @@ def test_http_market_requests_300_bars_and_orders_them_oldest_first(timeframe):
         bars, as_of = HttpMarket("http://market", None).bars("005930", timeframe)
 
     request = call.call_args.args[0]
-    assert request.full_url == f"http://market/bars/005930?timeframe={timeframe}&limit=300"
+    assert request.full_url == f"http://market/market/bars/005930?timeframe={timeframe}&limit=300"
     assert bars.close.tolist() == [1.5, 2.0]
     assert bars.volume.dtype == np.float64
     assert as_of == AS_OF

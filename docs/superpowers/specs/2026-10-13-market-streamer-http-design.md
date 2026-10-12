@@ -136,7 +136,9 @@ Production compose sets `MARKET_COLLECTOR_REQUEST_INTERVAL=0.25` (4 req/s, under
 
 A FastAPI service laid out like news-http (`app.py`, `controllers/`, `__main__.py` with uvicorn). It is public with no authentication. CORS allows any origin for `GET`. Rate limiting and connection limits belong to the ALB, not this service.
 
-### `GET /prices?codes=005930,000660`
+Every route sits under the `/market` prefix, and so do the OpenAPI docs (`/market/docs`, `/market/redoc`, `/market/openapi.json`), so one ALB path rule `/market/*` covers the service, including its health check.
+
+### `GET /market/prices?codes=005930,000660`
 
 1. Pipelined `GET price:{code}` per code (cluster-mode safe).
 2. For codes with no value, query QuestDB.
@@ -145,7 +147,7 @@ A FastAPI service laid out like news-http (`app.py`, `controllers/`, `__main__.p
 
 Codes with no data in QuestDB either are left out. Response: a list of price objects.
 
-`/prices` returns the latest known price, not necessarily one from the current trading session. Clients must use `ts` to judge freshness.
+`/market/prices` returns the latest known price, not necessarily one from the current trading session. Clients must use `ts` to judge freshness.
 
 The QuestDB fill:
 
@@ -153,19 +155,19 @@ The QuestDB fill:
 - `change`, `rate`: against the latest regular-session `bars_1d` close dated before the bar's KST day.
 - `volume`: sum of that KST day's `bars_1m` volume.
 
-### `GET /prices/stream?codes=005930,000660`
+### `GET /market/prices/stream?codes=005930,000660`
 
 SSE with FastAPI's built-in `EventSourceResponse`/`ServerSentEvent`.
 
 1. `SUBSCRIBE price:{code}` for every code first, so no tick is lost between the snapshot and the stream.
-2. Look up current prices the same way as `/prices`, including the QuestDB fill.
+2. Look up current prices the same way as `/market/prices`, including the QuestDB fill.
 3. Send one `price` event per code as the snapshot.
 4. Send each subscribed message as a `price` event. Messages that arrived during steps 2–3 are sent after the snapshot; clients order by `ts`.
 5. FastAPI's `EventSourceResponse` sends a `: ping` comment every 15 seconds while the generator is idle, which keeps the ALB from closing quiet streams; market-http adds no keep-alive of its own.
 
 Each SSE client holds its own pub/sub connection. A GitHub issue tracks moving to one shared subscription fanned out in-process when connection count needs it.
 
-### `GET /bars/{code}?timeframe=1m&limit=300&cursor=...`
+### `GET /market/bars/{code}?timeframe=1m&limit=300&cursor=...`
 
 Response: `{"items": [{"ts", "open", "high", "low", "close", "volume"}], "next_cursor": str | null}`, newest first.
 
@@ -176,7 +178,7 @@ Response: `{"items": [{"ts", "open", "high", "low", "close", "volume"}], "next_c
 
 QuestDB handlers are sync and run in FastAPI's threadpool with the official `questdb` client.
 
-### `GET /health`
+### `GET /market/health`
 
 `{"status": "ok"}`.
 
@@ -200,8 +202,8 @@ QuestDB handlers are sync and run in FastAPI's threadpool with the official `que
 
 `QuestDBMarket` is replaced by `HttpMarket`, which calls market-http with `urllib` like its `NewsClient`.
 
-- `bars(symbol, timeframe)`: one `GET /bars/{symbol}?timeframe=...&limit=300`, reversed to oldest first before building `Bars`. The returned `as_of` is the newest bar's `ts`.
-- `universe_closes()`: KOSPI 200 members still come from PostgreSQL. It then calls `GET /bars/{code}?timeframe=1d&limit=300` once per member, in sequence. It is already cached once per run.
+- `bars(symbol, timeframe)`: one `GET /market/bars/{symbol}?timeframe=...&limit=300`, reversed to oldest first before building `Bars`. The returned `as_of` is the newest bar's `ts`.
+- `universe_closes()`: KOSPI 200 members still come from PostgreSQL. It then calls `GET /market/bars/{code}?timeframe=1d&limit=300` once per member, in sequence. It is already cached once per run.
 
 `PORTFOLIO_BUILDER_QUESTDB_CONF` and the `questdb` dependency are removed. `PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI` is added (required; `http://market-http:8000` in compose).
 
@@ -225,7 +227,7 @@ Datastore tests use a real instance when their variable is set and skip otherwis
   2. A run at 15:35:05 rewrites the 15:30 bar written while forming and writes today's 1d bar; runs before 15:35 do not request 1d.
   3. A first run (`latest is None`) still caps at `LIMITS` and writes no bar twice.
 - **market-streamer:** tick parsing including signed and space-padded values; the `REG` packet carries all 200 codes; a dropped connection reconnects and sends `REG` again; passing `STOP_AT` exits 0; one frame produces `SET` and `PUBLISH` per entry in Valkey.
-- **market-http:** `/prices` hit; `/prices` miss filled from QuestDB with `SET NX` that leaves an existing key untouched; SSE sends the snapshot and then a published event; `/bars` pages across two pages via the cursor; an invalid cursor and an unknown timeframe return 422.
+- **market-http:** `/market/prices` hit; `/market/prices` miss filled from QuestDB with `SET NX` that leaves an existing key untouched; SSE sends the snapshot and then a published event; `/market/bars` pages across two pages via the cursor; an invalid cursor and an unknown timeframe return 422.
 - **portfolio-builder:** `HttpMarket` against a stubbed `httpx` transport.
 
 ### Check against the live API before implementation

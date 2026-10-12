@@ -103,7 +103,7 @@ def test_prices_reads_valkey_without_touching_questdb(monkeypatch, valkey_url):
     )
 
     with _app_client(valkey_url) as client:
-        response = client.get("/prices?codes=005930")
+        response = client.get("/market/prices?codes=005930")
 
     assert response.status_code == 200
     assert [Price.model_validate(item) for item in response.json()] == [STREAMED]
@@ -117,7 +117,7 @@ def test_prices_fills_a_miss_from_questdb_and_stores_it(monkeypatch, valkey_url)
     )
 
     with _app_client(valkey_url) as client:
-        response = client.get("/prices?codes=005930,000660")
+        response = client.get("/market/prices?codes=005930,000660")
 
     assert asked == [["000660"]]
     assert [Price.model_validate(item) for item in response.json()] == [STREAMED, STORED]
@@ -135,7 +135,7 @@ def test_streamed_price_written_during_the_fill_wins(monkeypatch, valkey_url):
     monkeypatch.setattr(prices_module, "questdb_prices", fill)
 
     with _app_client(valkey_url) as client:
-        response = client.get("/prices?codes=000660")
+        response = client.get("/market/prices?codes=000660")
 
     assert [Price.model_validate(item) for item in response.json()] == [raced]
 
@@ -144,7 +144,7 @@ def test_prices_omits_codes_without_any_data(monkeypatch, valkey_url):
     monkeypatch.setattr(prices_module, "questdb_prices", lambda conf, codes: [])
 
     with _app_client(valkey_url) as client:
-        response = client.get("/prices?codes=123456")
+        response = client.get("/market/prices?codes=123456")
 
     assert response.status_code == 200
     assert response.json() == []
@@ -153,7 +153,7 @@ def test_prices_omits_codes_without_any_data(monkeypatch, valkey_url):
 @pytest.mark.parametrize("codes", ["5930", "005930,", "abcdef", ""])
 def test_prices_rejects_malformed_codes(codes):
     with TestClient(create_app(Redis(host="127.0.0.1", port=1), "conf")) as client:
-        assert client.get(f"/prices?codes={codes}").status_code == 422
+        assert client.get(f"/market/prices?codes={codes}").status_code == 422
 
 
 def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, valkey_url):

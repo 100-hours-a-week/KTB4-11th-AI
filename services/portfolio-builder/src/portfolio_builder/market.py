@@ -34,7 +34,7 @@ class HttpMarket(Market):
             raise KeyError(timeframe)
         query = urlencode({"timeframe": timeframe, "limit": LIMIT})
         request = Request(
-            f"{self._base_uri}/bars/{symbol}?{query}", headers={"Accept": "application/json"}
+            f"{self._base_uri}/market/bars/{symbol}?{query}", headers={"Accept": "application/json"}
         )
         with urlopen(request, timeout=self._timeout) as response:
             return list(reversed(json.loads(response.read())["items"]))

@@ -434,6 +434,8 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 
 ### market-http (`MARKET_HTTP_`)
 
+모든 경로와 API 문서는 `/market` 아래에 있다 (`/market/prices`, `/market/prices/stream`, `/market/bars/{code}`, `/market/health`, `/market/docs`).
+
 | 변수 | 필수 | 기본값 | 설명 |
 |---|---|---|---|
 | `MARKET_HTTP_QUESTDB_CONF` | 필수 | | QuestDB 공식 Python 클라이언트 연결 문자열 |
