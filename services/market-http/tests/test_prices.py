@@ -1,10 +1,12 @@
-from datetime import datetime
+import asyncio
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
 import redis
 from fastapi.testclient import TestClient
 from market_http.app import create_app
+from market_http.controllers.prices import stream_prices
 from market_http.repositories import prices as prices_module
 from market_http.repositories.prices import KST, Price, questdb_price
 from redis.asyncio import Redis
@@ -152,3 +154,28 @@ def test_prices_omits_codes_without_any_data(monkeypatch, valkey_url):
 def test_prices_rejects_malformed_codes(codes):
     with TestClient(create_app(Redis(host="127.0.0.1", port=1), "conf")) as client:
         assert client.get(f"/prices?codes={codes}").status_code == 422
+
+
+def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, valkey_url):
+    redis.Redis.from_url(valkey_url).set("price:005930", STREAMED.model_dump_json())
+    monkeypatch.setattr(prices_module, "questdb_prices", lambda conf, codes: [])
+    live = STREAMED.model_copy(
+        update={"price": 82200, "ts": datetime(2026, 10, 13, 0, 2, tzinfo=UTC)}
+    )
+
+    async def scenario():
+        valkey = Redis.from_url(valkey_url, decode_responses=True)
+        events = stream_prices(valkey, "conf", ["005930"])
+        snapshot = await anext(events)
+        await valkey.publish("price:005930", live.model_dump_json())
+        published = await asyncio.wait_for(anext(events), 5)
+        await events.aclose()
+        await valkey.aclose()
+        return snapshot, published
+
+    snapshot, published = asyncio.run(scenario())
+
+    assert snapshot.event == "price"
+    assert snapshot.data == STREAMED
+    assert published.event == "price"
+    assert Price.model_validate_json(published.raw_data) == live
