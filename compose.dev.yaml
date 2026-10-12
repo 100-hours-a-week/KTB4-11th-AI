@@ -36,6 +36,16 @@ services:
       retries: 12
       start_period: 20s
 
+  valkey:
+    image: valkey/valkey:8.1.4
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
   news-preprocessor:
     profiles: ["jobs"]
     build:
@@ -158,6 +168,49 @@ services:
         condition: service_healthy
     restart: "no"
 
+  market-streamer:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/market-streamer.Dockerfile
+    environment:
+      MARKET_STREAMER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MARKET_STREAMER_KIWOOM_APP_KEY: ${MARKET_STREAMER_KIWOOM_APP_KEY:-}
+      MARKET_STREAMER_KIWOOM_SECRET_KEY: ${MARKET_STREAMER_KIWOOM_SECRET_KEY:-}
+      MARKET_STREAMER_KIWOOM_MODE: ${MARKET_STREAMER_KIWOOM_MODE:-real}
+      MARKET_STREAMER_STOP_AT: ${MARKET_STREAMER_STOP_AT:-15:40}
+      MARKET_STREAMER_VALKEY_HOST: valkey
+      MARKET_STREAMER_LOG_LEVEL: ${MARKET_STREAMER_LOG_LEVEL:-INFO}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    restart: "no"
+
+  market-http:
+    build:
+      context: .
+      dockerfile: docker/market-http.Dockerfile
+    environment:
+      MARKET_HTTP_QUESTDB_CONF: ws::addr=questdb:9000;
+      MARKET_HTTP_VALKEY_HOST: valkey
+      MARKET_HTTP_LOG_LEVEL: ${MARKET_HTTP_LOG_LEVEL:-INFO}
+    ports:
+      - "127.0.0.1:8001:8000"
+    depends_on:
+      questdb:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
   portfolio-builder:
     profiles: ["jobs"]
     build:
@@ -165,7 +218,7 @@ services:
       dockerfile: docker/portfolio-builder.Dockerfile
     environment:
       PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      PORTFOLIO_BUILDER_QUESTDB_CONF: ws::addr=questdb:9000;
+      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: http://market-http:8000
       PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: http://news-http:8000
       PORTFOLIO_BUILDER_LLM_API_KEY: ${PORTFOLIO_BUILDER_LLM_API_KEY:-}
       PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
@@ -176,7 +229,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      questdb:
+      market-http:
         condition: service_healthy
       news-http:
         condition: service_started
