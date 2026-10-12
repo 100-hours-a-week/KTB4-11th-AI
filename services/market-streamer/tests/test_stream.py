@@ -33,6 +33,18 @@ def test_frame_prices_skips_malformed_entries():
             TICK,
             {"type": "0B", "item": "000660", "values": {"10": "   ", "11": "0"}},
             {"type": "0D", "item": "005930", "values": {}},
+            {
+                "type": "0B",
+                "item": "035420",
+                "values": {"10": 100, "11": "0", "12": "0", "13": "0", "20": "090000"},
+            },
+            {
+                "type": "0B",
+                "item": "035720",
+                "values": {"10": "1", "11": "0", "12": "0", "13": "0", "20": None},
+            },
+            "garbage",
+            {"type": "0B", "item": "005380", "values": None},
         ],
     }
 

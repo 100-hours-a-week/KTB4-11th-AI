@@ -26,13 +26,14 @@ def parse_tick(entry: dict[str, Any], today: date) -> dict[str, object]:
 
 def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]]:
     prices = []
-    for entry in message.get("data", []):
-        if entry.get("type") != "0B":
-            continue
+    for entry in message.get("data") or []:
         try:
+            if entry.get("type") != "0B":
+                continue
             prices.append(parse_tick(entry, today))
-        except (KeyError, TypeError, ValueError) as error:
-            log.warning("tick_skipped", item=entry.get("item"), error=str(error))
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            item = entry.get("item") if isinstance(entry, dict) else None
+            log.warning("tick_skipped", item=item, error=str(error))
     return prices
 
 
