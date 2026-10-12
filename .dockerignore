@@ -9,5 +9,6 @@ __pycache__/
 docs/
 .github/
 .env*
+ai.env
 compose.dev.yaml
 .superpowers/
