@@ -15,6 +15,7 @@ members = [
     "ktb-core",
     "ktb-market-analyzer",
     "market-collector",
+    "market-http",
     "market-streamer",
     "market-syncer",
     "news-clusterer",
@@ -891,6 +892,35 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "questdb", specifier = ">=5.0" },
     { name = "sqlalchemy", specifier = ">=2.0.54" },
+]
+
+[[package]]
+name = "market-http"
+version = "0.1.0"
+source = { editable = "services/market-http" }
+dependencies = [
+    { name = "botocore" },
+    { name = "fastapi" },
+    { name = "ktb-core" },
+    { name = "pandas" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "questdb" },
+    { name = "redis" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "botocore", specifier = ">=1.40" },
+    { name = "fastapi", specifier = ">=0.142" },
+    { name = "ktb-core", editable = "packages/core" },
+    { name = "pandas", specifier = ">=2.2" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pydantic-settings", specifier = ">=2.7" },
+    { name = "questdb", specifier = ">=5.0" },
+    { name = "redis", specifier = ">=6.4" },
+    { name = "uvicorn", specifier = ">=0.54" },
 ]
 
 [[package]]
