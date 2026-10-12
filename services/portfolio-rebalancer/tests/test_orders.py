@@ -115,3 +115,27 @@ def test_http_user_fetch_failure_is_sent_to_the_normal_failure_queue():
     assert sent["body"]["payload"]["reason"] == "users_fetch_failed"
     assert sent["body"]["payload"]["source_sqs_message_id"] is None
     assert published["sqs_message_id"] == "m1"
+
+
+def test_cancel_then_replace_share_the_account_fifo_group():
+    queue = FakeQueue()
+    orders = Orders(queue, RUN)
+    orders.cancel(7, 11, 77)
+    orders.place(7, 11, BODY, [77])
+    assert [m["body"]["type"] for m in queue.sent] == ["order.cancel", "order.place"]
+    assert [m["group"] for m in queue.sent] == ["11", "11"]
+    assert queue.sent[0]["body"]["payload"] == {
+        "user_id": 7,
+        "account_id": 11,
+        "order_id": 77,
+        "status": "cancelled",
+    }
+    assert all(m["dedup"] == m["body"]["eventId"] for m in queue.sent)
+    assert queue.sent[0]["dedup"] != queue.sent[1]["dedup"]
+
+
+def test_cancel_publish_failure_keeps_its_event_identity():
+    with pytest.raises(PublishError) as error:
+        Orders(FakeQueue(boom=True), RUN).cancel(7, 11, 77)
+    assert error.value.fields["event_id"]
+    assert error.value.fields["correlation_id"] == RUN

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from ktb_core.queue import Queue
 
 PLACE_TYPE = "order.place"
+CANCEL_TYPE = "order.cancel"
 
 
 class PublishError(Exception):
@@ -66,6 +67,18 @@ class Orders:
                 "account_id": account_id,
                 "replaces_order_ids": replaces,
                 **body,
+            },
+        )
+
+    def cancel(self, user_id: int, account_id: int, order_id: int) -> dict[str, str]:
+        return self._publish(
+            CANCEL_TYPE,
+            account_id,
+            {
+                "user_id": user_id,
+                "account_id": account_id,
+                "order_id": order_id,
+                "status": "cancelled",
             },
         )
 

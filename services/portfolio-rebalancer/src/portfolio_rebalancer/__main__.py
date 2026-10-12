@@ -1,7 +1,6 @@
 import uuid
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
-from typing import Any
 
 import boto3
 import httpx
@@ -25,7 +24,7 @@ from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.snapshot import Account
 
 TOTALS = (
-    "cancelled",
+    "cancel_requested",
     "cancel_failed",
     "deferred",
     "sent",
@@ -37,14 +36,8 @@ TOTALS = (
 )
 
 
-def _failure(error: httpx.HTTPError) -> dict[str, Any]:
-    if isinstance(error, httpx.HTTPStatusError):
-        return {"status": error.response.status_code, "body": error.response.text}
-    return {"error": str(error)}
-
-
 def _cancel_all(
-    backend: Backend, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
+    orders: Orders, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
 ) -> bool:
     for pending in account.pending_orders:
         fields = {
@@ -55,15 +48,27 @@ def _cancel_all(
             "order_id": pending.order_id,
         }
         try:
-            backend.cancel(user_id, account.account_id, pending.order_id)
-        except httpx.HTTPError as error:
+            published = orders.cancel(user_id, account.account_id, pending.order_id)
+        except PublishError as error:
             counts["cancel_failed"] += 1
-            log.error("cancel_failed", **fields, **_failure(error))
+            log.error(
+                "cancel_failed",
+                **fields,
+                **error.fields,
+                result="failed",
+                error=str(error),
+                queue_role="orders",
+                direction="publish",
+            )
             return False
-        counts["cancelled"] += 1
+        counts["cancel_requested"] += 1
         log.info(
-            "order_cancelled",
+            "order_cancel_requested",
             **fields,
+            **published,
+            result="published",
+            queue_role="orders",
+            direction="publish",
             order_type=pending.order_type,
             limit_price=pending.limit_price,
             quantity=pending.quantity,
@@ -113,20 +118,20 @@ def main() -> None:
                 client, settings.backend_jwt_secret.get_secret_value(), settings.backend_jwt_issuer
             )
             failed_cancels: set[int] = set()
-            cancelled_by_account: dict[int, set[int]] = defaultdict(set)
+            cancel_requested_by_account: dict[int, set[int]] = defaultdict(set)
             try:
                 users = backend.users()
                 log.info("users_received", user_count=len(users))
                 for user in users:
                     for account in user.accounts:
                         if account.is_active:
-                            if _cancel_all(backend, log, user.user_id, account, counts):
-                                cancelled_by_account[account.account_id].update(
+                            if _cancel_all(orders, log, user.user_id, account, counts):
+                                cancel_requested_by_account[account.account_id].update(
                                     pending.order_id for pending in account.pending_orders
                                 )
                             else:
                                 failed_cancels.add(account.account_id)
-                if counts["cancelled"]:
+                if counts["cancel_requested"]:
                     users = backend.users()
                     log.info("users_received", user_count=len(users))
             except (httpx.HTTPError, ValueError) as error:
@@ -181,7 +186,7 @@ def main() -> None:
                 for account in user.accounts:
                     if not account.is_active or account.account_id in failed_cancels:
                         continue
-                    replaced = sorted(cancelled_by_account[account.account_id])
+                    replaced = sorted(cancel_requested_by_account[account.account_id])
                     if account.pending_orders:
                         counts["deferred"] += 1
                         log.warning(

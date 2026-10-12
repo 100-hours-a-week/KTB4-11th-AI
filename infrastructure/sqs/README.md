@@ -30,7 +30,7 @@ aws cloudformation describe-stacks --stack-name stockspoon-v2-dev-rebalancer-que
 ```
 
 FailureQueueUrl을 배포 .env의 PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL에 설정합니다.
-ORDER_QUEUE_URL과 기존 HTTP Backend 설정을 유지하고 AWS_DEFAULT_REGION=ap-northeast-2를 사용합니다.
+ORDER_QUEUE_URL과 HTTP 사용자 조회 Backend 설정을 유지하고 AWS_DEFAULT_REGION=ap-northeast-2를 사용합니다.
 AI Role은 Order/Failure ARN에 sqs:SendMessage, Backend Role은 Order/Failure ARN에 sqs:ReceiveMessage/sqs:DeleteMessage가 필요합니다.
 DLQ 일반 발행·소비 권한은 애플리케이션에 부여하지 않습니다. 관련 스냅샷 DB 마이그레이션은 없습니다.
 

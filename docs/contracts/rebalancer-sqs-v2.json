@@ -1,6 +1,19 @@
 [
   {
     "schemaVersion": 1,
+    "eventId": "cancel-1",
+    "correlationId": "ai-run-1",
+    "occurredAt": "2026-10-12T04:00:00Z",
+    "type": "order.cancel",
+    "payload": {
+      "user_id": 1,
+      "account_id": 11,
+      "order_id": 77,
+      "status": "cancelled"
+    }
+  },
+  {
+    "schemaVersion": 1,
     "eventId": "place-1",
     "correlationId": "ai-run-1",
     "occurredAt": "2026-10-11T01:00:00Z",

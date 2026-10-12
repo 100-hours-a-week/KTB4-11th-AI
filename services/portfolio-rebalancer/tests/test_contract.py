@@ -23,6 +23,7 @@ def test_published_order_payloads_match_the_shared_backend_examples():
     body = {
         k: v for k, v in place.items() if k not in {"user_id", "account_id", "replaces_order_ids"}
     }
+    orders.cancel(1, 11, 77)
     orders.place(1, 11, body, [77])
 
     for published in sent:
