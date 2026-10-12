@@ -15,7 +15,6 @@ from ktb_core.logging import (
 )
 from ktb_core.queue import SqsQueue
 
-from portfolio_rebalancer.accounts import Accounts, AccountsError
 from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
@@ -108,13 +107,7 @@ def main() -> None:
         counts: Counter[str] = Counter()
         sqs = boto3.client("sqs")
         orders = Orders(SqsQueue(sqs, settings.order_queue_url), run_id)
-        accounts = Accounts(
-            SqsQueue(sqs, settings.account_queue_url),
-            SqsQueue(sqs, settings.failure_queue_url),
-            log,
-            run_id,
-            budget=settings.drain_seconds,
-        )
+        failures = Orders(SqsQueue(sqs, settings.failure_queue_url), run_id)
         with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:
             backend = Backend(
                 client, settings.backend_jwt_secret.get_secret_value(), settings.backend_jwt_issuer
@@ -122,7 +115,7 @@ def main() -> None:
             failed_cancels: set[int] = set()
             cancelled_by_account: dict[int, set[int]] = defaultdict(set)
             try:
-                users = accounts.users()
+                users = backend.users()
                 log.info("users_received", user_count=len(users))
                 for user in users:
                     for account in user.accounts:
@@ -134,15 +127,42 @@ def main() -> None:
                             else:
                                 failed_cancels.add(account.account_id)
                 if counts["cancelled"]:
-                    users = accounts.users()
+                    users = backend.users()
                     log.info("users_received", user_count=len(users))
-            except AccountsError as error:
+            except (httpx.HTTPError, ValueError) as error:
+                reason = (
+                    "users_fetch_failed"
+                    if isinstance(error, httpx.HTTPError)
+                    else "users_payload_invalid"
+                )
+                detail = type(error).__name__
+                if isinstance(error, httpx.HTTPStatusError):
+                    detail += f": HTTP {error.response.status_code}"
+                log.error("users_fetch_failed", reason=reason, error=detail, result="failed")
+                try:
+                    published = failures.report_failure(reason, detail)
+                except PublishError as publish_error:
+                    log.error(
+                        "account_failure_report_failed",
+                        **publish_error.fields,
+                        result="failed",
+                        error=str(publish_error),
+                        queue_role="failures",
+                        direction="publish",
+                    )
+                else:
+                    log.info(
+                        "account_failure_reported",
+                        **published,
+                        reason=reason,
+                        result="published",
+                        queue_role="failures",
+                        direction="publish",
+                    )
                 end.update(
-                    outcome="account_snapshot_failed",
-                    error=str(error),
+                    outcome="users_fetch_failed",
+                    error=detail,
                     portfolio_id=portfolio.id,
-                    snapshot_rejected=accounts.rejected,
-                    snapshot_failed=accounts.failed,
                     **{key: counts[key] for key in TOTALS},
                 )
                 raise SystemExit(1) from error
@@ -235,8 +255,6 @@ def main() -> None:
 
             end.update(
                 portfolio_id=portfolio.id,
-                snapshot_rejected=accounts.rejected,
-                snapshot_failed=accounts.failed,
                 **{key: counts[key] for key in TOTALS},
             )
             raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)

@@ -9,7 +9,6 @@ REQUIRED = {
     "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
     "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
     "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
-    "PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL": "https://sqs.local/account.fifo",
     "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL": "https://sqs.local/failure.fifo",
 }
 
@@ -22,7 +21,6 @@ def test_defaults(monkeypatch):
 
     assert settings.band == 0.05
     assert settings.buy_buffer == 0.02
-    assert settings.drain_seconds == 60.0
     assert settings.log_level == "INFO"
 
 
@@ -30,7 +28,6 @@ def test_defaults(monkeypatch):
     "name",
     [
         "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL",
-        "PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL",
         "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL",
     ],
 )
@@ -55,8 +52,8 @@ def test_a_blank_queue_url_is_refused(monkeypatch):
 def test_a_whitespace_queue_url_is_refused(monkeypatch):
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL", "   ")
 
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL", "   ")
     with pytest.raises(ValidationError):
         Settings()
 

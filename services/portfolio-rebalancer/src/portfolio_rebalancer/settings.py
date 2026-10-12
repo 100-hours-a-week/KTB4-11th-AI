@@ -20,9 +20,7 @@ class Settings(BaseSettings):
         min_length=1,
         validation_alias=AliasChoices("ORDER_QUEUE_URL", "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"),
     )
-    account_queue_url: str = Field(min_length=1)
     failure_queue_url: str = Field(min_length=1)
-    drain_seconds: float = Field(default=60.0, gt=0)
     band: float = Field(default=0.05, gt=0, lt=1)
     buy_buffer: float = Field(default=0.02, ge=0, lt=1)
     test_mode: bool = False

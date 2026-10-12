@@ -18,7 +18,6 @@ REQUIRED = {
     "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
     "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
     "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
-    "PORTFOLIO_REBALANCER_ACCOUNT_QUEUE_URL": "https://sqs.local/account.fifo",
     "PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL": "https://sqs.local/failure.fifo",
 }
 WEDNESDAY_NOON = datetime(2026, 10, 14, 12, tzinfo=KST)
@@ -95,6 +94,9 @@ class FakeCancelBackend:
     def __init__(self, orders):
         self.orders = orders
 
+    def users(self):
+        return self.orders.accounts.users()
+
     def cancel(self, user_id, account_id, order_id):
         if order_id == self.orders.fail_cancel:
             request = httpx.Request("PATCH", "http://backend")
@@ -159,9 +161,6 @@ def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
     monkeypatch.setattr(entry, "SqsQueue", lambda client, url: url)
     monkeypatch.setattr(entry, "Orders", lambda queue, correlation_id: orders)
     monkeypatch.setattr(entry, "Backend", lambda *args: FakeCancelBackend(orders), raising=False)
-    monkeypatch.setattr(
-        entry, "Accounts", lambda queue, failures, log, correlation_id, budget: accounts
-    )
     return [orders]
 
 
@@ -379,118 +378,116 @@ def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, 
     assert (warn["account_id"], warn["order_ids"]) == (11, [79])
 
 
-def test_a_cancel_publish_without_a_new_snapshot_never_places_a_replacement(
-    env, monkeypatch, capsys
+@pytest.mark.parametrize("notification_failure", [False, True])
+@pytest.mark.parametrize("refresh_failure", [False, True])
+@pytest.mark.parametrize("failure", ["timeout", "status", "invalid", "json"])
+def test_http_user_fetch_failure_reports_sqs_and_stops_orders(
+    env, monkeypatch, capsys, failure, refresh_failure, notification_failure
 ):
-    from ktb_core.logging import get_logger
-    from portfolio_rebalancer.accounts import Accounts
-
-    initial = users(account(11, pending=[77]))
-    body = json.dumps(
-        {
-            "eventId": "e1",
-            "type": "account.snapshot",
-            "payload": {"users": [u.model_dump() for u in initial]},
-        }
-    )
-    batches = [[SimpleNamespace(id="m1", receipt="r1", body=body)]]
-    queue = SimpleNamespace(
-        receive=lambda **kwargs: batches.pop(0) if batches else [], delete=lambda receipt: None
-    )
-    actual = Accounts(queue, None, get_logger("test"), "run-1", budget=5)
-    backends = _use(monkeypatch, users=initial)
-    monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
-
-    assert _main() == 0
-    assert backends[0].cancelled == [(1, 11, 77)]
-    assert backends[0].placed == []
-    events = _events(capsys.readouterr().out)
-    assert any(e["message"] == "pending_after_cancel" for e in events)
-
-
-@pytest.mark.parametrize("missing", [False, True])
-def test_an_account_queue_failure_reports_failure_and_exits_one(env, monkeypatch, capsys, missing):
-    from ktb_core.logging import get_logger
-    from portfolio_rebalancer.accounts import Accounts
-
-    failures = []
-
-    def unavailable(**kwargs):
-        if missing:
-            return []
-        raise RuntimeError("SQS unavailable")
-
-    queue = SimpleNamespace(receive=unavailable)
-    failure_queue = SimpleNamespace(
-        send=lambda body, **kwargs: failures.append(json.loads(body)) or "f1"
-    )
-    actual = Accounts(queue, failure_queue, get_logger("test"), "run-1", budget=5)
-    backends = _use(monkeypatch)
-    monkeypatch.setattr(entry, "Accounts", lambda *args, **kwargs: actual)
-
-    assert _main() == 1
-    assert backends[0].placed == []
-    assert failures[0]["payload"]["reason"] == ("snapshot_missing" if missing else "receive_failed")
-    assert _events(capsys.readouterr().out)[-1]["outcome"] == "account_snapshot_failed"
-
-
-def test_cancel_http_then_snapshot_sqs_then_order_sqs(env, monkeypatch):
+    sent = []
     requests = []
-    published = []
-    deleted = []
-    phases = []
-
-    def snapshot_message(event_id, pending=(), cash=1_000_000):
-        return {
-            "MessageId": event_id,
-            "ReceiptHandle": event_id,
-            "Body": json.dumps(
-                {
-                    "eventId": event_id,
-                    "correlationId": "backend-run",
-                    "type": "account.snapshot",
-                    "payload": {
-                        "users": [
-                            u.model_dump() for u in users(account(11, pending=pending, cash=cash))
-                        ]
-                    },
-                }
-            ),
-        }
-
-    batches = [[snapshot_message("before", pending=[77])], []]
+    reads = 0
 
     class Sqs:
-        def receive_message(self, **kwargs):
-            assert kwargs["WaitTimeSeconds"] == 20
-            return {"Messages": batches.pop(0) if batches else []}
-
-        def delete_message(self, **kwargs):
-            deleted.append(kwargs["ReceiptHandle"])
-            phases.append(kwargs["ReceiptHandle"])
-
         def send_message(self, **kwargs):
             body = json.loads(kwargs["MessageBody"])
-            assert body["type"] == "order.place"
-            assert kwargs["MessageGroupId"] == "11"
+            assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL"]
+            assert kwargs["MessageGroupId"] == "ai-server"
             assert kwargs["MessageDeduplicationId"] == body["eventId"]
-            published.append(body)
-            phases.append("place")
-            return {"MessageId": "order-message"}
+            sent.append(body)
+            if notification_failure:
+                raise RuntimeError("failure queue unavailable")
+            return {"MessageId": "failure-id"}
 
     def respond(request):
+        nonlocal reads
         requests.append(request)
         if request.url.path == "/api/v1/auth/csrf":
             return httpx.Response(
                 200,
-                json={"token": "masked", "header_name": "X-XSRF-TOKEN"},
+                json={"token": "masked", "header_name": "X-CSRF"},
+                headers={"set-cookie": "XSRF-TOKEN=raw; Path=/"},
+            )
+        if request.method == "PATCH":
+            return httpx.Response(204)
+        assert request.url.path == "/api/v1/users/ai-server"
+        reads += 1
+        if refresh_failure and reads == 1:
+            return httpx.Response(
+                200, json={"users": [u.model_dump() for u in users(account(11, pending=[77]))]}
+            )
+        if failure == "timeout":
+            raise httpx.ReadTimeout("backend unavailable", request=request)
+        if failure == "status":
+            return httpx.Response(503, json={"detail": "private"})
+        if failure == "json":
+            return httpx.Response(200, text="not json")
+        return httpx.Response(200, json={"users": [{"private": "invalid"}]})
+
+    client_type = httpx.Client
+    monkeypatch.setattr(
+        entry.httpx,
+        "Client",
+        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
+    )
+    monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
+    assert _main() == 1
+    assert len(sent) == 1
+    assert sent[0]["type"] == "account.snapshot.failed"
+    assert sent[0]["payload"]["source_sqs_message_id"] is None
+    assert sent[0]["payload"]["reason"] == (
+        "users_fetch_failed" if failure in {"timeout", "status"} else "users_payload_invalid"
+    )
+    assert reads == (2 if refresh_failure else 1)
+    out = capsys.readouterr().out
+    assert "private" not in out
+    event = next(
+        e
+        for e in _events(out)
+        if e["message"]
+        == ("account_failure_report_failed" if notification_failure else "account_failure_reported")
+    )
+    assert event["sqs_message_id"] == (None if notification_failure else "failure-id")
+    assert event["event_id"] == sent[0]["eventId"]
+    assert event["correlation_id"] == sent[0]["correlationId"]
+    assert _events(out)[-1]["sent"] == 0
+
+
+def test_users_http_then_cancel_http_then_refresh_http_then_order_sqs(env, monkeypatch):
+    sent = []
+    phases = []
+    reads = 0
+
+    class Sqs:
+        def send_message(self, **kwargs):
+            body = json.loads(kwargs["MessageBody"])
+            assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
+            assert kwargs["MessageGroupId"] == "11"
+            assert kwargs["MessageDeduplicationId"] == body["eventId"]
+            sent.append(body)
+            phases.append("place")
+            return {"MessageId": "order-id"}
+
+    def respond(request):
+        nonlocal reads
+        if request.url.path == "/api/v1/users/ai-server":
+            assert request.method == "GET"
+            reads += 1
+            phases.append("users")
+            snapshot = (
+                users(account(11, pending=[77])) if reads == 1 else users(account(11, cash=777_000))
+            )
+            return httpx.Response(200, json={"users": [u.model_dump() for u in snapshot]})
+        if request.url.path == "/api/v1/auth/csrf":
+            return httpx.Response(
+                200,
+                json={"token": "masked", "header_name": "X-CSRF"},
                 headers={"set-cookie": "XSRF-TOKEN=raw; Path=/"},
             )
         assert request.method == "PATCH"
         assert request.url.path == "/api/v1/accounts/11/orders/77"
         assert json.loads(request.content) == {"status": "cancelled"}
         phases.append("cancel")
-        batches.extend([[snapshot_message("after", cash=777_000)], []])
         return httpx.Response(204)
 
     client_type = httpx.Client
@@ -500,12 +497,14 @@ def test_cancel_http_then_snapshot_sqs_then_order_sqs(env, monkeypatch):
         lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
     )
     monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
-
     assert _main() == 0
-    assert phases == ["before", "cancel", "after", "place"]
-    assert deleted == ["before", "after"]
-    assert len(published) == 1
-    assert published[0]["payload"]["reason_id"] == str(WHY.id)
-    assert published[0]["payload"]["replaces_order_ids"] == [77]
-    assert published[0]["payload"]["quantity"] == 3
-    assert all("users/ai-server" not in request.url.path for request in requests)
+    assert phases == ["users", "cancel", "users", "place"]
+    assert sent[0]["payload"]["reason_id"] == str(WHY.id)
+    assert sent[0]["payload"]["replaces_order_ids"] == [77]
+    assert sent[0]["payload"]["quantity"] == 3
+
+
+def test_empty_http_users_are_valid_and_publish_nothing(env, monkeypatch):
+    backends = _use(monkeypatch, users=[])
+    assert _main() == 0
+    assert backends[0].placed == []
