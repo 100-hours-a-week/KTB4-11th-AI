@@ -161,7 +161,7 @@ SSE with FastAPI's built-in `EventSourceResponse`/`ServerSentEvent`.
 2. Look up current prices the same way as `/prices`, including the QuestDB fill.
 3. Send one `price` event per code as the snapshot.
 4. Send each subscribed message as a `price` event. Messages that arrived during steps 2–3 are sent after the snapshot; clients order by `ts`.
-5. When 15 seconds pass without a message, send an SSE comment so the ALB idle timeout does not close quiet streams.
+5. FastAPI's `EventSourceResponse` sends a `: ping` comment every 15 seconds while the generator is idle, which keeps the ALB from closing quiet streams; market-http adds no keep-alive of its own.
 
 Each SSE client holds its own pub/sub connection. A GitHub issue tracks moving to one shared subscription fanned out in-process when connection count needs it.
 
@@ -198,7 +198,7 @@ QuestDB handlers are sync and run in FastAPI's threadpool with the official `que
 
 ## portfolio-builder changes
 
-`QuestDBMarket` is replaced by `HttpMarket`, which calls market-http with sync `httpx` like its news-http client.
+`QuestDBMarket` is replaced by `HttpMarket`, which calls market-http with `urllib` like its `NewsClient`.
 
 - `bars(symbol, timeframe)`: one `GET /bars/{symbol}?timeframe=...&limit=300`, reversed to oldest first before building `Bars`. The returned `as_of` is the newest bar's `ts`.
 - `universe_closes()`: KOSPI 200 members still come from PostgreSQL. It then calls `GET /bars/{code}?timeframe=1d&limit=300` once per member, in sequence. It is already cached once per run.
