@@ -1,7 +1,7 @@
 # market-streamer and market-http
 
 **Date:** 2026-10-13  
-**Status:** Draft for review
+**Status:** Approved for planning
 
 ## Purpose
 
@@ -138,7 +138,14 @@ A FastAPI service laid out like news-http (`app.py`, `controllers/`, `__main__.p
 
 ### `GET /prices?codes=005930,000660`
 
-`MGET price:{code}` for every code. For codes that are missing, market-http queries QuestDB, writes each result with `SET NX` (never overwriting a live streamed price), and includes it in the response. Codes with no data in QuestDB either are left out. Response: a list of price objects.
+1. `MGET price:{code}` for every code.
+2. For codes with no value, query QuestDB.
+3. `SET NX` each QuestDB result. The write fails when market-streamer set the key in the meantime, which is expected.
+4. `MGET` the missed codes again and return those values, so a streamed price wins over the QuestDB one.
+
+Codes with no data in QuestDB either are left out. Response: a list of price objects.
+
+`/prices` returns the latest known price, not necessarily one from the current trading session. Clients must use `ts` to judge freshness.
 
 The QuestDB fill:
 
@@ -150,9 +157,11 @@ The QuestDB fill:
 
 SSE with FastAPI's built-in `EventSourceResponse`/`ServerSentEvent`.
 
-1. Send one `price` event per code from the same lookup as `/prices`, including the QuestDB fill.
-2. `SUBSCRIBE price:{code}` for every code and send each message as a `price` event.
-3. When 15 seconds pass without a message, send an SSE comment so the ALB idle timeout does not close quiet streams.
+1. `SUBSCRIBE price:{code}` for every code first, so no tick is lost between the snapshot and the stream.
+2. Look up current prices the same way as `/prices`, including the QuestDB fill.
+3. Send one `price` event per code as the snapshot.
+4. Send each subscribed message as a `price` event. Messages that arrived during steps 2–3 are sent after the snapshot; clients order by `ts`.
+5. When 15 seconds pass without a message, send an SSE comment so the ALB idle timeout does not close quiet streams.
 
 Each SSE client holds its own pub/sub connection. A GitHub issue tracks moving to one shared subscription fanned out in-process when connection count needs it.
 
