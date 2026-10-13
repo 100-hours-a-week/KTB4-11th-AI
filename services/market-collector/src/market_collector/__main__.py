@@ -18,6 +18,7 @@ CLOSE_RUN = time(15, 35)
 FIRST_PASS = time(9, 0, 5)
 MINUTE_PASSES = 6 * 60 + 31
 CLOSE_PASS = time(15, 35, 5)
+PASS_BUDGET = 60.0
 
 
 def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
@@ -86,11 +87,15 @@ def run(
     close_failed = False
     for at in pending:
         sleep(max(0.0, (at - clock()).total_seconds()))
+        started = clock()
         try:
-            archive_ohlcv(settings, symbols, clients, clock())
+            archive_ohlcv(settings, symbols, clients, started)
         except Exception:
             log.exception("archive_pass_failed", scheduled=at.isoformat())
             close_failed = at == pending[-1]
+        elapsed = (clock() - started).total_seconds()
+        if elapsed > PASS_BUDGET:
+            log.warning("archive_pass_slow", scheduled=at.isoformat(), seconds=round(elapsed, 1))
     if close_failed:
         raise RuntimeError("market collection close pass failed")
 

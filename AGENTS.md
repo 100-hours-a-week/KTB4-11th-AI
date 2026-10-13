@@ -174,7 +174,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `services/news-graph-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
 | `services/news-http` | service | long-running HTTP server (uvicorn) | `ktb-core` |
 | `services/portfolio-builder` | service | cron: `main()` runs once and exits | `ktb-core` |
-| `services/market-collector` | service | one process per weekday from 08:59 KST: a pass every minute 09:00–15:30, a 15:35 pass with daily bars, then exits | `ktb-core` |
+| `services/market-collector` | service | one process per weekday from 08:55 KST: a pass every minute 09:00–15:30, a 15:35 pass with daily bars, then exits | `ktb-core` |
 | `services/market-streamer` | service | weekdays 08:50 KST until STOP_AT; one Kiwoom 0B WebSocket | `ktb-core` |
 | `services/market-http` | service | long-running public HTTP server (uvicorn) | `ktb-core` |
 | `services/portfolio-rebalancer` | service | scheduled job: polls the Backend, decides, sends market orders | `ktb-core` |

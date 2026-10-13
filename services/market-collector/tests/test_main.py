@@ -1,3 +1,4 @@
+import logging
 from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
@@ -175,7 +176,7 @@ def _kst(hour, minute, second=0):
 
 
 def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
-    day = Day(_kst(8, 59))
+    day = Day(_kst(8, 55))
 
     loads, built = _run(monkeypatch, day)
 
@@ -188,13 +189,18 @@ def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
     assert len(day.passes) == 6 * 60 + 31 + 1
 
 
-def test_overrunning_pass_is_followed_immediately(monkeypatch):
-    day = Day(_kst(8, 59), work={_kst(9, 0, 5): 70})
+def test_overrunning_pass_is_followed_immediately_and_warned(monkeypatch, caplog):
+    day = Day(_kst(8, 55), work={_kst(9, 0, 5): 70})
 
-    _run(monkeypatch, day)
+    with caplog.at_level(logging.WARNING, logger=cli.__name__):
+        _run(monkeypatch, day)
 
     assert day.passes[:3] == [_kst(9, 0, 5), _kst(9, 1, 15), _kst(9, 2, 5)]
     assert day.sleeps[1] == 0
+    slow = [record for record in caplog.records if record.getMessage() == "archive_pass_slow"]
+    assert len(slow) == 1
+    assert slow[0].levelno == logging.WARNING
+    assert slow[0].fields == {"scheduled": _kst(9, 0, 5).isoformat(), "seconds": 70.0}
 
 
 def test_restart_mid_session_resumes_at_the_next_minute(monkeypatch):
