@@ -356,3 +356,40 @@ SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 �
 기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
 리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
 DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.
+
+## 배포 Secret · Variable 목록
+
+값은 이 문서와 Terraform에 적지 않습니다. 이름과 용도만 기록하고, 실제 값은 `gh secret set` / `gh variable set` / `aws ssm put-parameter`로 직접 등록하며 원본은 비밀번호 관리자에 보관합니다. (GitHub Secret은 등록 후 다시 조회할 수 없습니다.)
+
+### GitHub (KTB4-11th-AI)
+
+| 이름 | 종류 | 범위 | 사용처 | 내용 |
+|---|---|---|---|---|
+| `AWS_ECR_PUSH_ROLE_ARN` | Variable | Repository | `ci-main.yaml`, `ci-dev.yaml` | Public ECR push용 OIDC Role ARN |
+| `PUBLIC_ECR_AI_REPOSITORY_URI` | Variable | Repository | CI·CD 전체 | AI 통합 이미지 저장소 URI. `cd-ecs-v2.yaml`은 CI Dev가 push한 `:<커밋 SHA>` 이미지를 배포 |
+| `EC2_HOST`, `EC2_USER` | Secret | Repository | `cd.yaml` | 운영 AI EC2 SSH 주소·사용자 |
+| `EC2_SSH_PRIVATE_KEY`, `EC2_SSH_KNOWN_HOSTS` | Secret | Repository | `cd.yaml` | 운영 AI EC2 SSH 키·호스트 키 |
+| `EC2_HOST`, `EC2_USER`, `EC2_SSH_PRIVATE_KEY`, `EC2_SSH_KNOWN_HOSTS` | Secret | Environment `development` | `cd-dev.yaml` | 개발 AI EC2 SSH 접속 정보 |
+| `PROD_AI_ENV` | Secret | Repository | `cd.yaml` | 운영 AI EC2 `~/ai/.env` 파일 전체. CD가 배포마다 서버에 씀 |
+| `AWS_ECS_DEPLOY_ROLE_ARN` | Variable | Repository | `cd-ecs-v2.yaml` | V2 ECS 배포용 OIDC Role ARN (Cloud `ecs` root에서 생성) |
+
+`cd.yaml`은 배포마다 `PROD_AI_ENV`를 서버의 `~/ai/.env`로 덮어씁니다. 서버에서 `.env`를 직접 고치면 다음 배포에서 사라지므로 Secret을 갱신합니다. 비어 있으면 배포 전에 실패하며, 배포가 실패하면 이전 `.env`로 되돌립니다. 기존 운영 `.env` 값에 더해 다음이 들어가야 합니다.
+
+- `AI_PRIVATE_IP`: PostgreSQL `5432`·QuestDB `9000`을 게시할 private IP (V2 ECS market 서비스가 접근)
+- `PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI=https://stock-spoon.com/market`: 운영 EC2에는 market-http가 없으므로 V2 ECS를 호출
+
+```bash
+gh secret set PROD_AI_ENV -R 100-hours-a-week/KTB4-11th-AI < prod.env   # 갱신 후 마지막 CD를 Re-run
+```
+
+### AWS SSM Parameter Store (V2 ECS)
+
+market-http·market-streamer는 운영 EC2가 아니라 V2 ECS에서 실행되며, 비밀값은 Task 시작 시 SSM SecureString에서 주입됩니다. 일반 값은 Cloud 레포 `ecs` root의 Task Definition에 있습니다.
+
+| 이름 | 사용처 |
+|---|---|
+| `/stockspoon/v2/prod/market-streamer/POSTGRES_DSN` | market-streamer (V1 AI 운영 PostgreSQL, `AI_PRIVATE_IP:5432`) |
+| `/stockspoon/v2/prod/market-streamer/KIWOOM_APP_KEY` | market-streamer |
+| `/stockspoon/v2/prod/market-streamer/KIWOOM_SECRET_KEY` | market-streamer |
+
+값을 바꾼 뒤에는 `aws ecs update-service --cluster stockspoon-v2-prod-cluster --service stockspoon-v2-prod-market-streamer --force-new-deployment`로 Task를 교체해야 반영됩니다.
