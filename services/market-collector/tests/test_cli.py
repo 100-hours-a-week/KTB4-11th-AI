@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -23,20 +22,15 @@ def test_shard_rejects_zero_buckets():
         cli.shard(["005930"], 0)
 
 
-def test_main_runs_one_archive_without_subcommands(monkeypatch):
+def test_main_runs_the_collection_day(monkeypatch):
     seen = []
     settings = SimpleNamespace(log_level="INFO")
     monkeypatch.setattr(cli, "Settings", lambda: settings)
     monkeypatch.setattr(
         cli, "setup_logging", lambda level, service_name: seen.append(("logging", level))
     )
-    monkeypatch.setattr(
-        cli,
-        "datetime",
-        type("Clock", (), {"now": staticmethod(lambda zone: datetime(2026, 9, 28, tzinfo=UTC))}),
-    )
-    monkeypatch.setattr(cli, "archive_ohlcv", lambda supplied, now: seen.append((supplied, now)))
+    monkeypatch.setattr(cli, "run", lambda supplied: seen.append(supplied))
 
     cli.main()
 
-    assert seen[1:] == [(settings, datetime(2026, 9, 28, tzinfo=UTC))]
+    assert seen[1:] == [settings]
