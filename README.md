@@ -480,7 +480,7 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | HTTP 사용자·계좌 정보를 조회할 Backend 주소 |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
-| `ORDER_QUEUE_URL` | 필수 | | 주문 취소·생성 요청을 발행하는 FIFO 큐 |
+| `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL` | 필수 | | 주문 취소·생성 요청을 발행하는 FIFO 큐 |
 | `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Compose에서 AWS SDK로 전달하는 리전 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |

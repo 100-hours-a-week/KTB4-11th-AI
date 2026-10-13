@@ -144,7 +144,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | portfolio-rebalancer; HTTP user lookup endpoint base | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | portfolio-rebalancer (HS256 secret shared with the Backend, ≥ 32 bytes; signs a token for any user) | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | portfolio-rebalancer; must equal the Backend's `JWT_ISSUER`, which its decoder validates | required |
-| `ORDER_QUEUE_URL` | portfolio-rebalancer; FIFO queue for order cancellation/creation requests | required |
+| `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL` | portfolio-rebalancer; FIFO queue for order cancellation/creation requests | required |
 | `AWS_DEFAULT_REGION` | portfolio-rebalancer; AWS SDK region passed by Compose | `ap-northeast-2` |
 | `PORTFOLIO_REBALANCER_BAND` | portfolio-rebalancer; a kept stock trades only when its weight is off target by more than this | `0.05` |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | portfolio-rebalancer; buys are sized at last close × (1 + this) | `0.02` |

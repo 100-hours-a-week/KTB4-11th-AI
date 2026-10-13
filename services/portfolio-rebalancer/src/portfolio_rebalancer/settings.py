@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,10 +16,7 @@ class Settings(BaseSettings):
     backend_url: str = Field(min_length=1)
     backend_jwt_secret: SecretStr = Field(min_length=32)
     backend_jwt_issuer: str = Field(min_length=1)
-    order_queue_url: str = Field(
-        min_length=1,
-        validation_alias=AliasChoices("ORDER_QUEUE_URL", "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"),
-    )
+    order_queue_url: str = Field(min_length=1)
     band: float = Field(default=0.05, gt=0, lt=1)
     buy_buffer: float = Field(default=0.02, ge=0, lt=1)
     test_mode: bool = False
