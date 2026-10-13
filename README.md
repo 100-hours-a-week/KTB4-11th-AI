@@ -326,24 +326,7 @@ erDiagram
 | `portfolios.status` | `portfolio-builder` | `0008` |
 | `portfolio_reasons.id` | `portfolio-builder` | `0010` |
 
-## 환경 변수
-
-모든 환경 변수의 목록, 필수 여부, 기본값, 설명은 [`.env.example`](.env.example)에서 관리합니다. 서비스별 설정은 각 서비스의 접두사가 붙은 환경 변수로 읽으며, 주석 처리된 항목은 선택 값과 기본값입니다.
-
-### 설정 변경과 검증
-
-환경 변수를 변경할 때는 서비스의 `settings.py`에서 필수 여부와 기본값을 확인하고 `.env.example`, `compose.dev.yaml`, `compose.prod.yaml`을 함께 갱신합니다. 저장소 루트에서 다음 명령으로 확인합니다.
-
-```bash
-docker compose -f compose.dev.yaml --profile jobs config --quiet
-docker compose -f compose.prod.yaml --profile jobs config --quiet
-uv run pytest services/portfolio-rebalancer/tests/test_settings.py
-```
-
-운영용 Compose 검증에는 배포 환경의 `APP_IMAGE`와 필수 DB/Backend 환경 변수가 필요합니다. `config --quiet`는 컨테이너를 시작하지 않고 설정만 검사합니다.
-
-
-### 리밸런서 통신 경로
+## 리밸런서 통신 경로
 
 | 작업 | 경로 |
 |---|---|

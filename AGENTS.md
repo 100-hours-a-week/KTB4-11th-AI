@@ -49,7 +49,7 @@ Use exactly this path. `uv export` writes the command into the file header, so a
 
 ## Environment variables
 
-Each service reads its own prefix through `pydantic-settings`; values without "required" have a default. `.env.example` lists the same variables with comments; `README.md` points to it.
+Each service reads its own prefix through `pydantic-settings`; values without "required" have a default. `.env.example` lists every variable with comments.
 
 | Variable | Used by | Default |
 |---|---|---|
