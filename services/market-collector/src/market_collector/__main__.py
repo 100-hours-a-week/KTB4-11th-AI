@@ -4,6 +4,7 @@ from datetime import UTC, datetime, time, timedelta
 from time import sleep as pause
 
 import questdb
+from ktb_core.krx import is_trading_day
 from ktb_core.logging import get_logger, setup_logging, start_logging
 
 from market_collector.kiwoom.official import ChartClient, build_client
@@ -72,6 +73,10 @@ def run(
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = pause,
 ) -> None:
+    today = clock().astimezone(KST).date()
+    if not is_trading_day(today):
+        log.info("market_closed", day=today.isoformat())
+        return
     symbols = load_symbols(settings.postgres_dsn, settings.index_name)
     accounts = settings.kiwoom_accounts[: len(shard(symbols, len(settings.kiwoom_accounts)))]
     clients = [

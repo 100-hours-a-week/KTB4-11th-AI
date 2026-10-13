@@ -220,6 +220,21 @@ def test_start_after_the_close_runs_one_close_pass(monkeypatch):
     assert day.passes == [_kst(15, 40)]
 
 
+@pytest.mark.parametrize(
+    "start",
+    [
+        datetime(2026, 10, 9, 8, 55, tzinfo=KST),
+        datetime(2026, 10, 9, 16, 0, tzinfo=KST),
+    ],
+)
+def test_holiday_does_nothing(monkeypatch, start):
+    day = Day(start)
+
+    loads, built = _run(monkeypatch, day)
+
+    assert (loads, built, day.passes, day.sleeps) == ([], [], [], [])
+
+
 def test_failed_minute_pass_does_not_stop_the_day(monkeypatch):
     day = Day(_kst(15, 29))
 
