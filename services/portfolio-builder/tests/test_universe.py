@@ -54,8 +54,8 @@ def test_universe_reads_daily_bars_per_kospi200_member(universe_engine):
 
     urls = [c.args[0].full_url for c in call.call_args_list]
     assert urls == [
-        "http://market/market/bars/000660?timeframe=1d&limit=300",
-        "http://market/market/bars/005930?timeframe=1d&limit=300",
+        "http://market/bars/000660?timeframe=1d&limit=300",
+        "http://market/bars/005930?timeframe=1d&limit=300",
     ]
     assert list(universe) == ["005930"]
     np.testing.assert_array_equal(universe["005930"], [1.0, 2.0])

@@ -70,7 +70,7 @@ def test_bars_reads_the_timeframe_view_newest_first(monkeypatch, client, timefra
     db = FakeDB(_rows(3))
     monkeypatch.setattr(bars_module.questdb, "connect", lambda conf: db)
 
-    response = client.get(f"/market/bars/005930?timeframe={timeframe}&limit=2")
+    response = client.get(f"/bars/005930?timeframe={timeframe}&limit=2")
 
     sql, binds = db.queries[0]
     assert f"FROM {view} " in sql
@@ -88,11 +88,11 @@ def test_bars_reads_the_timeframe_view_newest_first(monkeypatch, client, timefra
 def test_cursor_returns_the_next_older_page(monkeypatch, client):
     first = FakeDB(_rows(3))
     monkeypatch.setattr(bars_module.questdb, "connect", lambda conf: first)
-    cursor = client.get("/market/bars/005930?timeframe=1m&limit=2").json()["next_cursor"]
+    cursor = client.get("/bars/005930?timeframe=1m&limit=2").json()["next_cursor"]
     second = FakeDB(_rows(1))
     monkeypatch.setattr(bars_module.questdb, "connect", lambda conf: second)
 
-    body = client.get(f"/market/bars/005930?timeframe=1m&limit=2&cursor={cursor}").json()
+    body = client.get(f"/bars/005930?timeframe=1m&limit=2&cursor={cursor}").json()
 
     sql, binds = second.queries[0]
     assert "ts < cast($2 AS TIMESTAMP)" in sql
@@ -111,8 +111,8 @@ def test_cursor_returns_the_next_older_page(monkeypatch, client):
     ],
 )
 def test_invalid_query_is_rejected(client, query):
-    assert client.get(f"/market/bars/005930?{query}").status_code == 422
+    assert client.get(f"/bars/005930?{query}").status_code == 422
 
 
 def test_malformed_code_is_rejected(client):
-    assert client.get("/market/bars/5930?timeframe=1m").status_code == 422
+    assert client.get("/bars/5930?timeframe=1m").status_code == 422
