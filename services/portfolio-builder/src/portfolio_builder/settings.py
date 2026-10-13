@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     )
 
     postgres_dsn: str
-    questdb_conf: str
+    market_http_base_uri: str
     news_http_base_uri: str
     llm_api_key: SecretStr = Field(min_length=1)
     llm_model: str

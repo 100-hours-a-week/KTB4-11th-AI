@@ -1,17 +1,21 @@
 [Unit]
-Description=KTB market OHLCV collection job
+Description=KTB market OHLCV collection day
 Wants=network-online.target
 After=network-online.target docker.service
 Requires=docker.service
 # 작업 결과를 AI_CWAgent/ScheduledJobFailure(JobName=market-collector)로 발행합니다.
 OnSuccess=ktb-scheduled-job-success@market-collector.service
 OnFailure=ktb-scheduled-job-failure@market-collector.service
+StartLimitIntervalSec=1h
+StartLimitBurst=5
 
 [Service]
-Type=oneshot
+Type=simple
 User=@@DEPLOY_USER@@
 WorkingDirectory=@@DEPLOY_DIR@@
 ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.market-collector.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T market-collector
-TimeoutStartSec=50m
-Restart=no
+Restart=on-failure
+RestartMode=direct
+RestartSec=1m
+TimeoutStopSec=2m
 KillMode=mixed

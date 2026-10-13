@@ -1,10 +1,7 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime, time, timedelta, timezone
+from datetime import UTC, datetime
 
-KST = timezone(timedelta(hours=9), "KST")
-
-REGULAR_OPEN = time(9, 0)
-REGULAR_CLOSE = time(15, 30)
+from ktb_core.krx import KST, MARKET_CLOSE, MARKET_OPEN
 
 __all__ = [
     "DailyBar",
@@ -45,7 +42,7 @@ def parse_daily_ts(raw: str) -> datetime:
 
 def classify_session(ts_utc: datetime) -> str:
     local = ts_utc.astimezone(KST).time()
-    if REGULAR_OPEN <= local <= REGULAR_CLOSE:
+    if MARKET_OPEN <= local <= MARKET_CLOSE:
         return "regular"
     return "extended"
 

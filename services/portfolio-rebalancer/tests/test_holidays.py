@@ -1,7 +1,7 @@
 from datetime import date, datetime
 
 import pytest
-from portfolio_rebalancer import holidays
+from ktb_core import krx
 from portfolio_rebalancer.holidays import KST, hours_left, in_session
 
 
@@ -12,7 +12,7 @@ def at(*args):
 @pytest.fixture
 def two_day_week(monkeypatch):
     monkeypatch.setattr(
-        holidays,
+        krx,
         "KRX_HOLIDAYS",
         frozenset({date(2026, 10, 19), date(2026, 10, 21), date(2026, 10, 23)}),
     )

@@ -10,11 +10,9 @@ dependencies = [
     "langgraph>=1.2.12",
     "langchain-core>=1.6.5",
     "numpy>=2.3",
-    "pandas>=2.2",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.9",
     "pydantic-settings>=2.7",
-    "questdb>=5.0",
     "sqlalchemy>=2.0.54",
     "ta-lib>=0.8.1",
 ]
@@ -26,9 +24,8 @@ portfolio-builder = "portfolio_builder.__main__:main"
 ktb-core = { workspace = true }
 
 [tool.deptry.per_rule_ignores]
-# questdb's QueryResult.to_pandas() needs pandas installed; nothing imports it by name.
 # psycopg is the SQLAlchemy driver for PostgreSQL connections.
-DEP002 = ["pandas", "psycopg"]
+DEP002 = ["psycopg"]
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

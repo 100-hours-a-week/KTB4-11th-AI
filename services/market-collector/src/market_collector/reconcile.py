@@ -82,7 +82,7 @@ def reconcile_candles(
         next_key = continuation
 
     bars = sorted(
-        (bar for bar in bars_by_ts.values() if latest is None or bar.ts > latest),
+        (bar for bar in bars_by_ts.values() if latest is None or bar.ts >= latest),
         key=lambda bar: bar.ts,
     )
     if latest is None:

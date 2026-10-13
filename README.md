@@ -21,11 +21,14 @@ flowchart LR
         NGB["news-graph-builder"]
         NH["news-http"]
         MC["market-collector"]
+        MSTR["market-streamer"]
+        MH["market-http"]
         PB["portfolio-builder"]
         PR["portfolio-rebalancer"]
         RB["report-builder"]
         PG[("PostgreSQL")]
         QDB[("QuestDB")]
+        Valkey[("Valkey")]
     end
 
     subgraph BACKEND["KTB4-11th-BE"]
@@ -44,6 +47,7 @@ flowchart LR
     NC -->|clusters| PG
 
     KIWOOM --> MS
+    KIWOOM --> MSTR
     DART --> MS
     MS -->|corporations, indices, themes| PG
     PG -->|clusters, corporations| NGB
@@ -55,15 +59,21 @@ flowchart LR
     PG -->|KOSPI 200 symbols| MC
     KIWOOM --> MC
     MC -->|OHLCV| QDB
+    PG -->|KOSPI 200 symbols| MSTR
+    MSTR -->|latest price| Valkey
+    Valkey -->|prices| MH
+    MH -->|bars| QDB
 
     PG <-->|model portfolio| PB
-    QDB <--> PB
+    MH <--> PB
     OPENROUTER <--> PB
 
     PG -->|model portfolio, reasons| PR
     QDB -->|last close| PR
-    BE -->|users, accounts| PR
-    PR -->|limit or market orders| BE
+    PR -->|HTTP user lookup| BE
+    BE -->|HTTP account state| PR
+    PR -->|order cancellations and placements| SQS
+    SQS -->|order cancellations and placements| BE
     BE -->|report request| SQS
     SQS -->|report request| RB
     PG -->|reasons and cited summaries| RB
@@ -122,6 +132,10 @@ flowchart LR
 
 - PostgreSQL의 `corporation_indices`에서 현재 KOSPI 200 종목을 읽어오고, 종목과 시간 단위별 마지막 저장 시점을 확인한 후 키움에서 빠진 데이터를 가져와 QuestDB에 저장함
 - QuestDB의 `bars_15m`, `bars_1h`는 `bars_1m` 을 통해 생성함
+- 평일 08:55에 한 번 시작해 09:00–15:30 매분 `:05`에 1분봉을 갱신하고, 15:35에 일봉까지 수집한 뒤 종료함. 키움 토큰과 클라이언트는 하루 동안 재사용함
+- 한 번의 수집이 1분을 넘기면 `archive_pass_slow` 경고 로그를 남기고 다음 수집을 바로 시작함
+- 장 마감 후 실행하면 마감 수집을 한 번 하고 바로 종료함
+- `ktb_core.krx.KRX_HOLIDAYS` 기준 휴장일에는 아무것도 하지 않고 바로 종료함
 
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 
@@ -135,8 +149,8 @@ flowchart LR
 ### `portfolio-rebalancer`: 생성된 투자 포트폴리오를 기반으로 유저의 투자 포트폴리오 업데이트하기
 
 - 가장 최근 포트폴리오가 `ready` 일 때 거래 시작
-- 백엔드에서 유저의 계좌, 현금, 보유 종목, 미체결 주문을 가져옴
-- 미체결 주문을 모두 취소한 뒤 계좌 상태를 다시 읽고 목표 비중과 비교해 필요한 매수와 매도를 계산
+- 기존 HTTP API로 백엔드의 사용자·계좌·현금·보유 종목·미체결 주문을 조회함
+- 미체결 주문 취소와 좁아진 범위의 재주문 요청을 같은 계좌 SQS FIFO 그룹에 순서대로 발행하며, 편출 종목은 매도만 요청함
 - 기존 보유 종목의 보유량이 목표와의 차이가 `PORTFOLIO_REBALANCER_BAND`를 넘을 때 거래
 - QuestDB의 최근 1분봉 가격과 20개 일봉으로 주간 가격 경계를 계산
 - 경계는 위, 아래로 두 개 생성하며, 매도일 때는 높은 가격에 시도 후 낮은 가격에 도달하면 시장가 매도, 매수일 때는 낮은 가격에 시도 후 높은 가격에 도달하면 시장가 매수를 진행함
@@ -402,15 +416,50 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | 필수 | | `app_key`, `secret_key` 객체의 JSON 배열 |
 | `MARKET_COLLECTOR_KIWOOM_MODE` | | `real` | `real` 또는 `demo` |
 | `MARKET_COLLECTOR_INDEX_NAME` | | `KOSPI200` | 수집 종목을 구성하는 지수 이름 |
-| `MARKET_COLLECTOR_REQUEST_INTERVAL` | | `1.3` | 키움 REST 요청 사이 대기 시간(초) |
+| `MARKET_COLLECTOR_REQUEST_INTERVAL` | | `1.3` (운영 Compose `0.25`) | 키움 REST 요청 사이 대기 시간(초) |
 | `MARKET_COLLECTOR_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+### market-streamer (`MARKET_STREAMER_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `MARKET_STREAMER_POSTGRES_DSN` | 필수 | | `corporation_indices`에서 구독 종목을 읽는 DSN |
+| `MARKET_STREAMER_KIWOOM_APP_KEY` | 필수 | | 키움 REST API 앱 키 |
+| `MARKET_STREAMER_KIWOOM_SECRET_KEY` | 필수 | | 키움 REST API 시크릿 키 |
+| `MARKET_STREAMER_KIWOOM_MODE` | | `real` | `real` 또는 `demo`(모의투자) |
+| `MARKET_STREAMER_INDEX_NAME` | | `KOSPI200` | 구독 종목을 구성하는 지수 이름 |
+| `MARKET_STREAMER_STOP_AT` | | `15:40` | 종료 시각(KST, `HH:MM`). 이 시각 이후에 시작하면 바로 종료 |
+| `MARKET_STREAMER_VALKEY_HOST` | 필수 | | 현재가를 저장할 Valkey 호스트 |
+| `MARKET_STREAMER_VALKEY_PORT` | | `6379` | Valkey 포트 |
+| `MARKET_STREAMER_VALKEY_USERNAME` | | | Valkey 사용자. `iam` 인증에서 필요 |
+| `MARKET_STREAMER_VALKEY_CACHE_NAME` | | | ElastiCache 서버리스 캐시 이름. `iam` 인증에서 필요 |
+| `MARKET_STREAMER_VALKEY_TLS` | | `false` | Valkey TLS 연결 사용 여부 (운영 Compose는 `true`) |
+| `MARKET_STREAMER_VALKEY_AUTH_MODE` | | `none` | `none` 또는 `iam`(IAM 토큰 인증) |
+| `MARKET_STREAMER_AWS_REGION` | | `ap-northeast-2` | IAM 토큰을 서명할 AWS 리전 |
+| `MARKET_STREAMER_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+### market-http (`MARKET_HTTP_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `MARKET_HTTP_QUESTDB_CONF` | 필수 | | QuestDB 공식 Python 클라이언트 연결 문자열 |
+| `MARKET_HTTP_VALKEY_HOST` | 필수 | | 현재가를 읽을 Valkey 호스트 |
+| `MARKET_HTTP_VALKEY_PORT` | | `6379` | Valkey 포트 |
+| `MARKET_HTTP_VALKEY_USERNAME` | | | Valkey 사용자. `iam` 인증에서 필요 |
+| `MARKET_HTTP_VALKEY_CACHE_NAME` | | | ElastiCache 서버리스 캐시 이름. `iam` 인증에서 필요 |
+| `MARKET_HTTP_VALKEY_TLS` | | `false` | Valkey TLS 연결 사용 여부 (운영 Compose는 `true`) |
+| `MARKET_HTTP_VALKEY_AUTH_MODE` | | `none` | `none` 또는 `iam`(IAM 토큰 인증) |
+| `MARKET_HTTP_AWS_REGION` | | `ap-northeast-2` | IAM 토큰을 서명할 AWS 리전 |
+| `MARKET_HTTP_HOST` | | `0.0.0.0` | 바인드 주소 |
+| `MARKET_HTTP_PORT` | | `8000` | 바인드 포트 |
+| `MARKET_HTTP_LOG_LEVEL` | | `INFO` | 로그 수준 |
 
 ### portfolio-builder (`PORTFOLIO_BUILDER_`)
 
 | 변수 | 필수 | 기본값 | 조절 대상 |
 |---|---|---|---|
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | | 기업/포트폴리오 저장소 연결 |
-| `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | | QuestDB 시세 연결 |
+| `PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI` | 필수 | | market-http API 주소 |
 | `PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI` | 필수 | | news-http API 주소 |
 | `PORTFOLIO_BUILDER_LLM_API_KEY` | 필수 | | OpenAI API 인증 |
 | `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | | OpenAI API 모델 ID |
@@ -428,9 +477,11 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 |---|---|---|---|
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | | 최신 포트폴리오와 설명 읽기 |
 | `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | | 최근 종가 읽기 |
-| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | 계좌 조회/주문 전송 주소 |
+| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | HTTP 사용자·계좌 정보를 조회할 Backend 주소 |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
+| `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL` | 필수 | | 주문 취소·생성 요청을 발행하는 FIFO 큐 |
+| `AWS_DEFAULT_REGION` | | `ap-northeast-2` | Compose에서 AWS SDK로 전달하는 리전 |
 | `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
 | `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` | `true`면 KRX 거래일/시간 검사 생략 |
@@ -465,3 +516,35 @@ uv run pytest services/portfolio-rebalancer/tests/test_settings.py
 ```
 
 운영용 Compose 검증에는 배포 환경의 `APP_IMAGE`와 필수 DB/Backend 환경 변수가 필요합니다. `config --quiet`는 컨테이너를 시작하지 않고 설정만 검사합니다.
+
+
+### 리밸런서 통신 경로
+
+| 작업 | 경로 |
+|---|---|
+| 사용자·계좌 정보 조회 | 기존 HTTP `GET /api/v1/users/ai-server` |
+| 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
+| 주문 취소 요청 | AI → 같은 Order FIFO 큐; `order.cancel` |
+| HTTP 조회·응답 검증 실패 | 구조화 로그 기록 후 실패 종료 |
+
+매 실행 시작에 HTTP로 사용자 정보를 한 번 조회합니다. 조회한 잔고·보유량과 남은 실행 횟수로
+범위·수량을 계산하고, 대기 주문 취소 요청 다음에 재주문 요청을 같은 계좌 FIFO 그룹으로 바로 발행합니다.
+취소 반영을 기다리는 HTTP 재조회나 대기 주문 잔존에 따른 보류는 하지 않습니다.
+취소 요청 발행이 실패한 계좌에는 신규 주문을 보내지 않습니다. 편출 종목은 매도만 요청하며
+이번 매도의 예상 대금은 매수 예산에 더하지 않습니다.
+취소 메시지 발행 성공은 취소 완료가 아닙니다. 백엔드는 같은 그룹의 취소 처리를 마친 뒤 다음 주문을 처리해야 합니다.
+조회 실패나 잘못된 응답은 기존 구조화 로그로 기록하고 주문 요청 없이 종료합니다.
+`users: []`는 정상 응답입니다.
+
+주문 생성에는 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
+`MessageDeduplicationId`로 사용합니다. SDK 재시도는 동일 eventId와 본문을 유지합니다.
+FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계산한 주문은 새 이벤트입니다.
+계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
+
+HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용합니다.
+큐 URL과 HTTP 설정은 다른 서비스처럼 배포 `.env`에서 Compose `environment`를 거쳐
+Settings로 읽습니다. 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
+SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
+기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
+리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
+DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.

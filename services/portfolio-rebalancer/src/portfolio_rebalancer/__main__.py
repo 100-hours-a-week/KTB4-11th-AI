@@ -1,22 +1,30 @@
 import uuid
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
-from typing import Any
 
+import boto3
 import httpx
 import sqlalchemy as sa
-from ktb_core.logging import StructuredLogger, get_logger, setup_logging, start_logging
+from ktb_core.logging import (
+    StructuredLogger,
+    get_logger,
+    set_logger_level,
+    setup_logging,
+    start_logging,
+)
+from ktb_core.queue import SqsQueue
 
 from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
+from portfolio_rebalancer.orders import Orders, PublishError
 from portfolio_rebalancer.portfolio import Unready, load_portfolio
 from portfolio_rebalancer.rebalance import quote, rebalance
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.snapshot import Account
 
 TOTALS = (
-    "cancelled",
+    "cancel_requested",
     "cancel_failed",
     "sent",
     "failed",
@@ -27,14 +35,8 @@ TOTALS = (
 )
 
 
-def _failure(error: httpx.HTTPError) -> dict[str, Any]:
-    if isinstance(error, httpx.HTTPStatusError):
-        return {"status": error.response.status_code, "body": error.response.text}
-    return {"error": str(error)}
-
-
 def _cancel_all(
-    backend: Backend, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
+    orders: Orders, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
 ) -> bool:
     for pending in account.pending_orders:
         fields = {
@@ -45,15 +47,27 @@ def _cancel_all(
             "order_id": pending.order_id,
         }
         try:
-            backend.cancel(user_id, account.account_id, pending.order_id)
-        except httpx.HTTPError as error:
+            published = orders.cancel(user_id, account.account_id, pending.order_id)
+        except PublishError as error:
             counts["cancel_failed"] += 1
-            log.error("cancel_failed", **fields, **_failure(error))
+            log.error(
+                "cancel_failed",
+                **fields,
+                **error.fields,
+                result="failed",
+                error=str(error),
+                queue_role="orders",
+                direction="publish",
+            )
             return False
-        counts["cancelled"] += 1
+        counts["cancel_requested"] += 1
         log.info(
-            "order_cancelled",
+            "order_cancel_requested",
             **fields,
+            **published,
+            result="published",
+            queue_role="orders",
+            direction="publish",
             order_type=pending.order_type,
             limit_price=pending.limit_price,
             quantity=pending.quantity,
@@ -64,7 +78,9 @@ def _cancel_all(
 def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="portfolio-rebalancer")
-    log = get_logger(__name__, run_id=str(uuid.uuid4()))
+    set_logger_level("botocore", "WARNING")
+    run_id = str(uuid.uuid4())
+    log = get_logger(__name__, run_id=run_id)
     with start_logging(log, band=settings.band, buy_buffer=settings.buy_buffer) as end:
         now = datetime.now(UTC)
         days_left = (COVERED_THROUGH - now.astimezone(KST).date()).days
@@ -93,24 +109,43 @@ def main() -> None:
             raise SystemExit(1 if portfolio.status == "explanation_failed" else 0)
 
         counts: Counter[str] = Counter()
+        sqs = boto3.client("sqs")
+        orders = Orders(SqsQueue(sqs, settings.order_queue_url), run_id)
         with httpx.Client(base_url=settings.backend_url, timeout=10.0) as client:
             backend = Backend(
-                client,
-                settings.backend_jwt_secret.get_secret_value(),
-                settings.backend_jwt_issuer,
+                client, settings.backend_jwt_secret.get_secret_value(), settings.backend_jwt_issuer
             )
-            users = backend.users()
-            log.info("users_received", user_count=len(users))
             failed_cancels: set[int] = set()
-            for user in users:
-                for account in user.accounts:
-                    if account.is_active and not _cancel_all(
-                        backend, log, user.user_id, account, counts
-                    ):
-                        failed_cancels.add(account.account_id)
-            if counts["cancelled"]:
+            cancel_requested_by_account: dict[int, set[int]] = defaultdict(set)
+            try:
                 users = backend.users()
                 log.info("users_received", user_count=len(users))
+            except (httpx.HTTPError, ValueError) as error:
+                reason = (
+                    "users_fetch_failed"
+                    if isinstance(error, httpx.HTTPError)
+                    else "users_payload_invalid"
+                )
+                detail = type(error).__name__
+                if isinstance(error, httpx.HTTPStatusError):
+                    detail += f": HTTP {error.response.status_code}"
+                log.error("users_fetch_failed", reason=reason, error=detail, result="failed")
+                end.update(
+                    outcome="users_fetch_failed",
+                    error=detail,
+                    portfolio_id=portfolio.id,
+                    **{key: counts[key] for key in TOTALS},
+                )
+                raise SystemExit(1) from error
+            for user in users:
+                for account in user.accounts:
+                    if account.is_active:
+                        if _cancel_all(orders, log, user.user_id, account, counts):
+                            cancel_requested_by_account[account.account_id].update(
+                                pending.order_id for pending in account.pending_orders
+                            )
+                        else:
+                            failed_cancels.add(account.account_id)
             codes = {t.stock_code for t in portfolio.targets} | {
                 s.stock_code for u in users for a in u.accounts for s in a.stocks
             }
@@ -126,14 +161,7 @@ def main() -> None:
                 for account in user.accounts:
                     if not account.is_active or account.account_id in failed_cancels:
                         continue
-                    if account.pending_orders:
-                        log.warning(
-                            "pending_after_cancel",
-                            user_id=user.user_id,
-                            account_id=account.account_id,
-                            order_ids=[o.order_id for o in account.pending_orders],
-                        )
-                        continue
+                    replaced = sorted(cancel_requested_by_account[account.account_id])
                     if stranded := sorted(
                         {s.stock_code for s in account.stocks if s.quantity > 0}
                         - named
@@ -167,19 +195,39 @@ def main() -> None:
                             **order.pricing.model_dump(),
                         }
                         try:
-                            backend.place(user.user_id, account.account_id, order, request_body)
-                        except httpx.HTTPError as error:
+                            published = orders.place(
+                                user.user_id, account.account_id, request_body, replaced
+                            )
+                        except PublishError as error:
                             counts["failed"] += 1
-                            log.error("order_failed", **fields, **_failure(error))
+                            log.error(
+                                "order_failed",
+                                **fields,
+                                **error.fields,
+                                result="failed",
+                                error=str(error),
+                                queue_role="orders",
+                                direction="publish",
+                            )
                             continue
                         counts["sent"] += 1
                         counts[order.pricing.order_type] += 1
                         if order.pricing.trigger in ("upper", "lower"):
                             counts[f"{order.pricing.trigger}_triggered"] += 1
-                        log.info("order_sent", **fields)
+                        log.info(
+                            "order_sent",
+                            **fields,
+                            **published,
+                            result="published",
+                            queue_role="orders",
+                            direction="publish",
+                        )
 
-        end.update(portfolio_id=portfolio.id, **{key: counts[key] for key in TOTALS})
-        raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)
+            end.update(
+                portfolio_id=portfolio.id,
+                **{key: counts[key] for key in TOTALS},
+            )
+            raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)
 
 
 if __name__ == "__main__":

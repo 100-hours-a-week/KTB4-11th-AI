@@ -14,7 +14,7 @@ from portfolio_builder.explain import (
     load_unexplained,
     save_explanations,
 )
-from portfolio_builder.market import QuestDBMarket
+from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
 from portfolio_builder.settings import Settings
@@ -62,7 +62,7 @@ def main() -> None:
                 tools = [
                     *news_tools(news_client),
                     *graph_tools(news_client),
-                    technicals_tool(engine, QuestDBMarket(settings.questdb_conf, engine)),
+                    technicals_tool(engine, HttpMarket(settings.market_http_base_uri, engine)),
                     submit_tool(
                         engine,
                         briefing.previous_company_ids,

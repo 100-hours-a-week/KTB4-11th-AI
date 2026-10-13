@@ -1,0 +1,43 @@
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from datetime import datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from pydantic import BaseModel
+
+from market_http.controllers.dependencies import CODE, QuestDBConf
+from market_http.repositories.bars import Bar, Timeframe, find_bars
+
+router = APIRouter()
+
+
+class Page(BaseModel):
+    items: list[Bar]
+    next_cursor: str | None
+
+
+def _cursor(cursor: str | None = None) -> datetime | None:
+    if cursor is None:
+        return None
+    try:
+        ts = datetime.fromisoformat(urlsafe_b64decode(cursor).decode())
+    except ValueError as error:
+        raise HTTPException(422, "invalid cursor") from error
+    if ts.tzinfo is None:
+        raise HTTPException(422, "invalid cursor")
+    return ts
+
+
+@router.get("/bars/{code}")
+def list_bars(
+    code: Annotated[str, Path(pattern=CODE)],
+    timeframe: Timeframe,
+    conf: QuestDBConf,
+    before: Annotated[datetime | None, Depends(_cursor)],
+    limit: Annotated[int, Query(ge=1, le=1000)] = 300,
+) -> Page:
+    rows = find_bars(conf, code, timeframe, limit + 1, before)
+    if len(rows) <= limit:
+        return Page(items=rows, next_cursor=None)
+    cursor = urlsafe_b64encode(rows[limit - 1].ts.isoformat().encode()).decode()
+    return Page(items=rows[:limit], next_cursor=cursor)

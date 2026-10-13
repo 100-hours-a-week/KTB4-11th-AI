@@ -5,9 +5,10 @@ from pydantic import ValidationError
 REQUIRED = {
     "PORTFOLIO_REBALANCER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_REBALANCER_QUESTDB_CONF": "ws::addr=localhost:9000;",
-    "PORTFOLIO_REBALANCER_BACKEND_URL": "http://localhost:8081",
+    "PORTFOLIO_REBALANCER_BACKEND_URL": "http://backend",
     "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
     "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
+    "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
 }
 
 
@@ -22,21 +23,77 @@ def test_defaults(monkeypatch):
     assert settings.log_level == "INFO"
 
 
-def test_a_secret_shorter_than_the_backend_accepts_is_refused(monkeypatch):
-    for name, value in REQUIRED.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.setenv("PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET", "s" * 31)
+@pytest.mark.parametrize(
+    "name",
+    [
+        "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL",
+    ],
+)
+def test_every_queue_url_is_required(monkeypatch, name):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv(name)
 
     with pytest.raises(ValidationError):
         Settings()
 
 
-def test_a_short_secret_is_not_echoed_in_the_error(monkeypatch):
-    for name, value in REQUIRED.items():
-        monkeypatch.setenv(name, value)
-    monkeypatch.setenv("PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET", "hunter2-short-secret")
+def test_a_blank_queue_url_is_refused(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL", "")
 
-    with pytest.raises(ValidationError) as error:
+    with pytest.raises(ValidationError):
         Settings()
 
-    assert "hunter2-short-secret" not in str(error.value)
+
+def test_a_whitespace_queue_url_is_refused(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL", "   ")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_an_unprefixed_order_queue_variable_is_not_accepted(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL")
+    monkeypatch.setenv("ORDER_QUEUE_URL", "https://sqs.local/server-order.fifo")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_a_standard_order_queue_is_rejected(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL", "https://sqs.local/order")
+
+    with pytest.raises(ValidationError, match="FIFO"):
+        Settings()
+
+
+def test_an_unprefixed_order_queue_variable_is_ignored(monkeypatch):
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("ORDER_QUEUE_URL", "https://sqs.local/server-order.fifo")
+
+    assert Settings().order_queue_url == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
+
+
+@pytest.mark.parametrize("key", ["BACKEND_URL", "BACKEND_JWT_SECRET", "BACKEND_JWT_ISSUER"])
+def test_lookup_http_settings_are_required(monkeypatch, key):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("PORTFOLIO_REBALANCER_" + key)
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_http_lookup_does_not_require_a_failure_queue(monkeypatch):
+    for name, value in REQUIRED.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("PORTFOLIO_REBALANCER_FAILURE_QUEUE_URL", raising=False)
+    assert Settings().order_queue_url == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
