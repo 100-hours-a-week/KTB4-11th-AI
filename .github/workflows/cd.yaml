@@ -187,7 +187,8 @@ jobs:
 
           compose config --quiet
           compose pull
-          compose up -d --wait postgres questdb market-http
+          # market-http·market-streamer는 운영 EC2가 아니라 V2 ECS(cd-ecs-v2.yaml)에서 실행합니다.
+          compose up -d --wait postgres questdb
           compose run --rm -T postgres-migrate </dev/null
           compose run --rm -T questdb-migrate </dev/null
 
@@ -231,7 +232,6 @@ jobs:
           # 모든 운영 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
-            ktb-market-streamer.timer \
             ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
@@ -239,7 +239,6 @@ jobs:
 
           for timer in \
             ktb-market-collector.timer \
-            ktb-market-streamer.timer \
             ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
