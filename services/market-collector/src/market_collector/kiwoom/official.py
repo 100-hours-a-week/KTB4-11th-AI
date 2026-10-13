@@ -55,7 +55,7 @@ class ChartClient:
         self._next_request_at = 0.0
 
     def minute_page(self, symbol: str, tic_scope: int, next_key: str | None = None) -> Page:
-        self._wait_for_request()
+        self._avoid_rate_limit()
         return fetch_page(
             self._client,
             api_id="ka10080",
@@ -66,7 +66,7 @@ class ChartClient:
         )
 
     def daily_page(self, symbol: str, base_dt: str, next_key: str | None = None) -> Page:
-        self._wait_for_request()
+        self._avoid_rate_limit()
         return fetch_page(
             self._client,
             api_id="ka10081",
@@ -76,7 +76,7 @@ class ChartClient:
             next_key=next_key,
         )
 
-    def _wait_for_request(self) -> None:
+    def _avoid_rate_limit(self) -> None:
         delay = self._next_request_at - time.monotonic()
         if delay > 0:
             time.sleep(delay)
