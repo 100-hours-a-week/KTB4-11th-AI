@@ -9,7 +9,7 @@ The Backend and Frontend need live KOSPI 200 prices, and every consumer of marke
 
 - **market-streamer** holds one Kiwoom `0B` (주식체결) WebSocket session for all KOSPI 200 stocks and writes each tick to Valkey.
 - **market-http** serves current prices from Valkey (REST and SSE) and historical OHLCV from QuestDB.
-- **market-collector** runs every minute so QuestDB history is at most about a minute old.
+- **market-collector** collects every minute through one process per trading day, so QuestDB history is at most about a minute old.
 - **portfolio-builder** reads bars through market-http and no longer reads QuestDB.
 
 ```mermaid
@@ -110,19 +110,17 @@ One pipeline per frame: `SET price:{code} <json>` and `PUBLISH price:{code} <jso
 
 ### Schedule
 
-`ktb-market-collector.timer` changes from hourly to every minute:
+market-collector runs as one process per trading day, like market-streamer, instead of a fresh run every minute. A fresh run each minute would request a new Kiwoom token every time (about 390 a day on the key market-streamer shares), repeat its startup inside the minute, and skip a minute whenever a run overran.
 
-```
-OnCalendar=Mon..Fri *-*-* 09..14:*:05 Asia/Seoul
-OnCalendar=Mon..Fri *-*-* 15:00..30:05 Asia/Seoul
-OnCalendar=Mon..Fri *-*-* 15:35:05 Asia/Seoul
-```
-
-The existing `flock -n -E 0` makes a run that starts while the previous one is still going exit successfully, so a slow minute or a first backfill skips ticks without raising the failure alarm.
+- `ktb-market-collector.timer` starts it once at `Mon..Fri 08:55:00` Asia/Seoul, with `Persistent=true` so a host that boots mid-session still starts it. The service is `Type=simple` under `flock -n -E 0`, with `Restart=on-failure` (1 minute apart, at most 5 starts an hour) and the same `OnSuccess`/`OnFailure` hooks as market-streamer.
+- On a KRX holiday (`ktb_core.krx.KRX_HOLIDAYS`, shared with portfolio-rebalancer) it logs `market_closed` and exits 0 without touching Kiwoom, PostgreSQL or QuestDB.
+- It loads the KOSPI 200 codes and builds one Kiwoom client per account once, so the token is reused all day. Each pass reconnects to QuestDB and reads the checkpoints again.
+- Passes run at `:05` past every minute from 09:00:05 to 15:30:05, then once at 15:35:05, after which the process exits 0. A pass that takes longer than a minute logs an `archive_pass_slow` warning (scheduled time and seconds) and is followed immediately by the next one. Started mid-session (a restart), it resumes at the next `:05`; started after 15:35:05, it runs one close pass and exits. Reconcile catches up from the checkpoint either way.
+- A failed minute pass is logged and the day continues. If the close pass fails, the process exits non-zero, so systemd retries it and the failure alarm fires if retries run out.
 
 ### Timeframes
 
-`archive_ohlcv` collects `("1m",)` before 15:35 KST and `("1m", "1d")` from 15:35 KST.
+Each pass collects `("1m",)` before 15:35 KST and `("1m", "1d")` from 15:35 KST, so only the close pass writes daily bars.
 
 ### Rate
 
@@ -222,7 +220,7 @@ Datastore tests use a real instance when their variable is set and skip otherwis
 
 - **market-collector** (`test_reconcile.py`, `test_main.py`):
   1. Runs at 09:00:05 and 09:01:05: the second run rewrites the 09:00 bar with its finished OHLCV and adds 09:01.
-  2. A run at 15:35:05 rewrites the 15:30 bar written while forming and writes today's 1d bar; runs before 15:35 do not request 1d.
+  2. The close pass at 15:35:05 rewrites the 15:30 bar written while forming and writes today's 1d bar; runs before 15:35 do not request 1d.
   3. A first run (`latest is None`) still caps at `LIMITS` and writes no bar twice.
 - **market-streamer:** tick parsing including signed and space-padded values; the `REG` packet carries all 200 codes; a dropped connection reconnects and sends `REG` again; passing `STOP_AT` exits 0; one frame produces `SET` and `PUBLISH` per entry in Valkey.
 - **market-http:** `/prices` hit; `/prices` miss filled from QuestDB with `SET NX` that leaves an existing key untouched; SSE sends the snapshot and then a published event; `/bars` pages across two pages via the cursor; an invalid cursor and an unknown timeframe return 422.

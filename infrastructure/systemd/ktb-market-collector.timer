@@ -1,12 +1,10 @@
 [Unit]
-Description=Run KTB market OHLCV collection every minute during weekday market sessions
+Description=Start the KTB market OHLCV collection day before the weekday open
 
 [Timer]
-OnCalendar=Mon..Fri *-*-* 09..14:*:05 Asia/Seoul
-OnCalendar=Mon..Fri *-*-* 15:00..30:05 Asia/Seoul
-OnCalendar=Mon..Fri *-*-* 15:35:05 Asia/Seoul
+OnCalendar=Mon..Fri *-*-* 08:55:00 Asia/Seoul
 AccuracySec=1s
-Persistent=false
+Persistent=true
 Unit=ktb-market-collector.service
 
 [Install]
