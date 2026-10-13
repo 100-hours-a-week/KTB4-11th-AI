@@ -4,9 +4,9 @@ from datetime import datetime
 
 import pytest
 from kiwoom import KiwoomWebSocketClient
+from ktb_core.krx import KST
 from market_streamer import stream
 from market_streamer.settings import Settings
-from market_streamer.stream import KST
 
 LOGIN_OK = {"trnm": "LOGIN", "return_code": 0, "return_msg": "ok"}
 REG_OK = {"trnm": "REG", "return_code": 0, "return_msg": "ok"}

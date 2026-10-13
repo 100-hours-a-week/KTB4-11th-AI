@@ -5,10 +5,11 @@ import pandas as pd
 import pytest
 import redis
 from fastapi.testclient import TestClient
+from ktb_core.krx import KST
 from market_http.app import create_app
 from market_http.controllers.prices import stream_prices
 from market_http.repositories import prices as prices_module
-from market_http.repositories.prices import KST, Price, questdb_price
+from market_http.repositories.prices import Price, questdb_price
 from redis.asyncio import Redis
 
 STREAMED = Price(

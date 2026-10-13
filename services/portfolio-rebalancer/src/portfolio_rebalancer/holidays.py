@@ -1,10 +1,8 @@
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 
-from ktb_core.krx import COVERED_THROUGH, is_trading_day
+from ktb_core.krx import COVERED_THROUGH, KST, MARKET_CLOSE, MARKET_OPEN, is_trading_day
 
-KST = ZoneInfo("Asia/Seoul")
-FIRST_RUN, LAST_RUN = 9, 15
+FIRST_RUN, LAST_RUN = MARKET_OPEN.hour, MARKET_CLOSE.hour
 RUNS_PER_DAY = LAST_RUN - FIRST_RUN + 1
 
 

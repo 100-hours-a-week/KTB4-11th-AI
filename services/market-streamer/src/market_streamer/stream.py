@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Iterable
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time
 from typing import Any
 
 from kiwoom import KiwoomAuth, KiwoomWebSocketClient
@@ -9,6 +9,7 @@ from kiwoom.core.errors import normalize_return_code
 from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
 from kiwoom.realtime import build_reg_packet
+from ktb_core.krx import KST
 from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
@@ -16,8 +17,6 @@ from websockets.asyncio.client import ClientConnection, connect
 from market_streamer.settings import Settings
 from market_streamer.symbols import load_codes
 from market_streamer.valkey import connect_valkey
-
-KST = timezone(timedelta(hours=9), "KST")
 
 log = get_logger(__name__)
 

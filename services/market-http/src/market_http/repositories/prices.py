@@ -1,15 +1,14 @@
 import asyncio
-from datetime import UTC, datetime, time, timedelta, timezone
+from datetime import UTC, datetime, time
 from typing import Any
 
 import pandas as pd
 import questdb
+from ktb_core.krx import KST
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
 from market_http.repositories.questdb import as_utc, questdb_time, records
-
-KST = timezone(timedelta(hours=9), "KST")
 
 LATEST = "SELECT ts, close FROM bars WHERE timeframe = '1m' AND symbol = $1 LIMIT -1"
 PREVIOUS_CLOSE = (

@@ -3,8 +3,8 @@ from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from ktb_core.krx import KST
 from market_collector import __main__ as cli
-from market_collector.kiwoom.parse import KST
 from market_collector.settings import Settings
 
 QDB = "ws::addr=localhost:9000;"
@@ -53,7 +53,7 @@ def test_archive_pass_reads_checkpoints_before_reconciling(monkeypatch):
         ),
     )
 
-    assert cli.archive_ohlcv(settings, symbols, ["c1", "c2"], NOW) == 2
+    assert cli.archive_ohlcv(settings, symbols, ["c1", "c2"], NOW, daily=False) == 2
     assert events[0] == ("checkpoints",)
     assert sorted(events[1:]) == [
         ("reconcile_candles", "000660", "1m", "20260928", None),
@@ -80,7 +80,7 @@ def test_archive_pass_shards_symbols_across_clients(monkeypatch):
         ),
     )
 
-    cli.archive_ohlcv(settings, symbols, ["k1", "k2"], NOW)
+    cli.archive_ohlcv(settings, symbols, ["k1", "k2"], NOW, daily=False)
 
     by_client = {}
     for client, symbol, timeframe in calls:
@@ -105,18 +105,11 @@ def test_archive_pass_propagates_worker_exception(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        cli.archive_ohlcv(settings, ["005930"], ["c1"], NOW)
+        cli.archive_ohlcv(settings, ["005930"], ["c1"], NOW, daily=False)
 
 
-@pytest.mark.parametrize(
-    ("local", "timeframes"),
-    [
-        (datetime(2026, 9, 28, 9, 0, 5, tzinfo=KST), ["1m"]),
-        (datetime(2026, 9, 28, 15, 30, 5, tzinfo=KST), ["1m"]),
-        (datetime(2026, 9, 28, 15, 35, 5, tzinfo=KST), ["1m", "1d"]),
-    ],
-)
-def test_daily_bars_are_collected_only_from_the_close_pass(monkeypatch, local, timeframes):
+@pytest.mark.parametrize(("daily", "timeframes"), [(False, ["1m"]), (True, ["1m", "1d"])])
+def test_daily_bars_are_collected_only_when_asked(monkeypatch, daily, timeframes):
     settings = _settings(monkeypatch)
     seen = []
 
@@ -132,7 +125,7 @@ def test_daily_bars_are_collected_only_from_the_close_pass(monkeypatch, local, t
         lambda client, store, symbol, timeframe, base_dt, latest: seen.append(timeframe) or 0,
     )
 
-    cli.archive_ohlcv(settings, ["005930"], ["c1"], local.astimezone(UTC))
+    cli.archive_ohlcv(settings, ["005930"], ["c1"], NOW, daily=daily)
 
     assert seen == timeframes
 
@@ -142,6 +135,7 @@ class Day:
         self.now = start
         self.work = work or {}
         self.passes: list[datetime] = []
+        self.daily: list[bool] = []
         self.sleeps: list[float] = []
 
     def clock(self) -> datetime:
@@ -151,8 +145,9 @@ class Day:
         self.sleeps.append(seconds)
         self.now += timedelta(seconds=seconds)
 
-    def archive(self, settings, symbols, clients, now):
+    def archive(self, settings, symbols, clients, now, daily):
         self.passes.append(now.astimezone(KST))
+        self.daily.append(daily)
         self.now += timedelta(seconds=self.work.get(now.astimezone(KST), 50))
         return 0
 
@@ -187,6 +182,7 @@ def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
     assert day.passes[-2] == _kst(15, 30, 5)
     assert day.passes[-1] == _kst(15, 35, 5)
     assert len(day.passes) == 6 * 60 + 31 + 1
+    assert day.daily == [False] * (6 * 60 + 31) + [True]
 
 
 def test_overrunning_pass_is_followed_immediately_and_warned(monkeypatch, caplog):
@@ -218,6 +214,7 @@ def test_start_after_the_close_runs_one_close_pass(monkeypatch):
     _run(monkeypatch, day)
 
     assert day.passes == [_kst(15, 40)]
+    assert day.daily == [True]
 
 
 @pytest.mark.parametrize(
@@ -238,11 +235,11 @@ def test_holiday_does_nothing(monkeypatch, start):
 def test_failed_minute_pass_does_not_stop_the_day(monkeypatch):
     day = Day(_kst(15, 29))
 
-    def archive(settings, symbols, clients, now):
+    def archive(settings, symbols, clients, now, daily):
         if now.astimezone(KST) == _kst(15, 29, 5):
             day.now += timedelta(seconds=1)
             raise RuntimeError("kiwoom timeout")
-        return day.archive(settings, symbols, clients, now)
+        return day.archive(settings, symbols, clients, now, daily)
 
     _run(monkeypatch, day, archive)
 
@@ -252,7 +249,7 @@ def test_failed_minute_pass_does_not_stop_the_day(monkeypatch):
 def test_failed_close_pass_fails_the_run(monkeypatch):
     day = Day(_kst(15, 34))
 
-    def archive(settings, symbols, clients, now):
+    def archive(settings, symbols, clients, now, daily):
         day.passes.append(now.astimezone(KST))
         raise RuntimeError("questdb down")
 

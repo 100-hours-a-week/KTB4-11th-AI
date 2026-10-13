@@ -1,4 +1,9 @@
-from datetime import date
+from datetime import date, time
+from zoneinfo import ZoneInfo
+
+KST = ZoneInfo("Asia/Seoul")
+MARKET_OPEN = time(9, 0)
+MARKET_CLOSE = time(15, 30)
 
 KRX_HOLIDAYS = frozenset(
     {

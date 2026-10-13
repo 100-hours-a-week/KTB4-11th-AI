@@ -2,8 +2,8 @@ from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from ktb_core.krx import KST
 from market_collector.kiwoom.official import Page
-from market_collector.kiwoom.parse import KST
 from market_collector.reconcile import reconcile_candles
 from market_collector.store import Store
 
