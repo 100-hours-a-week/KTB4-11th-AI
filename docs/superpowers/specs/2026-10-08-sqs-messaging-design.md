@@ -29,7 +29,7 @@ SQS 발행 성공은 취소 완료가 아닙니다. AI는 취소 요청 후 바�
 
 ktb_core.backend_auth의 기존 HTTP 사용자 조회 JWT 인증을 유지합니다. boto3는 서비스에서 만들고 ktb_core.queue에 주입합니다.
 SQS 인증은 SDK 기본 자격 증명 체인/EC2 IAM Role, 리전은 Compose의 AWS_DEFAULT_REGION 기본 ap-northeast-2입니다.
-ORDER_QUEUE_URL과 Backend 설정은 배포 .env에서 다른 서비스와 같은 방식으로 전달합니다.
+운영 ORDER_QUEUE_URL은 /etc/stockspoon/ai.env에서 Compose env_file로 전달합니다. 개발 큐 URL과 Backend 설정은 기존 .env에서 Compose environment로 전달합니다.
 Access Key를 직접 저장하지 않습니다. 기존 ktb_core.logging으로 sqs_message_id, event_id, correlation_id, result를 기록합니다.
 
 리밸런서는 SQS 소비자가 아니므로 long polling, DeleteMessage, visibility 연장은 사용하지 않습니다.

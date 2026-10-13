@@ -542,8 +542,9 @@ FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계�
 계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
 
 HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용합니다.
-큐 URL과 HTTP 설정은 다른 서비스처럼 배포 `.env`에서 Compose `environment`를 거쳐
-Settings로 읽습니다. 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
+운영에서는 큐 URL을 `/etc/stockspoon/ai.env`에 설정하고 Compose의 `env_file`을 통해 Settings로 읽습니다.
+HTTP 설정은 기존 배포 `.env`에서 Compose `environment`로 전달합니다.
+개발 환경의 큐 URL은 `.env`에서 전달하며, 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
 SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
 기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
 리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.

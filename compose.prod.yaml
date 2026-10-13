@@ -128,12 +128,12 @@ services:
     <<: *app
     profiles: ["jobs"]
     command: ["portfolio-rebalancer"]
+    env_file: /etc/stockspoon/ai.env
     mem_limit: 384m
     stop_grace_period: 2m
     environment:
       <<: *postgres-environment
       PORTFOLIO_REBALANCER_QUESTDB_CONF: ws::addr=questdb:9000;
-      ORDER_QUEUE_URL: ${ORDER_QUEUE_URL:?ORDER_QUEUE_URL must be set}
       PORTFOLIO_REBALANCER_BACKEND_URL: ${PORTFOLIO_REBALANCER_BACKEND_URL:?PORTFOLIO_REBALANCER_BACKEND_URL must be set}
       PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET: ${PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET:?PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET must be set}
       PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER: ${PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER:?PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER must be set}
