@@ -21,11 +21,14 @@ flowchart LR
         NGB["news-graph-builder"]
         NH["news-http"]
         MC["market-collector"]
+        MSTR["market-streamer"]
+        MH["market-http"]
         PB["portfolio-builder"]
         PR["portfolio-rebalancer"]
         RB["report-builder"]
         PG[("PostgreSQL")]
         QDB[("QuestDB")]
+        Valkey[("Valkey")]
     end
 
     subgraph BACKEND["KTB4-11th-BE"]
@@ -44,6 +47,7 @@ flowchart LR
     NC -->|clusters| PG
 
     KIWOOM --> MS
+    KIWOOM --> MSTR
     DART --> MS
     MS -->|corporations, indices, themes| PG
     PG -->|clusters, corporations| NGB
@@ -55,9 +59,13 @@ flowchart LR
     PG -->|KOSPI 200 symbols| MC
     KIWOOM --> MC
     MC -->|OHLCV| QDB
+    PG -->|KOSPI 200 symbols| MSTR
+    MSTR -->|latest price| Valkey
+    Valkey -->|prices| MH
+    MH -->|bars| QDB
 
     PG <-->|model portfolio| PB
-    QDB <--> PB
+    MH <--> PB
     OPENROUTER <--> PB
 
     PG -->|model portfolio, reasons| PR
@@ -402,15 +410,50 @@ Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다.
 | `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | 필수 | | `app_key`, `secret_key` 객체의 JSON 배열 |
 | `MARKET_COLLECTOR_KIWOOM_MODE` | | `real` | `real` 또는 `demo` |
 | `MARKET_COLLECTOR_INDEX_NAME` | | `KOSPI200` | 수집 종목을 구성하는 지수 이름 |
-| `MARKET_COLLECTOR_REQUEST_INTERVAL` | | `1.3` | 키움 REST 요청 사이 대기 시간(초) |
+| `MARKET_COLLECTOR_REQUEST_INTERVAL` | | `1.3` (운영 Compose `0.25`) | 키움 REST 요청 사이 대기 시간(초) |
 | `MARKET_COLLECTOR_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+### market-streamer (`MARKET_STREAMER_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `MARKET_STREAMER_POSTGRES_DSN` | 필수 | | `corporation_indices`에서 구독 종목을 읽는 DSN |
+| `MARKET_STREAMER_KIWOOM_APP_KEY` | 필수 | | 키움 REST API 앱 키 |
+| `MARKET_STREAMER_KIWOOM_SECRET_KEY` | 필수 | | 키움 REST API 시크릿 키 |
+| `MARKET_STREAMER_KIWOOM_MODE` | | `real` | `real` 또는 `demo`(모의투자) |
+| `MARKET_STREAMER_INDEX_NAME` | | `KOSPI200` | 구독 종목을 구성하는 지수 이름 |
+| `MARKET_STREAMER_STOP_AT` | | `15:40` | 종료 시각(KST, `HH:MM`). 이 시각 이후에 시작하면 바로 종료 |
+| `MARKET_STREAMER_VALKEY_HOST` | 필수 | | 현재가를 저장할 Valkey 호스트 |
+| `MARKET_STREAMER_VALKEY_PORT` | | `6379` | Valkey 포트 |
+| `MARKET_STREAMER_VALKEY_USERNAME` | | | Valkey 사용자. `iam` 인증에서 필요 |
+| `MARKET_STREAMER_VALKEY_CACHE_NAME` | | | ElastiCache 서버리스 캐시 이름. `iam` 인증에서 필요 |
+| `MARKET_STREAMER_VALKEY_TLS` | | `false` | Valkey TLS 연결 사용 여부 (운영 Compose는 `true`) |
+| `MARKET_STREAMER_VALKEY_AUTH_MODE` | | `none` | `none` 또는 `iam`(IAM 토큰 인증) |
+| `MARKET_STREAMER_AWS_REGION` | | `ap-northeast-2` | IAM 토큰을 서명할 AWS 리전 |
+| `MARKET_STREAMER_LOG_LEVEL` | | `INFO` | 로그 수준 |
+
+### market-http (`MARKET_HTTP_`)
+
+| 변수 | 필수 | 기본값 | 설명 |
+|---|---|---|---|
+| `MARKET_HTTP_QUESTDB_CONF` | 필수 | | QuestDB 공식 Python 클라이언트 연결 문자열 |
+| `MARKET_HTTP_VALKEY_HOST` | 필수 | | 현재가를 읽을 Valkey 호스트 |
+| `MARKET_HTTP_VALKEY_PORT` | | `6379` | Valkey 포트 |
+| `MARKET_HTTP_VALKEY_USERNAME` | | | Valkey 사용자. `iam` 인증에서 필요 |
+| `MARKET_HTTP_VALKEY_CACHE_NAME` | | | ElastiCache 서버리스 캐시 이름. `iam` 인증에서 필요 |
+| `MARKET_HTTP_VALKEY_TLS` | | `false` | Valkey TLS 연결 사용 여부 (운영 Compose는 `true`) |
+| `MARKET_HTTP_VALKEY_AUTH_MODE` | | `none` | `none` 또는 `iam`(IAM 토큰 인증) |
+| `MARKET_HTTP_AWS_REGION` | | `ap-northeast-2` | IAM 토큰을 서명할 AWS 리전 |
+| `MARKET_HTTP_HOST` | | `0.0.0.0` | 바인드 주소 |
+| `MARKET_HTTP_PORT` | | `8000` | 바인드 포트 |
+| `MARKET_HTTP_LOG_LEVEL` | | `INFO` | 로그 수준 |
 
 ### portfolio-builder (`PORTFOLIO_BUILDER_`)
 
 | 변수 | 필수 | 기본값 | 조절 대상 |
 |---|---|---|---|
 | `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | | 기업/포트폴리오 저장소 연결 |
-| `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | | QuestDB 시세 연결 |
+| `PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI` | 필수 | | market-http API 주소 |
 | `PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI` | 필수 | | news-http API 주소 |
 | `PORTFOLIO_BUILDER_LLM_API_KEY` | 필수 | | OpenAI API 인증 |
 | `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | | OpenAI API 모델 ID |

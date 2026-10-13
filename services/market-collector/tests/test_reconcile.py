@@ -143,16 +143,16 @@ def test_incremental_collection_exceeds_initial_limit_and_reaches_old_checkpoint
 
     written = reconcile_candles(client, Store(sink), "005930", timeframe, BASE_DT, latest)
 
-    assert written == limit + 1
+    assert written == limit + 2
     assert [row[3] for row in sink.rows] == [
-        anchor - offset * step for offset in reversed(range(limit + 1))
+        anchor - offset * step for offset in reversed(range(limit + 2))
     ]
-    assert all(row[3] > latest for row in sink.rows)
+    assert all(row[3] >= latest for row in sink.rows)
     assert len(client.minute_calls + client.daily_calls) == 2
     assert len(client.pages) == 1
 
 
-def test_reconcile_with_checkpoint_filters_strictly_newer_and_stops_at_boundary_page():
+def test_reconcile_with_checkpoint_rewrites_it_and_stops_at_boundary_page():
     latest = datetime(2026, 9, 22, 6, 27, tzinfo=UTC)
     pages = [
         Page([_minute_row(101, 0), _minute_row(102, 1)], "NK1", True),
@@ -164,12 +164,96 @@ def test_reconcile_with_checkpoint_filters_strictly_newer_and_stops_at_boundary_
 
     written = reconcile_candles(client, Store(sink), "005930", "1m", BASE_DT, latest)
 
-    assert written == 2
+    assert written == 3
     assert [row[3] for row in sink.rows] == [
+        datetime(2026, 9, 22, 6, 27, tzinfo=UTC),
         datetime(2026, 9, 22, 6, 28, tzinfo=UTC),
         datetime(2026, 9, 22, 6, 29, tzinfo=UTC),
     ]
     assert len(client.minute_calls) == 2
+
+
+def _minute_at(at: datetime, close: int, volume: int) -> dict[str, str]:
+    return {
+        "cntr_tm": at.strftime("%Y%m%d%H%M%S"),
+        "cur_prc": f"+{close}",
+        "open_pric": "+100",
+        "high_pric": f"+{max(close, 100)}",
+        "low_pric": "+100",
+        "trde_qty": str(volume),
+    }
+
+
+def _written(sink: FakeSink) -> list[tuple[datetime, float, int]]:
+    return [(row[3], row[2]["close"], row[2]["volume"]) for row in sink.rows]
+
+
+def test_forming_minute_is_rewritten_by_the_next_run():
+    nine = datetime(2026, 9, 22, 9, 0, tzinfo=KST)
+    first = FakeSink()
+    reconcile_candles(
+        FakeClient([Page([_minute_at(nine, 101, 10)], None, False)]),
+        Store(first),
+        "005930",
+        "1m",
+        BASE_DT,
+        None,
+    )
+    second = FakeSink()
+
+    written = reconcile_candles(
+        FakeClient(
+            [
+                Page(
+                    [_minute_at(nine + timedelta(minutes=1), 103, 5), _minute_at(nine, 102, 30)],
+                    None,
+                    False,
+                )
+            ]
+        ),
+        Store(second),
+        "005930",
+        "1m",
+        BASE_DT,
+        nine.astimezone(UTC),
+    )
+
+    assert _written(first) == [(nine.astimezone(UTC), 101.0, 10)]
+    assert written == 2
+    assert _written(second) == [
+        (nine.astimezone(UTC), 102.0, 30),
+        ((nine + timedelta(minutes=1)).astimezone(UTC), 103.0, 5),
+    ]
+
+
+def test_close_run_rewrites_the_last_minute_and_writes_today_daily_bar():
+    last = datetime(2026, 9, 22, 15, 30, tzinfo=KST)
+    minute = FakeSink()
+    daily = FakeSink()
+
+    reconcile_candles(
+        FakeClient([Page([_minute_at(last, 105, 70)], None, False)]),
+        Store(minute),
+        "005930",
+        "1m",
+        BASE_DT,
+        last.astimezone(UTC),
+    )
+    written = reconcile_candles(
+        FakeClient([Page([_daily_row("20260922", 105), _daily_row("20260919", 99)], None, False)]),
+        Store(daily),
+        "005930",
+        "1d",
+        BASE_DT,
+        datetime(2026, 9, 19, tzinfo=UTC),
+    )
+
+    assert _written(minute) == [(last.astimezone(UTC), 105.0, 70)]
+    assert written == 2
+    assert [row[3] for row in daily.rows] == [
+        datetime(2026, 9, 19, tzinfo=UTC),
+        datetime(2026, 9, 22, tzinfo=UTC),
+    ]
 
 
 def test_reconcile_terminal_empty_first_page_writes_zero_and_returns():
