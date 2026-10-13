@@ -31,7 +31,6 @@ jobs:
     env:
       # Repository Variable과 CI가 방금 push한 커밋 SHA로 ECR 이미지 주소를 만듭니다.
       APP_IMAGE: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.event.workflow_run.head_sha }}
-      CLOUDWATCH_LOG_GROUP_PREFIX: /stockspoon/v2/dev/ai
       DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
       DEPLOY_HOST: ${{ secrets.EC2_HOST }}
       DEPLOY_USER: ${{ secrets.EC2_USER }}
@@ -78,11 +77,11 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             'sudo -n true && mkdir -p ~/ai && rm -rf ~/ai/.schedule.next && mkdir -p ~/ai/.schedule.next'
 
+          # 시크릿 .env와 분리해 CD가 APP_IMAGE만 안전하게 갱신합니다.
           umask 077
           image_env="$(mktemp)"
           trap 'rm -f "$image_env"' EXIT
-          printf "APP_IMAGE='%s'\nCLOUDWATCH_LOG_GROUP_PREFIX='%s'\n" \
-            "$APP_IMAGE" "$CLOUDWATCH_LOG_GROUP_PREFIX" > "$image_env"
+          printf "APP_IMAGE='%s'\n" "$APP_IMAGE" > "$image_env"
 
           # 임시 이름으로 전송해 불완전한 파일을 배포 과정에서 읽지 않게 합니다.
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"

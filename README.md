@@ -326,13 +326,6 @@ erDiagram
 | `portfolios.status` | `portfolio-builder` | `0008` |
 | `portfolio_reasons.id` | `portfolio-builder` | `0010` |
 
-## 배포 로그 설정
-
-운영 Compose의 CloudWatch 로그 그룹은 `CLOUDWATCH_LOG_GROUP_PREFIX`로 지정합니다.
-기본값은 `/stockspoon/ai`이며, 개발 CD는 `/stockspoon/v2/dev/ai`를 `.image.env`에 이미지와 함께 기록합니다.
-배포와 systemd 예약 실행은 같은 파일을 읽고, 롤백 시 이전 이미지와 로그 그룹 설정을 함께 복원합니다.
-각 환경의 EC2 Role은 해당 prefix의 application/postgres/questdb 로그 그룹에 대한 기록 권한이 필요합니다.
-
 ## 리밸런서 통신 경로
 
 | 작업 | 경로 |
