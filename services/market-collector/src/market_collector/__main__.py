@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 
 import questdb
 from ktb_core.logging import get_logger, setup_logging, start_logging
@@ -13,6 +13,7 @@ from market_collector.store import Store
 from market_collector.symbols import load_symbols
 
 log = get_logger(__name__)
+CLOSE_RUN = time(15, 35)
 
 
 def shard(symbols: Sequence[str], buckets: int) -> list[list[str]]:
@@ -31,7 +32,9 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
         store = Store(db)
         latest = store.latest_bar_timestamps(symbols)
 
-    base_dt = now.astimezone(KST).strftime("%Y%m%d")
+    local = now.astimezone(KST)
+    base_dt = local.strftime("%Y%m%d")
+    timeframes = ("1m", "1d") if local.time() >= CLOSE_RUN else ("1m",)
     groups = shard(symbols, len(settings.kiwoom_accounts))
 
     def worker(index: int, bucket: list[str]) -> int:
@@ -43,7 +46,7 @@ def archive_ohlcv(settings: Settings, now: datetime) -> int:
             store = Store(db)
             written = 0
             for symbol in bucket:
-                for timeframe in ("1d", "1m"):
+                for timeframe in timeframes:
                     written += reconcile_candles(
                         client,
                         store,
