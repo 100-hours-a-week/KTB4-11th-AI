@@ -56,13 +56,14 @@ def test_a_whitespace_queue_url_is_refused(monkeypatch):
         Settings()
 
 
-def test_the_server_order_queue_variable_is_accepted(monkeypatch):
+def test_an_unprefixed_order_queue_variable_is_not_accepted(monkeypatch):
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
     monkeypatch.delenv("PORTFOLIO_REBALANCER_ORDER_QUEUE_URL")
     monkeypatch.setenv("ORDER_QUEUE_URL", "https://sqs.local/server-order.fifo")
 
-    assert Settings().order_queue_url == "https://sqs.local/server-order.fifo"
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 def test_a_standard_order_queue_is_rejected(monkeypatch):
@@ -74,12 +75,12 @@ def test_a_standard_order_queue_is_rejected(monkeypatch):
         Settings()
 
 
-def test_the_server_order_queue_wins_over_the_legacy_variable(monkeypatch):
+def test_an_unprefixed_order_queue_variable_is_ignored(monkeypatch):
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("ORDER_QUEUE_URL", "https://sqs.local/server-order.fifo")
 
-    assert Settings().order_queue_url == "https://sqs.local/server-order.fifo"
+    assert Settings().order_queue_url == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
 
 
 @pytest.mark.parametrize("key", ["BACKEND_URL", "BACKEND_JWT_SECRET", "BACKEND_JWT_ISSUER"])
