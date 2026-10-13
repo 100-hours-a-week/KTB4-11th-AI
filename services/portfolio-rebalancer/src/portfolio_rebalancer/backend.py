@@ -52,15 +52,3 @@ class Backend:
     def users(self) -> list[User]:
         response = self._auth.get("/api/v1/users/ai-server", "ai-server")
         return Snapshot.model_validate(response.json()).users
-
-    def place(self, user_id: int, account_id: int, order: Order, body: dict | None = None) -> None:
-        body = order_request_body(order) if body is None else body
-        self._auth.request("POST", f"/api/v1/accounts/{account_id}/orders", str(user_id), json=body)
-
-    def cancel(self, user_id: int, account_id: int, order_id: int) -> None:
-        self._auth.request(
-            "PATCH",
-            f"/api/v1/accounts/{account_id}/orders/{order_id}",
-            str(user_id),
-            json={"status": "cancelled"},
-        )

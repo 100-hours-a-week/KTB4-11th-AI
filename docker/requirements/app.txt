@@ -28,7 +28,9 @@ beautifulsoup4==4.15.0 \
 boto3==1.43.109 \
     --hash=sha256:703a81baed186d31e27cf50065d25a9faeb704f009e7c56b0f002ca52a328896 \
     --hash=sha256:c829bc3352e1e3922d8fe1db10b697182ac411b64ce5fc3acb0a06a29837417e
-    # via report-builder
+    # via
+    #   portfolio-rebalancer
+    #   report-builder
 botocore==1.43.109 \
     --hash=sha256:46b15bea4d942aaea6d7ab7c4b8a3a7290305064a3b41a6cb271cde9da3ba371 \
     --hash=sha256:cd00edff465264fb448e36acc9ee29a828f738fff3746270b3f685a19194a5a6
