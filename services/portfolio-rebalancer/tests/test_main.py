@@ -206,9 +206,9 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
     ]
     assert events[-1]["cancel_requested"] == 2
     received = [e for e in events if e["message"] == "users_received"]
-    assert [e["user_count"] for e in received] == [2, 2]
+    assert [e["user_count"] for e in received] == [2]
     kinds = [c[0] for c in backends[0].calls]
-    assert kinds == ["users", "cancel", "cancel", "users", "place"]
+    assert kinds == ["users", "cancel", "cancel", "place"]
     assert backends[0].replaced == [(11, [77, 78])]
     sent = next(e for e in events if e["message"] == "order_sent")
     assert (sent["result"], sent["event_id"], sent["sqs_message_id"]) == ("published", "e1", "m1")
@@ -357,16 +357,17 @@ def test_the_clock_reaches_the_daily_closes_query(env, monkeypatch):
     assert env["now"] == WEDNESDAY_NOON.astimezone(UTC)
 
 
-def test_trades_are_sized_from_the_snapshot_after_cancelling(env, monkeypatch):
+def test_replacements_use_the_initial_snapshot_without_waiting_for_cancellation(env, monkeypatch):
     filled = users(account(11, stocks=[("005930", 4)], cash=600_000))
     backends = _use(monkeypatch, users=users(account(11, pending=[77])), refreshed=filled)
 
     assert _main() == 0
     assert backends[0].cancelled == [(1, 11, 77)]
-    assert backends[0].placed == []
+    assert backends[0].placed == [(1, 11, "005930", 4)]
+    assert backends[0].calls_of("users") == [("users",)]
 
 
-def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, capsys):
+def test_pending_orders_in_the_snapshot_do_not_defer_replacements(env, monkeypatch, capsys):
     backends = _use(
         monkeypatch,
         users=users(account(11, pending=[77])),
@@ -374,18 +375,13 @@ def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, 
     )
 
     assert _main() == 0
-    assert backends[0].placed == []
-    warn = next(
-        e for e in _events(capsys.readouterr().out) if e["message"] == "pending_after_cancel"
-    )
-    assert (warn["account_id"], warn["order_ids"]) == (11, [79])
+    assert backends[0].placed == [(1, 11, "005930", 4)]
+    assert backends[0].replaced == [(11, [77])]
+    assert not any(e["message"] == "pending_after_cancel" for e in _events(capsys.readouterr().out))
 
 
-@pytest.mark.parametrize("refresh_failure", [False, True])
 @pytest.mark.parametrize("failure", ["timeout", "status", "invalid", "json"])
-def test_http_user_fetch_failure_logs_and_stops_orders(
-    env, monkeypatch, capsys, failure, refresh_failure
-):
+def test_http_user_fetch_failure_logs_and_stops_orders(env, monkeypatch, capsys, failure):
     sent = []
     requests = []
     reads = 0
@@ -406,10 +402,6 @@ def test_http_user_fetch_failure_logs_and_stops_orders(
         assert request.method == "GET"
         assert request.url.path == "/api/v1/users/ai-server"
         reads += 1
-        if refresh_failure and reads == 1:
-            return httpx.Response(
-                200, json={"users": [u.model_dump() for u in users(account(11, pending=[77]))]}
-            )
         if failure == "timeout":
             raise httpx.ReadTimeout("backend unavailable", request=request)
         if failure == "status":
@@ -426,8 +418,8 @@ def test_http_user_fetch_failure_logs_and_stops_orders(
     )
     monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
     assert _main() == 1
-    assert len(sent) == (1 if refresh_failure else 0)
-    assert reads == (2 if refresh_failure else 1)
+    assert sent == []
+    assert reads == 1
     out = capsys.readouterr().out
     assert "private" not in out
     event = next(e for e in _events(out) if e["message"] == "users_fetch_failed")
@@ -439,10 +431,33 @@ def test_http_user_fetch_failure_logs_and_stops_orders(
     assert _events(out)[-1]["outcome"] == "users_fetch_failed"
 
 
-def test_users_http_then_cancel_sqs_then_refresh_http_then_place_sqs(env, monkeypatch):
+@pytest.mark.parametrize("exiting", [False, True])
+def test_users_http_then_cancel_and_replacement_in_one_fifo_group(env, monkeypatch, exiting):
     sent = []
     phases = []
     reads = 0
+    snapshot = account(
+        11,
+        pending=[77],
+        stocks=[("005930", 4)] if exiting else (),
+        cash=600_000 if exiting else 1_000_000,
+    )
+    if exiting:
+        snapshot["pending_orders"][0]["order_side"] = "sell"
+        portfolio = PORTFOLIO.model_copy(
+            update={
+                "cash_weight": 1.0,
+                "targets": [
+                    Target(stock_code="005930", weight=0.0, exiting=True, buy=None, sell=WHY)
+                ],
+            }
+        )
+        monkeypatch.setattr(entry, "load_portfolio", lambda engine: portfolio)
+    else:
+        snapshot["pending_orders"][0]["limit_price"] = 88_000
+    monkeypatch.setattr(
+        entry, "daily_closes", lambda conf, codes, now: {"005930": [90_000.0, 110_000.0] * 10}
+    )
 
     class Sqs:
         def send_message(self, **kwargs):
@@ -469,11 +484,9 @@ def test_users_http_then_cancel_sqs_then_refresh_http_then_place_sqs(env, monkey
         if request.url.path == "/api/v1/users/ai-server":
             assert request.method == "GET"
             reads += 1
+            assert reads == 1
             phases.append("users")
-            snapshot = (
-                users(account(11, pending=[77])) if reads == 1 else users(account(11, cash=777_000))
-            )
-            return httpx.Response(200, json={"users": [u.model_dump() for u in snapshot]})
+            return httpx.Response(200, json={"users": [u.model_dump() for u in users(snapshot)]})
         raise AssertionError("only user lookup uses HTTP")
 
     client_type = httpx.Client
@@ -484,10 +497,14 @@ def test_users_http_then_cancel_sqs_then_refresh_http_then_place_sqs(env, monkey
     )
     monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
     assert _main() == 0
-    assert phases == ["users", "cancel", "users", "place"]
+    assert phases == ["users", "cancel", "place"]
     assert sent[1]["payload"]["reason_id"] == str(WHY.id)
     assert sent[1]["payload"]["replaces_order_ids"] == [77]
-    assert sent[1]["payload"]["quantity"] == 3
+    assert sent[1]["payload"]["quantity"] == 4
+    assert sent[1]["payload"]["order_side"] == ("sell" if exiting else "buy")
+    assert sent[1]["payload"]["limit_price"] == (110_300 if exiting else 89_700)
+    assert len(sent) == 2
+    assert sent[0]["eventId"] != sent[1]["eventId"]
 
 
 def test_empty_http_users_are_valid_and_publish_nothing(env, monkeypatch):

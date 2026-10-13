@@ -26,7 +26,6 @@ from portfolio_rebalancer.snapshot import Account
 TOTALS = (
     "cancel_requested",
     "cancel_failed",
-    "deferred",
     "sent",
     "failed",
     "limit",
@@ -121,18 +120,6 @@ def main() -> None:
             try:
                 users = backend.users()
                 log.info("users_received", user_count=len(users))
-                for user in users:
-                    for account in user.accounts:
-                        if account.is_active:
-                            if _cancel_all(orders, log, user.user_id, account, counts):
-                                cancel_requested_by_account[account.account_id].update(
-                                    pending.order_id for pending in account.pending_orders
-                                )
-                            else:
-                                failed_cancels.add(account.account_id)
-                if counts["cancel_requested"]:
-                    users = backend.users()
-                    log.info("users_received", user_count=len(users))
             except (httpx.HTTPError, ValueError) as error:
                 reason = (
                     "users_fetch_failed"
@@ -150,6 +137,15 @@ def main() -> None:
                     **{key: counts[key] for key in TOTALS},
                 )
                 raise SystemExit(1) from error
+            for user in users:
+                for account in user.accounts:
+                    if account.is_active:
+                        if _cancel_all(orders, log, user.user_id, account, counts):
+                            cancel_requested_by_account[account.account_id].update(
+                                pending.order_id for pending in account.pending_orders
+                            )
+                        else:
+                            failed_cancels.add(account.account_id)
             codes = {t.stock_code for t in portfolio.targets} | {
                 s.stock_code for u in users for a in u.accounts for s in a.stocks
             }
@@ -166,16 +162,6 @@ def main() -> None:
                     if not account.is_active or account.account_id in failed_cancels:
                         continue
                     replaced = sorted(cancel_requested_by_account[account.account_id])
-                    if account.pending_orders:
-                        counts["deferred"] += 1
-                        log.warning(
-                            "pending_after_cancel",
-                            user_id=user.user_id,
-                            account_id=account.account_id,
-                            order_ids=[o.order_id for o in account.pending_orders],
-                            result="deferred",
-                        )
-                        continue
                     if stranded := sorted(
                         {s.stock_code for s in account.stocks if s.quantity > 0}
                         - named
