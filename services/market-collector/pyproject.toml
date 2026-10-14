@@ -11,6 +11,8 @@ dependencies = [
     "questdb>=5.0",
     "sqlalchemy>=2.0.54",
     "psycopg[binary]>=3.3.6",
+    "redis>=6.4",
+    "botocore>=1.40",
 ]
 
 [project.scripts]

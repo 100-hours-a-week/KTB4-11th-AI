@@ -49,6 +49,23 @@ One key and one channel per stock, both named `price:{code}` (e.g. `price:005930
 - `price` and `change` are integers in KRW; `rate` is percent; `volume` is today's cumulative volume.
 - Keys have no TTL. The last price stays valid overnight and over weekends.
 
+### Rankings
+
+market-streamer writes daily sorted sets for subscribed KOSPI 200 stocks. market-http reads
+the full signed change rate in descending order for gainers and ascending order for losers.
+
+| Key | Score |
+|---|---|
+| `ranking:trade_value:{YYYYMMDD}` | Kiwoom `0B` cumulative trading value (FID `14`) |
+| `ranking:volume:{YYYYMMDD}` | Kiwoom `0B` cumulative volume (FID `13`) |
+| `ranking:change_rate:{YYYYMMDD}` | Signed change rate (FID `12`) |
+| `ranking:popular` | Kiwoom `ka00198` lookup rank, collected by market-collector |
+
+The dated sets expire at 23:59:59 KST fourteen days after their trading date. market-http
+serves the previous trading day's ranking before 09:10 KST and on holidays. market-collector
+replaces `ranking:popular` after each full OHLCV pass, filtered to KOSPI 200. The existing
+`price:{code}` JSON and pub/sub message do not include trading value.
+
 ### Connection
 
 market-streamer and market-http each have their own `valkey.py` that builds an asyncio `redis` client from settings. Nothing goes into `ktb-core`, which stays free of third-party dependencies.

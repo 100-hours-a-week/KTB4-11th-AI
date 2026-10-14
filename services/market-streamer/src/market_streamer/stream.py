@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Iterable
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 from kiwoom import KiwoomAuth, KiwoomWebSocketClient
@@ -9,7 +9,7 @@ from kiwoom.core.errors import normalize_return_code
 from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
 from kiwoom.realtime import build_reg_packet
-from ktb_core.krx import KST
+from ktb_core.krx import KST, MARKET_CLOSE, MARKET_OPEN
 from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
@@ -37,6 +37,7 @@ def parse_tick(entry: dict[str, Any], today: date) -> dict[str, object]:
         "change": int(values["11"].strip()),
         "rate": float(values["12"].strip()),
         "volume": abs(int(values["13"].strip())),
+        "trade_value": abs(int(values["14"].strip())),
         "ts": datetime.combine(today, clock, KST).isoformat(),
     }
 
@@ -55,12 +56,51 @@ def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]
 
 
 async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
+    prices = list(prices)
     async with valkey.pipeline(transaction=False) as pipe:
         for price in prices:
+            pipe.get(f"price:{price['code']}")
+        stored = await pipe.execute()
+
+    accepted = []
+    latest = {}
+    for price, raw in zip(prices, stored, strict=True):
+        code = str(price["code"])
+        previous = latest.get(code) or (json.loads(raw) if raw else None)
+        if previous:
+            previous_ts = datetime.fromisoformat(previous["ts"])
+            current_ts = datetime.fromisoformat(str(price["ts"]))
+            if current_ts < previous_ts or (
+                current_ts.date() == previous_ts.date()
+                and int(price["volume"]) < int(previous["volume"])
+            ):
+                continue
+            if current_ts == previous_ts and int(price["volume"]) == int(previous["volume"]):
+                continue
+        latest[code] = price
+        accepted.append(price)
+
+    async with valkey.pipeline(transaction=False) as pipe:
+        for price in accepted:
             key = f"price:{price['code']}"
-            payload = json.dumps(price)
+            payload = json.dumps(
+                {field: value for field, value in price.items() if field != "trade_value"}
+            )
             pipe.set(key, payload)
             pipe.publish(key, payload)
+            code = str(price["code"])
+            timestamp = datetime.fromisoformat(str(price["ts"]))
+            if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
+                day = timestamp.astimezone(KST).date()
+                expiry = datetime.combine(day + timedelta(days=14), time(23, 59, 59), KST)
+                for kind, score in (
+                    ("volume", int(price["volume"])),
+                    ("trade_value", int(price["trade_value"])),
+                    ("change_rate", float(price["rate"])),
+                ):
+                    rank_key = f"ranking:{kind}:{day:%Y%m%d}"
+                    pipe.zadd(rank_key, {code: score})
+                    pipe.expireat(rank_key, expiry, nx=True)
         await pipe.execute()
 
 

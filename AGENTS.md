@@ -109,7 +109,15 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `PORTFOLIO_BUILDER_LOG_LEVEL` | portfolio-builder | `INFO` |
 | `MARKET_COLLECTOR_POSTGRES_DSN` | market-collector | required |
 | `MARKET_COLLECTOR_QUESTDB_CONF` | market-collector | required |
-| `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | market-collector | required |
+| `MARKET_COLLECTOR_KIWOOM_APP_KEY` | market-collector | required |
+| `MARKET_COLLECTOR_KIWOOM_SECRET_KEY` | market-collector | required |
+| `MARKET_COLLECTOR_VALKEY_HOST` | market-collector | required |
+| `MARKET_COLLECTOR_VALKEY_PORT` | market-collector | `6379` |
+| `MARKET_COLLECTOR_VALKEY_USERNAME` | market-collector (`iam`) | — |
+| `MARKET_COLLECTOR_VALKEY_CACHE_NAME` | market-collector (`iam`) | — |
+| `MARKET_COLLECTOR_VALKEY_TLS` | market-collector | `false` |
+| `MARKET_COLLECTOR_VALKEY_AUTH_MODE` | market-collector | `none` |
+| `MARKET_COLLECTOR_AWS_REGION` | market-collector | `ap-northeast-2` |
 | `MARKET_COLLECTOR_KIWOOM_MODE` | market-collector | `real` |
 | `MARKET_COLLECTOR_INDEX_NAME` | market-collector | `KOSPI200` |
 | `MARKET_COLLECTOR_REQUEST_INTERVAL` | market-collector | `1.3` (production Compose `0.25`) |
@@ -188,6 +196,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 - **news-http and market-http are the inbound HTTP surfaces.** news-http is read-only. The Backend calls it on the private network without authentication for stock clusters and cluster articles, and portfolio-builder calls it for news and graph reads (design: `docs/superpowers/specs/2026-10-07-portfolio-builder-news-http-design.md`). It never writes and runs no migrations. In `compose.local.yaml` it binds to `127.0.0.1:8000` only. market-http is public with no authentication; it serves `/prices`, `/prices/stream` (SSE) and `/bars/{code}`, reads QuestDB and Valkey, and writes Valkey only to fill a missing price with `SET NX`. In `compose.local.yaml` it binds to `127.0.0.1:8001`.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot. Migration `0002` drops the old `universe_members` table.
+- **Market rankings:** market-streamer writes daily cumulative volume, trading value, and signed change rate to Valkey. market-collector uses one Kiwoom client and shared request limiter for OHLCV, KOSPI/KOSPI200 quotes, and Kiwoom popularity; it stores index quotes and atomically replaces the filtered popularity ranking in Valkey. market-http serves `/indices/{name}` and `/rankings/{kind}` and uses the previous trading day before 09:10 KST or when the current day's ranking is absent.
 - **Work queue:** `ktb_core.queue` provides injected-client SQS transport without third-party core dependencies. Rebalancer retains dev's HTTP `Backend.users()` and publishes cancellations/placements to the same Order FIFO queue, using account ID as group and eventId as deduplication ID. Cancel publication is a request, not completion; logs/counters say `order_cancel_requested`/`cancel_requested`. Fetch the HTTP snapshot once per run. After successful cancel sends, immediately publish recalculated replacements in the same account FIFO group without refreshing or waiting for pending orders to clear. Exit stocks produce sells only; do not budget unconfirmed sell proceeds for buys. Backend consumers must finish cancellation processing before processing the next command in the group. A failed/partial cancel send skips that account. HTTP fetch failures are logged and exit before placing orders. No application failure queue or DLQ deployment is needed. No account snapshot consumer/state/migration. Existing backend_auth handles lookup JWT and logging records MessageId/eventId/correlationId/result. AWS default chain/EC2 IAM Role and deployment .env/Compose settings remain. Never directly publish to or normally consume DLQs. Report-builder is unchanged. Contract: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
 - **`market-analyzer` has zero first-party dependencies, not even `core`.** It is pure deterministic calculation (no I/O, LLM, or config). Keep it that way.
 - **portfolio-builder runs a LangChain `create_agent` agent on OpenRouter**, reads news and graph data through news-http, keeps PostgreSQL access for portfolio and company reference data, and reads bars through market-http. It computes technical evidence with TA-Lib directly (not `ktb-market-analyzer`). The OpenRouter key lives only in the environment.
