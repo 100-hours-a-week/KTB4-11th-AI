@@ -81,7 +81,7 @@ jobs:
           umask 077
           image_env="$(mktemp)"
           trap 'rm -f "$image_env"' EXIT
-          printf "APP_IMAGE='%s'\n" "$APP_IMAGE" > "$image_env"
+          printf "APP_IMAGE='%s'\nAWS_LOG_GROUP_PREFIX='/stockspoon/v2/dev/ai'\n" "$APP_IMAGE" > "$image_env"
 
           # 임시 이름으로 전송해 불완전한 파일을 배포 과정에서 읽지 않게 합니다.
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"

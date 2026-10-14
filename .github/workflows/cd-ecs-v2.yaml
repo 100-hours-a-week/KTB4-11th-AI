@@ -1,0 +1,116 @@
+name: CD ECS V2
+
+# dev 브랜치의 CI Dev가 성공하면, 그 커밋 이미지로 V2 운영 ECS의 market-http·market-streamer를 배포합니다.
+# 나머지 AI 서비스는 cd-dev.yaml(개발 EC2)과 cd.yaml(운영 EC2)이 담당합니다.
+on:
+  workflow_run:
+    workflows: ["CI Dev"]
+    # workflow_run은 success 타입을 지원하지 않아 completed로 받은 뒤 job의 if에서 성공만 허용합니다.
+    types: [completed]
+    branches: [dev]
+  # 재배포나 장 마감 후로 미룬 배포를 수동으로 실행합니다. dev 브랜치에서 실행해야 합니다.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # GitHub OIDC로 ECS 배포 Role을 assume
+
+# 배포가 겹쳐 서로 덮어쓰지 않도록 순서대로 실행합니다.
+concurrency:
+  group: ecs-v2-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ap-northeast-2
+  CLUSTER: stockspoon-v2-prod-cluster
+  # CI Dev가 push한 이미지입니다. (cd-dev.yaml과 같은 태그 규칙)
+  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+  IMAGE: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  check:
+    # push로 실행된 CI Dev가 성공했을 때, 또는 dev에서 수동 실행했을 때만 배포합니다.
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev')
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.freshness.outputs.deploy }}
+    steps:
+      # 대기 중 dev가 갱신됐으면 과거 이미지를 뒤늦게 배포하지 않습니다.
+      - name: Check deployment freshness
+        id: freshness
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_dev_sha="$(gh api "repos/${{ github.repository }}/commits/dev" --jq .sha)"
+          test -n "$current_dev_sha" || { echo "Unable to resolve refs/heads/dev" >&2; exit 1; }
+
+          if [[ "$DEPLOY_SHA" == "$current_dev_sha" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale deployment: target=$DEPLOY_SHA current=$current_dev_sha"
+          fi
+
+  deploy:
+    needs: check
+    if: needs.check.outputs.deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      # market-http(무중단 Rolling)를 먼저, market-streamer를 나중에 배포합니다.
+      # market-streamer는 키움 세션 중복을 막으려고 기존 Task를 내린 뒤 교체하므로 배포 중 수십 초 시세가 끊깁니다.
+      max-parallel: 1
+      fail-fast: true
+      matrix:
+        service: [market-http, market-streamer]
+    steps:
+      - name: Configure AWS credentials (ECS deploy)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ECS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Terraform이 관리하는 최신 Task Definition(환경 변수·Secret·리소스)에서 이미지만 바꿔 새 리비전을 등록합니다.
+      - name: Register task definition with the new image
+        id: taskdef
+        env:
+          FAMILY: stockspoon-v2-prod-${{ matrix.service }}
+          CONTAINER: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          aws ecs describe-task-definition --task-definition "$FAMILY" \
+            --query taskDefinition > current.json
+
+          jq --arg image "$IMAGE" --arg name "$CONTAINER" '
+            .containerDefinitions |= map(if .name == $name then .image = $image else . end)
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy)
+          ' current.json > next.json
+
+          arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
+            --query taskDefinition.taskDefinitionArn --output text)"
+          echo "arn=$arn" >> "$GITHUB_OUTPUT"
+          echo "::notice::Registered $arn ($IMAGE)"
+
+      # Circuit Breaker(rollback)가 켜져 있어 실패하면 ECS가 이전 리비전으로 되돌립니다.
+      - name: Update service and wait until stable
+        env:
+          SERVICE: stockspoon-v2-prod-${{ matrix.service }}
+          TASK_DEFINITION: ${{ steps.taskdef.outputs.arn }}
+        run: |
+          set -euo pipefail
+          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$TASK_DEFINITION" > /dev/null
+          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
+
+          running="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+            --query 'services[0].deployments[?status==`PRIMARY`].taskDefinition | [0]' --output text)"
+          if [[ "$running" != "$TASK_DEFINITION" ]]; then
+            echo "::error::$SERVICE rolled back to $running"
+            exit 1
+          fi

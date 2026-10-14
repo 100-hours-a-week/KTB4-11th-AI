@@ -1,5 +1,29 @@
 name: ktb4-ai
 
+x-application-logging: &application-logging
+  driver: awslogs
+  options:
+    awslogs-region: ap-northeast-2
+    awslogs-group: /stockspoon/v2/dev/ai/application
+    awslogs-create-group: "false"
+    tag: "{{.Name}}-{{.ID}}"
+
+x-postgres-logging: &postgres-logging
+  driver: awslogs
+  options:
+    awslogs-region: ap-northeast-2
+    awslogs-group: /stockspoon/v2/dev/ai/postgres
+    awslogs-create-group: "false"
+    tag: "{{.Name}}-{{.ID}}"
+
+x-questdb-logging: &questdb-logging
+  driver: awslogs
+  options:
+    awslogs-region: ap-northeast-2
+    awslogs-group: /stockspoon/v2/dev/ai/questdb
+    awslogs-create-group: "false"
+    tag: "{{.Name}}-{{.ID}}"
+
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18-trixie
@@ -17,6 +41,7 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
+    logging: *postgres-logging
 
   questdb:
     image: questdb/questdb:10.0.1
@@ -35,6 +60,7 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+    logging: *questdb-logging
 
   valkey:
     image: valkey/valkey:8.1.4
@@ -45,7 +71,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
-
   news-preprocessor:
     profiles: ["jobs"]
     build:
@@ -68,6 +93,7 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
+    logging: *application-logging
 
   news-clusterer:
     profiles: ["jobs"]
@@ -84,6 +110,7 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
+    logging: *application-logging
 
   market-syncer:
     profiles: ["jobs"]
@@ -104,6 +131,7 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
+    logging: *application-logging
 
   news-graph-builder:
     profiles: ["jobs"]
@@ -126,6 +154,7 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
+    logging: *application-logging
 
   news-http:
     build:
@@ -146,6 +175,7 @@ services:
       retries: 6
       start_period: 10s
     restart: unless-stopped
+    logging: *application-logging
 
   market-collector:
     profiles: ["jobs"]
@@ -167,6 +197,7 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
+    logging: *application-logging
 
   market-streamer:
     profiles: ["jobs"]
@@ -187,6 +218,7 @@ services:
       valkey:
         condition: service_healthy
     restart: "no"
+    logging: *application-logging
 
   market-http:
     build:
@@ -210,6 +242,7 @@ services:
       retries: 6
       start_period: 10s
     restart: unless-stopped
+    logging: *application-logging
 
   portfolio-builder:
     profiles: ["jobs"]
@@ -234,6 +267,7 @@ services:
       news-http:
         condition: service_started
     restart: "no"
+    logging: *application-logging
 
   portfolio-rebalancer:
     profiles: ["jobs"]
@@ -258,6 +292,7 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
+    logging: *application-logging
 
   report-builder:
     profiles: ["jobs"]
@@ -272,6 +307,7 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    logging: *application-logging
 
 volumes:
   postgres-data:
