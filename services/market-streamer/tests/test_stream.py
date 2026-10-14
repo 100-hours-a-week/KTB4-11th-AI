@@ -2,6 +2,7 @@ import asyncio
 import json
 from datetime import date, datetime
 
+import pytest
 from ktb_core.krx import KST
 from market_streamer.stream import (
     frame_orderbooks,
@@ -69,6 +70,20 @@ def test_parse_orderbook_reads_all_ten_levels():
         ],
         "ts": "2026-10-13T09:01:23+09:00",
     }
+
+
+def test_parse_orderbook_requires_six_digit_time():
+    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "21": "90123"}}
+
+    with pytest.raises(ValueError):
+        parse_orderbook(entry, TODAY)
+
+
+def test_parse_orderbook_rejects_zero_prices():
+    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "41": "0"}}
+
+    with pytest.raises(ValueError):
+        parse_orderbook(entry, TODAY)
 
 
 def test_frame_orderbooks_skips_partial_and_malformed_entries():
