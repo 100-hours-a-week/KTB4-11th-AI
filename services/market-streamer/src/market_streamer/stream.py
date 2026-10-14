@@ -42,6 +42,28 @@ def parse_tick(entry: dict[str, Any], today: date) -> dict[str, object]:
     }
 
 
+def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
+    values = entry["values"]
+    clock = datetime.strptime(values["21"].strip(), "%H%M%S").time()
+    asks = []
+    bids = []
+    for level in range(1, 11):
+        ask_price = abs(int(values[str(40 + level)].strip()))
+        ask_qty = int(values[str(60 + level)].strip())
+        bid_price = abs(int(values[str(50 + level)].strip()))
+        bid_qty = int(values[str(70 + level)].strip())
+        if ask_qty < 0 or bid_qty < 0:
+            raise ValueError("orderbook quantities must be nonnegative")
+        asks.append({"price": ask_price, "qty": ask_qty})
+        bids.append({"price": bid_price, "qty": bid_qty})
+    return {
+        "code": entry["item"],
+        "asks": asks,
+        "bids": bids,
+        "ts": datetime.combine(today, clock, KST).isoformat(),
+    }
+
+
 def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]]:
     prices = []
     for entry in message.get("data") or []:
@@ -53,6 +75,19 @@ def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]
             item = entry.get("item") if isinstance(entry, dict) else None
             log.warning("tick_skipped", item=item, error=str(error))
     return prices
+
+
+def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, object]]:
+    orderbooks = []
+    for entry in message.get("data") or []:
+        try:
+            if entry.get("type") != "0D":
+                continue
+            orderbooks.append(parse_orderbook(entry, today))
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            item = entry.get("item") if isinstance(entry, dict) else None
+            log.warning("orderbook_skipped", item=item, error=str(error))
+    return orderbooks
 
 
 async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
@@ -101,6 +136,16 @@ async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
                     rank_key = f"ranking:{kind}:{day:%Y%m%d}"
                     pipe.zadd(rank_key, {code: score})
                     pipe.expireat(rank_key, expiry, nx=True)
+        await pipe.execute()
+
+
+async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, object]]) -> None:
+    async with valkey.pipeline(transaction=False) as pipe:
+        for orderbook in orderbooks:
+            key = f"orderbook:{orderbook['code']}"
+            payload = json.dumps(orderbook)
+            pipe.set(key, payload)
+            pipe.publish(key, payload)
         await pipe.execute()
 
 

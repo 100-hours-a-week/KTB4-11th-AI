@@ -3,7 +3,14 @@ import json
 from datetime import date, datetime
 
 from ktb_core.krx import KST
-from market_streamer.stream import frame_prices, parse_tick, publish
+from market_streamer.stream import (
+    frame_orderbooks,
+    frame_prices,
+    parse_orderbook,
+    parse_tick,
+    publish,
+    publish_orderbooks,
+)
 from redis.asyncio import Redis
 
 TODAY = date(2026, 10, 13)
@@ -29,10 +36,74 @@ PRICE = {
     "trade_value": 987654321,
     "ts": "2026-10-13T09:01:23+09:00",
 }
+ORDERBOOK = {
+    "type": "0D",
+    "name": "주식호가잔량",
+    "item": "005930",
+    "values": {
+        "21": "090123",
+        **{str(fid): f" +{82000 - fid}" for fid in range(41, 51)},
+        **{str(fid): f"{fid * 10}" for fid in range(61, 71)},
+        **{str(fid): f" -{81900 - fid}" for fid in range(51, 61)},
+        **{str(fid): f"{fid * 10}" for fid in range(71, 81)},
+    },
+}
 
 
 def test_parse_tick_strips_padding_and_direction_signs():
     assert parse_tick(TICK, TODAY) == PRICE
+
+
+def test_parse_orderbook_reads_all_ten_levels():
+    result = parse_orderbook(ORDERBOOK, TODAY)
+
+    assert result == {
+        "code": "005930",
+        "asks": [
+            {"price": 82000 - fid, "qty": (60 + level) * 10}
+            for level, fid in enumerate(range(41, 51), 1)
+        ],
+        "bids": [
+            {"price": 81900 - fid, "qty": (70 + level) * 10}
+            for level, fid in enumerate(range(51, 61), 1)
+        ],
+        "ts": "2026-10-13T09:01:23+09:00",
+    }
+
+
+def test_frame_orderbooks_skips_partial_and_malformed_entries():
+    partial = {**ORDERBOOK, "item": "000660", "values": dict(ORDERBOOK["values"])}
+    del partial["values"]["80"]
+    blank = {**ORDERBOOK, "item": "035420", "values": {**ORDERBOOK["values"], "61": " "}}
+    invalid = {**ORDERBOOK, "item": "035720", "values": {**ORDERBOOK["values"], "21": "bad"}}
+    negative = {**ORDERBOOK, "item": "005380", "values": {**ORDERBOOK["values"], "71": "-1"}}
+    message = {
+        "data": [ORDERBOOK, partial, blank, invalid, negative, TICK, "garbage"],
+    }
+
+    assert frame_orderbooks(message, TODAY) == [parse_orderbook(ORDERBOOK, TODAY)]
+
+
+def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url):
+    async def scenario():
+        valkey = Redis.from_url(valkey_url, decode_responses=True)
+        pubsub = valkey.pubsub()
+        await pubsub.subscribe("orderbook:005930")
+        await pubsub.get_message(timeout=1)
+        await publish_orderbooks(valkey, [parse_orderbook(ORDERBOOK, TODAY)])
+        message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+        stored = await valkey.get("orderbook:005930")
+        await pubsub.aclose()
+        await valkey.aclose()
+        return message, stored
+
+    message, stored = asyncio.run(scenario())
+    expected = parse_orderbook(ORDERBOOK, TODAY)
+
+    assert json.loads(stored) == expected
+    assert message is not None
+    assert message["channel"] == "orderbook:005930"
+    assert json.loads(message["data"]) == expected
 
 
 def test_frame_prices_skips_malformed_entries():
