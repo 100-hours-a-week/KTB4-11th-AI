@@ -149,6 +149,32 @@ def test_malformed_orderbook_does_not_suppress_valid_tick(monkeypatch):
     assert books == []
 
 
+def test_stream_publishes_real_entries_in_arrival_order(monkeypatch):
+    _record(monkeypatch)
+    published = []
+
+    async def record_prices(valkey, prices):
+        published.extend(("price", price["code"]) for price in prices)
+
+    async def record_orderbooks(valkey, orderbooks):
+        published.extend(("orderbook", orderbook["code"]) for orderbook in orderbooks)
+
+    monkeypatch.setattr(stream, "publish", record_prices)
+    monkeypatch.setattr(stream, "publish_orderbooks", record_orderbooks)
+    second_orderbook = {**ORDERBOOK, "item": "000660"}
+    frame = {"trnm": "REAL", "data": [ORDERBOOK, REAL["data"][0], second_orderbook]}
+
+    with pytest.raises(asyncio.CancelledError):
+        client = _client([FakeSocket([LOGIN_OK, REG_OK, frame])])
+        asyncio.run(stream.stream_market_data(client, object(), ["000660", "005930"]))
+
+    assert published == [
+        ("orderbook", "005930"),
+        ("price", "005930"),
+        ("orderbook", "000660"),
+    ]
+
+
 def test_rejected_registration_backs_off_exponentially(monkeypatch):
     _, _, delays = _record(monkeypatch)
     sockets = [FakeSocket([LOGIN_OK, REG_REJECTED]) for _ in range(6)]

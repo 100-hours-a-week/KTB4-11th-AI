@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Iterable
 from datetime import date, datetime, time, timedelta
+from itertools import groupby
 from typing import Any
 
 from kiwoom import KiwoomAuth, KiwoomWebSocketClient
@@ -171,12 +172,20 @@ async def stream_market_data(
                     log.info("kiwoom_registered", codes=len(codes))
                 elif trnm == "REAL":
                     today = datetime.now(KST).date()
-                    prices = frame_prices(message, today)
-                    if prices:
-                        await publish(valkey, prices)
-                    orderbooks = frame_orderbooks(message, today)
-                    if orderbooks:
-                        await publish_orderbooks(valkey, orderbooks)
+                    entries = message.get("data") or []
+                    for kind, batch in groupby(
+                        entries,
+                        lambda entry: entry.get("type") if isinstance(entry, dict) else None,
+                    ):
+                        frame = {"data": list(batch)}
+                        if kind == "0B":
+                            prices = frame_prices(frame, today)
+                            if prices:
+                                await publish(valkey, prices)
+                        elif kind == "0D":
+                            orderbooks = frame_orderbooks(frame, today)
+                            if orderbooks:
+                                await publish_orderbooks(valkey, orderbooks)
             log.warning("kiwoom_stream_closed")
         except Exception:
             log.exception("kiwoom_stream_failed")
