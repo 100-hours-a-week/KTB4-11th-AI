@@ -17,21 +17,21 @@ uv run news-clusterer                       # run a service by its console scrip
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb uv run alembic upgrade head
 KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
 
-docker compose -f compose.dev.yaml up -d    # dev postgres/questdb and news-http; also starts valkey and market-http (the -f flag is required)
+docker compose -f compose.local.yaml up -d    # local postgres/questdb and news-http; also starts valkey and market-http (the -f flag is required)
 # once, on a volume created before the rename:
-docker compose -f compose.dev.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
-KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.dev.yaml up -d news-preprocessor
-docker compose -f compose.dev.yaml up news-clusterer
-docker compose -f compose.dev.yaml up market-syncer   # needs the Kiwoom and DART keys below; run before news-graph-builder
-docker compose -f compose.dev.yaml up -d valkey market-http   # http://127.0.0.1:8001
-docker compose -f compose.dev.yaml up market-streamer          # needs MARKET_STREAMER_KIWOOM_* keys
-docker compose -f compose.dev.yaml up news-graph-builder   # needs the env below
-PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.dev.yaml up portfolio-builder   # key from PORTFOLIO_BUILDER_LLM_API_KEY in .env
-docker compose -f compose.dev.yaml --profile jobs run --rm portfolio-rebalancer   # one tick, then exits
-docker compose -f compose.dev.yaml up report-builder
+docker compose -f compose.local.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
+KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.local.yaml up -d news-preprocessor
+docker compose -f compose.local.yaml up news-clusterer
+docker compose -f compose.local.yaml up market-syncer   # needs the Kiwoom and DART keys below; run before news-graph-builder
+docker compose -f compose.local.yaml up -d valkey market-http   # http://127.0.0.1:8001
+docker compose -f compose.local.yaml up market-streamer          # needs MARKET_STREAMER_KIWOOM_* keys
+docker compose -f compose.local.yaml up news-graph-builder   # needs the env below
+PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.local.yaml up portfolio-builder   # key from PORTFOLIO_BUILDER_LLM_API_KEY in .env
+docker compose -f compose.local.yaml --profile jobs run --rm portfolio-rebalancer   # one tick, then exits
+docker compose -f compose.local.yaml up report-builder
 
 # tests TRUNCATE tables: point them at a separate database, never at `ktb`
-docker compose -f compose.dev.yaml exec postgres createdb -U ktb ktb_test
+docker compose -f compose.local.yaml exec postgres createdb -U ktb ktb_test
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run alembic upgrade head
 KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest
 ```
@@ -162,7 +162,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `REPORT_BUILDER_BACKEND_TIMEOUT` | report-builder | `10` |
 | `REPORT_BUILDER_LOG_LEVEL` | report-builder | `INFO` |
 
-Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.dev.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
+Keys (`*_KEY`) come from the environment only: never commit them, and export them from a file rather than typing them on the command line. Compose reads `.env` next to `compose.local.yaml` for `${…}` interpolation; bare `- VAR` entries pass the shell's value through.
 
 ## Architecture
 
@@ -185,7 +185,7 @@ Design rationale lives in `docs/superpowers/specs/2026-09-20-monorepo-init-desig
 | `packages/market-analyzer` (`ktb_market_analyzer`) | library | — | TA-Lib + numpy only |
 
 - **Services communicate through datastores, except for HTTP edges.** news-preprocessor writes articles to PostgreSQL, including KOSPI 200 OpenDART disclosures through its `opendart` publisher (design: `docs/superpowers/specs/2026-09-29-opendart-publisher-design.md`); news-clusterer reads articles and writes `clusters` / `article_clusters`; market-syncer writes Kiwoom and OpenDART reference data (`corporations`, `corporation_aliases`, KOSPI 200 membership in `corporation_indices`, `themes`, `theme_companies`; design: `docs/superpowers/specs/2026-09-29-market-syncer-design.md`) and runs before news-preprocessor, news-graph-builder, and market-collector; news-graph-builder reads clusters and corporations and writes `cluster_summaries` and the knowledge graph (`entities`, `cluster_entities`, `relations`; design: `docs/superpowers/specs/2026-09-24-news-graph-builder-design.md`); market-collector reads its symbols from `corporation_indices` and writes OHLCV to QuestDB; market-streamer writes the latest price per KOSPI 200 stock to Valkey (`SET` and `PUBLISH price:{code}`; design: `docs/superpowers/specs/2026-10-13-market-streamer-http-design.md`); portfolio-builder reads news and graph data through news-http, company reference data and portfolios from PostgreSQL, and market bars through market-http. It writes `portfolios` (with the run's `trace`), `portfolio_holdings`, `portfolio_exits`, and, with one more LLM call, a buy and a sell explanation per stock in `portfolio_reasons`, moving `portfolios.status` from `explanation_pending` to `ready` or `explanation_failed`; when the latest portfolio is not `ready` and has a trace, a run re-explains it instead of building a new one (design: `docs/superpowers/specs/2026-09-28-portfolio-builder-langchain-design.md`). portfolio-builder computes its technical evidence itself. portfolio-rebalancer has no inbound surface and nothing calls it: it reads the latest portfolio from PostgreSQL and trades only when its `status` is `ready` (never an older one) and the last close from QuestDB, polls the Backend for accounts, and sends it one market order per stock, carrying `portfolio_reasons` as `reason` and `thoughts` (design: `docs/superpowers/specs/2026-10-02-portfolio-rebalancer-design.md`).
-- **news-http and market-http are the inbound HTTP surfaces.** news-http is read-only. The Backend calls it on the private network without authentication for stock clusters and cluster articles, and portfolio-builder calls it for news and graph reads (design: `docs/superpowers/specs/2026-10-07-portfolio-builder-news-http-design.md`). It never writes and runs no migrations. In `compose.dev.yaml` it binds to `127.0.0.1:8000` only. market-http is public with no authentication; it serves `/prices`, `/prices/stream` (SSE) and `/bars/{code}`, reads QuestDB and Valkey, and writes Valkey only to fill a missing price with `SET NX`. In `compose.dev.yaml` it binds to `127.0.0.1:8001`.
+- **news-http and market-http are the inbound HTTP surfaces.** news-http is read-only. The Backend calls it on the private network without authentication for stock clusters and cluster articles, and portfolio-builder calls it for news and graph reads (design: `docs/superpowers/specs/2026-10-07-portfolio-builder-news-http-design.md`). It never writes and runs no migrations. In `compose.local.yaml` it binds to `127.0.0.1:8000` only. market-http is public with no authentication; it serves `/prices`, `/prices/stream` (SSE) and `/bars/{code}`, reads QuestDB and Valkey, and writes Valkey only to fill a missing price with `SET NX`. In `compose.local.yaml` it binds to `127.0.0.1:8001`.
 - **news-clusterer recomputes DBSCAN over every embedded article on each run** (design: `docs/superpowers/specs/2026-09-23-news-clusterer-design.md`). Each run logs a `clustering cost:` line with time and peak RSS; that line decides when to move to incremental clustering.
 - **QuestDB access uses the official Python client.** Apply `infrastructure/questdb/migrations/*.sql` out of band with `python infrastructure/questdb/migrate.py` before starting `market-collector`; services never alter the schema at boot. Migration `0002` drops the old `universe_members` table.
 - **Work queue:** `ktb_core.queue` provides injected-client SQS transport without third-party core dependencies. Rebalancer retains dev's HTTP `Backend.users()` and publishes cancellations/placements to the same Order FIFO queue, using account ID as group and eventId as deduplication ID. Cancel publication is a request, not completion; logs/counters say `order_cancel_requested`/`cancel_requested`. Fetch the HTTP snapshot once per run. After successful cancel sends, immediately publish recalculated replacements in the same account FIFO group without refreshing or waiting for pending orders to clear. Exit stocks produce sells only; do not budget unconfirmed sell proceeds for buys. Backend consumers must finish cancellation processing before processing the next command in the group. A failed/partial cancel send skips that account. HTTP fetch failures are logged and exit before placing orders. No application failure queue or DLQ deployment is needed. No account snapshot consumer/state/migration. Existing backend_auth handles lookup JWT and logging records MessageId/eventId/correlationId/result. AWS default chain/EC2 IAM Role and deployment .env/Compose settings remain. Never directly publish to or normally consume DLQs. Report-builder is unchanged. Contract: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
