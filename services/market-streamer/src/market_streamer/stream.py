@@ -154,11 +154,14 @@ async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, objec
         await pipe.execute()
 
 
-async def stream_prices(client: KiwoomWebSocketClient, valkey: Redis, codes: list[str]) -> None:
+async def stream_market_data(
+    client: KiwoomWebSocketClient, valkey: Redis, codes: list[str]
+) -> None:
     delay = 1.0
     while True:
         try:
-            await client.subscribe(api_url=WEBSOCKET_PATH, body=build_reg_packet(codes, ["0B"]))
+            body = build_reg_packet(codes, ["0B", "0D"])
+            await client.subscribe(api_url=WEBSOCKET_PATH, body=body)
             async for message in client.iter_messages():
                 trnm = message.get("trnm")
                 if trnm == "REG":
@@ -167,9 +170,13 @@ async def stream_prices(client: KiwoomWebSocketClient, valkey: Redis, codes: lis
                     delay = 1.0
                     log.info("kiwoom_registered", codes=len(codes))
                 elif trnm == "REAL":
-                    prices = frame_prices(message, datetime.now(KST).date())
+                    today = datetime.now(KST).date()
+                    prices = frame_prices(message, today)
                     if prices:
                         await publish(valkey, prices)
+                    orderbooks = frame_orderbooks(message, today)
+                    if orderbooks:
+                        await publish_orderbooks(valkey, orderbooks)
             log.warning("kiwoom_stream_closed")
         except Exception:
             log.exception("kiwoom_stream_failed")
@@ -200,7 +207,7 @@ async def run(settings: Settings, now: datetime) -> None:
         await valkey.ping()
         try:
             async with asyncio.timeout(seconds_until(settings.stop_at, now)):
-                await stream_prices(client, valkey, codes)
+                await stream_market_data(client, valkey, codes)
         except TimeoutError:
             log.info("market_streamer_stopped", stop_at=settings.stop_at.isoformat())
     finally:
