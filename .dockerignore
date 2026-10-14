@@ -10,5 +10,5 @@ docs/
 .github/
 .env*
 ai.env
-compose.dev.yaml
+compose.local.yaml
 .superpowers/
