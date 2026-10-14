@@ -1,7 +1,7 @@
 # KOSPI 200 live orderbooks
 
 **Date:** 2026-10-15
-**Status:** Proposed for review
+**Status:** Approved for planning
 
 ## Purpose
 
