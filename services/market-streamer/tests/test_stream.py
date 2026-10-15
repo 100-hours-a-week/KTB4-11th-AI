@@ -15,6 +15,7 @@ from market_streamer.stream import (
 from redis.asyncio import Redis
 
 TODAY = date(2026, 10, 13)
+CAPTURE_DATE = date(2026, 10, 15)
 TICK = {
     "type": "0B",
     "name": "주식체결",
@@ -51,6 +52,53 @@ ORDERBOOK = {
 }
 
 
+def captured_orderbook(time, asks, ask_qtys, bids, bid_qtys):
+    values = {"21": time}
+    for start, fields in ((41, asks), (61, ask_qtys), (51, bids), (71, bid_qtys)):
+        values.update(
+            {str(fid): value for fid, value in zip(range(start, start + 10), fields, strict=True)}
+        )
+    return {"type": "0D", "name": "주식호가잔량", "item": "005930", "values": values}
+
+
+SPARSE_CAPTURE = captured_orderbook(
+    "090000",
+    ["-216500", "-217000", "-217500", *["-0"] * 7],
+    ["3907", "42399", "4434", *["0"] * 7],
+    ["-216000", "-215500", "-215000", *["-0"] * 7],
+    ["34242", "118496", "95265", *["0"] * 7],
+)
+FULL_CAPTURE = captured_orderbook(
+    "090020",
+    [
+        "-217000",
+        "-217500",
+        "-218000",
+        "-218500",
+        "-219000",
+        "-219500",
+        "-220000",
+        "-220500",
+        "-221000",
+        "-221500",
+    ],
+    ["62198", "9610", "19095", "5746", "12272", "12059", "30746", "16469", "4380", "33086"],
+    [
+        "-216500",
+        "-216000",
+        "-215500",
+        "-215000",
+        "-214500",
+        "-214000",
+        "-213500",
+        "-213000",
+        "-212500",
+        "-212000",
+    ],
+    ["9055", "117271", "66855", "90064", "51569", "54276", "39867", "42449", "22889", "42449"],
+)
+
+
 def test_parse_tick_strips_padding_and_direction_signs():
     assert parse_tick(TICK, TODAY) == PRICE
 
@@ -70,6 +118,49 @@ def test_parse_orderbook_reads_all_ten_levels():
         ],
         "ts": "2026-10-13T09:01:23+09:00",
     }
+
+
+def test_parse_captured_sparse_orderbook_preserves_empty_levels():
+    result = parse_orderbook(SPARSE_CAPTURE, CAPTURE_DATE)
+
+    assert result == {
+        "code": "005930",
+        "asks": [
+            {"price": 216500, "qty": 3907},
+            {"price": 217000, "qty": 42399},
+            {"price": 217500, "qty": 4434},
+            *[{"price": 0, "qty": 0}] * 7,
+        ],
+        "bids": [
+            {"price": 216000, "qty": 34242},
+            {"price": 215500, "qty": 118496},
+            {"price": 215000, "qty": 95265},
+            *[{"price": 0, "qty": 0}] * 7,
+        ],
+        "ts": "2026-10-15T09:00:00+09:00",
+    }
+
+
+def test_parse_captured_full_orderbook_reads_all_levels():
+    result = parse_orderbook(FULL_CAPTURE, CAPTURE_DATE)
+
+    assert result["asks"] == [
+        {"price": price, "qty": qty}
+        for price, qty in zip(
+            [217000, 217500, 218000, 218500, 219000, 219500, 220000, 220500, 221000, 221500],
+            [62198, 9610, 19095, 5746, 12272, 12059, 30746, 16469, 4380, 33086],
+            strict=True,
+        )
+    ]
+    assert result["bids"] == [
+        {"price": price, "qty": qty}
+        for price, qty in zip(
+            [216500, 216000, 215500, 215000, 214500, 214000, 213500, 213000, 212500, 212000],
+            [9055, 117271, 66855, 90064, 51569, 54276, 39867, 42449, 22889, 42449],
+            strict=True,
+        )
+    ]
+    assert result["ts"] == "2026-10-15T09:00:20+09:00"
 
 
 def test_parse_orderbook_requires_six_digit_time():
