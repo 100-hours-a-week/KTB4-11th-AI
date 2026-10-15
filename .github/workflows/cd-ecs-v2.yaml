@@ -1,6 +1,6 @@
 name: CD ECS V2
 
-# dev 브랜치의 CI Dev가 성공하면, 그 커밋 이미지로 V2 운영 ECS의 market-http·market-streamer를 배포합니다.
+# dev 브랜치의 CI Dev가 성공하면, 그 커밋 이미지로 V2 운영 ECS의 market-http를 배포합니다.
 # 나머지 AI 서비스는 cd-dev.yaml(개발 EC2)과 cd.yaml(운영 EC2)이 담당합니다.
 on:
   workflow_run:
@@ -62,12 +62,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      # market-http(무중단 Rolling)를 먼저, market-streamer를 나중에 배포합니다.
-      # market-streamer는 키움 세션 중복을 막으려고 기존 Task를 내린 뒤 교체하므로 배포 중 수십 초 시세가 끊깁니다.
+      # V2 ECS에는 market-http(무중단 Rolling)만 있습니다. market-streamer는 ECS에서 운영하지 않습니다.
       max-parallel: 1
       fail-fast: true
       matrix:
-        service: [market-http, market-streamer]
+        service: [market-http]
     steps:
       - name: Configure AWS credentials (ECS deploy)
         uses: aws-actions/configure-aws-credentials@v6

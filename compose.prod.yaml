@@ -283,8 +283,11 @@ services:
       postgres:
         condition: service_healthy
 
+  # 시세 조회 API. 개발 EC2는 cd-dev가 --profile market으로 함께 띄우고,
+  # 운영은 V2 ECS(cd-ecs-v2.yaml)에서 실행하므로 운영 EC2에서는 프로필을 켜지 않는다.
   market-http:
     <<: *app
+    profiles: ["market"]
     command: ["market-http"]
     restart: unless-stopped
     mem_limit: 384m
@@ -317,7 +320,8 @@ services:
     mem_limit: 768m
     environment:
       <<: *postgres-environment
-      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:-http://market-http:8000}
+      # 개발: http://market-http:8000 (같은 Compose), 운영: V2 ECS market-http (ALB /market)
+      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:?PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI must be set}
       PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI:-http://news-http:8000}
       PORTFOLIO_BUILDER_LLM_API_KEY: ${PORTFOLIO_BUILDER_LLM_API_KEY:-}
       PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
