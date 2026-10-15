@@ -97,6 +97,8 @@ def test_http_serves_indices_and_popular_rankings():
 
     assert index.status_code == 200
     assert index.json()["value"] == 2750.12
+    assert index.json()["timestamp"] == "2026-10-15T09:01:00+09:00"
+    assert "ts" not in index.json()
     assert popular.status_code == 200
     assert popular.json() == {
         "as_of": "2026-10-15",

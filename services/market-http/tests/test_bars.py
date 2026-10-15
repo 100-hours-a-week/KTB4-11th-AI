@@ -78,10 +78,11 @@ def test_bars_reads_the_timeframe_view_newest_first(monkeypatch, client, timefra
     assert "ORDER BY ts DESC" in sql
     assert binds == ["005930", 3]
     body = response.json()
-    assert [datetime.fromisoformat(item["ts"]) for item in body["items"]] == [
+    assert [datetime.fromisoformat(item["timestamp"]) for item in body["items"]] == [
         NEWEST,
         NEWEST - timedelta(minutes=1),
     ]
+    assert all("ts" not in item for item in body["items"])
     assert body["next_cursor"] is not None
 
 

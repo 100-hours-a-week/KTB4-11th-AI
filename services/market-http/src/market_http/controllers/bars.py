@@ -20,12 +20,12 @@ def _cursor(cursor: str | None = None) -> datetime | None:
     if cursor is None:
         return None
     try:
-        ts = datetime.fromisoformat(urlsafe_b64decode(cursor).decode())
+        timestamp = datetime.fromisoformat(urlsafe_b64decode(cursor).decode())
     except ValueError as error:
         raise HTTPException(422, "invalid cursor") from error
-    if ts.tzinfo is None:
+    if timestamp.tzinfo is None:
         raise HTTPException(422, "invalid cursor")
-    return ts
+    return timestamp
 
 
 @router.get("/bars/{code}")
@@ -39,5 +39,5 @@ def list_bars(
     rows = find_bars(conf, code, timeframe, limit + 1, before)
     if len(rows) <= limit:
         return Page(items=rows, next_cursor=None)
-    cursor = urlsafe_b64encode(rows[limit - 1].ts.isoformat().encode()).decode()
+    cursor = urlsafe_b64encode(rows[limit - 1].timestamp.isoformat().encode()).decode()
     return Page(items=rows[:limit], next_cursor=cursor)

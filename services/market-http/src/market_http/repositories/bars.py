@@ -13,7 +13,7 @@ SESSION_FILTERED = {"1m", "1d"}
 
 
 class Bar(BaseModel):
-    ts: datetime
+    timestamp: datetime
     open: float
     high: float
     low: float
@@ -37,7 +37,7 @@ def find_bars(
         rows = records(db, sql, binds)
     return [
         Bar(
-            ts=as_utc(row["ts"]),
+            timestamp=as_utc(row["ts"]),
             open=row["open"],
             high=row["high"],
             low=row["low"],

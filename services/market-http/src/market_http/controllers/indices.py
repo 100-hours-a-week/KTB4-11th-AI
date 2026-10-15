@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 
 from market_http.controllers.dependencies import Valkey
 
@@ -14,7 +14,7 @@ class IndexQuote(BaseModel):
     value: float
     change: float
     rate: float
-    ts: datetime
+    timestamp: datetime = Field(validation_alias=AliasChoices("timestamp", "ts"))
 
 
 @router.get("/indices/{name}")
