@@ -16,3 +16,26 @@ def test_cors_allows_any_origin_for_get():
         response = client.get("/health", headers={"Origin": "https://example.com"})
 
     assert response.headers["access-control-allow-origin"] == "*"
+
+
+def test_docs_use_public_prefix_without_moving_api_routes():
+    with TestClient(
+        create_app(Redis(host="127.0.0.1", port=1), "unused", docs_path_prefix="/market")
+    ) as client:
+        docs = client.get("/docs")
+        schema = client.get("/openapi.json")
+        health = client.get("/health")
+
+    assert docs.status_code == 200
+    assert "url: '/market/openapi.json'" in docs.text
+    assert schema.status_code == 200
+    assert health.status_code == 200
+
+
+def test_docs_are_unavailable_when_disabled():
+    with TestClient(
+        create_app(Redis(host="127.0.0.1", port=1), "unused", docs_enabled=False)
+    ) as client:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert client.get(path).status_code == 404
+        assert client.get("/health").status_code == 200
