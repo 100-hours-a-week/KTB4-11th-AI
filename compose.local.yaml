@@ -199,6 +199,8 @@ services:
     environment:
       MARKET_HTTP_QUESTDB_CONF: ws::addr=questdb:9000;
       MARKET_HTTP_VALKEY_HOST: valkey
+      MARKET_HTTP_CORS_ORIGINS: ${MARKET_HTTP_CORS_ORIGINS:-["*"]}
+      MARKET_HTTP_CORS_HEADERS: ${MARKET_HTTP_CORS_HEADERS:-["*"]}
       MARKET_HTTP_LOG_LEVEL: ${MARKET_HTTP_LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8001:8000"
