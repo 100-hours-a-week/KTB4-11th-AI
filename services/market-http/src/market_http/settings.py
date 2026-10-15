@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, gt=0, lt=65536)
     docs_enabled: bool = True
     docs_path_prefix: str = Field(default="", pattern=r"^$|^/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
+    cors_origins: list[str] = ["*"]
+    cors_headers: list[str] = ["*"]
     log_level: str = "INFO"
 
     @model_validator(mode="after")
