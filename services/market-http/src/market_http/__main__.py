@@ -14,5 +14,7 @@ def main() -> None:
         settings.questdb_conf,
         settings.docs_enabled,
         settings.docs_path_prefix,
+        settings.cors_origins,
+        settings.cors_headers,
     )
     uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
