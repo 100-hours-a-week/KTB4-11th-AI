@@ -1,6 +1,5 @@
 source_roots = [
     "packages/core/src",
-    "packages/market-analyzer/src",
     "services/market-syncer/src",
     "services/market-collector/src",
     "services/market-http/src",
@@ -16,9 +15,6 @@ root_module = "forbid"
 
 [[modules]]
 path = "ktb_core"
-
-[[modules]]
-path = "ktb_market_analyzer"
 
 [[modules]]
 path = "news_preprocessor"
