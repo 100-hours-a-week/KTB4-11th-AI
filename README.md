@@ -394,6 +394,8 @@ gh secret set PROD_AI_ENV -R 100-hours-a-week/KTB4-11th-AI < prod.env   # 갱신
 
 market-http·market-streamer는 운영 EC2가 아니라 V2 ECS에서 실행되며, 비밀값은 Task 시작 시 SSM SecureString에서 주입됩니다. 일반 값은 Cloud 레포 `ecs` root의 Task Definition에 있습니다.
 
+market-http의 운영 Task Definition에는 `MARKET_HTTP_DOCS_ENABLED=false`를 설정해야 합니다. 프록시가 `/market`을 제거하는 비운영 환경에서 문서를 제공할 때는 `MARKET_HTTP_DOCS_PATH_PREFIX=/market`을 설정합니다.
+
 | 이름 | 사용처 |
 |---|---|
 | `/stockspoon/v2/prod/market-streamer/POSTGRES_DSN` | market-streamer (V1 AI 운영 PostgreSQL, `AI_PRIVATE_IP:5432`) |
