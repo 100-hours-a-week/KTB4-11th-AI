@@ -60,8 +60,8 @@ flowchart LR
     KIWOOM --> MC
     MC -->|OHLCV| QDB
     PG -->|KOSPI 200 symbols| MSTR
-    MSTR -->|latest price| Valkey
-    Valkey -->|prices| MH
+    MSTR -->|latest price, orderbook| Valkey
+    Valkey -->|prices, orderbooks| MH
     MH -->|bars| QDB
 
     PG <-->|model portfolio| PB
@@ -136,6 +136,14 @@ flowchart LR
 - 한 번의 수집이 1분을 넘기면 `archive_pass_slow` 경고 로그를 남기고 다음 수집을 바로 시작함
 - 장 마감 후 실행하면 마감 수집을 한 번 하고 바로 종료함
 - `ktb_core.krx.KRX_HOLIDAYS` 기준 휴장일에는 아무것도 하지 않고 바로 종료함
+
+### `market-streamer`와 `market-http`: 실시간 가격과 호가 제공
+
+- market-streamer는 하나의 Kiwoom WebSocket에서 가격 `0B`와 호가 `0D`를 함께 구독함
+- market-http의 `GET /orderbooks?codes=005930,000660`은 저장된 최신 호가를 반환하고, `GET /orderbooks/stream?codes=005930,000660`은 SSE로 초기 스냅샷과 이후 갱신을 전달함
+- 각 호가 스냅샷은 최우선 순서로 매도·매수 각각 10개 가격과 수량을 포함함
+- `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
+- 기존 가격 API는 `/prices`, `/prices/stream`임
 
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 

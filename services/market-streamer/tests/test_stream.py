@@ -2,11 +2,20 @@ import asyncio
 import json
 from datetime import date, datetime
 
+import pytest
 from ktb_core.krx import KST
-from market_streamer.stream import frame_prices, parse_tick, publish
+from market_streamer.stream import (
+    frame_orderbooks,
+    frame_prices,
+    parse_orderbook,
+    parse_tick,
+    publish,
+    publish_orderbooks,
+)
 from redis.asyncio import Redis
 
 TODAY = date(2026, 10, 13)
+CAPTURE_DATE = date(2026, 10, 15)
 TICK = {
     "type": "0B",
     "name": "주식체결",
@@ -29,10 +38,188 @@ PRICE = {
     "trade_value": 987654321,
     "ts": "2026-10-13T09:01:23+09:00",
 }
+ORDERBOOK = {
+    "type": "0D",
+    "name": "주식호가잔량",
+    "item": "005930",
+    "values": {
+        "21": "090123",
+        **{str(fid): f" +{82000 - fid}" for fid in range(41, 51)},
+        **{str(fid): f"{fid * 10}" for fid in range(61, 71)},
+        **{str(fid): f" -{81900 - fid}" for fid in range(51, 61)},
+        **{str(fid): f"{fid * 10}" for fid in range(71, 81)},
+    },
+}
+
+
+def captured_orderbook(time, asks, ask_qtys, bids, bid_qtys):
+    values = {"21": time}
+    for start, fields in ((41, asks), (61, ask_qtys), (51, bids), (71, bid_qtys)):
+        values.update(
+            {str(fid): value for fid, value in zip(range(start, start + 10), fields, strict=True)}
+        )
+    return {"type": "0D", "name": "주식호가잔량", "item": "005930", "values": values}
+
+
+SPARSE_CAPTURE = captured_orderbook(
+    "090000",
+    ["-216500", "-217000", "-217500", *["-0"] * 7],
+    ["3907", "42399", "4434", *["0"] * 7],
+    ["-216000", "-215500", "-215000", *["-0"] * 7],
+    ["34242", "118496", "95265", *["0"] * 7],
+)
+FULL_CAPTURE = captured_orderbook(
+    "090020",
+    [
+        "-217000",
+        "-217500",
+        "-218000",
+        "-218500",
+        "-219000",
+        "-219500",
+        "-220000",
+        "-220500",
+        "-221000",
+        "-221500",
+    ],
+    ["62198", "9610", "19095", "5746", "12272", "12059", "30746", "16469", "4380", "33086"],
+    [
+        "-216500",
+        "-216000",
+        "-215500",
+        "-215000",
+        "-214500",
+        "-214000",
+        "-213500",
+        "-213000",
+        "-212500",
+        "-212000",
+    ],
+    ["9055", "117271", "66855", "90064", "51569", "54276", "39867", "42449", "22889", "42449"],
+)
 
 
 def test_parse_tick_strips_padding_and_direction_signs():
     assert parse_tick(TICK, TODAY) == PRICE
+
+
+def test_parse_orderbook_reads_all_ten_levels():
+    result = parse_orderbook(ORDERBOOK, TODAY)
+
+    assert result == {
+        "code": "005930",
+        "asks": [
+            {"price": 82000 - fid, "qty": (60 + level) * 10}
+            for level, fid in enumerate(range(41, 51), 1)
+        ],
+        "bids": [
+            {"price": 81900 - fid, "qty": (70 + level) * 10}
+            for level, fid in enumerate(range(51, 61), 1)
+        ],
+        "ts": "2026-10-13T09:01:23+09:00",
+    }
+
+
+def test_parse_captured_sparse_orderbook_preserves_empty_levels():
+    result = parse_orderbook(SPARSE_CAPTURE, CAPTURE_DATE)
+
+    assert result == {
+        "code": "005930",
+        "asks": [
+            {"price": 216500, "qty": 3907},
+            {"price": 217000, "qty": 42399},
+            {"price": 217500, "qty": 4434},
+            *[{"price": 0, "qty": 0}] * 7,
+        ],
+        "bids": [
+            {"price": 216000, "qty": 34242},
+            {"price": 215500, "qty": 118496},
+            {"price": 215000, "qty": 95265},
+            *[{"price": 0, "qty": 0}] * 7,
+        ],
+        "ts": "2026-10-15T09:00:00+09:00",
+    }
+
+
+def test_parse_captured_full_orderbook_reads_all_levels():
+    result = parse_orderbook(FULL_CAPTURE, CAPTURE_DATE)
+
+    assert result["asks"] == [
+        {"price": price, "qty": qty}
+        for price, qty in zip(
+            [217000, 217500, 218000, 218500, 219000, 219500, 220000, 220500, 221000, 221500],
+            [62198, 9610, 19095, 5746, 12272, 12059, 30746, 16469, 4380, 33086],
+            strict=True,
+        )
+    ]
+    assert result["bids"] == [
+        {"price": price, "qty": qty}
+        for price, qty in zip(
+            [216500, 216000, 215500, 215000, 214500, 214000, 213500, 213000, 212500, 212000],
+            [9055, 117271, 66855, 90064, 51569, 54276, 39867, 42449, 22889, 42449],
+            strict=True,
+        )
+    ]
+    assert result["ts"] == "2026-10-15T09:00:20+09:00"
+
+
+def test_parse_orderbook_requires_six_digit_time():
+    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "21": "90123"}}
+
+    with pytest.raises(ValueError):
+        parse_orderbook(entry, TODAY)
+
+
+def test_parse_orderbook_preserves_zero_prices():
+    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "41": "0", "60": "0"}}
+
+    result = parse_orderbook(entry, TODAY)
+
+    assert result["asks"][0] == {"price": 0, "qty": 610}
+    assert result["bids"][-1] == {"price": 0, "qty": 800}
+    assert len(result["asks"]) == len(result["bids"]) == 10
+
+
+def test_frame_orderbooks_skips_partial_and_malformed_entries():
+    partial = {**ORDERBOOK, "item": "000660", "values": dict(ORDERBOOK["values"])}
+    del partial["values"]["80"]
+    blank = {**ORDERBOOK, "item": "035420", "values": {**ORDERBOOK["values"], "61": " "}}
+    invalid = {**ORDERBOOK, "item": "035720", "values": {**ORDERBOOK["values"], "21": "bad"}}
+    negative = {**ORDERBOOK, "item": "005380", "values": {**ORDERBOOK["values"], "71": "-1"}}
+    message = {
+        "data": [ORDERBOOK, partial, blank, invalid, negative, TICK, "garbage"],
+    }
+
+    assert frame_orderbooks(message, TODAY) == [parse_orderbook(ORDERBOOK, TODAY)]
+
+
+def test_parse_orderbook_rejects_negative_quantities():
+    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "61": "-1"}}
+
+    with pytest.raises(ValueError, match="quantities must be nonnegative"):
+        parse_orderbook(entry, TODAY)
+
+
+def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url):
+    async def scenario():
+        valkey = Redis.from_url(valkey_url, decode_responses=True)
+        pubsub = valkey.pubsub()
+        await pubsub.subscribe("orderbook:005930")
+        await pubsub.get_message(timeout=1)
+        await publish_orderbooks(valkey, [parse_orderbook(ORDERBOOK, TODAY)])
+        message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+        stored = await valkey.get("orderbook:005930")
+        await pubsub.aclose()
+        await valkey.aclose()
+        return message, stored
+
+    message, stored = asyncio.run(scenario())
+    expected = parse_orderbook(ORDERBOOK, TODAY)
+
+    assert json.loads(stored) == expected
+    assert message is not None
+    assert message["channel"] == "orderbook:005930"
+    assert json.loads(message["data"]) == expected
 
 
 def test_frame_prices_skips_malformed_entries():
