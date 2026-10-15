@@ -11,11 +11,11 @@ def test_health_touches_no_datastore():
     assert response.json() == {"status": "ok"}
 
 
-def test_cors_allows_any_origin_for_get():
+def test_cors_blocks_origins_by_default():
     with TestClient(create_app(Redis(host="127.0.0.1", port=1), "unused")) as client:
         response = client.get("/health", headers={"Origin": "https://example.com"})
 
-    assert response.headers["access-control-allow-origin"] == "*"
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_cors_preflight_uses_configured_origins_and_headers():

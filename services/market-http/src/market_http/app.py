@@ -16,9 +16,9 @@ def create_app(
     app.state.questdb_conf = questdb_conf
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=cors_origins if cors_origins is not None else ["*"],
+        allow_origins=cors_origins if cors_origins is not None else [],
         allow_methods=["GET"],
-        allow_headers=cors_headers if cors_headers is not None else ["*"],
+        allow_headers=cors_headers if cors_headers is not None else [],
     )
     app.include_router(prices.router)
     app.include_router(bars.router)
