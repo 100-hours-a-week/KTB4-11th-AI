@@ -91,8 +91,9 @@ def test_stream_receives_update_published_during_snapshot_read(monkeypatch, valk
     assert Orderbook.model_validate_json(published.raw_data) == live
 
 
-def test_orderbook_model_requires_ten_positive_price_levels():
+def test_orderbook_model_requires_ten_nonnegative_price_levels():
     with pytest.raises(ValueError):
         Orderbook.model_validate({**BOOK.model_dump(), "asks": LEVELS[:9]})
+    assert OrderbookLevel(price=0, qty=1).price == 0
     with pytest.raises(ValueError):
-        OrderbookLevel(price=0, qty=1)
+        OrderbookLevel(price=0, qty=-1)

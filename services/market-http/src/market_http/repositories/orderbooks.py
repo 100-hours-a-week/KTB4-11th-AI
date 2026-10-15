@@ -5,7 +5,7 @@ from redis.asyncio import Redis
 
 
 class OrderbookLevel(BaseModel):
-    price: int = Field(gt=0)
+    price: int = Field(ge=0)
     qty: int = Field(ge=0)
 
 

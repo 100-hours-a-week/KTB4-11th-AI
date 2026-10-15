@@ -79,11 +79,14 @@ def test_parse_orderbook_requires_six_digit_time():
         parse_orderbook(entry, TODAY)
 
 
-def test_parse_orderbook_rejects_zero_prices():
-    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "41": "0"}}
+def test_parse_orderbook_preserves_zero_prices():
+    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "41": "0", "60": "0"}}
 
-    with pytest.raises(ValueError):
-        parse_orderbook(entry, TODAY)
+    result = parse_orderbook(entry, TODAY)
+
+    assert result["asks"][0] == {"price": 0, "qty": 610}
+    assert result["bids"][-1] == {"price": 0, "qty": 800}
+    assert len(result["asks"]) == len(result["bids"]) == 10
 
 
 def test_frame_orderbooks_skips_partial_and_malformed_entries():
@@ -97,6 +100,13 @@ def test_frame_orderbooks_skips_partial_and_malformed_entries():
     }
 
     assert frame_orderbooks(message, TODAY) == [parse_orderbook(ORDERBOOK, TODAY)]
+
+
+def test_parse_orderbook_rejects_negative_quantities():
+    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "61": "-1"}}
+
+    with pytest.raises(ValueError, match="quantities must be nonnegative"):
+        parse_orderbook(entry, TODAY)
 
 
 def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url):

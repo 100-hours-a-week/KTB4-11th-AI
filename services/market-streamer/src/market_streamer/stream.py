@@ -56,8 +56,6 @@ def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
         ask_qty = int(values[str(60 + level)].strip())
         bid_price = abs(int(values[str(50 + level)].strip()))
         bid_qty = int(values[str(70 + level)].strip())
-        if ask_price == 0 or bid_price == 0:
-            raise ValueError("orderbook prices must be positive")
         if ask_qty < 0 or bid_qty < 0:
             raise ValueError("orderbook quantities must be nonnegative")
         asks.append({"price": ask_price, "qty": ask_qty})
