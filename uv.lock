@@ -13,7 +13,6 @@ resolution-markers = [
 [manifest]
 members = [
     "ktb-core",
-    "ktb-market-analyzer",
     "market-collector",
     "market-http",
     "market-streamer",
@@ -607,21 +606,6 @@ wheels = [
 name = "ktb-core"
 version = "0.1.0"
 source = { editable = "packages/core" }
-
-[[package]]
-name = "ktb-market-analyzer"
-version = "0.1.0"
-source = { editable = "packages/market-analyzer" }
-dependencies = [
-    { name = "numpy" },
-    { name = "ta-lib" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=2.0" },
-    { name = "ta-lib", specifier = ">=0.8.0" },
-]
 
 [[package]]
 name = "kwcli"

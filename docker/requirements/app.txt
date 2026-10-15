@@ -497,7 +497,6 @@ numpy==2.5.3 \
     --hash=sha256:f7fabeb6cea87d65f3b926de33d03fb016cfdc29314c90974383b5582ae72891 \
     --hash=sha256:f9a2353b37a1a9e78fd82b27ad7e2a32a2d036604d18f02b05e3136c62ca3b09
     # via
-    #   ktb-market-analyzer
     #   news-clusterer
     #   pandas
     #   portfolio-builder
@@ -944,9 +943,7 @@ ta-lib==0.8.1 \
     --hash=sha256:de1db41f1a0a572f5a303f7f218edb68d4ae337c77486c8c8c769a63dd1c3e06 \
     --hash=sha256:f6e386d0e577a1e6112b150e23b4291d55424f06d964491ee7dfb9ca7ade095f \
     --hash=sha256:f84cf8ad03a1751302e77717e8638246e8281d17ff902e456e1c0c1dd2cea714
-    # via
-    #   ktb-market-analyzer
-    #   portfolio-builder
+    # via portfolio-builder
 tenacity==9.1.4 \
     --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55 \
     --hash=sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a
