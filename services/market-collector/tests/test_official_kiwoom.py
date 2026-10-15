@@ -3,11 +3,10 @@ from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
 from market_collector.kiwoom import official
 from market_collector.kiwoom.official import ChartClient, build_auth, build_client
-from market_collector.settings import KiwoomAccount
 
 
 def test_auth_keeps_credentials_and_tokens_in_memory():
-    auth = build_auth(KiwoomAccount(app_key="app", secret_key="secret"), "demo")
+    auth = build_auth("app", "secret", "demo")
 
     assert auth.mode == "demo"
     assert isinstance(auth.secret_provider, StaticSecretProvider)
@@ -15,7 +14,7 @@ def test_auth_keeps_credentials_and_tokens_in_memory():
 
 
 def test_build_client_returns_the_official_runtime():
-    client = build_client(KiwoomAccount(app_key="app", secret_key="secret"), "real")
+    client = build_client("app", "secret", "real")
 
     assert isinstance(client, KiwoomClient)
 

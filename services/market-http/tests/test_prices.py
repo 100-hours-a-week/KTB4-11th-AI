@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import UTC, datetime
 
 import pandas as pd
@@ -18,7 +19,7 @@ STREAMED = Price(
     change=-400,
     rate=-0.48,
     volume=500,
-    ts=datetime(2026, 10, 13, 9, 1, 23, tzinfo=KST),
+    timestamp=datetime(2026, 10, 13, 9, 1, 23, tzinfo=KST),
 )
 STORED = Price(
     code="000660",
@@ -26,7 +27,7 @@ STORED = Price(
     change=1000,
     rate=0.5,
     volume=900,
-    ts=datetime(2026, 10, 12, 15, 30, tzinfo=KST),
+    timestamp=datetime(2026, 10, 12, 15, 30, tzinfo=KST),
 )
 
 
@@ -71,7 +72,7 @@ def test_questdb_price_derives_change_and_day_volume():
         change=-500,
         rate=-0.61,
         volume=1234,
-        ts=datetime(2026, 10, 13, 9, 1, tzinfo=KST),
+        timestamp=datetime(2026, 10, 13, 9, 1, tzinfo=KST),
     )
     assert [binds for _, binds in db.queries] == [
         ["005930"],
@@ -97,8 +98,14 @@ def _app_client(valkey_url):
     return TestClient(create_app(Redis.from_url(valkey_url, decode_responses=True), "conf"))
 
 
+def _cached_price(price):
+    payload = price.model_dump(mode="json")
+    payload["ts"] = payload.pop("timestamp")
+    return json.dumps(payload)
+
+
 def test_prices_reads_valkey_without_touching_questdb(monkeypatch, valkey_url):
-    redis.Redis.from_url(valkey_url).set("price:005930", STREAMED.model_dump_json())
+    redis.Redis.from_url(valkey_url).set("price:005930", _cached_price(STREAMED))
     monkeypatch.setattr(
         prices_module, "questdb_prices", lambda conf, codes: pytest.fail("QuestDB was queried")
     )
@@ -108,10 +115,12 @@ def test_prices_reads_valkey_without_touching_questdb(monkeypatch, valkey_url):
 
     assert response.status_code == 200
     assert [Price.model_validate(item) for item in response.json()] == [STREAMED]
+    assert "timestamp" in response.json()[0]
+    assert "ts" not in response.json()[0]
 
 
 def test_prices_fills_a_miss_from_questdb_and_stores_it(monkeypatch, valkey_url):
-    redis.Redis.from_url(valkey_url).set("price:005930", STREAMED.model_dump_json())
+    redis.Redis.from_url(valkey_url).set("price:005930", _cached_price(STREAMED))
     asked = []
     monkeypatch.setattr(
         prices_module, "questdb_prices", lambda conf, codes: asked.append(codes) or [STORED]
@@ -124,13 +133,15 @@ def test_prices_fills_a_miss_from_questdb_and_stores_it(monkeypatch, valkey_url)
     assert [Price.model_validate(item) for item in response.json()] == [STREAMED, STORED]
     stored = redis.Redis.from_url(valkey_url, decode_responses=True).get("price:000660")
     assert Price.model_validate_json(stored) == STORED
+    assert "ts" in json.loads(stored)
+    assert "timestamp" not in json.loads(stored)
 
 
 def test_streamed_price_written_during_the_fill_wins(monkeypatch, valkey_url):
     raced = STORED.model_copy(update={"price": 201000})
 
     def fill(conf, codes):
-        redis.Redis.from_url(valkey_url).set("price:000660", raced.model_dump_json())
+        redis.Redis.from_url(valkey_url).set("price:000660", _cached_price(raced))
         return [STORED]
 
     monkeypatch.setattr(prices_module, "questdb_prices", fill)
@@ -158,17 +169,17 @@ def test_prices_rejects_malformed_codes(codes):
 
 
 def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, valkey_url):
-    redis.Redis.from_url(valkey_url).set("price:005930", STREAMED.model_dump_json())
+    redis.Redis.from_url(valkey_url).set("price:005930", _cached_price(STREAMED))
     monkeypatch.setattr(prices_module, "questdb_prices", lambda conf, codes: [])
     live = STREAMED.model_copy(
-        update={"price": 82200, "ts": datetime(2026, 10, 13, 0, 2, tzinfo=UTC)}
+        update={"price": 82200, "timestamp": datetime(2026, 10, 13, 0, 2, tzinfo=UTC)}
     )
 
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         events = stream_prices(valkey, "conf", ["005930"])
         snapshot = await anext(events)
-        await valkey.publish("price:005930", live.model_dump_json())
+        await valkey.publish("price:005930", _cached_price(live))
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
         await valkey.aclose()
@@ -179,4 +190,4 @@ def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, val
     assert snapshot.event == "price"
     assert snapshot.data == STREAMED
     assert published.event == "price"
-    assert Price.model_validate_json(published.raw_data) == live
+    assert published.data == live

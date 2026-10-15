@@ -18,7 +18,14 @@ REAL = {
         {
             "type": "0B",
             "item": "005930",
-            "values": {"10": "-82000", "11": "-500", "12": "-0.61", "13": "100", "20": "090123"},
+            "values": {
+                "10": "-82000",
+                "11": "-500",
+                "12": "-0.61",
+                "13": "100",
+                "14": "100000",
+                "20": "090123",
+            },
         }
     ],
 }
@@ -52,6 +59,20 @@ class FakeAuth:
         return "token"
 
     def recover_from_auth_failure(self):
+        pass
+
+
+class FakePipeline:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+    def delete(self, key):
+        pass
+
+    async def execute(self):
         pass
 
 
@@ -146,6 +167,9 @@ def test_run_builds_the_client_with_the_keepalive_connect_factory(monkeypatch):
         async def ping(self):
             return True
 
+        def pipeline(self, **kwargs):
+            return FakePipeline()
+
         async def aclose(self):
             pass
 
@@ -193,6 +217,9 @@ def test_run_exits_cleanly_at_the_stop_time(monkeypatch, now):
     class FakeValkey:
         async def ping(self):
             return True
+
+        def pipeline(self, **kwargs):
+            return FakePipeline()
 
         async def aclose(self):
             closed.append("valkey")

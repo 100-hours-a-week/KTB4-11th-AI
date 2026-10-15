@@ -49,6 +49,24 @@ One key and one channel per stock, both named `price:{code}` (e.g. `price:005930
 - `price` and `change` are integers in KRW; `rate` is percent; `volume` is today's cumulative volume.
 - Keys have no TTL. The last price stays valid overnight and over weekends.
 
+### Rankings
+
+market-streamer writes daily sorted sets for subscribed KOSPI 200 stocks. market-http reads
+the full signed change rate in descending order for gainers and ascending order for losers.
+
+| Key | Score |
+|---|---|
+| `ranking:trade_value:{YYYYMMDD}` | Kiwoom `0B` cumulative trading value (FID `14`) |
+| `ranking:volume:{YYYYMMDD}` | Kiwoom `0B` cumulative volume (FID `13`) |
+| `ranking:change_rate:{YYYYMMDD}` | Signed change rate (FID `12`) |
+| `ranking:popular` | Kiwoom `ka00198` lookup rank, collected by market-collector |
+
+The dated sets expire at 23:59:59 KST fourteen days after their trading date. market-http
+serves the previous trading day's ranking before 09:10 KST and on holidays. market-collector
+replaces `ranking:popular` after each full OHLCV pass, filtered to KOSPI 200. The existing
+`price:{code}` JSON and pub/sub message do not include trading value.
+`/indices/{name}` exposes the collected quote time as `timestamp`; the Valkey index JSON retains `ts`.
+
 ### Connection
 
 market-streamer and market-http each have their own `valkey.py` that builds an asyncio `redis` client from settings. Nothing goes into `ktb-core`, which stays free of third-party dependencies.
@@ -143,11 +161,11 @@ A FastAPI service laid out like news-http (`app.py`, `controllers/`, `__main__.p
 
 Codes with no data in QuestDB either are left out. Response: a list of price objects.
 
-`/prices` returns the latest known price, not necessarily one from the current trading session. Clients must use `ts` to judge freshness.
+`/prices` returns the latest known price, not necessarily one from the current trading session. Clients must use `timestamp` to judge freshness. Valkey still stores `ts` for market-streamer compatibility.
 
 The QuestDB fill:
 
-- `price`, `ts`: the latest `bars_1m` row per symbol (`LATEST ON ts PARTITION BY symbol`).
+- `price`, `timestamp`: the latest `bars_1m` row per symbol (`LATEST ON ts PARTITION BY symbol`).
 - `change`, `rate`: against the latest regular-session `bars_1d` close dated before the bar's KST day.
 - `volume`: sum of that KST day's `bars_1m` volume.
 
@@ -158,18 +176,18 @@ SSE with FastAPI's built-in `EventSourceResponse`/`ServerSentEvent`.
 1. `SUBSCRIBE price:{code}` for every code first, so no tick is lost between the snapshot and the stream.
 2. Look up current prices the same way as `/prices`, including the QuestDB fill.
 3. Send one `price` event per code as the snapshot.
-4. Send each subscribed message as a `price` event. Messages that arrived during steps 2–3 are sent after the snapshot; clients order by `ts`.
+4. Send each subscribed message as a `price` event. Messages that arrived during steps 2–3 are sent after the snapshot; clients order by `timestamp`.
 5. FastAPI's `EventSourceResponse` sends a `: ping` comment every 15 seconds while the generator is idle, which keeps the ALB from closing quiet streams; market-http adds no keep-alive of its own.
 
 Each SSE client holds its own pub/sub connection. A GitHub issue tracks moving to one shared subscription fanned out in-process when connection count needs it.
 
 ### `GET /bars/{code}?timeframe=1m&limit=300&cursor=...`
 
-Response: `{"items": [{"ts", "open", "high", "low", "close", "volume"}], "next_cursor": str | null}`, newest first.
+Response: `{"items": [{"timestamp", "open", "high", "low", "close", "volume"}], "next_cursor": str | null}`, newest first.
 
 - `timeframe` is one of `1m`, `15m`, `1h`, `1d`, reading `bars_1m`, `bars_15m`, `bars_1h`, `bars_1d`. `1m` and `1d` keep only `session = 'regular'`.
 - `limit` is 1 to 1000, default 300. The query fetches `limit + 1` rows to tell whether a next page exists.
-- The cursor is the urlsafe base64 of the last item's ISO `ts`. The next page is `ts < cursor`. `ts` is unique per symbol and timeframe, so no tiebreaker is needed.
+- The cursor is the urlsafe base64 of the last item's ISO `timestamp`. The next page queries `ts < cursor` in QuestDB. `ts` is unique per symbol and timeframe, so no tiebreaker is needed.
 - An unknown timeframe or an invalid cursor returns 422.
 
 QuestDB handlers are sync and run in FastAPI's threadpool with the official `questdb` client.
@@ -198,7 +216,7 @@ QuestDB handlers are sync and run in FastAPI's threadpool with the official `que
 
 `QuestDBMarket` is replaced by `HttpMarket`, which calls market-http with `urllib` like its `NewsClient`.
 
-- `bars(symbol, timeframe)`: one `GET /bars/{symbol}?timeframe=...&limit=300`, reversed to oldest first before building `Bars`. The returned `as_of` is the newest bar's `ts`.
+- `bars(symbol, timeframe)`: one `GET /bars/{symbol}?timeframe=...&limit=300`, reversed to oldest first before building `Bars`. The returned `as_of` is the newest bar's `timestamp`.
 - `universe_closes()`: KOSPI 200 members still come from PostgreSQL. It then calls `GET /bars/{code}?timeframe=1d&limit=300` once per member, in sequence. It is already cached once per run.
 
 `PORTFOLIO_BUILDER_QUESTDB_CONF` and the `questdb` dependency are removed. `PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI` is added (required; `http://market-http:8000` in compose).
