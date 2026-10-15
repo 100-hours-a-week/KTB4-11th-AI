@@ -202,7 +202,7 @@ jobs:
 
           compose config --quiet
           compose pull
-          # market-http·market-streamer는 운영 EC2가 아니라 V2 ECS(cd-ecs-v2.yaml)에서 실행합니다.
+          # market-http는 V2 ECS(cd-ecs-v2.yaml)에서 실행하고, market-streamer는 운영에서 실행하지 않습니다.
           compose up -d --wait postgres questdb
           compose run --rm -T postgres-migrate </dev/null
           compose run --rm -T questdb-migrate </dev/null
