@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     aws_region: str = "ap-northeast-2"
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)
+    cors_origins: list[str] = ["*"]
+    cors_headers: list[str] = ["*"]
     log_level: str = "INFO"
 
     @model_validator(mode="after")

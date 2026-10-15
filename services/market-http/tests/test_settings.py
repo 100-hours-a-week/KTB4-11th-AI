@@ -28,3 +28,16 @@ def test_iam_needs_username_and_cache_name(monkeypatch):
 
     with pytest.raises(ValidationError, match="valkey_username"):
         Settings()
+
+
+def test_cors_lists_from_environment(monkeypatch):
+    _populate(
+        monkeypatch,
+        MARKET_HTTP_CORS_ORIGINS='["https://app.example.com"]',
+        MARKET_HTTP_CORS_HEADERS='["Authorization"]',
+    )
+
+    settings = Settings()
+
+    assert settings.cors_origins == ["https://app.example.com"]
+    assert settings.cors_headers == ["Authorization"]
