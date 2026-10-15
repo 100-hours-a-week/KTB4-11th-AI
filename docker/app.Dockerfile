@@ -15,7 +15,6 @@ COPY packages packages
 COPY services services
 RUN uv pip install --no-deps \
     ./packages/core \
-    ./packages/market-analyzer \
     ./services/market-collector \
     ./services/market-http \
     ./services/market-streamer \

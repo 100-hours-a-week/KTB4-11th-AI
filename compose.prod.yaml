@@ -34,8 +34,6 @@ services:
     shm_size: 128m
     mem_limit: 600m
     restart: unless-stopped
-    # 운영: V2 ECS market-streamer가 corporation_indices를 읽습니다. AI_PRIVATE_IP(private IP)에만 게시하고
-    # AI 보안 그룹이 해당 Task SG만 허용합니다. 개발 서버는 값이 없으므로 localhost에만 게시됩니다.
     ports:
       - "${AI_PRIVATE_IP:-127.0.0.1}:5432:5432"
     volumes:
@@ -63,8 +61,6 @@ services:
       JVM_PREPEND: "-Xms256m -Xmx768m"
     mem_limit: 1500m
     restart: unless-stopped
-    # 운영: V2 ECS market-http가 QuestDB를 조회합니다. 9000은 인증 없는 웹 콘솔·/exec도 제공하므로
-    # 0.0.0.0에 게시하지 않습니다(호스트에 public IP가 있음). 개발 서버는 localhost에만 게시됩니다.
     ports:
       - "${AI_PRIVATE_IP:-127.0.0.1}:9000:9000"
     volumes:
@@ -251,8 +247,16 @@ services:
     environment:
       <<: *postgres-environment
       MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
-      MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
+      MARKET_COLLECTOR_KIWOOM_APP_KEY: ${MARKET_COLLECTOR_KIWOOM_APP_KEY:-}
+      MARKET_COLLECTOR_KIWOOM_SECRET_KEY: ${MARKET_COLLECTOR_KIWOOM_SECRET_KEY:-}
       MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
+      MARKET_COLLECTOR_VALKEY_HOST: ${MARKET_COLLECTOR_VALKEY_HOST:-}
+      MARKET_COLLECTOR_VALKEY_PORT: ${MARKET_COLLECTOR_VALKEY_PORT:-6379}
+      MARKET_COLLECTOR_VALKEY_USERNAME: ${MARKET_COLLECTOR_VALKEY_USERNAME:-}
+      MARKET_COLLECTOR_VALKEY_CACHE_NAME: ${MARKET_COLLECTOR_VALKEY_CACHE_NAME:-}
+      MARKET_COLLECTOR_VALKEY_TLS: ${MARKET_COLLECTOR_VALKEY_TLS:-true}
+      MARKET_COLLECTOR_VALKEY_AUTH_MODE: ${MARKET_COLLECTOR_VALKEY_AUTH_MODE:-iam}
+      MARKET_COLLECTOR_AWS_REGION: ${MARKET_COLLECTOR_AWS_REGION:-ap-northeast-2}
       MARKET_COLLECTOR_INDEX_NAME: ${MARKET_COLLECTOR_INDEX_NAME:-KOSPI200}
       MARKET_COLLECTOR_REQUEST_INTERVAL: ${MARKET_COLLECTOR_REQUEST_INTERVAL:-0.25}
       MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
@@ -287,8 +291,11 @@ services:
       postgres:
         condition: service_healthy
 
+  # 시세 조회 API. 개발 EC2는 cd-dev가 --profile market으로 함께 띄우고,
+  # 운영은 V2 ECS(cd-ecs-v2.yaml)에서 실행하므로 운영 EC2에서는 프로필을 켜지 않는다.
   market-http:
     <<: *app
+    profiles: ["market"]
     command: ["market-http"]
     restart: unless-stopped
     mem_limit: 384m
@@ -305,6 +312,7 @@ services:
       MARKET_HTTP_AWS_REGION: ${MARKET_HTTP_AWS_REGION:-ap-northeast-2}
       MARKET_HTTP_CORS_ORIGINS: ${MARKET_HTTP_CORS_ORIGINS:-[]}
       MARKET_HTTP_CORS_HEADERS: ${MARKET_HTTP_CORS_HEADERS:-[]}
+      MARKET_HTTP_DOCS_ENABLED: "false"
       MARKET_HTTP_LOG_LEVEL: ${MARKET_HTTP_LOG_LEVEL:-INFO}
     depends_on:
       questdb:
@@ -323,7 +331,8 @@ services:
     mem_limit: 768m
     environment:
       <<: *postgres-environment
-      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:-http://market-http:8000}
+      # 개발: http://market-http:8000 (같은 Compose), 운영: V2 ECS market-http (ALB /market)
+      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:?PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI must be set}
       PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI:-http://news-http:8000}
       PORTFOLIO_BUILDER_LLM_API_KEY: ${PORTFOLIO_BUILDER_LLM_API_KEY:-}
       PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}

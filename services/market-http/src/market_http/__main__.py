@@ -12,7 +12,9 @@ def main() -> None:
     app = create_app(
         connect_valkey(settings),
         settings.questdb_conf,
-        settings.cors_origins,
-        settings.cors_headers,
+        docs_enabled=settings.docs_enabled,
+        docs_path_prefix=settings.docs_path_prefix,
+        cors_origins=settings.cors_origins,
+        cors_headers=settings.cors_headers,
     )
     uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)

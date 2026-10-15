@@ -23,8 +23,8 @@ def test_cors_preflight_uses_configured_origins_and_headers():
         create_app(
             Redis(host="127.0.0.1", port=1),
             "unused",
-            ["https://app.example.com"],
-            ["Authorization"],
+            cors_origins=["https://app.example.com"],
+            cors_headers=["Authorization"],
         )
     ) as client:
         allowed = client.options(
@@ -41,3 +41,26 @@ def test_cors_preflight_uses_configured_origins_and_headers():
     assert allowed.headers["access-control-allow-origin"] == "https://app.example.com"
     assert "Authorization" in allowed.headers["access-control-allow-headers"]
     assert "access-control-allow-origin" not in blocked.headers
+
+
+def test_docs_use_public_prefix_without_moving_api_routes():
+    with TestClient(
+        create_app(Redis(host="127.0.0.1", port=1), "unused", docs_path_prefix="/market")
+    ) as client:
+        docs = client.get("/docs")
+        schema = client.get("/openapi.json")
+        health = client.get("/health")
+
+    assert docs.status_code == 200
+    assert "url: '/market/openapi.json'" in docs.text
+    assert schema.status_code == 200
+    assert health.status_code == 200
+
+
+def test_docs_are_unavailable_when_disabled():
+    with TestClient(
+        create_app(Redis(host="127.0.0.1", port=1), "unused", docs_enabled=False)
+    ) as client:
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            assert client.get(path).status_code == 404
+        assert client.get("/health").status_code == 200

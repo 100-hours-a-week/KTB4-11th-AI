@@ -25,6 +25,8 @@ async def stream_prices(
             yield ServerSentEvent(data=price, event="price")
         async for message in pubsub.listen():
             if message["type"] == "message":
-                yield ServerSentEvent(raw_data=message["data"], event="price")
+                yield ServerSentEvent(
+                    data=Price.model_validate_json(message["data"]), event="price"
+                )
     finally:
         await pubsub.aclose()

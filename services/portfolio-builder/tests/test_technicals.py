@@ -107,14 +107,14 @@ def _page(rows):
 @pytest.mark.parametrize("timeframe", ["1m", "15m", "1h", "1d"])
 def test_http_market_requests_300_bars_and_orders_them_oldest_first(timeframe):
     newest = {
-        "ts": "2026-09-28T06:30:00Z",
+        "timestamp": "2026-09-28T06:30:00Z",
         "open": 1.0,
         "high": 3.0,
         "low": 1.0,
         "close": 2.0,
         "volume": 30,
     }
-    older = {"ts": "2026-09-27T00:00:00Z", "open": 1.0, "high": 2.0, "low": 1.0,
+    older = {"timestamp": "2026-09-27T00:00:00Z", "open": 1.0, "high": 2.0, "low": 1.0,
              "close": 1.5, "volume": 20}  # fmt: skip
     with patch("portfolio_builder.market.urlopen", return_value=_page([newest, older])) as call:
         bars, as_of = HttpMarket("http://market", None).bars("005930", timeframe)

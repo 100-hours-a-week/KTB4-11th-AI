@@ -60,8 +60,8 @@ flowchart LR
     KIWOOM --> MC
     MC -->|OHLCV| QDB
     PG -->|KOSPI 200 symbols| MSTR
-    MSTR -->|latest price| Valkey
-    Valkey -->|prices| MH
+    MSTR -->|latest price, orderbook| Valkey
+    Valkey -->|prices, orderbooks| MH
     MH -->|bars| QDB
 
     PG <-->|model portfolio| PB
@@ -105,7 +105,6 @@ flowchart LR
 ### `news-clusterer`: 저장된 뉴스 클러스터링하기
 
 - PostgreSQL에서 임베딩이 있는 기사를 모두 가져와 코사인 거리 기반 DBSCAN을 계산
-  - 이 때 두 개의 환경변수를 사용하며, `NEWS_CLUSTERER_EPS`는 이웃으로 볼 최대 거리를, `NEWS_CLUSTERER_MIN_SAMPLES`는 핵심점에 필요한 최소 기사 수를 정함
 - `clusters`, `article_clusters`에 기사의 클러스터 정보를 저장하고 클러스터에 속하지 않는 기사는 노이즈로 처리함
 - 실행마다 기사 수, 군집 수, 소요 시간, 최대 메모리를 기록해, 전체 재계산을 증분 방식으로 바꿀 시점을 판단함
 
@@ -137,6 +136,14 @@ flowchart LR
 - 장 마감 후 실행하면 마감 수집을 한 번 하고 바로 종료함
 - `ktb_core.krx.KRX_HOLIDAYS` 기준 휴장일에는 아무것도 하지 않고 바로 종료함
 
+### `market-streamer`와 `market-http`: 실시간 가격과 호가 제공
+
+- market-streamer는 하나의 Kiwoom WebSocket에서 가격 `0B`와 호가 `0D`를 함께 구독함
+- market-http의 `GET /orderbooks?codes=005930,000660`은 저장된 최신 호가를 반환하고, `GET /orderbooks/stream?codes=005930,000660`은 SSE로 초기 스냅샷과 이후 갱신을 전달함
+- 각 호가 스냅샷은 최우선 순서로 매도·매수 각각 10개 가격과 수량을 포함함
+- `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
+- 기존 가격 API는 `/prices`, `/prices/stream`임
+
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 
 - PostgreSQL의 이전 포트폴리오와 news-http의 최근 뉴스, 관련 기업과 테마를 묶어 에이전트의 시작 자료를 생성함
@@ -161,32 +168,6 @@ flowchart LR
 - SQS에서 대회 참가자의 주문에 연결된 투자 이유 ID를 하나씩 받아 처리함
 - 선택된 이유와 해당 포트폴리오 설명, 인용된 뉴스 요약만으로 한국어 thoughts를 생성함
 - Backend에 결과를 전달한 뒤에만 SQS 메시지를 삭제함
-
-## 로컬 개발 환경에서 실행
-
-저장소 루트에서 `.env.example`을 `.env`로 복사해 해당 작업의 필수 값을 환경에 설정합니다.
-
-### 스키마 적용하기
-
-```bash
-docker compose -f compose.local.yaml up -d postgres questdb
-uv run alembic upgrade head
-KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
-```
-
-### 각 서비스 실행하기
-
-```bash
-docker compose -f compose.local.yaml up -d news-http
-docker compose -f compose.local.yaml run --rm news-preprocessor
-docker compose -f compose.local.yaml run --rm news-clusterer
-docker compose -f compose.local.yaml run --rm market-syncer
-docker compose -f compose.local.yaml run --rm news-graph-builder
-docker compose -f compose.local.yaml run --rm market-collector
-docker compose -f compose.local.yaml run --rm portfolio-builder
-docker compose -f compose.local.yaml run --rm portfolio-rebalancer
-docker compose -f compose.local.yaml up report-builder
-```
 
 ## 데이터베이스 (ERD): [mermaid.live](https://mermaid.live/edit#pako:eNrNWO9P20YY_ldO_tRqAZGkUMg3BFSbQG1VWk2akKyLfSRubV90Pq-EUIlVpKItnboNWraGDW3VqlZMCj_GMqn9h-LL_7A7_4pjx4ZoH7Z88_l97n2f9973uddpSApWkVSSEJnXYIVAY8UE_AcJ1RQdWWBjY2wMbwTPsqLbFkXEAiWwIvW-OXN-OWLP3va22oA92WFPXoArTrPDDs7Y79vOs13Qe_UUsNdP2MHO1RXJ2zncQey80Ri-c_fPI7Z1DLqdNnt8NBTJY_KfZcs2DEg05EHZT7ts79NwTCPEIJNqNIS86nQ7T0G33WInZ2lIgnRINWz6kHNuuw-iGQiA4dZZLtOMB71Y2CYKupwthaSCaBg9JjVM_NdBIP01GeoatPxYnNMt9vcfl0VqpqopQeLebbJtnoVvO-znZvoGG2CAuzjV103AC8X5oZXlllaRwQsDGzVoxhPnvsu09GuI_dp0PrwPYNwHXcW6hkNouCJXsa5qZsWvbZfTCGi0ptE-9Lw1ApQgaIWF5aL4kQC29db50MzKT0rowlQWbX05bD_wEYHRsAegMQlpeM_iV9YqmkmBpoLbi_1VitYo8God3FsM6x58BvgLREyoyxzBWofs4GMQWoiLmtyLb2oTPbbC61BHsbUyVuuRJY0XFoVGja6Dml3WNauKVBlScTgHHefFMW_3RBQEPpRrsK5jqAq7Ny-d0w64s7wM2N4Wl8NeszUAibhYRVQJHfDW4MBu-3tg4odXrkYxXyOFYiIXJiYmADLKSBUHziGmreuwrKMc-Pzm8peAfdrlkskDBYlgH8WE7eJziYRp11RIwzCj8txtbwKnvets7jjvz7iIHrPnhzGXCY1Pug5M3BBy4MZiwiLQUW5xQxTJrZtgfmFp4e4CmJtdnpudXxjOM3I9NLL29Lxm7ZtZQ56XlDIK3Awk0buoentcKZ632OFLdrAfns143zKtbnxa657RAPFo1zbicVKsPHA7lTMO9YZXTUSLQ-Owq722nJ-9cxd0Tw95Jzon2739TgJgQiOeGB7kAyT4Lt5avv1Fsn3NiixQkUpOZVw3lUy24a0WJ-2ue3xNTAz-uI5A96TdPU3qSSRBQREO8RTcgpnpHSxj9z3HoTWPsBuOmxTe07HaDe_Ly2mnUB8_iXwq4dMWEPLT-67FO3ToGV0mEbReQ1m5id_kzrudHOj-xYXnxw64eW9pKaUfM7iN3I4-zt2yHtcO329_TLowmaMqTQTjXVlyP5IhCuaNaCk2aTlXkaUQrSYYDNDyB6B4AQaTUNDfvcdv2ZtNdxnKFdHO6kVde2HLxaetzBguraqJ1rkw8xjrCJpAs2QD3sdEsG3uOO-2Afvto1BXV9r498eRc74ZK8bIODbSNajwoYdmjgMq5jMDAgq0qvJDpFWqNCGqhsFLYPCycJWSU4-MK_f5cFUGlEAl2YaQ2hYPAK3VdGh6ilRDppgIcrzeoVrPgei7VajpSE1LQX96TKaibzTaFekVR30AFb2XxhOzZiR3Q9PmTZsp14QXrQwJgXWgaOKE-k1spdD2Bt__mnOE3L_kE8zj_wtGlhYoUNmuA96cFtL1C3l7Ne-tior0mUo5qUI0VSpRYqOcZCB-dYlHyaXKv32F4KxI4kOEINVeG1P50DGmYB0T4VLgOY-vMDaCLQi2K1WptAp1iz9505b_B0howhsKkTlsm1Qq5SfcLaRSQ1qTSsWZifHidHE6ny_kpyYLk4WcVJdKk9PjhcLE1PS1wvXizMz1fOFRTlp3fRbHr_EXk8XJ6fxUfqYwVbj-6B_sZiCG) 에서 보기
 
@@ -350,46 +331,7 @@ FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계�
 계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
 
 HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용합니다.
-큐 URL과 HTTP 설정은 다른 서비스처럼 배포 `.env`에서 Compose `environment`를 거쳐
-Settings로 읽습니다. 직접 실행은 `uv run --env-file .env portfolio-rebalancer`를 사용합니다.
 SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
 기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
 리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
 DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.
-
-## 배포 Secret · Variable 목록
-
-값은 이 문서와 Terraform에 적지 않습니다. 이름과 용도만 기록하고, 실제 값은 `gh secret set` / `gh variable set` / `aws ssm put-parameter`로 직접 등록하며 원본은 비밀번호 관리자에 보관합니다. (GitHub Secret은 등록 후 다시 조회할 수 없습니다.)
-
-### GitHub (KTB4-11th-AI)
-
-| 이름 | 종류 | 범위 | 사용처 | 내용 |
-|---|---|---|---|---|
-| `AWS_ECR_PUSH_ROLE_ARN` | Variable | Repository | `ci-main.yaml`, `ci-dev.yaml` | Public ECR push용 OIDC Role ARN |
-| `PUBLIC_ECR_AI_REPOSITORY_URI` | Variable | Repository | CI·CD 전체 | AI 통합 이미지 저장소 URI. `cd-ecs-v2.yaml`은 CI Dev가 push한 `:<커밋 SHA>` 이미지를 배포 |
-| `EC2_HOST`, `EC2_USER` | Secret | Repository | `cd.yaml` | 운영 AI EC2 SSH 주소·사용자 |
-| `EC2_SSH_PRIVATE_KEY`, `EC2_SSH_KNOWN_HOSTS` | Secret | Repository | `cd.yaml` | 운영 AI EC2 SSH 키·호스트 키 |
-| `EC2_HOST`, `EC2_USER`, `EC2_SSH_PRIVATE_KEY`, `EC2_SSH_KNOWN_HOSTS` | Secret | Environment `development` | `cd-dev.yaml` | 개발 AI EC2 SSH 접속 정보 |
-| `PROD_AI_ENV` | Secret | Repository | `cd.yaml` | 운영 AI EC2 `~/ai/.env` 파일 전체. CD가 배포마다 서버에 씀 |
-| `AWS_ECS_DEPLOY_ROLE_ARN` | Variable | Repository | `cd-ecs-v2.yaml` | V2 ECS 배포용 OIDC Role ARN (Cloud `ecs` root에서 생성) |
-
-`cd.yaml`은 배포마다 `PROD_AI_ENV`를 서버의 `~/ai/.env`로 덮어씁니다. 서버에서 `.env`를 직접 고치면 다음 배포에서 사라지므로 Secret을 갱신합니다. 비어 있으면 배포 전에 실패하며, 배포가 실패하면 이전 `.env`로 되돌립니다. 기존 운영 `.env` 값에 더해 다음이 들어가야 합니다.
-
-- `AI_PRIVATE_IP`: PostgreSQL `5432`·QuestDB `9000`을 게시할 private IP (V2 ECS market 서비스가 접근)
-- `PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI=https://stock-spoon.com/market`: 운영 EC2에는 market-http가 없으므로 V2 ECS를 호출
-
-```bash
-gh secret set PROD_AI_ENV -R 100-hours-a-week/KTB4-11th-AI < prod.env   # 갱신 후 마지막 CD를 Re-run
-```
-
-### AWS SSM Parameter Store (V2 ECS)
-
-market-http·market-streamer는 운영 EC2가 아니라 V2 ECS에서 실행되며, 비밀값은 Task 시작 시 SSM SecureString에서 주입됩니다. 일반 값은 Cloud 레포 `ecs` root의 Task Definition에 있습니다.
-
-| 이름 | 사용처 |
-|---|---|
-| `/stockspoon/v2/prod/market-streamer/POSTGRES_DSN` | market-streamer (V1 AI 운영 PostgreSQL, `AI_PRIVATE_IP:5432`) |
-| `/stockspoon/v2/prod/market-streamer/KIWOOM_APP_KEY` | market-streamer |
-| `/stockspoon/v2/prod/market-streamer/KIWOOM_SECRET_KEY` | market-streamer |
-
-값을 바꾼 뒤에는 `aws ecs update-service --cluster stockspoon-v2-prod-cluster --service stockspoon-v2-prod-market-streamer --force-new-deployment`로 Task를 교체해야 반영됩니다.

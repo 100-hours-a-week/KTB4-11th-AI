@@ -1,11 +1,12 @@
 import asyncio
+import json
 from datetime import UTC, datetime, time
 from typing import Any
 
 import pandas as pd
 import questdb
 from ktb_core.krx import KST
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, Field
 from redis.asyncio import Redis
 
 from market_http.repositories.questdb import as_utc, questdb_time, records
@@ -27,7 +28,7 @@ class Price(BaseModel):
     change: int
     rate: float
     volume: int
-    ts: datetime
+    timestamp: datetime = Field(validation_alias=AliasChoices("timestamp", "ts"))
 
 
 def price_key(code: str) -> str:
@@ -38,9 +39,9 @@ def questdb_price(db: Any, code: str) -> Price | None:
     latest = records(db, LATEST, [code])
     if not latest:
         return None
-    ts = as_utc(latest[0]["ts"]).astimezone(KST)
+    timestamp = as_utc(latest[0]["ts"]).astimezone(KST)
     price = int(latest[0]["close"])
-    day = ts.date()
+    day = timestamp.date()
     previous = records(db, PREVIOUS_CLOSE, [code, questdb_time(datetime.combine(day, time(), UTC))])
     volume = records(db, DAY_VOLUME, [code, questdb_time(datetime.combine(day, time(), KST))])
     previous_close = int(previous[0]["close"]) if previous else price
@@ -52,7 +53,7 @@ def questdb_price(db: Any, code: str) -> Price | None:
         change=change,
         rate=round(change / previous_close * 100, 2) if previous_close else 0.0,
         volume=int(day_volume) if pd.notna(day_volume) else 0,
-        ts=ts,
+        timestamp=timestamp,
     )
 
 
@@ -76,7 +77,9 @@ async def current_prices(valkey: Redis, conf: str, codes: list[str]) -> list[Pri
         if filled:
             async with valkey.pipeline(transaction=False) as pipe:
                 for price in filled:
-                    pipe.set(price_key(price.code), price.model_dump_json(), nx=True)
+                    payload = price.model_dump(mode="json", exclude={"timestamp"})
+                    payload["ts"] = price.timestamp.isoformat()
+                    pipe.set(price_key(price.code), json.dumps(payload), nx=True)
                 await pipe.execute()
             refreshed = await _get_many(valkey, missing)
             values.update(zip(missing, refreshed, strict=True))
