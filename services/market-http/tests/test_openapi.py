@@ -26,7 +26,7 @@ def test_sse_openapi_documents_named_event_payload_and_example():
         )
         assert media["schema"]["type"] == "string"
         shown = media["example"]
-        assert shown.startswith(f"event: {event}\\n".replace("\\\\n", "\\n"))
+        assert shown.startswith(f"event: {event}\\n")
         assert json.loads(shown.split("data: ", 1)[1].strip()) == example
 
 
