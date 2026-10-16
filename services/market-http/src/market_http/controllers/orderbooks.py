@@ -1,9 +1,10 @@
 from collections.abc import AsyncIterable
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from market_http.controllers.dependencies import Codes, Valkey
+from market_http.metrics import track_sse_connection
 from market_http.openapi_examples import ORDERBOOK_EXAMPLE
 from market_http.repositories.orderbooks import Orderbook, current_orderbooks, orderbook_key
 from market_http.sse_openapi import sse_openapi
@@ -19,6 +20,7 @@ async def get_orderbooks(valkey: Valkey, codes: Codes) -> list[Orderbook]:
 @router.get(
     "/orderbooks/stream",
     response_class=EventSourceResponse,
+    dependencies=[Depends(track_sse_connection)],
     openapi_extra=sse_openapi("orderbook", Orderbook, ORDERBOOK_EXAMPLE),
 )
 async def stream_orderbooks(valkey: Valkey, codes: Codes) -> AsyncIterable[ServerSentEvent]:

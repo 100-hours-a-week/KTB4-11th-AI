@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
 from fastapi import FastAPI
@@ -7,6 +9,7 @@ from redis.asyncio import Redis
 from scalar_fastapi import get_scalar_api_reference
 
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
+from market_http.metrics import SSEConnectionMetrics
 from market_http.openapi_examples import HEALTH_EXAMPLE
 
 
@@ -24,9 +27,23 @@ def create_app(
     docs_path_prefix: str = "",
     cors_origins: list[str] | None = None,
     cors_headers: list[str] | None = None,
+    sse_metrics: SSEConnectionMetrics | None = None,
 ) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        metrics: SSEConnectionMetrics | None = app.state.sse_metrics
+        publisher = asyncio.create_task(metrics.publish()) if metrics is not None else None
+        try:
+            yield
+        finally:
+            if publisher is not None:
+                publisher.cancel()
+                with suppress(asyncio.CancelledError):
+                    await publisher
+
     app = FastAPI(
         title="market-http",
+        lifespan=lifespan,
         root_path=docs_path_prefix,
         openapi_url="/openapi.json" if docs_enabled else None,
         docs_url=None,
@@ -34,6 +51,7 @@ def create_app(
     )
     app.state.valkey = valkey
     app.state.questdb_conf = questdb_conf
+    app.state.sse_metrics = sse_metrics
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins if cors_origins is not None else [],
