@@ -109,3 +109,10 @@ def test_orderbook_model_requires_ten_nonnegative_price_levels():
     assert OrderbookLevel(price=0, qty=1).price == 0
     with pytest.raises(ValueError):
         OrderbookLevel(price=0, qty=-1)
+
+
+def test_orderbook_accepts_legacy_ts_but_exports_timestamp():
+    book = Orderbook.model_validate_json(_cached_book(BOOK))
+
+    assert book == BOOK
+    assert book.model_dump(mode="json") == BOOK.model_dump(mode="json")
