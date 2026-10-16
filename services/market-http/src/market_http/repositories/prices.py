@@ -6,7 +6,7 @@ from typing import Any
 import pandas as pd
 import questdb
 from ktb_core.krx import KST
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 
 from market_http.repositories.questdb import as_utc, questdb_time, records
@@ -22,6 +22,15 @@ DAY_VOLUME = (
 )
 
 
+PRICE_EXAMPLE = {
+    "code": "005930",
+    "price": 82100,
+    "change": -400,
+    "rate": -0.48,
+    "volume": 500,
+    "timestamp": "2026-10-15T09:01:23+09:00",
+}
+
 class Price(BaseModel):
     code: str
     price: int
@@ -29,6 +38,8 @@ class Price(BaseModel):
     rate: float
     volume: int
     timestamp: datetime = Field(validation_alias=AliasChoices("timestamp", "ts"))
+
+    model_config = ConfigDict(json_schema_extra={"examples": [PRICE_EXAMPLE]})
 
 
 def price_key(code: str) -> str:
