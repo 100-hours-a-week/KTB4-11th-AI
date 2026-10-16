@@ -19,21 +19,15 @@ def sse_openapi(event: str, model: type[BaseModel], example: dict[str, Any]) -> 
             },
         },
     }
+    wire_example = f"event: {event}\ndata: {json.dumps(example, ensure_ascii=False)}\n\n"
     return {
         "responses": {
             "200": {
                 "content": {
                     "text/event-stream": {
                         "itemSchema": item_schema,
-                        "schema": {"type": "array", "items": item_schema},
-                        "examples": {
-                            event: {
-                                "summary": f"{event} event",
-                                "value": [
-                                    {"event": event, "data": json.dumps(example, ensure_ascii=False)}
-                                ],
-                            }
-                        },
+                        "schema": {"type": "string", "examples": [wire_example]},
+                        "example": wire_example,
                     }
                 }
             }
