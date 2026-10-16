@@ -90,13 +90,16 @@ jobs:
       matrix:
         service: [market-http]
     steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
       - name: Configure AWS credentials (ECS deploy)
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ECS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Terraform이 관리하는 최신 Task Definition(환경 변수·Secret·리소스)에서 이미지만 바꿔 새 리비전을 등록합니다.
       - name: Register task definition with the new image
         id: taskdef
         env:
@@ -104,14 +107,14 @@ jobs:
           CONTAINER: ${{ matrix.service }}
         run: |
           set -euo pipefail
-          aws ecs describe-task-definition --task-definition "$FAMILY" \
-            --query taskDefinition > current.json
+          template=".aws/ecs/${CONTAINER}.json"
+          jq -e --arg family "$FAMILY" --arg name "$CONTAINER" \
+            '.family == $family and ([.containerDefinitions[] | select(.name == $name)] | length) == 1' \
+            "$template" > /dev/null
 
           jq --arg image "$IMAGE" --arg name "$CONTAINER" '
             .containerDefinitions |= map(if .name == $name then .image = $image else . end)
-            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-                  .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
-          ' current.json > next.json
+          ' "$template" > next.json
 
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
             --query taskDefinition.taskDefinitionArn --output text)"
