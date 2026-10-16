@@ -94,9 +94,15 @@ def _app_client(valkey_url):
 
 
 def _cached_price(price):
-    payload = price.model_dump(mode="json")
+    return price.model_dump_json()
+
+
+def test_price_requires_timestamp():
+    payload = STREAMED.model_dump(mode="json")
     payload["ts"] = payload.pop("timestamp")
-    return json.dumps(payload)
+
+    with pytest.raises(ValueError):
+        Price.model_validate(payload)
 
 
 def test_prices_reads_valkey_without_touching_questdb(monkeypatch, valkey_url):
@@ -128,8 +134,8 @@ def test_prices_fills_a_miss_from_questdb_and_stores_it(monkeypatch, valkey_url)
     assert [Price.model_validate(item) for item in response.json()] == [STREAMED, STORED]
     stored = redis.Redis.from_url(valkey_url, decode_responses=True).get("price:000660")
     assert Price.model_validate_json(stored) == STORED
-    assert "ts" in json.loads(stored)
-    assert "timestamp" not in json.loads(stored)
+    assert "timestamp" in json.loads(stored)
+    assert "ts" not in json.loads(stored)
 
 
 def test_streamed_price_written_during_the_fill_wins(monkeypatch, valkey_url):

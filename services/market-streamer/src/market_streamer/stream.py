@@ -39,7 +39,7 @@ def parse_tick(entry: dict[str, Any], today: date) -> dict[str, object]:
         "rate": float(values["12"].strip()),
         "volume": abs(int(values["13"].strip())),
         "trade_value": abs(int(values["14"].strip())),
-        "ts": datetime.combine(today, clock, KST).isoformat(),
+        "timestamp": datetime.combine(today, clock, KST).isoformat(),
     }
 
 
@@ -107,14 +107,16 @@ async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
         code = str(price["code"])
         previous = latest.get(code) or (json.loads(raw) if raw else None)
         if previous:
-            previous_ts = datetime.fromisoformat(previous["ts"])
-            current_ts = datetime.fromisoformat(str(price["ts"]))
-            if current_ts < previous_ts or (
-                current_ts.date() == previous_ts.date()
+            previous_timestamp = datetime.fromisoformat(previous["timestamp"])
+            current_timestamp = datetime.fromisoformat(str(price["timestamp"]))
+            if current_timestamp < previous_timestamp or (
+                current_timestamp.date() == previous_timestamp.date()
                 and int(price["volume"]) < int(previous["volume"])
             ):
                 continue
-            if current_ts == previous_ts and int(price["volume"]) == int(previous["volume"]):
+            if current_timestamp == previous_timestamp and int(price["volume"]) == int(
+                previous["volume"]
+            ):
                 continue
         latest[code] = price
         accepted.append(price)
@@ -128,7 +130,7 @@ async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
             pipe.set(key, payload)
             pipe.publish(key, payload)
             code = str(price["code"])
-            timestamp = datetime.fromisoformat(str(price["ts"]))
+            timestamp = datetime.fromisoformat(str(price["timestamp"]))
             if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
                 day = timestamp.astimezone(KST).date()
                 expiry = datetime.combine(day + timedelta(days=14), time(23, 59, 59), KST)

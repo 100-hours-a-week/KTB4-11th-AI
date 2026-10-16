@@ -1,12 +1,11 @@
 import asyncio
-import json
 from datetime import UTC, datetime, time
 from typing import Any
 
 import pandas as pd
 import questdb
 from ktb_core.krx import KST
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 
 from market_http.openapi_examples import PRICE_EXAMPLE
@@ -29,7 +28,7 @@ class Price(BaseModel):
     change: int
     rate: float
     volume: int
-    timestamp: datetime = Field(validation_alias=AliasChoices("timestamp", "ts"))
+    timestamp: datetime
 
     model_config = ConfigDict(json_schema_extra={"examples": [PRICE_EXAMPLE]})
 
@@ -80,9 +79,7 @@ async def current_prices(valkey: Redis, conf: str, codes: list[str]) -> list[Pri
         if filled:
             async with valkey.pipeline(transaction=False) as pipe:
                 for price in filled:
-                    payload = price.model_dump(mode="json", exclude={"timestamp"})
-                    payload["ts"] = price.timestamp.isoformat()
-                    pipe.set(price_key(price.code), json.dumps(payload), nx=True)
+                    pipe.set(price_key(price.code), price.model_dump_json(), nx=True)
                 await pipe.execute()
             refreshed = await _get_many(valkey, missing)
             values.update(zip(missing, refreshed, strict=True))
