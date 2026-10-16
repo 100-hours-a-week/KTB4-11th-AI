@@ -17,6 +17,7 @@ botocore==1.43.109 \
     --hash=sha256:cd00edff465264fb448e36acc9ee29a828f738fff3746270b3f685a19194a5a6
     # via
     #   boto3
+    #   ktb-aws
     #   s3transfer
 certifi==2026.7.22 \
     --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
@@ -257,6 +258,10 @@ questdb==5.0.0 \
     --hash=sha256:f001a0d14a91ab85137facbaf1c7a2d5532e2b26eb057b095a92513a330d06ed \
     --hash=sha256:f424a5f7f66f61238294eb05e81ddf2d0f52e9a3527d085e0b4613f380d2caf4
     # via portfolio-rebalancer
+redis==8.1.0 \
+    --hash=sha256:6e1a19beef9225c83efd689c7e6b7da2d5215b1f42cd13b7fc3714d0a09c7b25 \
+    --hash=sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb
+    # via ktb-aws
 s3transfer==0.19.2 \
     --hash=sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993 \
     --hash=sha256:d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25

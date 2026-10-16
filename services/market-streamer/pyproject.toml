@@ -5,7 +5,7 @@ description = "Kiwoom realtime KOSPI 200 prices into Valkey"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
-    "botocore>=1.40",
+    "ktb-aws",
     "kwcli",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.9",
@@ -20,6 +20,7 @@ market-streamer = "market_streamer.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }
+ktb-aws = { workspace = true }
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["psycopg"]

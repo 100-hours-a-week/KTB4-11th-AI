@@ -14,6 +14,7 @@ COPY pyproject.toml ./
 COPY packages packages
 COPY services services
 RUN uv pip install --no-deps \
+    ./packages/aws \
     ./packages/core \
     ./services/market-collector \
     ./services/market-http \

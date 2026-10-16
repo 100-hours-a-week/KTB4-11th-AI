@@ -5,7 +5,7 @@ description = "Public HTTP API for current prices and OHLCV history"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
-    "botocore>=1.40",
+    "ktb-aws",
     "fastapi>=0.142",
     "pandas>=2.2",
     "pydantic>=2.9",
@@ -21,6 +21,7 @@ market-http = "market_http.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }
+ktb-aws = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

@@ -1,4 +1,5 @@
 source_roots = [
+    "packages/aws/src",
     "packages/core/src",
     "services/market-syncer/src",
     "services/market-collector/src",
@@ -12,6 +13,9 @@ source_roots = [
     "services/portfolio-rebalancer/src",
 ]
 root_module = "forbid"
+
+[[modules]]
+path = "ktb_aws"
 
 [[modules]]
 path = "ktb_core"
@@ -82,16 +86,16 @@ depends_on = ["ktb_core"]
 
 [[modules]]
 path = "market_collector"
-depends_on = ["ktb_core"]
+depends_on = ["ktb_aws", "ktb_core"]
 
 [[modules]]
 path = "portfolio_rebalancer"
-depends_on = ["ktb_core"]
+depends_on = ["ktb_aws", "ktb_core"]
 
 [[modules]]
 path = "market_streamer"
-depends_on = ["ktb_core"]
+depends_on = ["ktb_aws", "ktb_core"]
 
 [[modules]]
 path = "market_http"
-depends_on = ["ktb_core"]
+depends_on = ["ktb_aws", "ktb_core"]

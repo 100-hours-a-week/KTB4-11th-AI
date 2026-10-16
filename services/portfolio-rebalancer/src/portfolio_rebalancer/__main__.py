@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import boto3
 import httpx
 import sqlalchemy as sa
+from ktb_aws.sqs import SqsQueue
 from ktb_core.logging import (
     StructuredLogger,
     get_logger,
@@ -12,7 +13,6 @@ from ktb_core.logging import (
     setup_logging,
     start_logging,
 )
-from ktb_core.queue import SqsQueue
 
 from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session

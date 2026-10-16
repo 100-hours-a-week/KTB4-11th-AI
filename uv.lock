@@ -12,6 +12,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "ktb-aws",
     "ktb-core",
     "market-collector",
     "market-http",
@@ -603,6 +604,21 @@ wheels = [
 ]
 
 [[package]]
+name = "ktb-aws"
+version = "0.1.0"
+source = { editable = "packages/aws" }
+dependencies = [
+    { name = "botocore" },
+    { name = "redis" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "botocore", specifier = ">=1.40" },
+    { name = "redis", specifier = ">=6.4" },
+]
+
+[[package]]
 name = "ktb-core"
 version = "0.1.0"
 source = { editable = "packages/core" }
@@ -858,7 +874,7 @@ name = "market-collector"
 version = "0.1.0"
 source = { editable = "services/market-collector" }
 dependencies = [
-    { name = "botocore" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "kwcli" },
     { name = "psycopg", extra = ["binary"] },
@@ -871,7 +887,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "botocore", specifier = ">=1.40" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "kwcli" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
@@ -887,8 +903,8 @@ name = "market-http"
 version = "0.1.0"
 source = { editable = "services/market-http" }
 dependencies = [
-    { name = "botocore" },
     { name = "fastapi" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "pandas" },
     { name = "pydantic" },
@@ -901,8 +917,8 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "botocore", specifier = ">=1.40" },
     { name = "fastapi", specifier = ">=0.142" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "pandas", specifier = ">=2.2" },
     { name = "pydantic", specifier = ">=2.9" },
@@ -918,7 +934,7 @@ name = "market-streamer"
 version = "0.1.0"
 source = { editable = "services/market-streamer" }
 dependencies = [
-    { name = "botocore" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "kwcli" },
     { name = "psycopg", extra = ["binary"] },
@@ -931,7 +947,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "botocore", specifier = ">=1.40" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "kwcli" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
@@ -1406,6 +1422,7 @@ source = { editable = "services/portfolio-rebalancer" }
 dependencies = [
     { name = "boto3" },
     { name = "httpx" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -1418,6 +1435,7 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.98" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic", specifier = ">=2.9" },

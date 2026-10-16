@@ -11,9 +11,10 @@ COPY docker/requirements/market-streamer.txt ./requirements.txt
 RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
+COPY packages/aws packages/aws
 COPY packages/core packages/core
 COPY services/market-streamer services/market-streamer
-RUN uv pip install --no-deps ./packages/core ./services/market-streamer
+RUN uv pip install --no-deps ./packages/aws ./packages/core ./services/market-streamer
 
 FROM python:3.13-slim-bookworm AS runtime
 
