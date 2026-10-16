@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import datetime
 
 import pytest
@@ -21,16 +22,23 @@ def _app_client(valkey_url):
     return TestClient(create_app(Redis.from_url(valkey_url, decode_responses=True), "conf"))
 
 
+def _cached_book(book):
+    payload = book.model_dump(mode="json")
+    payload["ts"] = payload.pop("timestamp")
+    return json.dumps(payload)
+
+
 def test_orderbooks_preserves_requested_order_and_omits_missing_codes(valkey_url):
     client = redis.Redis.from_url(valkey_url)
-    client.set("orderbook:005930", BOOK.model_dump_json())
-    client.set("orderbook:000660", SECOND.model_dump_json())
+    client.set("orderbook:005930", _cached_book(BOOK))
+    client.set("orderbook:000660", _cached_book(SECOND))
 
     with _app_client(valkey_url) as http:
         response = http.get("/orderbooks?codes=000660,005930,123456")
 
     assert response.status_code == 200
     assert [Orderbook.model_validate(item) for item in response.json()] == [SECOND, BOOK]
+    assert all("timestamp" in item and "ts" not in item for item in response.json())
 
 
 def test_orderbooks_returns_empty_list_when_all_codes_are_missing(valkey_url):
@@ -48,14 +56,14 @@ def test_orderbooks_rejects_malformed_codes(codes):
 
 
 def test_stream_sends_snapshot_then_published_update(valkey_url):
-    redis.Redis.from_url(valkey_url).set("orderbook:005930", BOOK.model_dump_json())
-    live = BOOK.model_copy(update={"ts": datetime(2026, 10, 15, 0, 2)})
+    redis.Redis.from_url(valkey_url).set("orderbook:005930", _cached_book(BOOK))
+    live = BOOK.model_copy(update={"timestamp": datetime(2026, 10, 15, 0, 2)})
 
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         events = stream_orderbooks(valkey, ["005930"])
         snapshot = await anext(events)
-        await valkey.publish("orderbook:005930", live.model_dump_json())
+        await valkey.publish("orderbook:005930", _cached_book(live))
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
         await valkey.aclose()
@@ -65,15 +73,17 @@ def test_stream_sends_snapshot_then_published_update(valkey_url):
 
     assert snapshot.event == "orderbook"
     assert snapshot.data == BOOK
+    assert "timestamp" in snapshot.data.model_dump() and "ts" not in snapshot.data.model_dump()
     assert published.event == "orderbook"
-    assert Orderbook.model_validate_json(published.raw_data) == live
+    assert published.data == live
+    assert "timestamp" in published.data.model_dump() and "ts" not in published.data.model_dump()
 
 
 def test_stream_receives_update_published_during_snapshot_read(monkeypatch, valkey_url):
-    live = BOOK.model_copy(update={"ts": datetime(2026, 10, 15, 0, 2)})
+    live = BOOK.model_copy(update={"timestamp": datetime(2026, 10, 15, 0, 2)})
 
     async def publish_during_snapshot(valkey, codes):
-        await valkey.publish("orderbook:005930", live.model_dump_json())
+        await valkey.publish("orderbook:005930", _cached_book(live))
         await asyncio.sleep(0.05)
         return []
 
@@ -90,7 +100,7 @@ def test_stream_receives_update_published_during_snapshot_read(monkeypatch, valk
     published = asyncio.run(scenario())
 
     assert published.event == "orderbook"
-    assert Orderbook.model_validate_json(published.raw_data) == live
+    assert published.data == live
 
 
 def test_orderbook_model_requires_ten_nonnegative_price_levels():

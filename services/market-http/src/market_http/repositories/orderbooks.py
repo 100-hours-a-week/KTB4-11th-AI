@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 
 from market_http.openapi_examples import ORDERBOOK_EXAMPLE
@@ -15,7 +15,7 @@ class Orderbook(BaseModel):
     code: str
     asks: list[OrderbookLevel] = Field(min_length=10, max_length=10)
     bids: list[OrderbookLevel] = Field(min_length=10, max_length=10)
-    ts: datetime
+    timestamp: datetime = Field(validation_alias=AliasChoices("timestamp", "ts"))
 
     model_config = ConfigDict(json_schema_extra={"examples": [ORDERBOOK_EXAMPLE]})
 

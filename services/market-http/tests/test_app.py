@@ -86,6 +86,10 @@ def test_docs_examples_match_test_entities():
         assert getattr(openapi_examples, name) == expected
         assert schema["components"]["schemas"][type(entity).__name__]["examples"][0] == expected
 
+    orderbook_schema = schema["components"]["schemas"]["Orderbook"]
+    assert "timestamp" in orderbook_schema["properties"]
+    assert "ts" not in orderbook_schema["properties"]
+
     for path, event, name in (
         ("/prices/stream", "price", "PRICE_EXAMPLE"),
         ("/orderbooks/stream", "orderbook", "ORDERBOOK_EXAMPLE"),

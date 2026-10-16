@@ -33,7 +33,7 @@ ORDERBOOK_EXAMPLE = {
         {"price": 81200, "qty": 1280},
         {"price": 81100, "qty": 1290},
     ],
-    "ts": "2026-10-15T09:01:00+09:00",
+    "timestamp": "2026-10-15T09:01:00+09:00",
 }
 
 PAGE_EXAMPLE = {

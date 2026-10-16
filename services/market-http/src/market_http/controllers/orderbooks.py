@@ -29,6 +29,8 @@ async def stream_orderbooks(valkey: Valkey, codes: Codes) -> AsyncIterable[Serve
             yield ServerSentEvent(data=orderbook, event="orderbook")
         async for message in pubsub.listen():
             if message["type"] == "message":
-                yield ServerSentEvent(raw_data=message["data"], event="orderbook")
+                yield ServerSentEvent(
+                    data=Orderbook.model_validate_json(message["data"]), event="orderbook"
+                )
     finally:
         await pubsub.aclose()
