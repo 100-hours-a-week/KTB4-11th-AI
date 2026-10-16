@@ -86,7 +86,7 @@ depends_on = ["ktb_core"]
 
 [[modules]]
 path = "market_collector"
-depends_on = ["ktb_core"]
+depends_on = ["ktb_aws", "ktb_core"]
 
 [[modules]]
 path = "portfolio_rebalancer"

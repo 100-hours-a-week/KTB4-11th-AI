@@ -874,7 +874,7 @@ name = "market-collector"
 version = "0.1.0"
 source = { editable = "services/market-collector" }
 dependencies = [
-    { name = "botocore" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "kwcli" },
     { name = "psycopg", extra = ["binary"] },
@@ -887,7 +887,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "botocore", specifier = ">=1.40" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "kwcli" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },

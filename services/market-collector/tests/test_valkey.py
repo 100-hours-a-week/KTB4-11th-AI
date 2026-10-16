@@ -1,13 +1,20 @@
-import gc
+from ktb_aws.elasticache import ElastiCacheIAMProvider
+from market_collector.settings import Settings
+from market_collector.valkey import connect_valkey
 
-from market_collector.valkey import ElastiCacheIAMProvider
 
+def test_iam_connection_uses_shared_provider():
+    settings = Settings(
+        questdb_conf="unused",
+        kiwoom_app_key="app",
+        kiwoom_secret_key="secret",
+        postgres_dsn="postgresql://unused",
+        valkey_host="localhost",
+        valkey_auth_mode="iam",
+        valkey_username="backend",
+        valkey_cache_name="my-cache",
+    )
 
-def test_iam_token_survives_garbage_collection(monkeypatch):
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
-    provider = ElastiCacheIAMProvider("backend", "my-cache", "ap-northeast-2")
+    kwargs = connect_valkey(settings).connection_pool.connection_kwargs
 
-    gc.collect()
-
-    assert provider.get_credentials()[1].startswith("my-cache/?")
+    assert isinstance(kwargs["credential_provider"], ElastiCacheIAMProvider)
