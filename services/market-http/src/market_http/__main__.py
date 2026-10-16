@@ -17,12 +17,14 @@ def main() -> None:
         docs_path_prefix=settings.docs_path_prefix,
         cors_origins=settings.cors_origins,
         cors_headers=settings.cors_headers,
+        sse_metrics=(
+            SSEConnectionMetrics(
+                namespace=settings.metrics_namespace,
+                cluster_name=settings.metrics_cluster_name,
+                service_name=settings.metrics_service_name,
+            )
+            if settings.metrics_namespace
+            else None
+        ),
     )
-    if settings.metrics_namespace:
-        app.add_middleware(
-            SSEConnectionMetrics,
-            namespace=settings.metrics_namespace,
-            cluster_name=settings.metrics_cluster_name,
-            service_name=settings.metrics_service_name,
-        )
     uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
