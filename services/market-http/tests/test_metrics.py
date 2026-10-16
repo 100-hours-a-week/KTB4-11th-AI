@@ -1,5 +1,5 @@
 import asyncio
-import json
+import logging
 from contextlib import suppress
 
 import pytest
@@ -79,7 +79,9 @@ def test_send_failure_does_not_leak_a_connection():
     asyncio.run(scenario())
 
 
-def test_publisher_emits_idle_zero_and_stops_at_shutdown(capsys):
+def test_publisher_emits_idle_zero_and_stops_at_shutdown(caplog):
+    caplog.set_level(logging.INFO)
+
     async def scenario():
         started = asyncio.Event()
         shutdown = asyncio.Event()
@@ -102,18 +104,19 @@ def test_publisher_emits_idle_zero_and_stops_at_shutdown(capsys):
         task = asyncio.create_task(metrics({"type": "lifespan"}, receive, send))
         await started.wait()
         await asyncio.sleep(0.005)
+        metrics.active_connections = 2
+        await asyncio.sleep(0.005)
         shutdown.set()
         await task
-        events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        events = [record for record in caplog.records if record.message == "active_sse_connections"]
         assert events
-        assert all(event["ActiveSSEConnections"] == 0 for event in events)
-        assert events[0]["ClusterName"] == "c"
-        assert events[0]["ServiceName"] == "s"
-        assert events[0]["_aws"]["CloudWatchMetrics"][0]["Dimensions"] == [
-            ["ClusterName", "ServiceName"]
-        ]
+        assert {event.fields["count"] for event in events} == {0, 2}
+        assert events[0].name == "market_http.metrics"
+        assert events[0].fields["namespace"] == "test"
+        assert events[0].fields["cluster_name"] == "c"
+        assert events[0].fields["service_name"] == "s"
         await asyncio.sleep(0.005)
-        assert capsys.readouterr().out == ""
+        assert len(caplog.records) == len(events)
 
     asyncio.run(scenario())
 

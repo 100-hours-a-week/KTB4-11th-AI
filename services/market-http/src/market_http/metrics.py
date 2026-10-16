@@ -1,9 +1,9 @@
 import asyncio
-import json
-import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
+
+from ktb_core.logging import get_logger
 
 type Message = dict[str, Any]
 type Scope = dict[str, Any]
@@ -31,25 +31,12 @@ class SSEConnectionMetrics:
 
     async def publish(self) -> None:
         while True:
-            print(
-                json.dumps(
-                    {
-                        "_aws": {
-                            "Timestamp": int(time.time() * 1000),
-                            "CloudWatchMetrics": [
-                                {
-                                    "Namespace": self.namespace,
-                                    "Dimensions": [["ClusterName", "ServiceName"]],
-                                    "Metrics": [{"Name": "ActiveSSEConnections", "Unit": "Count"}],
-                                }
-                            ],
-                        },
-                        "ClusterName": self.cluster_name,
-                        "ServiceName": self.service_name,
-                        "ActiveSSEConnections": self.active_connections,
-                    }
-                ),
-                flush=True,
+            get_logger(__name__).info(
+                "active_sse_connections",
+                namespace=self.namespace,
+                cluster_name=self.cluster_name,
+                service_name=self.service_name,
+                count=self.active_connections,
             )
             await asyncio.sleep(self.interval)
 
