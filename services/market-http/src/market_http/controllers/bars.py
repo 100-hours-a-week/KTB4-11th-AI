@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from market_http.controllers.dependencies import CODE, QuestDBConf
 from market_http.repositories.bars import Bar, Timeframe, find_bars
@@ -14,6 +14,26 @@ router = APIRouter()
 class Page(BaseModel):
     items: list[Bar]
     next_cursor: str | None
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "items": [
+                        {
+                            "timestamp": "2026-10-15T09:01:00+09:00",
+                            "open": 82000.0,
+                            "high": 82300.0,
+                            "low": 81900.0,
+                            "close": 82100.0,
+                            "volume": 15000,
+                        }
+                    ],
+                    "next_cursor": None,
+                }
+            ]
+        }
+    )
 
 
 def _cursor(cursor: str | None = None) -> datetime | None:
