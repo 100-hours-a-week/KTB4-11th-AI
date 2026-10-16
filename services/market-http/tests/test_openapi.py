@@ -24,10 +24,10 @@ def test_sse_openapi_documents_named_event_payload_and_example():
         assert item["properties"]["data"]["contentSchema"]["$ref"] == (
             f"#/components/schemas/{model}"
         )
-        assert media["schema"] == {"type": "array", "items": item}
-        shown = media["examples"][event]["value"][0]
-        assert shown["event"] == event
-        assert json.loads(shown["data"]) == example
+        assert media["schema"]["type"] == "string"
+        shown = media["example"]
+        assert shown.startswith(f"event: {event}\\n".replace("\\\\n", "\\n"))
+        assert json.loads(shown.split("data: ", 1)[1].strip()) == example
 
 
 def test_all_market_http_response_models_have_concrete_examples():
