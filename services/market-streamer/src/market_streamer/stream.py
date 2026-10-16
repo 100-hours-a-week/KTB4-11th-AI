@@ -64,7 +64,7 @@ def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
         "code": entry["item"],
         "asks": asks,
         "bids": bids,
-        "ts": datetime.combine(today, clock, KST).isoformat(),
+        "timestamp": datetime.combine(today, clock, KST).isoformat(),
     }
 
 

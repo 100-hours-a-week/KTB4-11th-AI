@@ -116,7 +116,7 @@ def test_parse_orderbook_reads_all_ten_levels():
             {"price": 81900 - fid, "qty": (70 + level) * 10}
             for level, fid in enumerate(range(51, 61), 1)
         ],
-        "ts": "2026-10-13T09:01:23+09:00",
+        "timestamp": "2026-10-13T09:01:23+09:00",
     }
 
 
@@ -137,7 +137,7 @@ def test_parse_captured_sparse_orderbook_preserves_empty_levels():
             {"price": 215000, "qty": 95265},
             *[{"price": 0, "qty": 0}] * 7,
         ],
-        "ts": "2026-10-15T09:00:00+09:00",
+        "timestamp": "2026-10-15T09:00:00+09:00",
     }
 
 
@@ -160,7 +160,7 @@ def test_parse_captured_full_orderbook_reads_all_levels():
             strict=True,
         )
     ]
-    assert result["ts"] == "2026-10-15T09:00:20+09:00"
+    assert result["timestamp"] == "2026-10-15T09:00:20+09:00"
 
 
 def test_parse_orderbook_requires_six_digit_time():

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 
 from market_http.openapi_examples import ORDERBOOK_EXAMPLE
@@ -18,13 +18,6 @@ class Orderbook(BaseModel):
     timestamp: datetime
 
     model_config = ConfigDict(json_schema_extra={"examples": [ORDERBOOK_EXAMPLE]})
-
-    @model_validator(mode="before")
-    @classmethod
-    def accept_legacy_ts(cls, value):
-        if isinstance(value, dict) and "timestamp" not in value and "ts" in value:
-            return {**value, "timestamp": value["ts"]}
-        return value
 
 
 def orderbook_key(code: str) -> str:

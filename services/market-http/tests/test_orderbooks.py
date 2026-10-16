@@ -1,5 +1,4 @@
 import asyncio
-import json
 from datetime import datetime
 
 import pytest
@@ -22,16 +21,10 @@ def _app_client(valkey_url):
     return TestClient(create_app(Redis.from_url(valkey_url, decode_responses=True), "conf"))
 
 
-def _cached_book(book):
-    payload = book.model_dump(mode="json")
-    payload["ts"] = payload.pop("timestamp")
-    return json.dumps(payload)
-
-
 def test_orderbooks_preserves_requested_order_and_omits_missing_codes(valkey_url):
     client = redis.Redis.from_url(valkey_url)
-    client.set("orderbook:005930", _cached_book(BOOK))
-    client.set("orderbook:000660", _cached_book(SECOND))
+    client.set("orderbook:005930", BOOK.model_dump_json())
+    client.set("orderbook:000660", SECOND.model_dump_json())
 
     with _app_client(valkey_url) as http:
         response = http.get("/orderbooks?codes=000660,005930,123456")
@@ -56,14 +49,14 @@ def test_orderbooks_rejects_malformed_codes(codes):
 
 
 def test_stream_sends_snapshot_then_published_update(valkey_url):
-    redis.Redis.from_url(valkey_url).set("orderbook:005930", _cached_book(BOOK))
+    redis.Redis.from_url(valkey_url).set("orderbook:005930", BOOK.model_dump_json())
     live = BOOK.model_copy(update={"timestamp": datetime(2026, 10, 15, 0, 2)})
 
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         events = stream_orderbooks(valkey, ["005930"])
         snapshot = await anext(events)
-        await valkey.publish("orderbook:005930", _cached_book(live))
+        await valkey.publish("orderbook:005930", live.model_dump_json())
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
         await valkey.aclose()
@@ -83,7 +76,7 @@ def test_stream_receives_update_published_during_snapshot_read(monkeypatch, valk
     live = BOOK.model_copy(update={"timestamp": datetime(2026, 10, 15, 0, 2)})
 
     async def publish_during_snapshot(valkey, codes):
-        await valkey.publish("orderbook:005930", _cached_book(live))
+        await valkey.publish("orderbook:005930", live.model_dump_json())
         await asyncio.sleep(0.05)
         return []
 
@@ -111,8 +104,9 @@ def test_orderbook_model_requires_ten_nonnegative_price_levels():
         OrderbookLevel(price=0, qty=-1)
 
 
-def test_orderbook_accepts_legacy_ts_but_exports_timestamp():
-    book = Orderbook.model_validate_json(_cached_book(BOOK))
+def test_orderbook_requires_timestamp():
+    payload = BOOK.model_dump(mode="json")
+    payload["ts"] = payload.pop("timestamp")
 
-    assert book == BOOK
-    assert book.model_dump(mode="json") == BOOK.model_dump(mode="json")
+    with pytest.raises(ValueError):
+        Orderbook.model_validate(payload)
