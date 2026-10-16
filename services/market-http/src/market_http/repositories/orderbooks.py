@@ -1,7 +1,9 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
+
+from market_http.openapi_examples import ORDERBOOK_EXAMPLE
 
 
 class OrderbookLevel(BaseModel):
@@ -14,6 +16,8 @@ class Orderbook(BaseModel):
     asks: list[OrderbookLevel] = Field(min_length=10, max_length=10)
     bids: list[OrderbookLevel] = Field(min_length=10, max_length=10)
     ts: datetime
+
+    model_config = ConfigDict(json_schema_extra={"examples": [ORDERBOOK_EXAMPLE]})
 
 
 def orderbook_key(code: str) -> str:

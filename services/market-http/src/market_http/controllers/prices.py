@@ -4,7 +4,9 @@ from fastapi import APIRouter
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from market_http.controllers.dependencies import Codes, QuestDBConf, Valkey
+from market_http.openapi_examples import PRICE_EXAMPLE
 from market_http.repositories.prices import Price, current_prices, price_key
+from market_http.sse_openapi import sse_openapi
 
 router = APIRouter()
 
@@ -14,7 +16,11 @@ async def get_prices(valkey: Valkey, conf: QuestDBConf, codes: Codes) -> list[Pr
     return await current_prices(valkey, conf, codes)
 
 
-@router.get("/prices/stream", response_class=EventSourceResponse)
+@router.get(
+    "/prices/stream",
+    response_class=EventSourceResponse,
+    openapi_extra=sse_openapi("price", Price, PRICE_EXAMPLE),
+)
 async def stream_prices(
     valkey: Valkey, conf: QuestDBConf, codes: Codes
 ) -> AsyncIterable[ServerSentEvent]:

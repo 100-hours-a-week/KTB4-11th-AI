@@ -6,9 +6,10 @@ from typing import Any
 import pandas as pd
 import questdb
 from ktb_core.krx import KST
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 
+from market_http.openapi_examples import PRICE_EXAMPLE
 from market_http.repositories.questdb import as_utc, questdb_time, records
 
 LATEST = "SELECT ts, close FROM bars WHERE timeframe = '1m' AND symbol = $1 LIMIT -1"
@@ -29,6 +30,8 @@ class Price(BaseModel):
     rate: float
     volume: int
     timestamp: datetime = Field(validation_alias=AliasChoices("timestamp", "ts"))
+
+    model_config = ConfigDict(json_schema_extra={"examples": [PRICE_EXAMPLE]})
 
 
 def price_key(code: str) -> str:

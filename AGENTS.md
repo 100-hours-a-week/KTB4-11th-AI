@@ -145,7 +145,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_HTTP_AWS_REGION` | market-http (IAM token signing region) | `ap-northeast-2` |
 | `MARKET_HTTP_HOST` | market-http | `0.0.0.0` |
 | `MARKET_HTTP_PORT` | market-http | `8000` |
-| `MARKET_HTTP_DOCS_ENABLED` | market-http (set `false` in production to disable `/docs`, `/redoc`, and `/openapi.json`) | `true` |
+| `MARKET_HTTP_DOCS_ENABLED` | market-http (set `false` in production to disable `/scalar` and `/openapi.json`) | `true` |
 | `MARKET_HTTP_DOCS_PATH_PREFIX` | market-http (public proxy prefix stripped before reaching the app; e.g. `/market`) | empty |
 | `MARKET_HTTP_LOG_LEVEL` | market-http | `INFO` |
 | `PORTFOLIO_REBALANCER_POSTGRES_DSN` | portfolio-rebalancer | required |

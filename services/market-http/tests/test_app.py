@@ -47,20 +47,22 @@ def test_docs_use_public_prefix_without_moving_api_routes():
     with TestClient(
         create_app(Redis(host="127.0.0.1", port=1), "unused", docs_path_prefix="/market")
     ) as client:
-        docs = client.get("/docs")
+        docs = client.get("/scalar")
         schema = client.get("/openapi.json")
         health = client.get("/health")
 
     assert docs.status_code == 200
-    assert "url: '/market/openapi.json'" in docs.text
+    assert "/market/openapi.json" in docs.text
     assert schema.status_code == 200
     assert health.status_code == 200
+    assert client.get("/docs").status_code == 404
+    assert client.get("/redoc").status_code == 404
 
 
 def test_docs_are_unavailable_when_disabled():
     with TestClient(
         create_app(Redis(host="127.0.0.1", port=1), "unused", docs_enabled=False)
     ) as client:
-        for path in ("/docs", "/redoc", "/openapi.json"):
+        for path in ("/scalar", "/docs", "/redoc", "/openapi.json"):
             assert client.get(path).status_code == 404
         assert client.get("/health").status_code == 200
