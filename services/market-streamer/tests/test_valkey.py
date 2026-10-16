@@ -1,3 +1,4 @@
+import gc
 from urllib.parse import parse_qs
 
 from market_streamer.settings import Settings
@@ -10,7 +11,9 @@ def test_iam_token_is_a_presigned_connect_url_for_the_serverless_cache(monkeypat
     monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
 
-    user, token = ElastiCacheIAMProvider("backend", "my-cache", "ap-northeast-2").get_credentials()
+    provider = ElastiCacheIAMProvider("backend", "my-cache", "ap-northeast-2")
+    gc.collect()
+    user, token = provider.get_credentials()
 
     assert user == "backend"
     assert token.startswith("my-cache/?")

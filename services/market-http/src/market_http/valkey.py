@@ -14,14 +14,14 @@ class ElastiCacheIAMProvider(CredentialProvider):
         self._user = user
         self._cache_name = cache_name
         self._region = region
-        session = botocore.session.get_session()
+        self._session = botocore.session.get_session()
         self._signer = RequestSigner(
             ServiceId("elasticache"),
             region,
             "elasticache",
             "v4",
-            session.get_credentials(),
-            session.get_component("event_emitter"),
+            self._session.get_credentials(),
+            self._session.get_component("event_emitter"),
         )
 
     def get_credentials(self) -> tuple[str, str]:
