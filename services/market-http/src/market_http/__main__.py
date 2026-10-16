@@ -2,6 +2,7 @@ import uvicorn
 from ktb_core.logging import setup_logging
 
 from market_http.app import create_app
+from market_http.metrics import SSEConnectionMetrics
 from market_http.settings import Settings
 from market_http.valkey import connect_valkey
 
@@ -17,4 +18,11 @@ def main() -> None:
         cors_origins=settings.cors_origins,
         cors_headers=settings.cors_headers,
     )
+    if settings.metrics_namespace:
+        app.add_middleware(
+            SSEConnectionMetrics,
+            namespace=settings.metrics_namespace,
+            cluster_name=settings.metrics_cluster_name,
+            service_name=settings.metrics_service_name,
+        )
     uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)

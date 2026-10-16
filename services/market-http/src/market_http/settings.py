@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     docs_enabled: bool = True
     docs_path_prefix: str = Field(default="", pattern=r"^$|^/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
     log_level: str = "INFO"
+    metrics_namespace: str = ""
+    metrics_cluster_name: str = ""
+    metrics_service_name: str = ""
+
+    @model_validator(mode="after")
+    def _metrics_need_dimensions(self) -> Self:
+        if self.metrics_namespace and not (self.metrics_cluster_name and self.metrics_service_name):
+            raise ValueError("metrics need metrics_cluster_name and metrics_service_name")
+        return self
 
     @model_validator(mode="after")
     def _iam_needs_identity(self) -> Self:
