@@ -10,8 +10,10 @@ from market_http.controllers.orderbooks import stream_orderbooks
 from market_http.repositories.orderbooks import Orderbook, OrderbookLevel
 from redis.asyncio import Redis
 
-LEVELS = [OrderbookLevel(price=82000 - i * 100, qty=1000 + i) for i in range(10)]
-BOOK = Orderbook(code="005930", asks=LEVELS, bids=LEVELS, ts=datetime(2026, 10, 15, 0, 1))
+from .example_entities import ORDERBOOK
+
+BOOK = ORDERBOOK
+LEVELS = BOOK.asks
 SECOND = BOOK.model_copy(update={"code": "000660"})
 
 

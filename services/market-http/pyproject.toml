@@ -12,6 +12,7 @@ dependencies = [
     "pydantic-settings>=2.7",
     "questdb>=5.0",
     "redis>=6.4",
+    "scalar-fastapi>=1.0",
     "uvicorn>=0.54",
 ]
 

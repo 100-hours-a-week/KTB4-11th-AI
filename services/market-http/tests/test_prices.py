@@ -13,14 +13,9 @@ from market_http.repositories import prices as prices_module
 from market_http.repositories.prices import Price, questdb_price
 from redis.asyncio import Redis
 
-STREAMED = Price(
-    code="005930",
-    price=82100,
-    change=-400,
-    rate=-0.48,
-    volume=500,
-    timestamp=datetime(2026, 10, 13, 9, 1, 23, tzinfo=KST),
-)
+from .example_entities import PRICE
+
+STREAMED = PRICE.model_copy(update={"timestamp": datetime(2026, 10, 13, 9, 1, 23, tzinfo=KST)})
 STORED = Price(
     code="000660",
     price=200000,

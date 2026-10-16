@@ -7,6 +7,8 @@ from ktb_core.krx import KST
 from market_http.app import create_app
 from market_http.repositories.rankings import read_rankings
 
+from .example_entities import INDEX, RANKING
+
 
 class Valkey:
     def __init__(self, sets):
@@ -75,19 +77,14 @@ def test_rankings_fall_back_when_current_day_is_missing():
 
 
 def test_http_serves_indices_and_popular_rankings():
+    index_payload = INDEX.model_dump(mode="json")
+    index_payload["ts"] = index_payload.pop("timestamp")
+    assert RANKING.updated_at is not None
     valkey = Valkey(
         {
-            "index:KOSPI": json.dumps(
-                {
-                    "name": "KOSPI",
-                    "value": 2750.12,
-                    "change": -12.34,
-                    "rate": -0.45,
-                    "ts": "2026-10-15T09:01:00+09:00",
-                }
-            ),
-            "ranking:popular": {"005930": 2, "000660": 1},
-            "ranking:popular:updated_at": "2026-10-15T09:01:00+09:00",
+            "index:KOSPI": json.dumps(index_payload),
+            "ranking:popular": {RANKING.items[0].code: RANKING.items[0].score, "000660": 1},
+            "ranking:popular:updated_at": RANKING.updated_at.isoformat(),
         }
     )
     with TestClient(create_app(valkey, "unused")) as client:
@@ -100,9 +97,5 @@ def test_http_serves_indices_and_popular_rankings():
     assert index.json()["timestamp"] == "2026-10-15T09:01:00+09:00"
     assert "ts" not in index.json()
     assert popular.status_code == 200
-    assert popular.json() == {
-        "as_of": "2026-10-15",
-        "updated_at": "2026-10-15T09:01:00+09:00",
-        "items": [{"rank": 1, "code": "005930", "score": 2.0}],
-    }
+    assert popular.json() == RANKING.model_dump(mode="json")
     assert invalid.status_code == 422
