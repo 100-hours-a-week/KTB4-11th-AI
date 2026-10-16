@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 
 import questdb
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from market_http.repositories.questdb import as_utc, questdb_time, records
 
@@ -19,6 +19,21 @@ class Bar(BaseModel):
     low: float
     close: float
     volume: int
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {
+                    "timestamp": "2026-10-15T09:01:00+09:00",
+                    "open": 82000.0,
+                    "high": 82300.0,
+                    "low": 81900.0,
+                    "close": 82100.0,
+                    "volume": 15000,
+                }
+            ]
+        }
+    )
 
 
 def find_bars(
