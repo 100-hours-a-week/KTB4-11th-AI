@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from contextlib import suppress
 
@@ -6,6 +7,7 @@ import httpx
 import pytest
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import StreamingResponse
+from ktb_core.logging import JsonFormatter
 from market_http.app import create_app
 from market_http.controllers import orderbooks, prices
 from market_http.metrics import SSEConnectionMetrics, track_sse_connection
@@ -132,11 +134,23 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
             await asyncio.sleep(0.005)
 
         events = [record for record in caplog.records if record.message == "active_sse_connections"]
-        assert {event.fields["count"] for event in events} == {0, 2}
+        payloads = [json.loads(JsonFormatter("market-http").format(event)) for event in events]
+        assert {payload["ActiveSSEConnections"] for payload in payloads} == {0, 2}
         assert events[0].name == "market_http.metrics"
-        assert events[0].fields["namespace"] == "test"
-        assert events[0].fields["cluster_name"] == "c"
-        assert events[0].fields["service_name"] == "s"
+        assert all(payload["ClusterName"] == "c" for payload in payloads)
+        assert all(payload["ServiceName"] == "s" for payload in payloads)
+        assert all(isinstance(payload["_aws"]["Timestamp"], int) for payload in payloads)
+        assert all(
+            payload["_aws"]["CloudWatchMetrics"]
+            == [
+                {
+                    "Namespace": "test",
+                    "Dimensions": [["ClusterName", "ServiceName"]],
+                    "Metrics": [{"Name": "ActiveSSEConnections", "Unit": "Count"}],
+                }
+            ]
+            for payload in payloads
+        )
         await asyncio.sleep(0.005)
         assert len(caplog.records) == len(events)
 

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from collections.abc import AsyncIterator
 
 from fastapi import Request
@@ -24,10 +25,19 @@ class SSEConnectionMetrics:
         while True:
             get_logger(__name__).info(
                 "active_sse_connections",
-                namespace=self.namespace,
-                cluster_name=self.cluster_name,
-                service_name=self.service_name,
-                count=self.active_connections,
+                _aws={
+                    "Timestamp": int(time.time() * 1000),
+                    "CloudWatchMetrics": [
+                        {
+                            "Namespace": self.namespace,
+                            "Dimensions": [["ClusterName", "ServiceName"]],
+                            "Metrics": [{"Name": "ActiveSSEConnections", "Unit": "Count"}],
+                        }
+                    ],
+                },
+                ClusterName=self.cluster_name,
+                ServiceName=self.service_name,
+                ActiveSSEConnections=self.active_connections,
             )
             await asyncio.sleep(self.interval)
 
