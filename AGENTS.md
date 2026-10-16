@@ -10,6 +10,7 @@ This is a uv workspace (Python 3.13, also CI-tested against 3.14). Run everythin
 uv sync --all-packages --group migrations   # install every member + alembic/psycopg into one .venv
 uv run ruff check .                         # lint (E, F, I, UP, B; line length 100)
 uv run ruff format --check .                # CI fails on unformatted code
+uv run python services/market-http/tests/example_entities.py services/market-http/src/market_http/openapi_examples.py
 KTB_TEST_VALKEY_URL=redis://localhost:6379/0 uv run pytest   # all tests (packages/, services/, infrastructure/)
 uv run pytest services/news-clusterer       # one member
 uv run news-clusterer                       # run a service by its console script
