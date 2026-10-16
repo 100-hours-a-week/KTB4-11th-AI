@@ -36,7 +36,7 @@ PRICE = {
     "rate": -0.61,
     "volume": 12345678,
     "trade_value": 987654321,
-    "ts": "2026-10-13T09:01:23+09:00",
+    "timestamp": "2026-10-13T09:01:23+09:00",
 }
 ORDERBOOK = {
     "type": "0D",
@@ -116,7 +116,7 @@ def test_parse_orderbook_reads_all_ten_levels():
             {"price": 81900 - fid, "qty": (70 + level) * 10}
             for level, fid in enumerate(range(51, 61), 1)
         ],
-        "ts": "2026-10-13T09:01:23+09:00",
+        "timestamp": "2026-10-13T09:01:23+09:00",
     }
 
 
@@ -137,7 +137,7 @@ def test_parse_captured_sparse_orderbook_preserves_empty_levels():
             {"price": 215000, "qty": 95265},
             *[{"price": 0, "qty": 0}] * 7,
         ],
-        "ts": "2026-10-15T09:00:00+09:00",
+        "timestamp": "2026-10-15T09:00:00+09:00",
     }
 
 
@@ -160,7 +160,7 @@ def test_parse_captured_full_orderbook_reads_all_levels():
             strict=True,
         )
     ]
-    assert result["ts"] == "2026-10-15T09:00:20+09:00"
+    assert result["timestamp"] == "2026-10-15T09:00:20+09:00"
 
 
 def test_parse_orderbook_requires_six_digit_time():
@@ -329,7 +329,7 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
         await publish(valkey, [older])
         await publish(
             valkey,
-            [{**older, "ts": "2026-10-13T09:00:23+09:00", "volume": 400}],
+            [{**older, "timestamp": "2026-10-13T09:00:23+09:00", "volume": 400}],
         )
         return valkey
 

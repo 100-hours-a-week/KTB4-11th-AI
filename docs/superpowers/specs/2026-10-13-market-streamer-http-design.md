@@ -43,7 +43,7 @@ Valkey is a local container in development and ElastiCache Serverless (Valkey) i
 One key and one channel per stock, both named `price:{code}` (e.g. `price:005930`). The key holds, and each message carries, the same JSON:
 
 ```json
-{"code": "005930", "price": 82000, "change": -500, "rate": -0.61, "volume": 12345678, "ts": "2026-10-13T09:01:23+09:00"}
+{"code": "005930", "price": 82000, "change": -500, "rate": -0.61, "volume": 12345678, "timestamp": "2026-10-13T09:01:23+09:00"}
 ```
 
 - `price` and `change` are integers in KRW; `rate` is percent; `volume` is today's cumulative volume.
@@ -161,7 +161,7 @@ A FastAPI service laid out like news-http (`app.py`, `controllers/`, `__main__.p
 
 Codes with no data in QuestDB either are left out. Response: a list of price objects.
 
-`/prices` returns the latest known price, not necessarily one from the current trading session. Clients must use `timestamp` to judge freshness. Valkey still stores `ts` for market-streamer compatibility.
+`/prices` returns the latest known price, not necessarily one from the current trading session. Clients must use `timestamp` to judge freshness. Valkey stores `timestamp` as well.
 
 The QuestDB fill:
 

@@ -15,7 +15,7 @@ class Orderbook(BaseModel):
     code: str
     asks: list[OrderbookLevel] = Field(min_length=10, max_length=10)
     bids: list[OrderbookLevel] = Field(min_length=10, max_length=10)
-    ts: datetime
+    timestamp: datetime
 
     model_config = ConfigDict(json_schema_extra={"examples": [ORDERBOOK_EXAMPLE]})
 

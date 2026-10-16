@@ -130,8 +130,9 @@ def test_stream_publishes_ticks_and_registers_again_after_disconnect(monkeypatch
         assert socket.sent[1]["trnm"] == "REG"
         assert socket.sent[1]["data"] == [{"item": codes, "type": ["0B", "0D"]}]
     assert [[price["code"] for price in prices] for prices in published] == [["005930"]]
-    assert published[0][0]["ts"].endswith("T09:01:23+09:00")
+    assert published[0][0]["timestamp"].endswith("T09:01:23+09:00")
     assert [[book["code"] for book in orderbooks] for orderbooks in books] == [["005930"]]
+    assert books[0][0]["timestamp"].endswith("T09:01:24+09:00")
     assert books[0][0]["asks"][0]["price"] == abs(100000 - 41)
     assert delays == [1.0, 1.0]
 

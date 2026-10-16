@@ -24,7 +24,7 @@ ORDERBOOK = Orderbook(
     code="005930",
     asks=[OrderbookLevel(price=82100 + i * 100, qty=1000 + i * 10) for i in range(10)],
     bids=[OrderbookLevel(price=82000 - i * 100, qty=1200 + i * 10) for i in range(10)],
-    ts=datetime.fromisoformat("2026-10-15T09:01:00+09:00"),
+    timestamp=datetime.fromisoformat("2026-10-15T09:01:00+09:00"),
 )
 PAGE = Page(
     items=[

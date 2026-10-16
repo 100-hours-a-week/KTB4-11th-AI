@@ -17,22 +17,22 @@ Kiwoom identifies `0D` as 주식호가잔량. Its FID mapping is `41`–`50` for
 
 ## Valkey and HTTP contract
 
-The key and pub/sub channel are both `orderbook:{code}`. Each accepted snapshot is written with `SET` and published as the same JSON payload. The key has no TTL, like `price:{code}`; consumers use `ts` to decide whether the last known book is fresh. There is no QuestDB fallback or orderbook history.
+The key and pub/sub channel are both `orderbook:{code}`. Each accepted snapshot is written with `SET` and published as the same JSON payload. The key has no TTL, like `price:{code}`; consumers use `timestamp` to decide whether the last known book is fresh. There is no QuestDB fallback or orderbook history.
 
 ```json
 {
   "code": "005930",
   "asks": [{"price": 82000, "qty": 1200}],
   "bids": [{"price": 81900, "qty": 1500}],
-  "ts": "2026-10-15T09:01:23+09:00"
+  "timestamp": "2026-10-15T09:01:23+09:00"
 }
 ```
 
-The example abbreviates the arrays; a stored live snapshot contains exactly ten entries in each array, ordered best price first. `ts` combines FID `21` with the KST trading date, as the price stream does for FID `20`. The full arrays are replaced on every accepted update; no merging of levels is needed.
+The example abbreviates the arrays; a stored live snapshot contains exactly ten entries in each array, ordered best price first. `timestamp` combines FID `21` with the KST trading date, as the price stream does for FID `20`. The full arrays are replaced on every accepted update; no merging of levels is needed.
 
 `GET /orderbooks?codes=005930,000660` reuses the existing six-character code validation and de-duplication. It pipelines one `GET` per `orderbook:{code}`, safe for Valkey cluster mode, and returns available snapshots in requested-code order. Missing codes are omitted, yielding `[]` when no snapshots exist.
 
-`GET /orderbooks/stream?codes=005930,000660` subscribes to the requested channels before reading snapshots. It emits one `orderbook` SSE event per available snapshot, then one `orderbook` event for each published update. Clients may receive an update queued during snapshot reading afterward and use `ts` to order or discard older data. FastAPI's existing SSE ping and per-client pub/sub connection behavior apply. The public authentication and CORS policy remain the same as for `/prices`.
+`GET /orderbooks/stream?codes=005930,000660` subscribes to the requested channels before reading snapshots. It emits one `orderbook` SSE event per available snapshot, then one `orderbook` event for each published update. Clients may receive an update queued during snapshot reading afterward and use `timestamp` to order or discard older data. FastAPI's existing SSE ping and per-client pub/sub connection behavior apply. The public authentication and CORS policy remain the same as for `/prices`.
 
 ## Files and compatibility
 
