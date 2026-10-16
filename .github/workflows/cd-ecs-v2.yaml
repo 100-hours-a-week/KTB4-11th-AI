@@ -36,6 +36,9 @@ jobs:
        github.event.workflow_run.conclusion == 'success') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
       deploy: ${{ steps.freshness.outputs.deploy }}
     steps:
@@ -55,6 +58,25 @@ jobs:
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Skipping stale deployment: target=$DEPLOY_SHA current=$current_dev_sha"
           fi
+
+      - name: Verify successful CI for manual deployment
+        if: github.event_name == 'workflow_dispatch' && steps.freshness.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run="$(gh api --method GET \
+            "repos/${{ github.repository }}/actions/workflows/ci-dev.yaml/runs" \
+            -f branch=dev -f event=push -f head_sha="$DEPLOY_SHA" -f per_page=1 \
+            --jq '.workflow_runs[0] // null')"
+
+          if ! jq -e --arg sha "$DEPLOY_SHA" \
+            '.head_sha == $sha and .head_branch == "dev" and .event == "push" and .status == "completed" and .conclusion == "success"' \
+            <<<"$run" > /dev/null; then
+            echo "::error::No successful completed CI Dev push run for $DEPLOY_SHA"
+            exit 1
+          fi
+          echo "Verified CI: $(jq -r .html_url <<<"$run")"
 
   deploy:
     needs: check
@@ -88,7 +110,7 @@ jobs:
           jq --arg image "$IMAGE" --arg name "$CONTAINER" '
             .containerDefinitions |= map(if .name == $name then .image = $image else . end)
             | del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
-                  .compatibilities, .registeredAt, .registeredBy)
+                  .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
           ' current.json > next.json
 
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
@@ -97,19 +119,74 @@ jobs:
           echo "::notice::Registered $arn ($IMAGE)"
 
       # Circuit Breaker(rollback)가 켜져 있어 실패하면 ECS가 이전 리비전으로 되돌립니다.
-      - name: Update service and wait until stable
+      - name: Update service
+        id: update
         env:
           SERVICE: stockspoon-v2-prod-${{ matrix.service }}
           TASK_DEFINITION: ${{ steps.taskdef.outputs.arn }}
         run: |
           set -euo pipefail
-          aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
-            --task-definition "$TASK_DEFINITION" > /dev/null
-          aws ecs wait services-stable --cluster "$CLUSTER" --services "$SERVICE"
-
-          running="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
-            --query 'services[0].deployments[?status==`PRIMARY`].taskDefinition | [0]' --output text)"
-          if [[ "$running" != "$TASK_DEFINITION" ]]; then
-            echo "::error::$SERVICE rolled back to $running"
+          response="$(aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
+            --task-definition "$TASK_DEFINITION")"
+          deployment_id="$(jq -r --arg arn "$TASK_DEFINITION" \
+            '.service.deployments[] | select(.status == "PRIMARY" and .taskDefinition == $arn) | .id' \
+            <<<"$response")"
+          if [[ -z "$deployment_id" || "$deployment_id" == "null" ]]; then
+            echo "::error::Could not find the new deployment for $TASK_DEFINITION"
             exit 1
           fi
+          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for deployment completion
+        env:
+          SERVICE: stockspoon-v2-prod-${{ matrix.service }}
+          TASK_DEFINITION: ${{ steps.taskdef.outputs.arn }}
+          DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 25 * 60))
+
+          print_events() {
+            aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
+              --query 'services[0].events[:10].[createdAt,message]' --output text || true
+          }
+
+          while (( SECONDS < deadline )); do
+            response="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
+            deployment="$(jq --arg id "$DEPLOYMENT_ID" \
+              '[.services[0].deployments[]? | select(.id == $id)] | .[0] // null' \
+              <<<"$response")"
+
+            if ! jq -e --arg arn "$TASK_DEFINITION" \
+              '. != null and .status == "PRIMARY" and .taskDefinition == $arn' \
+              <<<"$deployment" > /dev/null; then
+              echo "::error::Deployment $DEPLOYMENT_ID was rolled back, replaced or not returned"
+              print_events
+              exit 1
+            fi
+
+            state="$(jq -r .rolloutState <<<"$deployment")"
+            echo "Deployment $DEPLOYMENT_ID: $state"
+            case "$state" in
+              COMPLETED)
+                echo "Deployment completed: $TASK_DEFINITION"
+                exit 0
+                ;;
+              FAILED)
+                echo "::error::Deployment failed: $(jq -r .rolloutStateReason <<<"$deployment")"
+                print_events
+                exit 1
+                ;;
+              IN_PROGRESS) ;;
+              *)
+                echo "::error::Unexpected rollout state: $state"
+                print_events
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+
+          echo "::error::Timed out waiting for deployment $DEPLOYMENT_ID"
+          print_events
+          exit 1
