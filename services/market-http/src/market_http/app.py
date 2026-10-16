@@ -1,8 +1,17 @@
+from typing import Literal
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"]
+
+    model_config = ConfigDict(json_schema_extra={"examples": [{"status": "ok"}]})
 
 
 def create_app(
@@ -34,7 +43,7 @@ def create_app(
     app.include_router(rankings.router)
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health() -> HealthResponse:
+        return HealthResponse(status="ok")
 
     return app
