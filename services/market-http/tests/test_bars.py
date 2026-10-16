@@ -8,6 +8,8 @@ from market_http.app import create_app
 from market_http.repositories import bars as bars_module
 from redis.asyncio import Redis
 
+from .example_entities import PAGE
+
 NEWEST = datetime(2026, 10, 13, 6, 30, tzinfo=UTC)
 
 
@@ -42,14 +44,15 @@ class FakeDB:
 
 
 def _rows(count):
+    bar = PAGE.items[0]
     return [
         {
             "ts": (NEWEST - timedelta(minutes=offset)).replace(tzinfo=None),
-            "open": 1.0,
-            "high": 2.0,
-            "low": 0.5,
-            "close": 1.5,
-            "volume": 10,
+            "open": bar.open,
+            "high": bar.high,
+            "low": bar.low,
+            "close": bar.close,
+            "volume": bar.volume,
         }
         for offset in range(count)
     ]

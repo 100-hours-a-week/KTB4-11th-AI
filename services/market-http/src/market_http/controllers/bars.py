@@ -3,9 +3,10 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from market_http.controllers.dependencies import CODE, QuestDBConf
+from market_http.openapi_examples import PAGE_EXAMPLE
 from market_http.repositories.bars import Bar, Timeframe, find_bars
 
 router = APIRouter()
@@ -14,6 +15,8 @@ router = APIRouter()
 class Page(BaseModel):
     items: list[Bar]
     next_cursor: str | None
+
+    model_config = ConfigDict(json_schema_extra={"examples": [PAGE_EXAMPLE]})
 
 
 def _cursor(cursor: str | None = None) -> datetime | None:

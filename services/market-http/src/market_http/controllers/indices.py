@@ -2,9 +2,10 @@ from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from market_http.controllers.dependencies import Valkey
+from market_http.openapi_examples import INDEX_EXAMPLE
 
 router = APIRouter()
 
@@ -15,6 +16,8 @@ class IndexQuote(BaseModel):
     change: float
     rate: float
     timestamp: datetime = Field(validation_alias=AliasChoices("timestamp", "ts"))
+
+    model_config = ConfigDict(json_schema_extra={"examples": [INDEX_EXAMPLE]})
 
 
 @router.get("/indices/{name}")

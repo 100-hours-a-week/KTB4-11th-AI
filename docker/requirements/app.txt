@@ -203,6 +203,7 @@ fastapi==0.142.2 \
     # via
     #   market-http
     #   news-http
+    #   scalar-fastapi
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -697,6 +698,7 @@ pydantic==2.13.5 \
     #   portfolio-rebalancer
     #   pydantic-settings
     #   report-builder
+    #   scalar-fastapi
 pydantic-core==2.46.5 \
     --hash=sha256:03b9666e41e35d8909852ba191a0607520f81b74eaf12ccf8737005dbb313821 \
     --hash=sha256:045ab3b6d308439e32b81cc173bba5b9018bc6ed896afd0c65b3b009b1699af5 \
@@ -858,6 +860,10 @@ s3transfer==0.19.2 \
     --hash=sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993 \
     --hash=sha256:d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25
     # via boto3
+scalar-fastapi==1.9.1 \
+    --hash=sha256:a54104c434655c457fdbad3c181d3368be07c63ddbb7a5a084c83fdfa7239333 \
+    --hash=sha256:fc7fdba6e60fb016a57b3eca59621773179c133abb6d496611df9575f97555a8
+    # via market-http
 secretstorage==3.5.0 ; sys_platform == 'linux' \
     --hash=sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137 \
     --hash=sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be
@@ -968,6 +974,7 @@ typing-extensions==4.16.0 \
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
+    #   scalar-fastapi
     #   sqlalchemy
     #   typing-inspection
 typing-inspection==0.4.4 \
