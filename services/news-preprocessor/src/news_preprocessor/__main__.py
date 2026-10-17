@@ -33,9 +33,7 @@ def main() -> None:
             scraped = [scrape(engine, source) for source in sources]
             embedded = embed_pending(
                 engine,
-                partial(
-                    embed, api_key=settings.embedding_api_key, timeout=settings.embedding_timeout
-                ),
+                partial(embed, api_key=settings.embedding_api_key, timeout=settings.embed_timeout),
                 settings.embed_batch_limit,
             )
         finally:

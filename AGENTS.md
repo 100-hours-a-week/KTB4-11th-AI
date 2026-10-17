@@ -69,7 +69,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `KTB_EMBEDDING_MAX_TOKENS` | news-preprocessor | `16384` |
 | `NEWS_PREPROCESSOR_POSTGRES_DSN` | news-preprocessor | required |
 | `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` | news-preprocessor | `100` |
-| `NEWS_PREPROCESSOR_EMBEDDING_TIMEOUT` | news-preprocessor; embedding HTTP request timeout in seconds (positive finite number) | `120` |
+| `NEWS_PREPROCESSOR_EMBED_TIMEOUT` | news-preprocessor; embedding HTTP request timeout in seconds (positive finite number) | `120` |
 | `NEWS_PREPROCESSOR_USER_AGENT` | news-preprocessor | `ktb-ai/0.1` |
 | `NEWS_PREPROCESSOR_LOG_LEVEL` | news-preprocessor | `INFO` |
 | `NEWS_PREPROCESSOR_DART_API_KEY` | news-preprocessor `opendart` publisher; Compose uses the same name | required |

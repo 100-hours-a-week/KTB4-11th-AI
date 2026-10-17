@@ -74,8 +74,8 @@ def test_publishers_get_the_dart_key_and_kospi200_codes(env, monkeypatch):
     assert received == [("dart-key", {"005930"})]
 
 
-def test_embedding_timeout_reaches_embedder(env, monkeypatch):
-    monkeypatch.setenv("NEWS_PREPROCESSOR_EMBEDDING_TIMEOUT", "180.5")
+def test_embed_timeout_reaches_embedder(env, monkeypatch):
+    monkeypatch.setenv("NEWS_PREPROCESSOR_EMBED_TIMEOUT", "180.5")
     received = []
     monkeypatch.setattr(entry, "scrape", lambda engine, source: OK)
     monkeypatch.setattr(
