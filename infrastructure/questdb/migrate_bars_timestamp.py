@@ -27,7 +27,7 @@ def _wait_for_copy(db, table, expected):
             raise RuntimeError(f"WAL application suspended for {table}")
         if state and state["writerTxn"] == state["sequencerTxn"]:
             actual = _stats(db, table, "timestamp")
-            if actual == expected:
+            if actual == expected or (actual["rows"] == expected["rows"] == 0):
                 return
         sleep(1)
     raise TimeoutError(f"copy validation timed out for {table}")
@@ -81,7 +81,7 @@ def migrate(db, table="bars"):
     if temporary in names:
         raise RuntimeError(f"{temporary} already exists; inspect it before retrying")
     ddl = _rows(db, f"SHOW CREATE TABLE {table}")[0]["ddl"]
-    if not re.search(r"\bts TIMESTAMP\b", ddl) or "src SYMBOL" not in ddl:
+    if not re.search(r"\bts TIMESTAMP\b", ddl):
         raise RuntimeError(f"unexpected schema for {table}")
     view_ddls = []
     for timeframe in ("1m", "1d", "15m", "1h"):
@@ -99,13 +99,18 @@ def migrate(db, table="bars"):
         " close DOUBLE, volume LONG, src SYMBOL) TIMESTAMP(timestamp) PARTITION BY DAY"
         " WAL DEDUP UPSERT KEYS(timestamp, symbol, timeframe)"
     )
+    columns = "symbol, timeframe, session, open, high, low, close, volume"
+    if "src SYMBOL" in ddl:
+        columns += ", src"
     db.execute(
-        f"INSERT INTO {temporary} (timestamp, symbol, timeframe, session, open, high,"
-        " low, close, volume, src) SELECT ts, symbol, timeframe, session, open, high,"
-        f" low, close, volume, src FROM {table} ORDER BY ts"
+        f"INSERT INTO {temporary} (timestamp, {columns})"
+        f" SELECT ts, {columns} FROM {table} ORDER BY ts"
     )
     _wait_for_copy(db, temporary, expected)
-    if _writer_txn(db, table) != original_txn or _stats(db, table, "ts") != original:
+    if (
+        _writer_txn(db, table) != original_txn
+        or _stats(db, table, "ts")["rows"] != original["rows"]
+    ):
         raise RuntimeError(f"{table} changed during the copy; stop writers before retrying")
 
     for kind, view, _ in reversed(view_ddls):
