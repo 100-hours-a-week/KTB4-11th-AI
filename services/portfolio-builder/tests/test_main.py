@@ -10,7 +10,7 @@ from portfolio_builder.explain import ExplanationRejected, Explanations
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
-    "PORTFOLIO_BUILDER_QUESTDB_CONF": "ws::addr=localhost:9000;",
+    "PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI": "http://market-http:8000",
     "PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI": "http://news-http:8000",
     "PORTFOLIO_BUILDER_LLM_API_KEY": "test-openrouter-key",
     "PORTFOLIO_BUILDER_LLM_MODEL": "openai/gpt-5.5",

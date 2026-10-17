@@ -25,6 +25,19 @@ beautifulsoup4==4.15.0 \
     # via
     #   news-preprocessor
     #   opendartreader
+boto3==1.43.109 \
+    --hash=sha256:703a81baed186d31e27cf50065d25a9faeb704f009e7c56b0f002ca52a328896 \
+    --hash=sha256:c829bc3352e1e3922d8fe1db10b697182ac411b64ce5fc3acb0a06a29837417e
+    # via
+    #   portfolio-rebalancer
+    #   report-builder
+botocore==1.43.109 \
+    --hash=sha256:46b15bea4d942aaea6d7ab7c4b8a3a7290305064a3b41a6cb271cde9da3ba371 \
+    --hash=sha256:cd00edff465264fb448e36acc9ee29a828f738fff3746270b3f685a19194a5a6
+    # via
+    #   boto3
+    #   ktb-aws
+    #   s3transfer
 certifi==2026.7.22 \
     --hash=sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775 \
     --hash=sha256:741e2c3b351ddf169a738da9f2c048608ff7f2c5cc02f1ebc6b118bb090d5d55
@@ -185,7 +198,10 @@ distro==1.9.0 \
 fastapi==0.142.2 \
     --hash=sha256:06366626f2e70576367714d9ab2fe8472e6c8456dba69b399f9f797ab5e92570 \
     --hash=sha256:bd5f4d81f1e93a88bcd77caf4dfe3c2dbffc3805407a0007e9a114c18b3a670b
-    # via news-http
+    # via
+    #   market-http
+    #   news-http
+    #   scalar-fastapi
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -213,6 +229,7 @@ httpx==0.28.1 \
     #   news-preprocessor
     #   openrouter
     #   portfolio-rebalancer
+    #   report-builder
 httpx2==2.13.1 \
     --hash=sha256:6dff50fabc270ee5fd25d845d0b078ed20564579744d6d962850975996d2f9a4 \
     --hash=sha256:e48744a19e3af5ee48313d0ce5fe941d5422fae5705ea922a4aabf94d7800dfa
@@ -247,6 +264,12 @@ jeepney==0.9.0 ; sys_platform == 'linux' \
     # via
     #   keyring
     #   secretstorage
+jmespath==1.1.0 \
+    --hash=sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d \
+    --hash=sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64
+    # via
+    #   boto3
+    #   botocore
 jsonpatch==1.33 \
     --hash=sha256:0ae28c0cd062bbd8b8ecc26d7d164fbbea9652a1a3693f3b956c1eae5145dade \
     --hash=sha256:9fcd4009c41e6d12348b4a0ff2563ba56a2923a7dfee731d004e212e1ee5030c
@@ -268,6 +291,7 @@ kwcli==1.0.3 \
     --hash=sha256:6fa0ed6bc153445d7520e3e85bdf4921b98f9ad2474a017c75dd5013a837aeac
     # via
     #   market-collector
+    #   market-streamer
     #   market-syncer
 langchain==1.4.3 \
     --hash=sha256:0334066939dd1c7551889727ed2d09a72dea7a6aed2193ffb61817fb658d8921 \
@@ -284,10 +308,13 @@ langchain-core==1.6.5 \
     #   langgraph-prebuilt
     #   langgraph-sdk
     #   portfolio-builder
+    #   report-builder
 langchain-openrouter==0.2.9 \
     --hash=sha256:375a79a4a849069d2254627185210b2f2b9fe84c69326e10d71c3d48f8b41f06 \
     --hash=sha256:e3c130bfc58a517811044b6cb56e13b2e7d1ee219c38e025f4522aa0400f9c8e
-    # via portfolio-builder
+    # via
+    #   portfolio-builder
+    #   report-builder
 langchain-protocol==0.0.19 \
     --hash=sha256:4cdf879a492a35980fd859ae792d3c65458ccaae504e183c9a10d7eac1f0720f \
     --hash=sha256:79d90a1425122ac87e8052e2ec054fbd09c3edbf341bdfb6397112a495c7bf8c
@@ -469,7 +496,6 @@ numpy==2.5.3 \
     --hash=sha256:f7fabeb6cea87d65f3b926de33d03fb016cfdc29314c90974383b5582ae72891 \
     --hash=sha256:f9a2353b37a1a9e78fd82b27ad7e2a32a2d036604d18f02b05e3136c62ca3b09
     # via
-    #   ktb-market-analyzer
     #   news-clusterer
     #   pandas
     #   portfolio-builder
@@ -573,8 +599,8 @@ pandas==3.0.6 \
     --hash=sha256:ff51a4459ed036e93d1eb1bb5e6e7b28685d3cb6b7c12b91c05b31024e234729
     # via
     #   kwcli
+    #   market-http
     #   opendartreader
-    #   portfolio-builder
     #   questdb
 pgvector==0.5.0 \
     --hash=sha256:07a9dcf735696879406983afc6eba9a787cef7c0cf6c367ca1a5779f036dee74 \
@@ -591,6 +617,7 @@ psycopg==3.3.6 \
     --hash=sha256:c081f2250df751a943036e42db6df4571c66cd0aabe8291a7a506512b12007d2
     # via
     #   market-collector
+    #   market-streamer
     #   market-syncer
     #   news-clusterer
     #   news-graph-builder
@@ -598,6 +625,7 @@ psycopg==3.3.6 \
     #   news-preprocessor
     #   portfolio-builder
     #   portfolio-rebalancer
+    #   report-builder
 psycopg-binary==3.3.6 ; implementation_name != 'pypy' \
     --hash=sha256:05a83ac9fd52b9bca7cb5ab04b3691163170bd16f53defa27216ea3aa07ee781 \
     --hash=sha256:0bf08b749cc144f33b44a91b78e3f71c60eb07963746a0df5a100b36ce3d7475 \
@@ -660,11 +688,15 @@ pydantic==2.13.5 \
     #   langgraph
     #   langsmith
     #   market-collector
+    #   market-http
+    #   market-streamer
     #   news-http
     #   openrouter
     #   portfolio-builder
     #   portfolio-rebalancer
     #   pydantic-settings
+    #   report-builder
+    #   scalar-fastapi
 pydantic-core==2.46.5 \
     --hash=sha256:03b9666e41e35d8909852ba191a0607520f81b74eaf12ccf8737005dbb313821 \
     --hash=sha256:045ab3b6d308439e32b81cc173bba5b9018bc6ed896afd0c65b3b009b1699af5 \
@@ -718,6 +750,8 @@ pydantic-settings==2.15.0 \
     --hash=sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117
     # via
     #   market-collector
+    #   market-http
+    #   market-streamer
     #   market-syncer
     #   news-clusterer
     #   news-graph-builder
@@ -725,14 +759,13 @@ pydantic-settings==2.15.0 \
     #   news-preprocessor
     #   portfolio-builder
     #   portfolio-rebalancer
-pyjwt==2.15.1 \
-    --hash=sha256:42d59d631f7768a1028a64c7ff581a9bf7519804daf91fc5b6c56e30eec5e193 \
-    --hash=sha256:4f259e80cdfb6b3fc18a7de51fd1ef9ec79652f25019bae68975ca2468a34df8
-    # via portfolio-rebalancer
+    #   report-builder
 python-dateutil==2.9.0.post0 \
     --hash=sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3 \
     --hash=sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427
-    # via pandas
+    # via
+    #   botocore
+    #   pandas
 python-dotenv==1.2.3 \
     --hash=sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9 \
     --hash=sha256:a20a594dabeaa385725aa239d5244871c143ecb356add8a20fcf23773a6c3a35
@@ -800,8 +833,16 @@ questdb==5.0.0 \
     --hash=sha256:f424a5f7f66f61238294eb05e81ddf2d0f52e9a3527d085e0b4613f380d2caf4
     # via
     #   market-collector
-    #   portfolio-builder
+    #   market-http
     #   portfolio-rebalancer
+redis==8.1.0 \
+    --hash=sha256:6e1a19beef9225c83efd689c7e6b7da2d5215b1f42cd13b7fc3714d0a09c7b25 \
+    --hash=sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb
+    # via
+    #   ktb-aws
+    #   market-collector
+    #   market-http
+    #   market-streamer
 requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed
@@ -814,6 +855,14 @@ requests-toolbelt==1.0.0 \
     --hash=sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6 \
     --hash=sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06
     # via langsmith
+s3transfer==0.19.2 \
+    --hash=sha256:ba0309fd86be3c27dbf78cdd813c13c5e1df16e5874b99d2535ebbdfb9892993 \
+    --hash=sha256:d8168eccca828cbb2cd573675333f3bddd254313a9c42494b84c76b539e8ba25
+    # via boto3
+scalar-fastapi==1.9.1 \
+    --hash=sha256:a54104c434655c457fdbad3c181d3368be07c63ddbb7a5a084c83fdfa7239333 \
+    --hash=sha256:fc7fdba6e60fb016a57b3eca59621773179c133abb6d496611df9575f97555a8
+    # via market-http
 secretstorage==3.5.0 ; sys_platform == 'linux' \
     --hash=sha256:0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137 \
     --hash=sha256:f04b8e4689cbce351744d5537bf6b1329c6fc68f91fa666f60a380edddcd11be
@@ -866,6 +915,7 @@ sqlalchemy==2.1.1 \
     # via
     #   alembic
     #   market-collector
+    #   market-streamer
     #   market-syncer
     #   news-clusterer
     #   news-graph-builder
@@ -873,6 +923,7 @@ sqlalchemy==2.1.1 \
     #   news-preprocessor
     #   portfolio-builder
     #   portfolio-rebalancer
+    #   report-builder
 starlette==1.7.0 \
     --hash=sha256:67f8e99895493dd2911a03f11314af6ceebeae4e704bb9f43dfc6a9db151c93e \
     --hash=sha256:c79f74ea63cff761804fbbfb182f1e0b440c2d07b164d24700c5a1bab5d6ff5d
@@ -897,9 +948,7 @@ ta-lib==0.8.1 \
     --hash=sha256:de1db41f1a0a572f5a303f7f218edb68d4ae337c77486c8c8c769a63dd1c3e06 \
     --hash=sha256:f6e386d0e577a1e6112b150e23b4291d55424f06d964491ee7dfb9ca7ade095f \
     --hash=sha256:f84cf8ad03a1751302e77717e8638246e8281d17ff902e456e1c0c1dd2cea714
-    # via
-    #   ktb-market-analyzer
-    #   portfolio-builder
+    # via portfolio-builder
 tenacity==9.1.4 \
     --hash=sha256:6095a360c919085f28c6527de529e76a06ad89b23659fa881ae0649b867a9d55 \
     --hash=sha256:adb31d4c263f2bd041081ab33b498309a57c77f9acf2db65aadf0898179cf93a
@@ -924,6 +973,7 @@ typing-extensions==4.16.0 \
     #   opentelemetry-api
     #   pydantic
     #   pydantic-core
+    #   scalar-fastapi
     #   sqlalchemy
     #   typing-inspection
 typing-inspection==0.4.4 \
@@ -942,7 +992,9 @@ tzdata==2026.4 ; sys_platform == 'emscripten' or sys_platform == 'win32' \
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3 \
     --hash=sha256:63bf2ead4c879426ebf22ef2a781eeb4aa3b4ae798a0435506f8687fd5bb9b63
-    # via requests
+    # via
+    #   botocore
+    #   requests
 uuid-utils==0.17.1 \
     --hash=sha256:01d9209d6fed20226af0d29b95c5e253a1907b61f1a00153187ac5412f1df9b6 \
     --hash=sha256:0721f05b4f10cc7d49d91be65524a3bc6e6a5d88be054cdca05dff487a022091 \
@@ -995,7 +1047,9 @@ uuid-utils==0.17.1 \
 uvicorn==0.54.0 \
     --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
-    # via news-http
+    # via
+    #   market-http
+    #   news-http
 websockets==16.1.1 \
     --hash=sha256:024193f8551a2b0eafbdd160911012c4e6c228c28430c84433253299a9e42d6a \
     --hash=sha256:056ae37939ed7e9974f364f5864e76e49182622d8f9751ac1903c0d09b013985 \
@@ -1054,6 +1108,7 @@ websockets==16.1.1 \
     #   kwcli
     #   langgraph-sdk
     #   langsmith
+    #   market-streamer
 xxhash==4.0.1 \
     --hash=sha256:08ed8da18cd4fd0a6a5d6a444852d8fbd0e565388a74a4937085451b5f1a312a \
     --hash=sha256:1749f0688020209fe0d357ce1e1cd9ec9c6161ed0405ea949d24581c4c43fa91 \

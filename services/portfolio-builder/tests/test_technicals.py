@@ -1,11 +1,12 @@
 import json
 from datetime import UTC, datetime
+from io import BytesIO
+from unittest.mock import patch
 
 import numpy as np
 import pytest
-from portfolio_builder import market as market_module
 from portfolio_builder.errors import NoMarketData, UnknownCompany
-from portfolio_builder.market import QuestDBMarket
+from portfolio_builder.market import HttpMarket
 from portfolio_builder.measurement import Bars
 from portfolio_builder.tools.technicals import technicals_tool
 
@@ -91,87 +92,48 @@ def test_no_bars_is_a_recoverable_error(engine):
         )
 
 
-class FakeResult:
-    def __init__(self, records):
-        self.records = records
-
+class Response(BytesIO):
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
-        return False
-
-    def to_pandas(self):
-        records = self.records
-
-        class Frame:
-            def to_dict(self, orient):
-                assert orient == "records"
-                return records
-
-        return Frame()
+    def __exit__(self, *args):
+        self.close()
 
 
-class FakeDB:
-    def __init__(self, answers):
-        self.answers = answers
-        self.queries: list[tuple[str, list]] = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def query(self, sql, binds=None):
-        self.queries.append((sql, binds))
-        return FakeResult(self.answers.pop(0))
+def _page(rows):
+    return Response(json.dumps({"items": rows, "next_cursor": None}).encode())
 
 
-@pytest.mark.parametrize(
-    ("timeframe", "view", "session"),
-    [("1m", "bars_1m", True), ("15m", "bars_15m", False), ("1h", "bars_1h", False),
-     ("1d", "bars_1d", True)],
-)  # fmt: skip
-def test_bars_reads_the_timeframe_view_with_questdb_latest_limit(
-    monkeypatch, timeframe, view, session
-):
-    rows = [
-        {"ts": datetime(2026, 9, 27, tzinfo=UTC), "high": 2.0, "low": 1.0, "close": 1.5,
-         "volume": 20},
-        {"ts": AS_OF, "high": 3.0, "low": 1.0, "close": 2.0, "volume": 30},
-    ]  # fmt: skip
-    db = FakeDB([rows])
-    monkeypatch.setattr(market_module.questdb, "connect", lambda conf: db)
+@pytest.mark.parametrize("timeframe", ["1m", "15m", "1h", "1d"])
+def test_http_market_requests_300_bars_and_orders_them_oldest_first(timeframe):
+    newest = {
+        "timestamp": "2026-09-28T06:30:00Z",
+        "open": 1.0,
+        "high": 3.0,
+        "low": 1.0,
+        "close": 2.0,
+        "volume": 30,
+    }
+    older = {"timestamp": "2026-09-27T00:00:00Z", "open": 1.0, "high": 2.0, "low": 1.0,
+             "close": 1.5, "volume": 20}  # fmt: skip
+    with patch("portfolio_builder.market.urlopen", return_value=_page([newest, older])) as call:
+        bars, as_of = HttpMarket("http://market", None).bars("005930", timeframe)
 
-    bars, as_of = QuestDBMarket("ws::addr=x:9000;", None).bars("005930", timeframe)
-
-    sql, binds = db.queries[0]
-    assert f"FROM {view} " in sql
-    assert ("session = 'regular'" in sql) is session
-    assert binds == ["005930", -300]
+    request = call.call_args.args[0]
+    assert request.full_url == f"http://market/bars/005930?timeframe={timeframe}&limit=300"
     assert bars.close.tolist() == [1.5, 2.0]
     assert bars.volume.dtype == np.float64
     assert as_of == AS_OF
 
 
-def test_bars_rejects_an_unknown_timeframe():
+def test_http_market_rejects_an_unknown_timeframe():
     with pytest.raises(KeyError):
-        QuestDBMarket("x", None).bars("005930", "5m")
+        HttpMarket("http://market", None).bars("005930", "5m")
 
 
-def test_universe_closes_groups_kospi200_members_by_symbol(monkeypatch, engine):
-    closes = [
-        {"symbol": "000660", "close": 10.0},
-        {"symbol": "005930", "close": 1.0},
-        {"symbol": "005930", "close": 2.0},
-    ]
-    db = FakeDB([closes])
-    monkeypatch.setattr(market_module.questdb, "connect", lambda conf: db)
+def test_http_market_returns_empty_bars_for_unknown_symbol():
+    with patch("portfolio_builder.market.urlopen", return_value=_page([])):
+        bars, as_of = HttpMarket("http://market", None).bars("999999", "1d")
 
-    universe = QuestDBMarket("x", engine).universe_closes()
-
-    assert {k: v.tolist() for k, v in universe.items()} == {
-        "005930": [1.0, 2.0],
-        "000660": [10.0],
-    }
+    assert bars.close.size == 0
+    assert as_of is None

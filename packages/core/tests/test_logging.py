@@ -145,3 +145,51 @@ def test_emit_run_logs_reports_an_exception_over_fields_already_set(capsys):
     assert (finish["level"], finish["outcome"]) == ("ERROR", "error")
     assert finish["error"] == "ValueError: boom"
     assert "ValueError: boom" in finish["exception"]
+
+
+KEY = "0123456789abcdef0123456789abcdef01234567"
+DART_URL = f"https://opendart.fss.or.kr/api/list.json?crtfc_key={KEY}&rcept_no=20260928000386"
+MASKED_URL = "https://opendart.fss.or.kr/api/list.json?crtfc_key=***&rcept_no=20260928000386"
+
+
+def _masked_lines(capsys):
+    out = capsys.readouterr().out
+    assert KEY not in out
+    return [json.loads(line) for line in out.splitlines()]
+
+
+def test_masks_sensitive_query_params_in_message_fields_and_exception(capsys):
+    setup_logging("INFO", service_name="svc", sensitive_query_params={"crtfc_key"})
+    logging.getLogger("httpx").info('HTTP Request: GET %s "HTTP/1.1 200 OK"', DART_URL)
+    get_logger("svc").warning("feed_failed", url=DART_URL, nested={"urls": [DART_URL]})
+    try:
+        raise RuntimeError(f"Client error for url '{DART_URL}'")
+    except RuntimeError:
+        get_logger("svc").exception("article_failed")
+
+    request, field, failure = _masked_lines(capsys)
+
+    assert request["message"] == f'HTTP Request: GET {MASKED_URL} "HTTP/1.1 200 OK"'
+    assert field["url"] == MASKED_URL
+    assert field["nested"] == {"urls": [MASKED_URL]}
+    assert f"Client error for url '{MASKED_URL}'" in failure["exception"]
+
+
+def test_a_masked_value_before_a_quote_or_newline_keeps_the_json_valid(capsys):
+    setup_logging("INFO", service_name="svc", sensitive_query_params={"crtfc_key"})
+    url = f"https://opendart.fss.or.kr/api/list.json?page_no=1&crtfc_key={KEY}"
+    logging.getLogger("svc").info('GET "%s"', url)
+    logging.getLogger("svc").info("%s\nnext line", url)
+
+    quoted, newline = _masked_lines(capsys)
+
+    masked = "https://opendart.fss.or.kr/api/list.json?page_no=1&crtfc_key=***"
+    assert quoted["message"] == f'GET "{masked}"'
+    assert newline["message"] == f"{masked}\nnext line"
+
+
+def test_query_params_are_left_alone_by_default(capsys):
+    setup_logging("INFO", service_name="svc")
+    logging.getLogger("svc").info("crtfc_key=abc")
+
+    assert json.loads(capsys.readouterr().out)["message"] == "crtfc_key=abc"

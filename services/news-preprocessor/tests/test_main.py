@@ -1,3 +1,6 @@
+import logging
+from unittest.mock import MagicMock
+
 import pytest
 from news_preprocessor import __main__ as entry
 from news_preprocessor.embed_pending import EmbedResult
@@ -11,7 +14,13 @@ BROKEN = ScrapeResult(succeed=[], failed=[FEED])
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setenv("NEWS_PREPROCESSOR_POSTGRES_DSN", "postgresql+psycopg://u@unused.invalid/db")
-    monkeypatch.setattr(entry, "publishers", lambda client: ("first", "second"))
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DART_API_KEY", "dart-key")
+    # The entry point reads corporation_indices before scraping; no database here.
+    monkeypatch.setattr(entry.sa, "create_engine", lambda dsn: MagicMock())
+    monkeypatch.setattr(entry, "kospi200_stock_codes", lambda conn: {"005930"})
+    monkeypatch.setattr(
+        entry, "publishers", lambda client, dart_api_key, stock_codes: ("first", "second")
+    )
 
 
 @pytest.mark.parametrize(
@@ -44,3 +53,43 @@ def test_a_failing_source_does_not_stop_the_others(env, monkeypatch):
         entry.main()
 
     assert scraped == ["first", "second"]
+
+
+def test_publishers_get_the_dart_key_and_kospi200_codes(env, monkeypatch):
+    received = []
+    monkeypatch.setattr(
+        entry,
+        "publishers",
+        lambda client, dart_api_key, stock_codes: (
+            received.append((dart_api_key, stock_codes)) or ()
+        ),
+    )
+    monkeypatch.setattr(
+        entry, "embed_pending", lambda engine, embedder, limit: EmbedResult(succeed=[], failed=[])
+    )
+
+    with pytest.raises(SystemExit):
+        entry.main()
+
+    assert received == [("dart-key", {"005930"})]
+
+
+def test_dart_keys_in_urls_are_masked_in_logs(env, monkeypatch, capsys):
+    def publishers(client, dart_api_key, stock_codes):
+        logging.getLogger("httpx").info(
+            "HTTP Request: GET https://opendart.fss.or.kr/api/list.json?crtfc_key=%s&page_no=1",
+            dart_api_key,
+        )
+        return ()
+
+    monkeypatch.setattr(entry, "publishers", publishers)
+    monkeypatch.setattr(
+        entry, "embed_pending", lambda engine, embedder, limit: EmbedResult(succeed=[], failed=[])
+    )
+
+    with pytest.raises(SystemExit):
+        entry.main()
+
+    out = capsys.readouterr().out
+    assert "dart-key" not in out
+    assert "crtfc_key=***&page_no=1" in out

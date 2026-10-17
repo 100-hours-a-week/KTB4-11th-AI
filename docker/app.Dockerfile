@@ -14,16 +14,19 @@ COPY pyproject.toml ./
 COPY packages packages
 COPY services services
 RUN uv pip install --no-deps \
+    ./packages/aws \
     ./packages/core \
-    ./packages/market-analyzer \
     ./services/market-collector \
+    ./services/market-http \
+    ./services/market-streamer \
     ./services/market-syncer \
     ./services/news-clusterer \
     ./services/news-graph-builder \
     ./services/news-http \
     ./services/news-preprocessor \
     ./services/portfolio-builder \
-    ./services/portfolio-rebalancer
+    ./services/portfolio-rebalancer \
+    ./services/report-builder
 
 FROM python:3.13-slim-bookworm AS runtime
 

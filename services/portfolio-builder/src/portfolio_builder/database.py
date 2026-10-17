@@ -76,6 +76,13 @@ portfolio_reasons = sa.Table(
     "portfolio_reasons",
     metadata,
     sa.Column(
+        "id",
+        postgresql.UUID(as_uuid=True),
+        nullable=False,
+        server_default=sa.text("gen_random_uuid()"),
+        unique=True,
+    ),
+    sa.Column(
         "portfolio_id",
         sa.BigInteger,
         sa.ForeignKey("portfolios.id", ondelete="CASCADE"),

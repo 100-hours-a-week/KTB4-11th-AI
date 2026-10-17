@@ -1,8 +1,10 @@
 source_roots = [
+    "packages/aws/src",
     "packages/core/src",
-    "packages/market-analyzer/src",
     "services/market-syncer/src",
     "services/market-collector/src",
+    "services/market-http/src",
+    "services/market-streamer/src",
     "services/news-preprocessor/src",
     "services/news-clusterer/src",
     "services/news-graph-builder/src",
@@ -13,10 +15,10 @@ source_roots = [
 root_module = "forbid"
 
 [[modules]]
-path = "ktb_core"
+path = "ktb_aws"
 
 [[modules]]
-path = "ktb_market_analyzer"
+path = "ktb_core"
 
 [[modules]]
 path = "news_preprocessor"
@@ -84,8 +86,16 @@ depends_on = ["ktb_core"]
 
 [[modules]]
 path = "market_collector"
-depends_on = ["ktb_core"]
+depends_on = ["ktb_aws", "ktb_core"]
 
 [[modules]]
 path = "portfolio_rebalancer"
-depends_on = ["ktb_core"]
+depends_on = ["ktb_aws", "ktb_core"]
+
+[[modules]]
+path = "market_streamer"
+depends_on = ["ktb_aws", "ktb_core"]
+
+[[modules]]
+path = "market_http"
+depends_on = ["ktb_aws", "ktb_core"]

@@ -21,23 +21,33 @@ flowchart LR
         NGB["news-graph-builder"]
         NH["news-http"]
         MC["market-collector"]
+        MSTR["market-streamer"]
+        MH["market-http"]
         PB["portfolio-builder"]
         PR["portfolio-rebalancer"]
+        RB["report-builder"]
         PG[("PostgreSQL")]
         QDB[("QuestDB")]
+        Valkey[("Valkey")]
     end
 
     subgraph BACKEND["KTB4-11th-BE"]
         BE["Backend"]
     end
 
+    subgraph AWS["AWS"]
+        SQS["SQS"]
+    end
+
     NEWS --> NP
+    DART --> NP
     EMB --> NP
     NP -->|articles, embeddings| PG
     PG -->|embedded articles| NC
     NC -->|clusters| PG
 
     KIWOOM --> MS
+    KIWOOM --> MSTR
     DART --> MS
     MS -->|corporations, indices, themes| PG
     PG -->|clusters, corporations| NGB
@@ -49,15 +59,26 @@ flowchart LR
     PG -->|KOSPI 200 symbols| MC
     KIWOOM --> MC
     MC -->|OHLCV| QDB
+    PG -->|KOSPI 200 symbols| MSTR
+    MSTR -->|latest price, orderbook| Valkey
+    Valkey -->|prices, orderbooks| MH
+    MH -->|bars| QDB
 
     PG <-->|model portfolio| PB
-    QDB <--> PB
+    MH <--> PB
     OPENROUTER <--> PB
 
     PG -->|model portfolio, reasons| PR
     QDB -->|last close| PR
-    BE -->|users, accounts| PR
-    PR -->|limit or market orders| BE
+    PR -->|HTTP user lookup| BE
+    BE -->|HTTP account state| PR
+    PR -->|order cancellations and placements| SQS
+    SQS -->|order cancellations and placements| BE
+    BE -->|report request| SQS
+    SQS -->|report request| RB
+    PG -->|reasons and cited summaries| RB
+    OPENROUTER --> RB
+    RB -->|HTTP report callback| BE
 ```
 
 ## 서비스 실행 의존 관계
@@ -68,6 +89,7 @@ flowchart LR
 flowchart LR
     NP["news-preprocessor"] --> NC["news-clusterer"] --> NGB["news-graph-builder"] --> PB["portfolio-builder"] --> PR["portfolio-rebalancer"]
     MS["market-syncer"] --> NGB
+    MS --> NP
     MS --> MC["market-collector"] --> PB
 ```
 
@@ -76,13 +98,13 @@ flowchart LR
 ### `news-preprocessor`: 뉴스 가져와서 저장하기
 
 - 경제 뉴스 RSS를 읽고 각 사이트의 본문 구조에 맞게 기사 추출
+- OpenDART에서 `corporation_indices`의 KOSPI 200 종목 공시를 읽어 기사처럼 저장함. 정기보고서·감사보고서·증권신고서처럼 긴 공시는 제외하고, 문서가 비어 있거나 없는 공시는 제목만 저장함
 - 기사 제목과 본문을 PostgreSQL `articles`에 저장 후 임베딩 시도
 - 임베딩은 OpenAI API와 호완되는 서버로 요청을 보내며 2000차원으로 임베딩
 
 ### `news-clusterer`: 저장된 뉴스 클러스터링하기
 
 - PostgreSQL에서 임베딩이 있는 기사를 모두 가져와 코사인 거리 기반 DBSCAN을 계산
-  - 이 때 두 개의 환경변수를 사용하며, `NEWS_CLUSTERER_EPS`는 이웃으로 볼 최대 거리를, `NEWS_CLUSTERER_MIN_SAMPLES`는 핵심점에 필요한 최소 기사 수를 정함
 - `clusters`, `article_clusters`에 기사의 클러스터 정보를 저장하고 클러스터에 속하지 않는 기사는 노이즈로 처리함
 - 실행마다 기사 수, 군집 수, 소요 시간, 최대 메모리를 기록해, 전체 재계산을 증분 방식으로 바꿀 시점을 판단함
 
@@ -109,6 +131,18 @@ flowchart LR
 
 - PostgreSQL의 `corporation_indices`에서 현재 KOSPI 200 종목을 읽어오고, 종목과 시간 단위별 마지막 저장 시점을 확인한 후 키움에서 빠진 데이터를 가져와 QuestDB에 저장함
 - QuestDB의 `bars_15m`, `bars_1h`는 `bars_1m` 을 통해 생성함
+- 평일 08:55에 한 번 시작해 09:00–15:30 매분 `:05`에 1분봉을 갱신하고, 15:35에 일봉까지 수집한 뒤 종료함. 키움 토큰과 클라이언트는 하루 동안 재사용함
+- 한 번의 수집이 1분을 넘기면 `archive_pass_slow` 경고 로그를 남기고 다음 수집을 바로 시작함
+- 장 마감 후 실행하면 마감 수집을 한 번 하고 바로 종료함
+- `ktb_core.krx.KRX_HOLIDAYS` 기준 휴장일에는 아무것도 하지 않고 바로 종료함
+
+### `market-streamer`와 `market-http`: 실시간 가격과 호가 제공
+
+- market-streamer는 하나의 Kiwoom WebSocket에서 가격 `0B`와 호가 `0D`를 함께 구독함
+- market-http의 `GET /orderbooks?codes=005930,000660`은 저장된 최신 호가를 반환하고, `GET /orderbooks/stream?codes=005930,000660`은 SSE로 초기 스냅샷과 이후 갱신을 전달함
+- 각 호가 스냅샷은 최우선 순서로 매도·매수 각각 10개 가격과 수량을 포함함
+- `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
+- 기존 가격 API는 `/prices`, `/prices/stream`임
 
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 
@@ -122,37 +156,18 @@ flowchart LR
 ### `portfolio-rebalancer`: 생성된 투자 포트폴리오를 기반으로 유저의 투자 포트폴리오 업데이트하기
 
 - 가장 최근 포트폴리오가 `ready` 일 때 거래 시작
-- 백엔드에서 유저의 계좌, 현금, 보유 종목, 미체결 주문을 가져옴
-- 미체결 주문을 모두 취소한 뒤 계좌 상태를 다시 읽고 목표 비중과 비교해 필요한 매수와 매도를 계산
+- 기존 HTTP API로 백엔드의 사용자·계좌·현금·보유 종목·미체결 주문을 조회함
+- 미체결 주문 취소와 좁아진 범위의 재주문 요청을 같은 계좌 SQS FIFO 그룹에 순서대로 발행하며, 편출 종목은 매도만 요청함
 - 기존 보유 종목의 보유량이 목표와의 차이가 `PORTFOLIO_REBALANCER_BAND`를 넘을 때 거래
 - QuestDB의 최근 1분봉 가격과 20개 일봉으로 주간 가격 경계를 계산
 - 경계는 위, 아래로 두 개 생성하며, 매도일 때는 높은 가격에 시도 후 낮은 가격에 도달하면 시장가 매도, 매수일 때는 낮은 가격에 시도 후 높은 가격에 도달하면 시장가 매수를 진행함
 - 주문마다 `portfolio_reasons`을 백엔드에 보냄
 
-## 개발 환경에서 실행
+### `report-builder`: 대회 종료 투자 리포트 생성하기
 
-저장소 루트에서 `.env.example`을 `.env`로 복사해 해당 작업의 필수 값을 환경에 설정합니다.
-
-### 스키마 적용하기
-
-```bash
-docker compose -f compose.dev.yaml up -d postgres questdb redis
-uv run alembic upgrade head
-KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
-```
-
-### 각 서비스 실행하기
-
-```bash
-docker compose -f compose.dev.yaml up -d news-http
-docker compose -f compose.dev.yaml run --rm news-preprocessor
-docker compose -f compose.dev.yaml run --rm news-clusterer
-docker compose -f compose.dev.yaml run --rm market-syncer
-docker compose -f compose.dev.yaml run --rm news-graph-builder
-docker compose -f compose.dev.yaml run --rm market-collector
-docker compose -f compose.dev.yaml run --rm portfolio-builder
-docker compose -f compose.dev.yaml run --rm portfolio-rebalancer
-```
+- SQS에서 대회 참가자의 주문에 연결된 투자 이유 ID를 하나씩 받아 처리함
+- 선택된 이유와 해당 포트폴리오 설명, 인용된 뉴스 요약만으로 한국어 thoughts를 생성함
+- Backend에 결과를 전달한 뒤에만 SQS 메시지를 삭제함
 
 ## 데이터베이스 (ERD): [mermaid.live](https://mermaid.live/edit#pako:eNrNWO9P20YY_ldO_tRqAZGkUMg3BFSbQG1VWk2akKyLfSRubV90Pq-EUIlVpKItnboNWraGDW3VqlZMCj_GMqn9h-LL_7A7_4pjx4ZoH7Z88_l97n2f9973uddpSApWkVSSEJnXYIVAY8UE_AcJ1RQdWWBjY2wMbwTPsqLbFkXEAiWwIvW-OXN-OWLP3va22oA92WFPXoArTrPDDs7Y79vOs13Qe_UUsNdP2MHO1RXJ2zncQey80Ri-c_fPI7Z1DLqdNnt8NBTJY_KfZcs2DEg05EHZT7ts79NwTCPEIJNqNIS86nQ7T0G33WInZ2lIgnRINWz6kHNuuw-iGQiA4dZZLtOMB71Y2CYKupwthaSCaBg9JjVM_NdBIP01GeoatPxYnNMt9vcfl0VqpqopQeLebbJtnoVvO-znZvoGG2CAuzjV103AC8X5oZXlllaRwQsDGzVoxhPnvsu09GuI_dp0PrwPYNwHXcW6hkNouCJXsa5qZsWvbZfTCGi0ptE-9Lw1ApQgaIWF5aL4kQC29db50MzKT0rowlQWbX05bD_wEYHRsAegMQlpeM_iV9YqmkmBpoLbi_1VitYo8God3FsM6x58BvgLREyoyxzBWofs4GMQWoiLmtyLb2oTPbbC61BHsbUyVuuRJY0XFoVGja6Dml3WNauKVBlScTgHHefFMW_3RBQEPpRrsK5jqAq7Ny-d0w64s7wM2N4Wl8NeszUAibhYRVQJHfDW4MBu-3tg4odXrkYxXyOFYiIXJiYmADLKSBUHziGmreuwrKMc-Pzm8peAfdrlkskDBYlgH8WE7eJziYRp11RIwzCj8txtbwKnvets7jjvz7iIHrPnhzGXCY1Pug5M3BBy4MZiwiLQUW5xQxTJrZtgfmFp4e4CmJtdnpudXxjOM3I9NLL29Lxm7ZtZQ56XlDIK3Awk0buoentcKZ632OFLdrAfns143zKtbnxa657RAPFo1zbicVKsPHA7lTMO9YZXTUSLQ-Owq722nJ-9cxd0Tw95Jzon2739TgJgQiOeGB7kAyT4Lt5avv1Fsn3NiixQkUpOZVw3lUy24a0WJ-2ue3xNTAz-uI5A96TdPU3qSSRBQREO8RTcgpnpHSxj9z3HoTWPsBuOmxTe07HaDe_Ly2mnUB8_iXwq4dMWEPLT-67FO3ToGV0mEbReQ1m5id_kzrudHOj-xYXnxw64eW9pKaUfM7iN3I4-zt2yHtcO329_TLowmaMqTQTjXVlyP5IhCuaNaCk2aTlXkaUQrSYYDNDyB6B4AQaTUNDfvcdv2ZtNdxnKFdHO6kVde2HLxaetzBguraqJ1rkw8xjrCJpAs2QD3sdEsG3uOO-2Afvto1BXV9r498eRc74ZK8bIODbSNajwoYdmjgMq5jMDAgq0qvJDpFWqNCGqhsFLYPCycJWSU4-MK_f5cFUGlEAl2YaQ2hYPAK3VdGh6ilRDppgIcrzeoVrPgei7VajpSE1LQX96TKaibzTaFekVR30AFb2XxhOzZiR3Q9PmTZsp14QXrQwJgXWgaOKE-k1spdD2Bt__mnOE3L_kE8zj_wtGlhYoUNmuA96cFtL1C3l7Ne-tior0mUo5qUI0VSpRYqOcZCB-dYlHyaXKv32F4KxI4kOEINVeG1P50DGmYB0T4VLgOY-vMDaCLQi2K1WptAp1iz9505b_B0howhsKkTlsm1Qq5SfcLaRSQ1qTSsWZifHidHE6ny_kpyYLk4WcVJdKk9PjhcLE1PS1wvXizMz1fOFRTlp3fRbHr_EXk8XJ6fxUfqYwVbj-6B_sZiCG) 에서 보기
 
@@ -290,138 +305,33 @@ erDiagram
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
 | `portfolios.status` | `portfolio-builder` | `0008` |
+| `portfolio_reasons.id` | `portfolio-builder` | `0010` |
 
-## 환경 변수
+## 리밸런서 통신 경로
 
-서비스별 설정은 각 서비스의 접두사가 붙은 환경 변수로 읽습니다.
+| 작업 | 경로 |
+|---|---|
+| 사용자·계좌 정보 조회 | 기존 HTTP `GET /api/v1/users/ai-server` |
+| 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
+| 주문 취소 요청 | AI → 같은 Order FIFO 큐; `order.cancel` |
+| HTTP 조회·응답 검증 실패 | 구조화 로그 기록 후 실패 종료 |
 
-Compose의 데이터베이스 연결 정보도 환경 변수로만 받습니다. 로컬에서는 Git에서 제외된 `.env.example`을 `.env`로 복사하고 다음 다섯 값을 설정합니다.
+매 실행 시작에 HTTP로 사용자 정보를 한 번 조회합니다. 조회한 잔고·보유량과 남은 실행 횟수로
+범위·수량을 계산하고, 대기 주문 취소 요청 다음에 재주문 요청을 같은 계좌 FIFO 그룹으로 바로 발행합니다.
+취소 반영을 기다리는 HTTP 재조회나 대기 주문 잔존에 따른 보류는 하지 않습니다.
+취소 요청 발행이 실패한 계좌에는 신규 주문을 보내지 않습니다. 편출 종목은 매도만 요청하며
+이번 매도의 예상 대금은 매수 예산에 더하지 않습니다.
+취소 메시지 발행 성공은 취소 완료가 아닙니다. 백엔드는 같은 그룹의 취소 처리를 마친 뒤 다음 주문을 처리해야 합니다.
+조회 실패나 잘못된 응답은 기존 구조화 로그로 기록하고 주문 요청 없이 종료합니다.
+`users: []`는 정상 응답입니다.
 
-| 변수 | 필수 | 설명 |
-|---|---|---|
-| `POSTGRES_USER` | 필수 | PostgreSQL 사용자 |
-| `POSTGRES_DB` | 필수 | PostgreSQL 데이터베이스 |
-| `POSTGRES_PASSWORD` | 필수 | PostgreSQL 비밀번호 |
-| `QUESTDB_USER` | 필수 | QuestDB PGWire 사용자 |
-| `QUESTDB_PASSWORD` | 필수 | QuestDB PGWire 비밀번호 |
+주문 생성에는 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
+`MessageDeduplicationId`로 사용합니다. SDK 재시도는 동일 eventId와 본문을 유지합니다.
+FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계산한 주문은 새 이벤트입니다.
+계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
 
-### 공통 / 도구
-
-| 변수 | 필수 | 기본값 | 설명 |
-|---|---|---|---|
-| `KTB_POSTGRES_DSN` | 마이그레이션 시 | | `alembic upgrade`가 사용하는 DSN |
-| `KTB_QUESTDB_CONF` | QuestDB 마이그레이션 시 | | 공식 클라이언트 연결 문자열 |
-| `KTB_TEST_POSTGRES_DSN` | | | DB 테스트용 DSN. 없으면 해당 테스트를 건너뜀. 테스트가 테이블을 비우므로 `ktb`가 아닌 `ktb_test`를 가리킬 것 |
-| `KTB_EMBEDDING_BASE_URI` | news-preprocessor | | OpenAI 호환 임베딩 서버 주소 (`/v1` 포함) |
-| `KTB_EMBEDDING_API_KEY` | | | 설정하면 `Authorization: Bearer`로 전송 (예: OpenRouter `https://openrouter.ai/api/v1`). 키가 없는 로컬 서버면 비워 둠 |
-| `KTB_EMBEDDING_MODEL` | | `mlx-community/Qwen3-Embedding-4B-4bit-DWQ` | 임베딩 모델 |
-| `KTB_EMBEDDING_DIMENSIONS` | | `2000` | DB 컬럼 `vector(2000)`과 같아야 함 |
-| `KTB_EMBEDDING_MAX_TOKENS` | | `16384` | 기사별 임베딩 입력 최대 토큰 수 |
-
-### news-preprocessor (`NEWS_PREPROCESSOR_`)
-
-| 변수 | 필수 | 기본값 | 조절 대상 |
-|---|---|---|---|
-| `NEWS_PREPROCESSOR_POSTGRES_DSN` | 필수 | | 기사 저장소 연결 |
-| `NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT` | | `100` | 한 번에 처리할 미임베딩 기사 수 |
-| `NEWS_PREPROCESSOR_USER_AGENT` | | `ktb-ai/0.1` | 뉴스 요청의 User-Agent |
-| `NEWS_PREPROCESSOR_LOG_LEVEL` | | `INFO` | 로그 수준 |
-
-### news-clusterer (`NEWS_CLUSTERER_`)
-
-| 변수 | 필수 | 기본값 | 조절 대상 |
-|---|---|---|---|
-| `NEWS_CLUSTERER_POSTGRES_DSN` | 필수 | | 기사와 클러스터 저장소 연결 |
-| `NEWS_CLUSTERER_EPS` | | `0.36` | DBSCAN의 최대 코사인 거리 (0 초과 2 이하). Qwen3-Embedding-4B 기준이며 모델 변경 시 재조정 |
-| `NEWS_CLUSTERER_MIN_SAMPLES` | | `2` | DBSCAN 핵심점에 필요한 최소 기사 수 |
-| `NEWS_CLUSTERER_LOG_LEVEL` | | `INFO` | 로그 수준 |
-
-### news-graph-builder (`NEWS_GRAPH_BUILDER_`)
-
-| 변수 | 필수 | 기본값 | 설명 |
-|---|---|---|---|
-| `NEWS_GRAPH_BUILDER_POSTGRES_DSN` | 필수 | | 클러스터/기업 읽기와 그래프 저장 |
-| `NEWS_GRAPH_BUILDER_LOG_LEVEL` | | `INFO` | 로그 수준 |
-| `NEWS_GRAPH_BUILDER_LLM_BASE_URI` | 필수 | | OpenAI 호환 LLM 서버 주소 (`/v1` 포함) |
-| `NEWS_GRAPH_BUILDER_LLM_MODEL` | 필수 | | 요약/그래프 추출에 사용할 모델 |
-| `NEWS_GRAPH_BUILDER_LLM_API_KEY` | | | OpenAI 호환 API 키. 설정하면 `Authorization: Bearer` 로 보냄 (키가 필요 없는 로컬 vLLM 은 비워 둠) |
-| `NEWS_GRAPH_BUILDER_SUMMARY_MAX_CHARS` | | `24000` | LLM에 넣는 기사 본문 글자 수 상한 |
-| `NEWS_GRAPH_BUILDER_LLM_TIMEOUT` | | `120` | LLM 요청 제한 시간(초) |
-| `NEWS_GRAPH_BUILDER_MAX_ENTITIES` | | `30` | 클러스터당 개체 수 상한 |
-| `NEWS_GRAPH_BUILDER_MAX_RELATIONS` | | `50` | 클러스터당 관계 수 상한 |
-
-### news-http (`NEWS_HTTP_`)
-
-| 변수 | 필수 | 기본값 | 설명 |
-|---|---|---|---|
-| `NEWS_HTTP_POSTGRES_DSN` | 필수 | | 클러스터와 기사 읽기 |
-| `NEWS_HTTP_HOST` | | `0.0.0.0` | 바인드 주소 |
-| `NEWS_HTTP_PORT` | | `8000` | 바인드 포트 |
-| `NEWS_HTTP_LOG_LEVEL` | | `INFO` | 로그 수준 |
-
-### market-syncer (`MARKET_SYNCER_`)
-
-| 변수 | 필수 | 기본값 | 설명 |
-|---|---|---|---|
-| `MARKET_SYNCER_POSTGRES_DSN` | 필수 | | 기업/지수/테마 저장소 연결 |
-| `MARKET_SYNCER_KIWOOM_APP_KEY` | 필수 | | 키움 REST API 앱 키 |
-| `MARKET_SYNCER_KIWOOM_SECRET_KEY` | 필수 | | 키움 REST API 시크릿 키 |
-| `MARKET_SYNCER_KIWOOM_MODE` | | `real` | `real` 또는 `demo`(모의투자) |
-| `MARKET_SYNCER_KIWOOM_REQUEST_INTERVAL` | | `0.2` | 키움 요청 사이 대기 시간(초) |
-| `MARKET_SYNCER_DART_API_KEY` | 필수 | | OpenDART API 키. Compose도 같은 이름을 사용 |
-| `MARKET_SYNCER_LOG_LEVEL` | | `INFO` | 로그 수준 |
-
-### market-collector (`MARKET_COLLECTOR_`)
-
-| 변수 | 필수 | 기본값 | 설명 |
-|---|---|---|---|
-| `MARKET_COLLECTOR_POSTGRES_DSN` | 필수 | | `corporation_indices` 를 읽는 DSN |
-| `MARKET_COLLECTOR_QUESTDB_CONF` | 필수 | | QuestDB 공식 Python 클라이언트 연결 문자열 |
-| `MARKET_COLLECTOR_KIWOOM_ACCOUNTS` | 필수 | | `app_key`, `secret_key` 객체의 JSON 배열 |
-| `MARKET_COLLECTOR_KIWOOM_MODE` | | `real` | `real` 또는 `demo` |
-| `MARKET_COLLECTOR_INDEX_NAME` | | `KOSPI200` | 수집 종목을 구성하는 지수 이름 |
-| `MARKET_COLLECTOR_REQUEST_INTERVAL` | | `1.3` | 키움 REST 요청 사이 대기 시간(초) |
-| `MARKET_COLLECTOR_LOG_LEVEL` | | `INFO` | 로그 수준 |
-
-### portfolio-builder (`PORTFOLIO_BUILDER_`)
-
-| 변수 | 필수 | 기본값 | 조절 대상 |
-|---|---|---|---|
-| `PORTFOLIO_BUILDER_POSTGRES_DSN` | 필수 | | 기업/포트폴리오 저장소 연결 |
-| `PORTFOLIO_BUILDER_QUESTDB_CONF` | 필수 | | QuestDB 시세 연결 |
-| `PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI` | 필수 | | news-http API 주소 |
-| `PORTFOLIO_BUILDER_LLM_API_KEY` | 필수 | | OpenAI API 인증 |
-| `PORTFOLIO_BUILDER_LLM_MODEL` | 필수 | | OpenAI API 모델 ID |
-| `PORTFOLIO_BUILDER_THINKING_LEVEL` | | `medium` | 모델 추론 수준 (`none`/`minimal`/`low`/`medium`/`high`/`xhigh`) |
-| `PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS` | | `7` | 분석에 포함할 최근 뉴스 기간(일) |
-| `PORTFOLIO_BUILDER_MAX_TURNS` | | `150` | 포트폴리오 에이전트의 최대 모델 호출 횟수 |
-| `PORTFOLIO_BUILDER_EXPLAIN_RESULT_CHARS` | | `2000` | 설명 프롬프트에 포함할 도구 결과별 글자 수 상한 |
-| `PORTFOLIO_BUILDER_EXPLAIN_MAX_TOKENS` | | `16000` | 설명 생성의 최대 출력 토큰 수 |
-| `PORTFOLIO_BUILDER_LOG_LEVEL` | | `INFO` | 로그 수준 |
-
-
-### portfolio-rebalancer (`PORTFOLIO_REBALANCER_`)
-
-| 변수 | 필수 | 기본값 | 조절 대상 |
-|---|---|---|---|
-| `PORTFOLIO_REBALANCER_POSTGRES_DSN` | 필수 | | 최신 포트폴리오와 설명 읽기 |
-| `PORTFOLIO_REBALANCER_QUESTDB_CONF` | 필수 | | 최근 종가 읽기 |
-| `PORTFOLIO_REBALANCER_BACKEND_URL` | 필수 | | 계좌 조회/주문 전송 주소 |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | 필수 | | Backend와 공유하는 서명 비밀값 (32바이트 이상) |
-| `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | 필수 | | Backend의 `JWT_ISSUER`와 일치해야 하는 발급자 |
-| `PORTFOLIO_REBALANCER_BAND` | | `0.05` | 기존 보유 종목이 목표 비중에서 벗어나야 거래하는 폭 |
-| `PORTFOLIO_REBALANCER_BUY_BUFFER` | | `0.02` | 매수 수량 산정 시 종가에 더하는 비율 |
-| `PORTFOLIO_REBALANCER_TEST_MODE` | | `false` | `true`면 KRX 거래일/시간 검사 생략 |
-| `PORTFOLIO_REBALANCER_LOG_LEVEL` | | `INFO` | 로그 수준 |
-
-### 설정 변경과 검증
-
-환경 변수를 변경할 때는 서비스의 `settings.py`에서 필수 여부와 기본값을 확인하고 `.env.example`, 위 표, `compose.dev.yaml`, `compose.prod.yaml`을 함께 갱신합니다. 저장소 루트에서 다음 명령으로 확인합니다.
-
-```bash
-docker compose -f compose.dev.yaml --profile jobs config --quiet
-docker compose -f compose.prod.yaml --profile jobs config --quiet
-uv run pytest services/portfolio-rebalancer/tests/test_settings.py
-```
-
-운영용 Compose 검증에는 배포 환경의 `APP_IMAGE`와 필수 DB/Backend 환경 변수가 필요합니다. `config --quiet`는 컨테이너를 시작하지 않고 설정만 검사합니다.
+HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용합니다.
+SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
+기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
+리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
+DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.

@@ -8,6 +8,7 @@ DSN = "postgresql+psycopg://ktb:ktb@localhost:5432/ktb"
 @pytest.fixture
 def required_env(monkeypatch):
     monkeypatch.setenv("NEWS_PREPROCESSOR_POSTGRES_DSN", DSN)
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DART_API_KEY", "dart-key")
     for name in (
         "NEWS_PREPROCESSOR_LOG_LEVEL",
         "NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT",
@@ -53,6 +54,20 @@ def test_missing_dsn_raises_at_construction(required_env, monkeypatch):
 
 def test_embed_batch_limit_must_be_positive(required_env, monkeypatch):
     monkeypatch.setenv("NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT", "0")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_reads_the_dart_api_key_as_a_secret(required_env):
+    settings = Settings()
+
+    assert settings.dart_api_key.get_secret_value() == "dart-key"
+    assert "dart-key" not in repr(settings)
+
+
+def test_missing_dart_api_key_raises_at_construction(required_env, monkeypatch):
+    monkeypatch.delenv("NEWS_PREPROCESSOR_DART_API_KEY")
 
     with pytest.raises(ValidationError):
         Settings()

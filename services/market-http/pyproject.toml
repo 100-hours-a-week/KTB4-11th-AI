@@ -1,0 +1,28 @@
+[project]
+name = "market-http"
+version = "0.1.0"
+description = "Public HTTP API for current prices and OHLCV history"
+requires-python = ">=3.13,<3.15"
+dependencies = [
+    "ktb-core",
+    "ktb-aws",
+    "fastapi>=0.142",
+    "pandas>=2.2",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "questdb>=5.0",
+    "redis>=6.4",
+    "scalar-fastapi>=1.0",
+    "uvicorn>=0.54",
+]
+
+[project.scripts]
+market-http = "market_http.__main__:main"
+
+[tool.uv.sources]
+ktb-core = { workspace = true }
+ktb-aws = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"

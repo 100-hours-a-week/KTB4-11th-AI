@@ -1,7 +1,19 @@
+import json
+from io import BytesIO
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 import sqlalchemy as sa
-from portfolio_builder.market import QuestDBMarket
+from portfolio_builder.market import HttpMarket
+
+
+class Response(BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
 
 
 @pytest.fixture
@@ -13,40 +25,37 @@ def universe_engine():
     engine.dispose()
 
 
-def test_empty_universe_does_not_open_questdb(monkeypatch, universe_engine):
-    def unexpected_query(*args):
-        pytest.fail("an empty universe must not query QuestDB")
-
-    market = QuestDBMarket("unused", universe_engine)
-    monkeypatch.setattr(market, "_records", unexpected_query)
-    assert market.universe_closes() == {}
+def test_empty_universe_makes_no_requests(universe_engine):
+    with patch("portfolio_builder.market.urlopen", side_effect=AssertionError("requested")):
+        assert HttpMarket("http://market", universe_engine).universe_closes() == {}
 
 
-def test_universe_members_are_bound_and_refreshed_for_each_read(monkeypatch, universe_engine):
-    special_code = "member'code"
+def test_universe_reads_daily_bars_per_kospi200_member(universe_engine):
     with universe_engine.begin() as conn:
         conn.execute(
             sa.text("INSERT INTO corporation_indices VALUES (:code, 'KOSPI200')"),
-            [{"code": "005930"}, {"code": special_code}],
+            [{"code": "005930"}, {"code": "000660"}],
         )
         conn.execute(sa.text("INSERT INTO corporation_indices VALUES ('removed', 'KRX300')"))
-    queries = []
 
-    def records(sql, binds=None):
-        queries.append((sql, binds))
-        return [{"symbol": binds[0], "close": 10.0}]
+    def respond(request, timeout):
+        if "000660" in request.full_url:
+            return Response(json.dumps({"items": [], "next_cursor": None}).encode())
+        rows = [
+            {"timestamp": "2026-09-28T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 2.0,
+             "volume": 1},
+            {"timestamp": "2026-09-27T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1.0,
+             "volume": 1},
+        ]  # fmt: skip
+        return Response(json.dumps({"items": rows, "next_cursor": None}).encode())
 
-    market = QuestDBMarket("unused", universe_engine)
-    monkeypatch.setattr(market, "_records", records)
-    universe = market.universe_closes()
+    with patch("portfolio_builder.market.urlopen", side_effect=respond) as call:
+        universe = HttpMarket("http://market", universe_engine).universe_closes()
+
+    urls = [c.args[0].full_url for c in call.call_args_list]
+    assert urls == [
+        "http://market/bars/000660?timeframe=1d&limit=300",
+        "http://market/bars/005930?timeframe=1d&limit=300",
+    ]
     assert list(universe) == ["005930"]
-    np.testing.assert_array_equal(universe["005930"], [10.0])
-    sql, binds = queries[0]
-    assert special_code not in sql
-    assert binds == ["005930", special_code]
-    assert "cast(symbol AS VARCHAR) IN ($1, $2)" in sql
-    with universe_engine.begin() as conn:
-        conn.execute(sa.text("DELETE FROM corporation_indices WHERE stock_code = '005930'"))
-        conn.execute(sa.text("INSERT INTO corporation_indices VALUES ('new', 'KOSPI200')"))
-    market.universe_closes()
-    assert queries[1][1] == [special_code, "new"]
+    np.testing.assert_array_equal(universe["005930"], [1.0, 2.0])

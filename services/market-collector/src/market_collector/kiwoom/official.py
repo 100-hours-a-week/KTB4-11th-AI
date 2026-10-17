@@ -5,8 +5,6 @@ from kiwoom import KiwoomAuth, KiwoomClient
 from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
 
-from market_collector.settings import KiwoomAccount
-
 
 class Page(NamedTuple):
     rows: list[dict[str, str]]
@@ -14,16 +12,16 @@ class Page(NamedTuple):
     has_more: bool
 
 
-def build_auth(account: KiwoomAccount, mode: Literal["real", "demo"]) -> KiwoomAuth:
+def build_auth(app_key: str, secret_key: str, mode: Literal["real", "demo"]) -> KiwoomAuth:
     return KiwoomAuth(
         mode,
-        StaticSecretProvider(account.app_key, account.secret_key),
+        StaticSecretProvider(app_key, secret_key),
         MemoryTokenStore(),
     )
 
 
-def build_client(account: KiwoomAccount, mode: Literal["real", "demo"]) -> KiwoomClient:
-    return KiwoomClient(build_auth(account, mode))
+def build_client(app_key: str, secret_key: str, mode: Literal["real", "demo"]) -> KiwoomClient:
+    return KiwoomClient(build_auth(app_key, secret_key, mode))
 
 
 def fetch_page(
@@ -55,7 +53,7 @@ class ChartClient:
         self._next_request_at = 0.0
 
     def minute_page(self, symbol: str, tic_scope: int, next_key: str | None = None) -> Page:
-        self._wait_for_request()
+        self._avoid_rate_limit()
         return fetch_page(
             self._client,
             api_id="ka10080",
@@ -66,7 +64,7 @@ class ChartClient:
         )
 
     def daily_page(self, symbol: str, base_dt: str, next_key: str | None = None) -> Page:
-        self._wait_for_request()
+        self._avoid_rate_limit()
         return fetch_page(
             self._client,
             api_id="ka10081",
@@ -76,7 +74,41 @@ class ChartClient:
             next_key=next_key,
         )
 
-    def _wait_for_request(self) -> None:
+    def index_quote(self, name: str) -> dict[str, float]:
+        market, code = {"KOSPI": ("0", "001"), "KOSPI200": ("2", "201")}[name]
+        self._avoid_rate_limit()
+        body = self._client.fetch_page(
+            api_id="ka20001",
+            path="/api/dostk/sect",
+            body={"mrkt_tp": market, "inds_cd": code},
+        ).body
+        if body.get("return_code") not in (None, 0, "0"):
+            raise RuntimeError(body.get("return_msg") or "index request failed")
+        return {
+            "value": abs(float(body["cur_prc"])),
+            "change": float(body["pred_pre"]),
+            "rate": float(body["flu_rt"]),
+        }
+
+    def popular_codes(self, universe: set[str]) -> list[str]:
+        self._avoid_rate_limit()
+        body = self._client.fetch_page(
+            api_id="ka00198", path="/api/dostk/stkinfo", body={"qry_tp": "1"}
+        ).body
+        if body.get("return_code") not in (None, 0, "0"):
+            raise RuntimeError(body.get("return_msg") or "popular request failed")
+        rows = body["item_inq_rank"]
+        if not isinstance(rows, list):
+            raise TypeError("item_inq_rank is not a list")
+        return list(
+            dict.fromkeys(
+                row["stk_cd"]
+                for row in sorted(rows, key=lambda row: int(row["bigd_rank"]))
+                if row["stk_cd"] in universe
+            )
+        )
+
+    def _avoid_rate_limit(self) -> None:
         delay = self._next_request_at - time.monotonic()
         if delay > 0:
             time.sleep(delay)

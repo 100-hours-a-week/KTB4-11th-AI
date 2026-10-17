@@ -15,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: ci-dev-${{ github.ref }}
@@ -47,10 +48,20 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
+      valkey:
+        image: valkey/valkey:8.1.4
+        ports:
+          - "6379:6379"
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
     env:
       KTB_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
       KTB_TEST_POSTGRES_DSN: postgresql+psycopg://ktb:ktb@localhost:5432/ktb
       KTB_TEST_QUESTDB_CONF: ws::addr=localhost:9000;
+      KTB_TEST_VALKEY_URL: redis://localhost:6379/0
 
     steps:
       - uses: actions/checkout@v7
@@ -74,7 +85,10 @@ jobs:
       - name: Check core has no external dependencies
         run: |
           uv run python -c 'import pathlib, tomllib; assert not tomllib.loads(pathlib.Path("packages/core/pyproject.toml").read_text())["project"]["dependencies"]'
-          uv run tach check-external -e packages/market-analyzer,services
+          uv run tach check-external -e services
+
+      - name: Check report-builder isolated import
+        run: uv run --isolated --package report-builder --locked --no-dev python -c 'import report_builder.__main__'
 
       - name: Apply database migrations
         run: uv run alembic upgrade head
@@ -112,7 +126,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector portfolio-rebalancer; do
+          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector market-streamer market-http portfolio-rebalancer report-builder; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done
@@ -133,7 +147,10 @@ jobs:
           - news-http
           - portfolio-builder
           - market-collector
+          - market-streamer
+          - market-http
           - portfolio-rebalancer
+          - report-builder
 
     steps:
       - uses: actions/checkout@v7
@@ -151,21 +168,36 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
   build-app-image:
+    needs: lint-and-test
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v7
 
+      - name: Configure AWS credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ECR_PUSH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR Public
+        if: github.event_name == 'push'
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build application image
+      - name: Build and push application image
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/app.Dockerfile
           platforms: linux/amd64
-          push: false
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.sha }}
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
 

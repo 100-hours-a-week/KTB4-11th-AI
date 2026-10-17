@@ -1,10 +1,13 @@
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from portfolio_rebalancer import __main__ as entry
 from portfolio_rebalancer.holidays import KST
+from portfolio_rebalancer.orders import PublishError
 from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target, Unready
 from portfolio_rebalancer.snapshot import User
 
@@ -14,9 +17,10 @@ REQUIRED = {
     "PORTFOLIO_REBALANCER_BACKEND_URL": "http://backend",
     "PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET": "s" * 32,
     "PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER": "river-be",
+    "PORTFOLIO_REBALANCER_ORDER_QUEUE_URL": "https://sqs.local/order.fifo",
 }
 WEDNESDAY_NOON = datetime(2026, 10, 14, 12, tzinfo=KST)
-WHY = Explanation(reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
+WHY = Explanation(id=uuid.uuid4(), reason="사요", reasonings=[{"label": "근거", "body": "사요"}])
 PORTFOLIO = Portfolio(
     id=5,
     cash_weight=0.5,
@@ -57,50 +61,51 @@ def users(*accounts):
 USERS = users(account(11, stocks=[("000660", 1)]), account(12))
 
 
-class FakeBackend:
-    def __init__(
-        self,
-        client,
-        secret,
-        issuer,
-        users=USERS,
-        refreshed=None,
-        fail_account=None,
-        fail_cancel=None,
-    ):
-        self.calls = []
+class FakeOrders:
+    def __init__(self, calls, fail_account=None, fail_cancel=None):
+        self.calls = calls
         self.placed = []
         self.request_bodies = []
         self.cancelled = []
-        self._snapshots = [users, refreshed or users]
+        self.replaced = []
         self.fail_account = fail_account
         self.fail_cancel = fail_cancel
-
-    def users(self):
-        self.calls.append(("users",))
-        return self._snapshots[min(len(self.calls_of("users")) - 1, 1)]
+        self._published = 0
 
     def calls_of(self, kind):
         return [c for c in self.calls if c[0] == kind]
 
-    def _boom(self, method):
-        request = httpx.Request(method, "http://backend")
-        raise httpx.HTTPStatusError(
-            "boom", request=request, response=httpx.Response(409, text="bad", request=request)
-        )
+    def _ids(self):
+        self._published += 1
+        return {"event_id": f"e{self._published}", "sqs_message_id": f"m{self._published}"}
+
+    def place(self, user_id, account_id, body, replaces):
+        self.request_bodies.append(body)
+        if account_id == self.fail_account:
+            raise PublishError("RuntimeError: boom")
+        self.calls.append(("place", account_id, body["stock_code"]))
+        self.placed.append((user_id, account_id, body["stock_code"], body["quantity"]))
+        self.replaced.append((account_id, replaces))
+        return self._ids()
 
     def cancel(self, user_id, account_id, order_id):
         if order_id == self.fail_cancel:
-            self._boom("PATCH")
+            raise PublishError("cancel send failed")
         self.calls.append(("cancel", account_id, order_id))
         self.cancelled.append((user_id, account_id, order_id))
+        return {
+            "event_id": f"cancel-{order_id}",
+            "sqs_message_id": f"cancel-message-{order_id}",
+            "correlation_id": "run",
+        }
 
-    def place(self, user_id, account_id, order, body=None):
-        self.request_bodies.append(body)
-        if account_id == self.fail_account:
-            self._boom("POST")
-        self.calls.append(("place", account_id, order.stock_code))
-        self.placed.append((user_id, account_id, order.stock_code, order.quantity))
+
+class FakeBackend:
+    def __init__(self, orders):
+        self.orders = orders
+
+    def users(self):
+        return self.orders.accounts.users()
 
 
 def clock(monkeypatch, now):
@@ -134,16 +139,31 @@ def _events(out):
     return [json.loads(line) for line in out.splitlines()]
 
 
-def _use(monkeypatch, **kwargs):
-    backends = []
+class FakeAccounts:
+    def __init__(self, snapshots, refreshed, calls):
+        self._snapshots = [snapshots, refreshed or snapshots]
+        self._reads = 0
+        self.calls = calls
+        self.rejected = 0
+        self.failed = 0
 
-    def make(client, secret, issuer):
-        backend = FakeBackend(client, secret, issuer, **kwargs)
-        backends.append(backend)
-        return backend
+    def users(self):
+        self.calls.append(("users",))
+        self._reads += 1
+        return self._snapshots[min(self._reads - 1, 1)]
 
-    monkeypatch.setattr(entry, "Backend", make)
-    return backends
+
+def _use(monkeypatch, users=USERS, refreshed=None, **kwargs):
+    calls = []
+    accounts = FakeAccounts(users, refreshed, calls)
+    orders = FakeOrders(calls, **kwargs)
+    orders.accounts = accounts
+
+    monkeypatch.setattr(entry, "boto3", SimpleNamespace(client=lambda name: None))
+    monkeypatch.setattr(entry, "SqsQueue", lambda client, url: url)
+    monkeypatch.setattr(entry, "Orders", lambda queue, correlation_id: orders)
+    monkeypatch.setattr(entry, "Backend", lambda *args: FakeBackend(orders), raising=False)
+    return [orders]
 
 
 def _main():
@@ -179,16 +199,19 @@ def test_pending_orders_are_cancelled_before_placing(env, monkeypatch, capsys):
     assert _main() == 0
     assert backends[0].cancelled == [(1, 11, 77), (1, 11, 78)]
     events = _events(capsys.readouterr().out)
-    cancelled = [e for e in events if e["message"] == "order_cancelled"]
+    cancelled = [e for e in events if e["message"] == "order_cancel_requested"]
     assert [(e["order_id"], e["limit_price"], e["quantity"]) for e in cancelled] == [
         (77, 95_000, 2),
         (78, 95_000, 2),
     ]
-    assert events[-1]["cancelled"] == 2
+    assert events[-1]["cancel_requested"] == 2
     received = [e for e in events if e["message"] == "users_received"]
-    assert [e["user_count"] for e in received] == [2, 2]
+    assert [e["user_count"] for e in received] == [2]
     kinds = [c[0] for c in backends[0].calls]
-    assert kinds == ["users", "cancel", "cancel", "users", "place"]
+    assert kinds == ["users", "cancel", "cancel", "place"]
+    assert backends[0].replaced == [(11, [77, 78])]
+    sent = next(e for e in events if e["message"] == "order_sent")
+    assert (sent["result"], sent["event_id"], sent["sqs_message_id"]) == ("published", "e1", "m1")
 
 
 def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsys):
@@ -200,7 +223,9 @@ def test_a_failed_cancel_skips_the_account_and_exits_one(env, monkeypatch, capsy
     assert backends[0].placed == [(1, 12, "005930", 4)]
     events = _events(capsys.readouterr().out)
     failed = next(e for e in events if e["message"] == "cancel_failed")
-    assert (failed["account_id"], failed["order_id"], failed["status"]) == (11, 77, 409)
+    assert (failed["account_id"], failed["order_id"]) == (11, 77)
+    assert failed["result"] == "failed"
+    assert failed["error"] == "cancel send failed"
     assert events[-1]["cancel_failed"] == 1
 
 
@@ -218,10 +243,12 @@ def test_a_failed_order_is_logged_the_rest_sent_and_the_run_exits_one(env, monke
     assert _main() == 1
     assert backends[0].placed == [(1, 11, "005930", 4)]
     failed = next(e for e in _events(capsys.readouterr().out) if e["message"] == "order_failed")
-    assert (failed["account_id"], failed["status"], failed["body"]) == (12, 409, "bad")
+    assert (failed["account_id"], failed["result"]) == (12, "failed")
+    assert failed["error"] == "RuntimeError: boom"
     assert failed["order_type"] == "limit"
     assert failed["stock_name"] == "삼성전자"
     assert failed["request_body"] == {
+        "reason_id": str(WHY.id),
         "stock_code": "005930",
         "stock_name": "삼성전자",
         "order_side": "buy",
@@ -264,18 +291,8 @@ def test_default_mode_skips_a_market_holiday(env, monkeypatch, capsys):
     backends = _use(monkeypatch)
 
     assert _main() == 0
-    assert backends == []
+    assert backends[0].calls == []
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "market_closed"
-
-
-def test_an_empty_user_response_is_logged_as_zero(env, monkeypatch, capsys):
-    _use(monkeypatch, users=[])
-
-    assert _main() == 0
-
-    events = _events(capsys.readouterr().out)
-    received = [e for e in events if e["message"] == "users_received"]
-    assert [e["user_count"] for e in received] == [0]
 
 
 def test_a_calendar_ending_within_a_month_is_warned(env, monkeypatch, capsys):
@@ -293,7 +310,7 @@ def test_no_explained_portfolio_exits_zero_without_calling_the_backend(env, monk
     backends = _use(monkeypatch)
 
     assert _main() == 0
-    assert backends == []
+    assert backends[0].calls == []
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "no_portfolio"
 
 
@@ -309,7 +326,7 @@ def test_an_unready_latest_portfolio_sends_nothing(env, monkeypatch, capsys, sta
         entry.main()
 
     assert exit_.value.code == code
-    assert backends == []
+    assert backends[0].calls == []
     last = _events(capsys.readouterr().out)[-1]
     assert (last["outcome"], last["portfolio_id"], last["level"]) == (status, 8, level)
 
@@ -340,16 +357,17 @@ def test_the_clock_reaches_the_daily_closes_query(env, monkeypatch):
     assert env["now"] == WEDNESDAY_NOON.astimezone(UTC)
 
 
-def test_trades_are_sized_from_the_snapshot_after_cancelling(env, monkeypatch):
+def test_replacements_use_the_initial_snapshot_without_waiting_for_cancellation(env, monkeypatch):
     filled = users(account(11, stocks=[("005930", 4)], cash=600_000))
     backends = _use(monkeypatch, users=users(account(11, pending=[77])), refreshed=filled)
 
     assert _main() == 0
     assert backends[0].cancelled == [(1, 11, 77)]
-    assert backends[0].placed == []
+    assert backends[0].placed == [(1, 11, "005930", 4)]
+    assert backends[0].calls_of("users") == [("users",)]
 
 
-def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, capsys):
+def test_pending_orders_in_the_snapshot_do_not_defer_replacements(env, monkeypatch, capsys):
     backends = _use(
         monkeypatch,
         users=users(account(11, pending=[77])),
@@ -357,8 +375,161 @@ def test_an_account_still_pending_after_cancelling_is_skipped(env, monkeypatch, 
     )
 
     assert _main() == 0
-    assert backends[0].placed == []
-    warn = next(
-        e for e in _events(capsys.readouterr().out) if e["message"] == "pending_after_cancel"
+    assert backends[0].placed == [(1, 11, "005930", 4)]
+    assert backends[0].replaced == [(11, [77])]
+    assert not any(e["message"] == "pending_after_cancel" for e in _events(capsys.readouterr().out))
+
+
+@pytest.mark.parametrize("failure", ["timeout", "status", "invalid", "json"])
+def test_http_user_fetch_failure_logs_and_stops_orders(env, monkeypatch, capsys, failure):
+    sent = []
+    requests = []
+    reads = 0
+
+    class Sqs:
+        def send_message(self, **kwargs):
+            body = json.loads(kwargs["MessageBody"])
+            assert body["type"] == "order.cancel"
+            assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
+            assert kwargs["MessageGroupId"] == "11"
+            assert kwargs["MessageDeduplicationId"] == body["eventId"]
+            sent.append(body)
+            return {"MessageId": "cancel-id"}
+
+    def respond(request):
+        nonlocal reads
+        requests.append(request)
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/users/ai-server"
+        reads += 1
+        if failure == "timeout":
+            raise httpx.ReadTimeout("backend unavailable", request=request)
+        if failure == "status":
+            return httpx.Response(503, json={"detail": "private"})
+        if failure == "json":
+            return httpx.Response(200, text="not json")
+        return httpx.Response(200, json={"users": [{"private": "invalid"}]})
+
+    client_type = httpx.Client
+    monkeypatch.setattr(
+        entry.httpx,
+        "Client",
+        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
     )
-    assert (warn["account_id"], warn["order_ids"]) == (11, [79])
+    monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
+    assert _main() == 1
+    assert sent == []
+    assert reads == 1
+    out = capsys.readouterr().out
+    assert "private" not in out
+    event = next(e for e in _events(out) if e["message"] == "users_fetch_failed")
+    assert event["reason"] == (
+        "users_fetch_failed" if failure in {"timeout", "status"} else "users_payload_invalid"
+    )
+    assert event["result"] == "failed"
+    assert _events(out)[-1]["sent"] == 0
+    assert _events(out)[-1]["outcome"] == "users_fetch_failed"
+
+
+@pytest.mark.parametrize("exiting", [False, True])
+def test_users_http_then_cancel_and_replacement_in_one_fifo_group(env, monkeypatch, exiting):
+    sent = []
+    phases = []
+    reads = 0
+    snapshot = account(
+        11,
+        pending=[77],
+        stocks=[("005930", 4)] if exiting else (),
+        cash=600_000 if exiting else 1_000_000,
+    )
+    if exiting:
+        snapshot["pending_orders"][0]["order_side"] = "sell"
+        portfolio = PORTFOLIO.model_copy(
+            update={
+                "cash_weight": 1.0,
+                "targets": [
+                    Target(stock_code="005930", weight=0.0, exiting=True, buy=None, sell=WHY)
+                ],
+            }
+        )
+        monkeypatch.setattr(entry, "load_portfolio", lambda engine: portfolio)
+    else:
+        snapshot["pending_orders"][0]["limit_price"] = 88_000
+    monkeypatch.setattr(
+        entry, "daily_closes", lambda conf, codes, now: {"005930": [90_000.0, 110_000.0] * 10}
+    )
+
+    class Sqs:
+        def send_message(self, **kwargs):
+            body = json.loads(kwargs["MessageBody"])
+            assert kwargs["QueueUrl"] == REQUIRED["PORTFOLIO_REBALANCER_ORDER_QUEUE_URL"]
+            assert kwargs["MessageGroupId"] == "11"
+            assert kwargs["MessageDeduplicationId"] == body["eventId"]
+            sent.append(body)
+            if body["type"] == "order.cancel":
+                assert body["payload"] == {
+                    "user_id": 1,
+                    "account_id": 11,
+                    "order_id": 77,
+                    "status": "cancelled",
+                }
+                phases.append("cancel")
+            else:
+                assert body["type"] == "order.place"
+                phases.append("place")
+            return {"MessageId": "order-id"}
+
+    def respond(request):
+        nonlocal reads
+        if request.url.path == "/api/v1/users/ai-server":
+            assert request.method == "GET"
+            reads += 1
+            assert reads == 1
+            phases.append("users")
+            return httpx.Response(200, json={"users": [u.model_dump() for u in users(snapshot)]})
+        raise AssertionError("only user lookup uses HTTP")
+
+    client_type = httpx.Client
+    monkeypatch.setattr(
+        entry.httpx,
+        "Client",
+        lambda **kwargs: client_type(**kwargs, transport=httpx.MockTransport(respond)),
+    )
+    monkeypatch.setattr(entry.boto3, "client", lambda name: Sqs())
+    assert _main() == 0
+    assert phases == ["users", "cancel", "place"]
+    assert sent[1]["payload"]["reason_id"] == str(WHY.id)
+    assert sent[1]["payload"]["replaces_order_ids"] == [77]
+    assert sent[1]["payload"]["quantity"] == 4
+    assert sent[1]["payload"]["order_side"] == ("sell" if exiting else "buy")
+    assert sent[1]["payload"]["limit_price"] == (110_300 if exiting else 89_700)
+    assert len(sent) == 2
+    assert sent[0]["eventId"] != sent[1]["eventId"]
+
+
+def test_empty_http_users_are_valid_and_publish_nothing(env, monkeypatch):
+    backends = _use(monkeypatch, users=[])
+    assert _main() == 0
+    assert backends[0].placed == []
+
+
+def test_a_partial_cancel_publish_failure_does_not_place_replacements(env, monkeypatch, capsys):
+    backends = _use(
+        monkeypatch,
+        users=users(account(11, pending=[77, 78]), account(12)),
+        refreshed=users(account(11), account(12)),
+        fail_cancel=78,
+    )
+    assert _main() == 1
+    assert backends[0].cancelled == [(1, 11, 77)]
+    assert all(order[1] != 11 for order in backends[0].placed)
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["cancel_requested"] == 1
+    assert events[-1]["cancel_failed"] == 1
+    requested = next(e for e in events if e["message"] == "order_cancel_requested")
+    assert (
+        requested["sqs_message_id"],
+        requested["event_id"],
+        requested["correlation_id"],
+        requested["result"],
+    ) == ("cancel-message-77", "cancel-77", "run", "published")

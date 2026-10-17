@@ -5,6 +5,7 @@ members = ["packages/*", "services/*"]
 dev = [
     "pytest>=8.0",
     "httpx>=0.28",
+    "pyjwt>=2.10",
     "ruff>=0.14",
     "ty==0.0.82",
     "scikit-learn>=1.7",
