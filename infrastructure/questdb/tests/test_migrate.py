@@ -135,6 +135,9 @@ def test_market_data_migration_defines_archive_schema():
     bars = sql[: sql.index("CREATE VIEW")]
 
     assert "timeframe VARCHAR" in bars
+    assert "timestamp TIMESTAMP" in bars
+    assert "TIMESTAMP(timestamp)" in bars
+    assert "src SYMBOL" in bars
     for column in ("open DOUBLE", "high DOUBLE", "low DOUBLE", "close DOUBLE", "volume LONG"):
         assert column in bars
 
@@ -148,6 +151,7 @@ def test_market_data_migration_defines_archive_schema():
         view = sql[sql.index(f"bars_{timeframe}") :]
         view = view[: view.index(";") + 1]
         assert "FROM bars" in view
+        assert "timestamp," in view
         assert "first(open)" in view
         assert "max(high)" in view
         assert "min(low)" in view

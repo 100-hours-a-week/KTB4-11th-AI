@@ -1,4 +1,4 @@
-from ktb_core.queue import SqsQueue
+from ktb_aws.sqs import SqsQueue
 
 
 class FakeSqs:

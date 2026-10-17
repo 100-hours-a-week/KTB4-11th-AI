@@ -113,9 +113,11 @@ def inspect_checkpoint(
     cutoffs = [checked_at - timedelta(days=minute_days), checked_at - timedelta(days=daily_days)]
     latest_sql = CHECKPOINT_SQL.replace("FROM bars", f"FROM {table}")
     latest_rows, latest = _measure(db, latest_sql, None, repeats, metrics_url)
-    bounded_sql = latest_sql.replace("WHERE timeframe = '1m'", "WHERE timeframe = '1m' AND ts > $1")
+    bounded_sql = latest_sql.replace(
+        "WHERE timeframe = '1m'", "WHERE timeframe = '1m' AND timestamp > $1"
+    )
     bounded_sql = bounded_sql.replace(
-        "WHERE timeframe = '1d'", "WHERE timeframe = '1d' AND ts > $2"
+        "WHERE timeframe = '1d'", "WHERE timeframe = '1d' AND timestamp > $2"
     )
     bounded_rows, bounded = _measure(db, bounded_sql, cutoffs, repeats, metrics_url)
     boundaries = _boundaries(latest_rows)
@@ -144,7 +146,7 @@ def inspect_checkpoint(
         ),
     }
     if compare_aggregate:
-        sql = f"SELECT symbol, timeframe, max(ts) AS latest_ts FROM {table}"
+        sql = f"SELECT symbol, timeframe, max(timestamp) AS latest_ts FROM {table}"
         sql += " WHERE timeframe IN ('1m', '1d') GROUP BY symbol, timeframe"
         aggregate_rows, report["aggregate"] = _measure(db, sql, None, repeats, metrics_url)
         report["aggregate_mapping_equal"] = boundaries == _boundaries(aggregate_rows)

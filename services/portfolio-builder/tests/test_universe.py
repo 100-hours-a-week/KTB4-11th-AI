@@ -42,9 +42,9 @@ def test_universe_reads_daily_bars_per_kospi200_member(universe_engine):
         if "000660" in request.full_url:
             return Response(json.dumps({"items": [], "next_cursor": None}).encode())
         rows = [
-            {"ts": "2026-09-28T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 2.0,
+            {"timestamp": "2026-09-28T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 2.0,
              "volume": 1},
-            {"ts": "2026-09-27T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1.0,
+            {"timestamp": "2026-09-27T00:00:00Z", "open": 1, "high": 1, "low": 1, "close": 1.0,
              "volume": 1},
         ]  # fmt: skip
         return Response(json.dumps({"items": rows, "next_cursor": None}).encode())

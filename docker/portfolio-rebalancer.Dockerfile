@@ -11,9 +11,10 @@ COPY docker/requirements/portfolio-rebalancer.txt ./requirements.txt
 RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
+COPY packages/aws packages/aws
 COPY packages/core packages/core
 COPY services/portfolio-rebalancer services/portfolio-rebalancer
-RUN uv pip install --no-deps ./packages/core ./services/portfolio-rebalancer
+RUN uv pip install --no-deps ./packages/aws ./packages/core ./services/portfolio-rebalancer
 
 FROM python:3.13-slim-bookworm AS runtime
 

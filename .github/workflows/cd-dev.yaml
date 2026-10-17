@@ -190,7 +190,8 @@ jobs:
 
           compose config --quiet
           compose pull
-          compose up -d --wait postgres questdb market-http
+          # market-http는 market 프로필이라 개발 EC2에서만 명시적으로 켭니다. (운영은 V2 ECS)
+          compose --profile market up -d --wait postgres questdb market-http
           compose run --rm -T postgres-migrate </dev/null
           compose run --rm -T questdb-migrate </dev/null
 

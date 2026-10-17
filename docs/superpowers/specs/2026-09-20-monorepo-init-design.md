@@ -1,3 +1,5 @@
+> Historical design: `packages/market-analyzer` was removed in issue #280. Portfolio-builder now computes technical indicators directly with TA-Lib.
+
 # 척척개미단 AI Monorepo — Repository Initialization
 
 **Date:** 2026-09-20

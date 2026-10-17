@@ -1,10 +1,13 @@
 from collections.abc import AsyncIterable
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from market_http.controllers.dependencies import Codes, QuestDBConf, Valkey
+from market_http.metrics import track_sse_connection
+from market_http.openapi_examples import PRICE_EXAMPLE
 from market_http.repositories.prices import Price, current_prices, price_key
+from market_http.sse_openapi import sse_openapi
 
 router = APIRouter()
 
@@ -14,7 +17,12 @@ async def get_prices(valkey: Valkey, conf: QuestDBConf, codes: Codes) -> list[Pr
     return await current_prices(valkey, conf, codes)
 
 
-@router.get("/prices/stream", response_class=EventSourceResponse)
+@router.get(
+    "/prices/stream",
+    response_class=EventSourceResponse,
+    dependencies=[Depends(track_sse_connection)],
+    openapi_extra=sse_openapi("price", Price, PRICE_EXAMPLE),
+)
 async def stream_prices(
     valkey: Valkey, conf: QuestDBConf, codes: Codes
 ) -> AsyncIterable[ServerSentEvent]:
@@ -25,6 +33,8 @@ async def stream_prices(
             yield ServerSentEvent(data=price, event="price")
         async for message in pubsub.listen():
             if message["type"] == "message":
-                yield ServerSentEvent(raw_data=message["data"], event="price")
+                yield ServerSentEvent(
+                    data=Price.model_validate_json(message["data"]), event="price"
+                )
     finally:
         await pubsub.aclose()

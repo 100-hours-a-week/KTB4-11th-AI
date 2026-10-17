@@ -5,19 +5,20 @@ from typing import Any
 import pandas as pd
 import questdb
 from ktb_core.krx import KST
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 
+from market_http.openapi_examples import PRICE_EXAMPLE
 from market_http.repositories.questdb import as_utc, questdb_time, records
 
-LATEST = "SELECT ts, close FROM bars WHERE timeframe = '1m' AND symbol = $1 LIMIT -1"
+LATEST = "SELECT timestamp, close FROM bars WHERE timeframe = '1m' AND symbol = $1 LIMIT -1"
 PREVIOUS_CLOSE = (
     "SELECT close FROM bars WHERE timeframe = '1d' AND session = 'regular'"
-    " AND symbol = $1 AND ts < cast($2 AS TIMESTAMP) LIMIT -1"
+    " AND symbol = $1 AND timestamp < cast($2 AS TIMESTAMP) LIMIT -1"
 )
 DAY_VOLUME = (
     "SELECT sum(volume) AS volume FROM bars WHERE timeframe = '1m'"
-    " AND symbol = $1 AND ts >= cast($2 AS TIMESTAMP)"
+    " AND symbol = $1 AND timestamp >= cast($2 AS TIMESTAMP)"
 )
 
 
@@ -27,7 +28,9 @@ class Price(BaseModel):
     change: int
     rate: float
     volume: int
-    ts: datetime
+    timestamp: datetime
+
+    model_config = ConfigDict(json_schema_extra={"examples": [PRICE_EXAMPLE]})
 
 
 def price_key(code: str) -> str:
@@ -38,9 +41,9 @@ def questdb_price(db: Any, code: str) -> Price | None:
     latest = records(db, LATEST, [code])
     if not latest:
         return None
-    ts = as_utc(latest[0]["ts"]).astimezone(KST)
+    timestamp = as_utc(latest[0]["timestamp"]).astimezone(KST)
     price = int(latest[0]["close"])
-    day = ts.date()
+    day = timestamp.date()
     previous = records(db, PREVIOUS_CLOSE, [code, questdb_time(datetime.combine(day, time(), UTC))])
     volume = records(db, DAY_VOLUME, [code, questdb_time(datetime.combine(day, time(), KST))])
     previous_close = int(previous[0]["close"]) if previous else price
@@ -52,7 +55,7 @@ def questdb_price(db: Any, code: str) -> Price | None:
         change=change,
         rate=round(change / previous_close * 100, 2) if previous_close else 0.0,
         volume=int(day_volume) if pd.notna(day_volume) else 0,
-        ts=ts,
+        timestamp=timestamp,
     )
 
 

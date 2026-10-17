@@ -85,7 +85,7 @@ jobs:
       - name: Check core has no external dependencies
         run: |
           uv run python -c 'import pathlib, tomllib; assert not tomllib.loads(pathlib.Path("packages/core/pyproject.toml").read_text())["project"]["dependencies"]'
-          uv run tach check-external -e packages/market-analyzer,services
+          uv run tach check-external -e services
 
       - name: Check report-builder isolated import
         run: uv run --isolated --package report-builder --locked --no-dev python -c 'import report_builder.__main__'

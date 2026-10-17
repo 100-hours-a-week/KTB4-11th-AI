@@ -5,8 +5,6 @@ from kiwoom import KiwoomAuth, KiwoomClient
 from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
 
-from market_collector.settings import KiwoomAccount
-
 
 class Page(NamedTuple):
     rows: list[dict[str, str]]
@@ -14,16 +12,16 @@ class Page(NamedTuple):
     has_more: bool
 
 
-def build_auth(account: KiwoomAccount, mode: Literal["real", "demo"]) -> KiwoomAuth:
+def build_auth(app_key: str, secret_key: str, mode: Literal["real", "demo"]) -> KiwoomAuth:
     return KiwoomAuth(
         mode,
-        StaticSecretProvider(account.app_key, account.secret_key),
+        StaticSecretProvider(app_key, secret_key),
         MemoryTokenStore(),
     )
 
 
-def build_client(account: KiwoomAccount, mode: Literal["real", "demo"]) -> KiwoomClient:
-    return KiwoomClient(build_auth(account, mode))
+def build_client(app_key: str, secret_key: str, mode: Literal["real", "demo"]) -> KiwoomClient:
+    return KiwoomClient(build_auth(app_key, secret_key, mode))
 
 
 def fetch_page(
@@ -74,6 +72,40 @@ class ChartClient:
             body={"stk_cd": symbol, "base_dt": base_dt, "upd_stkpc_tp": "1"},
             array_field="stk_dt_pole_chart_qry",
             next_key=next_key,
+        )
+
+    def index_quote(self, name: str) -> dict[str, float]:
+        market, code = {"KOSPI": ("0", "001"), "KOSPI200": ("2", "201")}[name]
+        self._avoid_rate_limit()
+        body = self._client.fetch_page(
+            api_id="ka20001",
+            path="/api/dostk/sect",
+            body={"mrkt_tp": market, "inds_cd": code},
+        ).body
+        if body.get("return_code") not in (None, 0, "0"):
+            raise RuntimeError(body.get("return_msg") or "index request failed")
+        return {
+            "value": abs(float(body["cur_prc"])),
+            "change": float(body["pred_pre"]),
+            "rate": float(body["flu_rt"]),
+        }
+
+    def popular_codes(self, universe: set[str]) -> list[str]:
+        self._avoid_rate_limit()
+        body = self._client.fetch_page(
+            api_id="ka00198", path="/api/dostk/stkinfo", body={"qry_tp": "1"}
+        ).body
+        if body.get("return_code") not in (None, 0, "0"):
+            raise RuntimeError(body.get("return_msg") or "popular request failed")
+        rows = body["item_inq_rank"]
+        if not isinstance(rows, list):
+            raise TypeError("item_inq_rank is not a list")
+        return list(
+            dict.fromkeys(
+                row["stk_cd"]
+                for row in sorted(rows, key=lambda row: int(row["bigd_rank"]))
+                if row["stk_cd"] in universe
+            )
         )
 
     def _avoid_rate_limit(self) -> None:

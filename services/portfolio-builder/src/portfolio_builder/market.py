@@ -46,7 +46,7 @@ class HttpMarket(Market):
             return np.array([row[name] for row in rows], dtype=np.float64)
 
         bars = Bars(column("high"), column("low"), column("close"), column("volume"))
-        return bars, (datetime.fromisoformat(rows[-1]["ts"]) if rows else None)
+        return bars, (datetime.fromisoformat(rows[-1]["timestamp"]) if rows else None)
 
     def universe_closes(self) -> dict[str, Array]:
         with self._engine.connect() as conn:

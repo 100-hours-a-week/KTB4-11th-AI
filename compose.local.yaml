@@ -1,29 +1,5 @@
 name: ktb4-ai
 
-x-application-logging: &application-logging
-  driver: awslogs
-  options:
-    awslogs-region: ap-northeast-2
-    awslogs-group: /stockspoon/v2/dev/ai/application
-    awslogs-create-group: "false"
-    tag: "{{.Name}}-{{.ID}}"
-
-x-postgres-logging: &postgres-logging
-  driver: awslogs
-  options:
-    awslogs-region: ap-northeast-2
-    awslogs-group: /stockspoon/v2/dev/ai/postgres
-    awslogs-create-group: "false"
-    tag: "{{.Name}}-{{.ID}}"
-
-x-questdb-logging: &questdb-logging
-  driver: awslogs
-  options:
-    awslogs-region: ap-northeast-2
-    awslogs-group: /stockspoon/v2/dev/ai/questdb
-    awslogs-create-group: "false"
-    tag: "{{.Name}}-{{.ID}}"
-
 services:
   postgres:
     image: pgvector/pgvector:0.8.6-pg18-trixie
@@ -41,7 +17,6 @@ services:
       timeout: 3s
       retries: 12
       start_period: 10s
-    logging: *postgres-logging
 
   questdb:
     image: questdb/questdb:10.0.1
@@ -60,7 +35,6 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
-    logging: *questdb-logging
 
   valkey:
     image: valkey/valkey:8.1.4
@@ -71,6 +45,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+
   news-preprocessor:
     profiles: ["jobs"]
     build:
@@ -79,6 +54,7 @@ services:
     environment:
       NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
       NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT: ${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
+      NEWS_PREPROCESSOR_EMBED_TIMEOUT: ${NEWS_PREPROCESSOR_EMBED_TIMEOUT:-120}
       NEWS_PREPROCESSOR_LOG_LEVEL: ${NEWS_PREPROCESSOR_LOG_LEVEL:-INFO}
       KTB_EMBEDDING_BASE_URI: ${KTB_EMBEDDING_BASE_URI:-}
       KTB_EMBEDDING_API_KEY: ${KTB_EMBEDDING_API_KEY:-}
@@ -93,7 +69,6 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
-    logging: *application-logging
 
   news-clusterer:
     profiles: ["jobs"]
@@ -110,7 +85,6 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
-    logging: *application-logging
 
   market-syncer:
     profiles: ["jobs"]
@@ -131,7 +105,6 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
-    logging: *application-logging
 
   news-graph-builder:
     profiles: ["jobs"]
@@ -154,7 +127,6 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
-    logging: *application-logging
 
   news-http:
     build:
@@ -175,7 +147,6 @@ services:
       retries: 6
       start_period: 10s
     restart: unless-stopped
-    logging: *application-logging
 
   market-collector:
     profiles: ["jobs"]
@@ -186,8 +157,10 @@ services:
     environment:
       MARKET_COLLECTOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       MARKET_COLLECTOR_QUESTDB_CONF: ws::addr=questdb:9000;
-      MARKET_COLLECTOR_KIWOOM_ACCOUNTS: ${MARKET_COLLECTOR_KIWOOM_ACCOUNTS:-[]}
+      MARKET_COLLECTOR_KIWOOM_APP_KEY: ${MARKET_COLLECTOR_KIWOOM_APP_KEY:-}
+      MARKET_COLLECTOR_KIWOOM_SECRET_KEY: ${MARKET_COLLECTOR_KIWOOM_SECRET_KEY:-}
       MARKET_COLLECTOR_KIWOOM_MODE: ${MARKET_COLLECTOR_KIWOOM_MODE:-real}
+      MARKET_COLLECTOR_VALKEY_HOST: valkey
       MARKET_COLLECTOR_INDEX_NAME: ${MARKET_COLLECTOR_INDEX_NAME:-KOSPI200}
       MARKET_COLLECTOR_REQUEST_INTERVAL: ${MARKET_COLLECTOR_REQUEST_INTERVAL:-1.3}
       MARKET_COLLECTOR_LOG_LEVEL: ${MARKET_COLLECTOR_LOG_LEVEL:-INFO}
@@ -196,8 +169,9 @@ services:
         condition: service_healthy
       questdb:
         condition: service_healthy
+      valkey:
+        condition: service_healthy
     restart: "no"
-    logging: *application-logging
 
   market-streamer:
     profiles: ["jobs"]
@@ -218,7 +192,6 @@ services:
       valkey:
         condition: service_healthy
     restart: "no"
-    logging: *application-logging
 
   market-http:
     build:
@@ -227,6 +200,8 @@ services:
     environment:
       MARKET_HTTP_QUESTDB_CONF: ws::addr=questdb:9000;
       MARKET_HTTP_VALKEY_HOST: valkey
+      MARKET_HTTP_CORS_ORIGINS: ${MARKET_HTTP_CORS_ORIGINS:-[]}
+      MARKET_HTTP_CORS_HEADERS: ${MARKET_HTTP_CORS_HEADERS:-[]}
       MARKET_HTTP_LOG_LEVEL: ${MARKET_HTTP_LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8001:8000"
@@ -242,7 +217,6 @@ services:
       retries: 6
       start_period: 10s
     restart: unless-stopped
-    logging: *application-logging
 
   portfolio-builder:
     profiles: ["jobs"]
@@ -267,7 +241,6 @@ services:
       news-http:
         condition: service_started
     restart: "no"
-    logging: *application-logging
 
   portfolio-rebalancer:
     profiles: ["jobs"]
@@ -292,7 +265,6 @@ services:
       questdb:
         condition: service_healthy
     restart: "no"
-    logging: *application-logging
 
   report-builder:
     profiles: ["jobs"]
@@ -307,7 +279,6 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    logging: *application-logging
 
 volumes:
   postgres-data:

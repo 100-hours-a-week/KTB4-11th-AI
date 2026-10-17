@@ -5,6 +5,7 @@ description = "Turns model portfolios into buy and sell requests on the Backend"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
+    "ktb-aws",
     "httpx>=0.28",
     "boto3>=1.43.98",
     "psycopg[binary]>=3.3.6",
@@ -19,6 +20,7 @@ portfolio-rebalancer = "portfolio_rebalancer.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }
+ktb-aws = { workspace = true }
 
 [build-system]
 requires = ["uv_build>=0.12,<0.13"]

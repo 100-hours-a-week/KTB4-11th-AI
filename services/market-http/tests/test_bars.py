@@ -8,6 +8,8 @@ from market_http.app import create_app
 from market_http.repositories import bars as bars_module
 from redis.asyncio import Redis
 
+from .example_entities import PAGE
+
 NEWEST = datetime(2026, 10, 13, 6, 30, tzinfo=UTC)
 
 
@@ -42,14 +44,15 @@ class FakeDB:
 
 
 def _rows(count):
+    bar = PAGE.items[0]
     return [
         {
-            "ts": (NEWEST - timedelta(minutes=offset)).replace(tzinfo=None),
-            "open": 1.0,
-            "high": 2.0,
-            "low": 0.5,
-            "close": 1.5,
-            "volume": 10,
+            "timestamp": (NEWEST - timedelta(minutes=offset)).replace(tzinfo=None),
+            "open": bar.open,
+            "high": bar.high,
+            "low": bar.low,
+            "close": bar.close,
+            "volume": bar.volume,
         }
         for offset in range(count)
     ]
@@ -75,13 +78,14 @@ def test_bars_reads_the_timeframe_view_newest_first(monkeypatch, client, timefra
     sql, binds = db.queries[0]
     assert f"FROM {view} " in sql
     assert ("session = 'regular'" in sql) is session
-    assert "ORDER BY ts DESC" in sql
+    assert "ORDER BY timestamp DESC" in sql
     assert binds == ["005930", 3]
     body = response.json()
-    assert [datetime.fromisoformat(item["ts"]) for item in body["items"]] == [
+    assert [datetime.fromisoformat(item["timestamp"]) for item in body["items"]] == [
         NEWEST,
         NEWEST - timedelta(minutes=1),
     ]
+    assert all("ts" not in item for item in body["items"])
     assert body["next_cursor"] is not None
 
 
@@ -95,7 +99,7 @@ def test_cursor_returns_the_next_older_page(monkeypatch, client):
     body = client.get(f"/bars/005930?timeframe=1m&limit=2&cursor={cursor}").json()
 
     sql, binds = second.queries[0]
-    assert "ts < cast($2 AS TIMESTAMP)" in sql
+    assert "timestamp < cast($2 AS TIMESTAMP)" in sql
     assert binds == ["005930", "2026-10-13T06:29:00.000000Z", 3]
     assert body["next_cursor"] is None
 

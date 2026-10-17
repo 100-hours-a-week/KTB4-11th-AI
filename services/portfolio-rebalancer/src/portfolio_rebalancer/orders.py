@@ -2,7 +2,7 @@ import json
 import uuid
 from datetime import UTC, datetime
 
-from ktb_core.queue import Queue
+from ktb_aws.sqs import Queue
 
 PLACE_TYPE = "order.place"
 CANCEL_TYPE = "order.cancel"

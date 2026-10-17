@@ -1,3 +1,5 @@
+> Historical design: `packages/market-analyzer` was removed in issue #280. Market-collector does not use it.
+
 # market-collector — Kiwoom Candle and Indicator Ingestion
 
 **Date:** 2026-09-22 (status and measured facts updated 2026-09-26)

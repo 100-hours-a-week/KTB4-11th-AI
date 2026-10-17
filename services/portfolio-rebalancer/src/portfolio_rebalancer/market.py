@@ -5,14 +5,14 @@ import questdb
 from portfolio_rebalancer.holidays import KST
 
 DAILY = (
-    "SELECT symbol, ts, close FROM bars"
+    "SELECT symbol, timestamp, close FROM bars"
     " WHERE timeframe = '1d' AND session = 'regular' AND symbol IN ({codes})"
-    " AND ts > dateadd('d', -60, now()) ORDER BY ts"
+    " AND timestamp > dateadd('d', -60, now()) ORDER BY timestamp"
 )
 LATEST = (
     "SELECT symbol, close FROM bars"
     " WHERE timeframe = '1m' AND session = 'regular' AND symbol IN ({codes})"
-    " LATEST ON ts PARTITION BY symbol"
+    " LATEST ON timestamp PARTITION BY symbol"
 )
 
 
@@ -28,8 +28,8 @@ def _query(conf: str, sql: str, stock_codes: set[str]) -> list[dict]:
 def recent_closes(records: list[dict], before: datetime, n: int) -> dict[str, list[float]]:
     closes: dict[str, list[float]] = {}
     for record in records:
-        ts = record["ts"]
-        if (ts if ts.tzinfo else ts.replace(tzinfo=UTC)) < before:
+        timestamp = record["timestamp"]
+        if (timestamp if timestamp.tzinfo else timestamp.replace(tzinfo=UTC)) < before:
             closes.setdefault(record["symbol"], []).append(float(record["close"]))
     return {symbol: c[-n:] for symbol, c in closes.items() if len(c) >= n}
 

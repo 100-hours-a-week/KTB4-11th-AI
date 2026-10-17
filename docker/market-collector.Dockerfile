@@ -11,9 +11,10 @@ COPY docker/requirements/market-collector.txt ./requirements.txt
 RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
+COPY packages/aws packages/aws
 COPY packages/core packages/core
 COPY services/market-collector services/market-collector
-RUN uv pip install --no-deps ./packages/core ./services/market-collector
+RUN uv pip install --no-deps ./packages/aws ./packages/core ./services/market-collector
 
 FROM python:3.13-slim-bookworm AS runtime
 
