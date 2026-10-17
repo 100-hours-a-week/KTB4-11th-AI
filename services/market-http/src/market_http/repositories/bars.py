@@ -24,20 +24,23 @@ class Bar(BaseModel):
 def find_bars(
     conf: str, code: str, timeframe: Timeframe, limit: int, before: datetime | None
 ) -> list[Bar]:
-    sql = f"SELECT ts, open, high, low, close, volume FROM {VIEWS[timeframe]} WHERE symbol = $1"
+    sql = (
+        f"SELECT timestamp, open, high, low, close, volume FROM {VIEWS[timeframe]}"
+        " WHERE symbol = $1"
+    )
     binds: list[object] = [code]
     if timeframe in SESSION_FILTERED:
         sql += " AND session = 'regular'"
     if before is not None:
         binds.append(questdb_time(before))
-        sql += f" AND ts < cast(${len(binds)} AS TIMESTAMP)"
+        sql += f" AND timestamp < cast(${len(binds)} AS TIMESTAMP)"
     binds.append(limit)
-    sql += f" ORDER BY ts DESC LIMIT ${len(binds)}"
+    sql += f" ORDER BY timestamp DESC LIMIT ${len(binds)}"
     with questdb.connect(conf) as db:
         rows = records(db, sql, binds)
     return [
         Bar(
-            timestamp=as_utc(row["ts"]),
+            timestamp=as_utc(row["timestamp"]),
             open=row["open"],
             high=row["high"],
             low=row["low"],

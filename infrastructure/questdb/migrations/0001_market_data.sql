@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS bars (
-    ts TIMESTAMP,
+    timestamp TIMESTAMP,
     symbol SYMBOL INDEX,
     timeframe VARCHAR,
     session SYMBOL,
@@ -7,15 +7,16 @@ CREATE TABLE IF NOT EXISTS bars (
     high DOUBLE,
     low DOUBLE,
     close DOUBLE,
-    volume LONG
-) TIMESTAMP(ts) PARTITION BY DAY WAL DEDUP UPSERT KEYS(ts, symbol, timeframe);
+    volume LONG,
+    src SYMBOL
+) TIMESTAMP(timestamp) PARTITION BY DAY WAL DEDUP UPSERT KEYS(timestamp, symbol, timeframe);
 
 CREATE VIEW IF NOT EXISTS bars_1m AS (SELECT * FROM bars WHERE timeframe = '1m');
 CREATE VIEW IF NOT EXISTS bars_1d AS (SELECT * FROM bars WHERE timeframe = '1d');
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS bars_15m AS (
     SELECT
-        ts,
+        timestamp,
         symbol,
         first(open) AS open,
         max(high) AS high,
@@ -29,7 +30,7 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS bars_15m AS (
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS bars_1h AS (
     SELECT
-        ts,
+        timestamp,
         symbol,
         first(open) AS open,
         max(high) AS high,

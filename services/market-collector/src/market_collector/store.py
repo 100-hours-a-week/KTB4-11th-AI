@@ -11,8 +11,8 @@ __all__ = ["Candle", "CandleRow", "Store"]
 TIMEFRAMES = frozenset({"1m", "1d"})
 CHECKPOINT_DAYS = 7
 CHECKPOINT_QUERIES = {
-    timeframe: f"SELECT symbol, '{timeframe}' AS timeframe, ts AS latest_ts FROM bars\n"
-    f"WHERE timeframe = '{timeframe}'\nLATEST ON ts PARTITION BY symbol"
+    timeframe: f"SELECT symbol, '{timeframe}' AS timeframe, timestamp AS latest_ts FROM bars\n"
+    f"WHERE timeframe = '{timeframe}'\nLATEST ON timestamp PARTITION BY symbol"
     for timeframe in ("1m", "1d")
 }
 CHECKPOINT_SQL = "\nUNION ALL\n".join(CHECKPOINT_QUERIES.values())
@@ -27,7 +27,7 @@ def checkpoint_query(
     placeholders = ", ".join(f"${i}" for i in range(1, len(symbols) + 1))
     predicate = f" AND symbol IN ({placeholders})"
     if recent:
-        predicate += f" AND ts > dateadd('d', -{CHECKPOINT_DAYS}, now())"
+        predicate += f" AND timestamp > dateadd('d', -{CHECKPOINT_DAYS}, now())"
     timeframes = tuple(CHECKPOINT_QUERIES) if timeframe is None else (timeframe,)
     return "\nUNION ALL\n".join(
         CHECKPOINT_QUERIES[tf].replace(
@@ -160,9 +160,9 @@ class Store:
     def read_regular_candles(self, timeframe: str, symbol: str, limit: int = 300) -> list[Candle]:
         if timeframe not in TIMEFRAMES:
             raise KeyError(f"unknown timeframe: {timeframe}")
-        sql = """SELECT ts, high, low, close FROM bars
+        sql = """SELECT timestamp AS ts, high, low, close FROM bars
         WHERE symbol = $1 AND timeframe = $2 AND session = 'regular'
-        ORDER BY ts DESC LIMIT $3"""
+        ORDER BY timestamp DESC LIMIT $3"""
         with self._db.query(sql, [symbol, timeframe, limit]) as result:
             records = result.to_pandas().to_dict("records")
         return [Candle(**record) for record in reversed(records)]
