@@ -12,6 +12,7 @@ def required_env(monkeypatch):
     for name in (
         "NEWS_PREPROCESSOR_LOG_LEVEL",
         "NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT",
+        "NEWS_PREPROCESSOR_EMBEDDING_TIMEOUT",
         "KTB_EMBEDDING_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
@@ -33,6 +34,7 @@ def test_defaults(required_env):
 
     assert settings.log_level == "INFO"
     assert settings.embed_batch_limit == 100
+    assert settings.embedding_timeout == 120
     assert settings.embedding_api_key is None
 
 
@@ -57,6 +59,20 @@ def test_embed_batch_limit_must_be_positive(required_env, monkeypatch):
 
     with pytest.raises(ValidationError):
         Settings()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
+def test_embedding_timeout_must_be_positive_and_finite(required_env, monkeypatch, value):
+    monkeypatch.setenv("NEWS_PREPROCESSOR_EMBEDDING_TIMEOUT", value)
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_reads_embedding_timeout(required_env, monkeypatch):
+    monkeypatch.setenv("NEWS_PREPROCESSOR_EMBEDDING_TIMEOUT", "180.5")
+
+    assert Settings().embedding_timeout == 180.5
 
 
 def test_reads_the_dart_api_key_as_a_secret(required_env):
