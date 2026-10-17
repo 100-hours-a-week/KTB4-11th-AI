@@ -47,7 +47,7 @@ def _rows(count):
     bar = PAGE.items[0]
     return [
         {
-            "ts": (NEWEST - timedelta(minutes=offset)).replace(tzinfo=None),
+            "timestamp": (NEWEST - timedelta(minutes=offset)).replace(tzinfo=None),
             "open": bar.open,
             "high": bar.high,
             "low": bar.low,
@@ -78,7 +78,7 @@ def test_bars_reads_the_timeframe_view_newest_first(monkeypatch, client, timefra
     sql, binds = db.queries[0]
     assert f"FROM {view} " in sql
     assert ("session = 'regular'" in sql) is session
-    assert "ORDER BY ts DESC" in sql
+    assert "ORDER BY timestamp DESC" in sql
     assert binds == ["005930", 3]
     body = response.json()
     assert [datetime.fromisoformat(item["timestamp"]) for item in body["items"]] == [
@@ -99,7 +99,7 @@ def test_cursor_returns_the_next_older_page(monkeypatch, client):
     body = client.get(f"/bars/005930?timeframe=1m&limit=2&cursor={cursor}").json()
 
     sql, binds = second.queries[0]
-    assert "ts < cast($2 AS TIMESTAMP)" in sql
+    assert "timestamp < cast($2 AS TIMESTAMP)" in sql
     assert binds == ["005930", "2026-10-13T06:29:00.000000Z", 3]
     assert body["next_cursor"] is None
 

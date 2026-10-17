@@ -53,7 +53,7 @@ class FakeDB:
 def test_questdb_price_derives_change_and_day_volume():
     db = FakeDB(
         [
-            [{"ts": datetime(2026, 10, 13, 0, 1), "close": 82000.0}],
+            [{"timestamp": datetime(2026, 10, 13, 0, 1), "close": 82000.0}],
             [{"close": 82500.0}],
             [{"volume": 1234.0}],
         ]
@@ -74,10 +74,13 @@ def test_questdb_price_derives_change_and_day_volume():
         ["005930", "2026-10-13T00:00:00.000000Z"],
         ["005930", "2026-10-12T15:00:00.000000Z"],
     ]
+    assert "SELECT timestamp, close FROM bars" in db.queries[0][0]
 
 
 def test_questdb_price_without_previous_close_or_volume():
-    db = FakeDB([[{"ts": datetime(2026, 10, 13, 0, 1), "close": 100.0}], [], [{"volume": None}]])
+    db = FakeDB(
+        [[{"timestamp": datetime(2026, 10, 13, 0, 1), "close": 100.0}], [], [{"volume": None}]]
+    )
 
     price = questdb_price(db, "005930")
 

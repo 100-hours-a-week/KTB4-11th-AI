@@ -72,7 +72,7 @@ def test_recent_checkpoints_skip_historical_queries_and_bind_current_symbols():
     assert len(db.queries) == 1
     sql, binds = db.queries[0]
     assert binds == ["000660", "005930"]
-    assert sql.count("ts > dateadd('d', -7, now())") == 2
+    assert sql.count("timestamp > dateadd('d', -7, now())") == 2
     assert sql.count("symbol IN ($1, $2)") == 2
 
 
@@ -215,11 +215,11 @@ def test_latest_bar_timestamps_groups_physical_rows_into_reconciliation_boundari
     }
     assert all(timestamp.tzinfo is UTC for timestamp in latest.values())
     sql, binds = db.queries[0]
-    assert sql.count("LATEST ON ts PARTITION BY symbol") == 2
+    assert sql.count("LATEST ON timestamp PARTITION BY symbol") == 2
     assert "WHERE timeframe = '1m'" in sql
     assert "WHERE timeframe = '1d'" in sql
     assert "UNION ALL" in sql
-    assert "max(ts)" not in sql
+    assert "max(timestamp)" not in sql
     assert binds == ["000660", "005930"]
 
 
