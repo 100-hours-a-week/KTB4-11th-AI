@@ -96,12 +96,18 @@ def test_docs_examples_match_test_entities():
     ):
         media = schema["paths"][path]["get"]["responses"]["200"]["content"]["text/event-stream"]
         assert media["itemSchema"]["properties"]["event"]["const"] == event
-        assert media["itemSchema"]["properties"]["data"]["contentSchema"] == {
-            "$ref": f"#/components/schemas/{type(ENTITIES[name]).__name__}"
-        }
-        assert json.loads(media["example"].split("data: ", 1)[1].strip()) == getattr(
-            openapi_examples, name
-        )
+        content_schema = media["itemSchema"]["properties"]["data"]["contentSchema"]
+        example = json.loads(media["example"].split("data: ", 1)[1].strip())
+        if path == "/prices/stream":
+            assert content_schema["oneOf"][0] == {"$ref": "#/components/schemas/Price"}
+            assert "upper_limit_price" not in content_schema["oneOf"][1]["properties"]
+            assert "lower_limit_price" not in content_schema["oneOf"][1]["properties"]
+            assert example == getattr(openapi_examples, name)
+        else:
+            assert content_schema == {
+                "$ref": f"#/components/schemas/{type(ENTITIES[name]).__name__}"
+            }
+            assert example == getattr(openapi_examples, name)
 
 
 def test_example_entities_generate_runtime_docs(tmp_path):

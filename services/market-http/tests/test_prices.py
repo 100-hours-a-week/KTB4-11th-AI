@@ -121,7 +121,7 @@ def test_price_without_daily_limits_is_omitted(monkeypatch):
     assert asyncio.run(prices_module.current_prices(None, "conf", ["005930"])) == []
 
 
-def test_live_stream_enriches_raw_tick_with_required_limits(monkeypatch):
+def test_live_stream_keeps_raw_tick_without_limits(monkeypatch):
     async def no_snapshot(valkey, conf, codes):
         return []
 
@@ -148,7 +148,9 @@ def test_live_stream_enriches_raw_tick_with_required_limits(monkeypatch):
         return event
 
     event = asyncio.run(scenario())
-    assert event.data == STREAMED
+    assert event.data == TickPrice.model_validate(STREAMED.model_dump())
+    assert "upper_limit_price" not in event.data.model_dump()
+    assert "lower_limit_price" not in event.data.model_dump()
 
 
 def _app_client(valkey_url):
@@ -275,4 +277,6 @@ def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, val
     assert snapshot.data.upper_limit_price == 107200
     assert snapshot.data.lower_limit_price == 57700
     assert published.event == "price"
-    assert published.data == live
+    assert published.data == TickPrice.model_validate(live.model_dump())
+    assert "upper_limit_price" not in published.data.model_dump()
+    assert "lower_limit_price" not in published.data.model_dump()
