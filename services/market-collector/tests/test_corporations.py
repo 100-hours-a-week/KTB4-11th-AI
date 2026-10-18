@@ -1,12 +1,12 @@
 from datetime import UTC, date, datetime
 
 import pytest
-from market_collector.__main__ import _stock_values
+from market_collector.corporations import stock_values
 from market_collector.store import Store
 
 
 def test_stock_values_keep_only_requested_integer_fields():
-    values = _stock_values(
+    values = stock_values(
         {
             "base_pric": "+80,000",
             "upl_pric": "+104000",
@@ -31,7 +31,7 @@ def test_required_price_rejects_zero(field):
     raw = {name: "1" for name in ("base_pric", "upl_pric", "lst_pric", "eps", "bps")}
     raw[field] = "0"
     with pytest.raises(ValueError, match=field):
-        _stock_values(raw)
+        stock_values(raw)
 
 
 def test_store_uses_trade_day_timestamp_as_dedup_key():
@@ -76,7 +76,7 @@ def test_migration_has_wal_dedup_and_required_columns():
     migration = (
         Path(__file__).parents[3] / "infrastructure/questdb/migrations/0003_corporations.sql"
     ).read_text()
-    assert "DEDUP UPSERT KEYS(ts, symbol)" in migration
+    assert "DEDUP UPSERT KEYS(timestamp, symbol)" in migration
     assert "PARTITION BY MONTH WAL" in migration
     for column in (
         "base_price LONG",

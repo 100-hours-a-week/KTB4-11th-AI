@@ -110,7 +110,7 @@ def test_archive_pass_reads_checkpoints_before_reconciling(monkeypatch):
         def execute(self):
             pass
 
-    assert cli.archive_ohlcv(settings, symbols, Client(), Valkey(), NOW, daily=False) == 2
+    assert cli.collect_market_data(settings, symbols, Client(), Valkey(), NOW, daily=False) == 2
     assert events[0] == ("checkpoints",)
     assert sorted(events[1:]) == [
         ("reconcile_candles", "000660", "1m", "20260928", None),
@@ -142,7 +142,7 @@ def test_archive_pass_uses_one_client_for_all_symbols(monkeypatch):
             return []
 
     client = Client()
-    cli.archive_ohlcv(settings, symbols, client, _valkey(), NOW, daily=False)
+    cli.collect_market_data(settings, symbols, client, _valkey(), NOW, daily=False)
 
     assert calls == [(client, symbol, "1m") for symbol in symbols]
 
@@ -161,7 +161,7 @@ def test_archive_pass_propagates_worker_exception(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        cli.archive_ohlcv(settings, ["005930"], object(), _valkey(), NOW, daily=False)
+        cli.collect_market_data(settings, ["005930"], object(), _valkey(), NOW, daily=False)
 
 
 @pytest.mark.parametrize(("daily", "timeframes"), [(False, ["1m"]), (True, ["1m", "1d"])])
@@ -185,7 +185,7 @@ def test_daily_bars_are_collected_only_when_asked(monkeypatch, daily, timeframes
         def popular_codes(self, universe):
             return []
 
-    cli.archive_ohlcv(settings, ["005930"], Client(), _valkey(), NOW, daily=daily)
+    cli.collect_market_data(settings, ["005930"], Client(), _valkey(), NOW, daily=daily)
 
     assert seen == timeframes
 
@@ -222,7 +222,7 @@ def _run(monkeypatch, day: Day, archive=None):
     monkeypatch.setattr(cli, "build_client", lambda app, secret, mode: built.append(app) or "c")
     monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(cli, "connect_valkey", lambda settings: _valkey())
-    monkeypatch.setattr(cli, "archive_ohlcv", archive or day.archive)
+    monkeypatch.setattr(cli, "collect_market_data", archive or day.archive)
     monkeypatch.setattr(cli, "collect_corporations", lambda *args: None)
     cli.run(settings, clock=day.clock, sleep=day.sleep)
     return loads, built
@@ -262,7 +262,7 @@ def test_preopen_snapshot_finishes_before_open_and_failure_does_not_stop_bars(mo
     monkeypatch.setattr(cli, "build_client", lambda *args: object())
     monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(cli, "connect_valkey", lambda settings: _valkey())
-    monkeypatch.setattr(cli, "archive_ohlcv", day.archive)
+    monkeypatch.setattr(cli, "collect_market_data", day.archive)
 
     cli.run(settings, clock=day.clock, sleep=day.sleep)
 

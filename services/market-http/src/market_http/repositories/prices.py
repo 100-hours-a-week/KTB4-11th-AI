@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 
 from market_http.openapi_examples import PRICE_EXAMPLE
+from market_http.repositories.corporations import corporation_limits
 from market_http.repositories.questdb import as_utc, questdb_time, records
 
 LATEST = "SELECT ts, close FROM bars WHERE timeframe = '1m' AND symbol = $1 LIMIT -1"
@@ -90,21 +91,3 @@ async def current_prices(valkey: Redis, conf: str, codes: list[str]) -> list[Pri
         limits = await asyncio.to_thread(corporation_limits, conf, [price.code for price in prices])
         prices = [price.model_copy(update=limits.get(price.code, {})) for price in prices]
     return prices
-
-
-def corporation_limits(conf: str, codes: list[str]) -> dict[str, dict[str, int | None]]:
-    placeholders = ", ".join(f"${index}" for index in range(2, len(codes) + 2))
-    sql = (
-        "SELECT symbol, upper_limit_price, lower_limit_price FROM corporations "
-        f"WHERE ts = cast($1 AS TIMESTAMP) AND symbol IN ({placeholders})"
-    )
-    day = datetime.now(KST).date()
-    with questdb.connect(conf) as db:
-        rows = records(db, sql, [questdb_time(datetime.combine(day, time(), UTC)), *codes])
-    return {
-        row["symbol"]: {
-            "upper_limit_price": int(row["upper_limit_price"]),
-            "lower_limit_price": int(row["lower_limit_price"]),
-        }
-        for row in rows
-    }

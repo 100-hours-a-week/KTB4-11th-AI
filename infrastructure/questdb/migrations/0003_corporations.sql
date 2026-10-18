@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS corporations (
-    ts TIMESTAMP,
+    timestamp TIMESTAMP,
     symbol SYMBOL INDEX,
     trade_date VARCHAR,
     fetched_at TIMESTAMP,
@@ -8,4 +8,4 @@ CREATE TABLE IF NOT EXISTS corporations (
     lower_limit_price LONG,
     eps LONG,
     bps LONG
-) TIMESTAMP(ts) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(ts, symbol);
+) TIMESTAMP(timestamp) PARTITION BY MONTH WAL DEDUP UPSERT KEYS(timestamp, symbol);
