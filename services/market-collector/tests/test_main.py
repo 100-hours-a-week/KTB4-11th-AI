@@ -247,8 +247,9 @@ def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
     assert day.daily == [False] * (6 * 60 + 31) + [True]
 
 
-def test_preopen_snapshot_finishes_before_open_and_failure_does_not_stop_bars(monkeypatch):
-    day = Day(_kst(8, 55))
+@pytest.mark.parametrize("start", [_kst(8, 50), _kst(11, 0, 30), _kst(15, 40)])
+def test_snapshot_runs_at_launch_and_failure_does_not_stop_bars(monkeypatch, start):
+    day = Day(start)
     snapshots = []
 
     def snapshot(settings, symbols, client, now):
@@ -266,8 +267,8 @@ def test_preopen_snapshot_finishes_before_open_and_failure_does_not_stop_bars(mo
 
     cli.run(settings, clock=day.clock, sleep=day.sleep)
 
-    assert snapshots == [_kst(8, 55)]
-    assert day.passes[0] == _kst(9, 0, 5)
+    assert snapshots == [start]
+    assert day.passes
 
 
 def test_overrunning_pass_is_followed_immediately_and_warned(monkeypatch, caplog):

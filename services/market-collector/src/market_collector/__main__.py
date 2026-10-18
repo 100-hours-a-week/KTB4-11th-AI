@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from time import sleep as pause
 
 import questdb
@@ -101,13 +101,10 @@ def run(
         passes.append(close_at + CLOSE_DELAY + SETTLE)
         pending = [at for at in passes if at > local] or [local]
 
-        if local.time() < MARKET_OPEN:
-            snapshot_at = datetime.combine(today, time(8, 55), KST)
-            sleep(max(0.0, (snapshot_at - clock()).total_seconds()))
-            try:
-                collect_corporations(settings, symbols, client, clock())
-            except Exception:
-                log.exception("corporation_snapshot_pass_failed")
+        try:
+            collect_corporations(settings, symbols, client, clock())
+        except Exception:
+            log.exception("corporation_snapshot_pass_failed")
 
         close_failed = False
         for at in pending:
