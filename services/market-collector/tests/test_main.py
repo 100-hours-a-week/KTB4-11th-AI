@@ -233,7 +233,7 @@ def _kst(hour, minute, second=0):
 
 
 def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
-    day = Day(_kst(8, 55))
+    day = Day(_kst(8, 42))
 
     loads, built = _run(monkeypatch, day)
 
@@ -253,6 +253,7 @@ def test_snapshot_runs_at_launch_and_failure_does_not_stop_bars(monkeypatch, sta
     snapshots = []
 
     def snapshot(settings, symbols, client, now):
+        assert day.sleeps == []
         snapshots.append(now.astimezone(KST))
         day.now += timedelta(seconds=40)
         raise RuntimeError("one snapshot request failed")
@@ -272,13 +273,13 @@ def test_snapshot_runs_at_launch_and_failure_does_not_stop_bars(monkeypatch, sta
 
 
 def test_overrunning_pass_is_followed_immediately_and_warned(monkeypatch, caplog):
-    day = Day(_kst(8, 55), work={_kst(9, 0, 5): 70})
+    day = Day(_kst(8, 42), work={_kst(9, 0, 5): 70})
 
     with caplog.at_level(logging.WARNING, logger=cli.__name__):
         _run(monkeypatch, day)
 
     assert day.passes[:3] == [_kst(9, 0, 5), _kst(9, 1, 15), _kst(9, 2, 5)]
-    assert day.sleeps[2] == 0
+    assert day.sleeps[1] == 0
     slow = [record for record in caplog.records if record.getMessage() == "archive_pass_slow"]
     assert len(slow) == 1
     assert slow[0].levelno == logging.WARNING
@@ -306,7 +307,7 @@ def test_start_after_the_close_runs_one_close_pass(monkeypatch):
 @pytest.mark.parametrize(
     "start",
     [
-        datetime(2026, 10, 9, 8, 55, tzinfo=KST),
+        datetime(2026, 10, 9, 8, 42, tzinfo=KST),
         datetime(2026, 10, 9, 16, 0, tzinfo=KST),
     ],
 )
