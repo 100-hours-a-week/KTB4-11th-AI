@@ -6,7 +6,7 @@ from ktb_core.krx import KST
 from market_http.repositories.questdb import questdb_time, records
 
 
-def corporation_limits(conf: str, codes: list[str]) -> dict[str, dict[str, int]]:
+def current_day_price_limits(conf: str, codes: list[str]) -> dict[str, dict[str, int]]:
     placeholders = ", ".join(f"${index}" for index in range(2, len(codes) + 2))
     sql = (
         "SELECT symbol, upper_limit_price, lower_limit_price FROM corporations "

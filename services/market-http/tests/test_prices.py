@@ -116,7 +116,7 @@ def test_price_without_daily_limits_is_omitted(monkeypatch):
         return [_cached_price(STREAMED)]
 
     monkeypatch.setattr(prices_module, "_get_many", get_many)
-    monkeypatch.setattr(prices_module, "corporation_limits", lambda conf, codes: {})
+    monkeypatch.setattr(prices_module, "current_day_price_limits", lambda conf, codes: {})
 
     assert asyncio.run(prices_module.current_prices(None, "conf", ["005930"])) == []
 
@@ -165,7 +165,7 @@ def _cached_price(price):
 def _limits(monkeypatch):
     monkeypatch.setattr(
         prices_module,
-        "corporation_limits",
+        "current_day_price_limits",
         lambda conf, codes: {
             code: {"upper_limit_price": 107200, "lower_limit_price": 57700} for code in codes
         },

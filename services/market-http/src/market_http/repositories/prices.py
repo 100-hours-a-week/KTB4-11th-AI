@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 
 from market_http.openapi_examples import PRICE_EXAMPLE
-from market_http.repositories.corporations import corporation_limits
+from market_http.repositories.corporations import current_day_price_limits
 from market_http.repositories.questdb import as_utc, questdb_time, records
 
 LATEST = "SELECT ts, close FROM bars WHERE timeframe = '1m' AND symbol = $1 LIMIT -1"
@@ -92,7 +92,7 @@ async def current_prices(valkey: Redis, conf: str, codes: list[str]) -> list[Pri
     ticks = [TickPrice.model_validate_json(value) for value in values.values() if value is not None]
     if not ticks:
         return []
-    limits = await asyncio.to_thread(corporation_limits, conf, [tick.code for tick in ticks])
+    limits = await asyncio.to_thread(current_day_price_limits, conf, [tick.code for tick in ticks])
     return [
         Price.model_validate(tick.model_dump() | limits[tick.code])
         for tick in ticks
