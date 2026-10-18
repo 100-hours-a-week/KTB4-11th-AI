@@ -29,6 +29,8 @@ class Price(BaseModel):
     rate: float
     volume: int
     timestamp: datetime
+    upper_limit_price: int | None = None
+    lower_limit_price: int | None = None
 
     model_config = ConfigDict(json_schema_extra={"examples": [PRICE_EXAMPLE]})
 
@@ -83,4 +85,26 @@ async def current_prices(valkey: Redis, conf: str, codes: list[str]) -> list[Pri
                 await pipe.execute()
             refreshed = await _get_many(valkey, missing)
             values.update(zip(missing, refreshed, strict=True))
-    return [Price.model_validate_json(value) for value in values.values() if value is not None]
+    prices = [Price.model_validate_json(value) for value in values.values() if value is not None]
+    if prices:
+        limits = await asyncio.to_thread(corporation_limits, conf, [price.code for price in prices])
+        prices = [price.model_copy(update=limits.get(price.code, {})) for price in prices]
+    return prices
+
+
+def corporation_limits(conf: str, codes: list[str]) -> dict[str, dict[str, int | None]]:
+    placeholders = ", ".join(f"${index}" for index in range(2, len(codes) + 2))
+    sql = (
+        "SELECT symbol, upper_limit_price, lower_limit_price FROM corporations "
+        f"WHERE ts = cast($1 AS TIMESTAMP) AND symbol IN ({placeholders})"
+    )
+    day = datetime.now(KST).date()
+    with questdb.connect(conf) as db:
+        rows = records(db, sql, [questdb_time(datetime.combine(day, time(), UTC)), *codes])
+    return {
+        row["symbol"]: {
+            "upper_limit_price": int(row["upper_limit_price"]),
+            "lower_limit_price": int(row["lower_limit_price"]),
+        }
+        for row in rows
+    }

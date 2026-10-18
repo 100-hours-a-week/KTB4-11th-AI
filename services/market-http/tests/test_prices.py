@@ -89,12 +89,34 @@ def test_questdb_price_is_none_without_minute_bars():
     assert questdb_price(FakeDB([[]]), "005930") is None
 
 
+def test_cached_price_response_includes_daily_limits(monkeypatch):
+    async def get_many(valkey, codes):
+        return [_cached_price(STREAMED)]
+
+    monkeypatch.setattr(prices_module, "_get_many", get_many)
+    prices = asyncio.run(prices_module.current_prices(None, "conf", ["005930"]))
+
+    assert prices[0].upper_limit_price == 107200
+    assert prices[0].lower_limit_price == 57700
+
+
 def _app_client(valkey_url):
     return TestClient(create_app(Redis.from_url(valkey_url, decode_responses=True), "conf"))
 
 
 def _cached_price(price):
     return price.model_dump_json()
+
+
+@pytest.fixture(autouse=True)
+def _limits(monkeypatch):
+    monkeypatch.setattr(
+        prices_module,
+        "corporation_limits",
+        lambda conf, codes: {
+            code: {"upper_limit_price": 107200, "lower_limit_price": 57700} for code in codes
+        },
+    )
 
 
 def test_price_requires_timestamp():
@@ -117,6 +139,8 @@ def test_prices_reads_valkey_without_touching_questdb(monkeypatch, valkey_url):
     assert response.status_code == 200
     assert [Price.model_validate(item) for item in response.json()] == [STREAMED]
     assert "timestamp" in response.json()[0]
+    assert response.json()[0]["upper_limit_price"] == 107200
+    assert response.json()[0]["lower_limit_price"] == 57700
     assert "ts" not in response.json()[0]
 
 
@@ -190,5 +214,7 @@ def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, val
 
     assert snapshot.event == "price"
     assert snapshot.data == STREAMED
+    assert snapshot.data.upper_limit_price == 107200
+    assert snapshot.data.lower_limit_price == 57700
     assert published.event == "price"
     assert published.data == live

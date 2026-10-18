@@ -223,6 +223,7 @@ def _run(monkeypatch, day: Day, archive=None):
     monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(cli, "connect_valkey", lambda settings: _valkey())
     monkeypatch.setattr(cli, "archive_ohlcv", archive or day.archive)
+    monkeypatch.setattr(cli, "collect_corporations", lambda *args: None)
     cli.run(settings, clock=day.clock, sleep=day.sleep)
     return loads, built
 
@@ -246,6 +247,29 @@ def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
     assert day.daily == [False] * (6 * 60 + 31) + [True]
 
 
+def test_preopen_snapshot_finishes_before_open_and_failure_does_not_stop_bars(monkeypatch):
+    day = Day(_kst(8, 55))
+    snapshots = []
+
+    def snapshot(settings, symbols, client, now):
+        snapshots.append(now.astimezone(KST))
+        day.now += timedelta(seconds=40)
+        raise RuntimeError("one snapshot request failed")
+
+    monkeypatch.setattr(cli, "collect_corporations", snapshot)
+    settings = _settings(monkeypatch)
+    monkeypatch.setattr(cli, "load_symbols", lambda *args: ["005930"])
+    monkeypatch.setattr(cli, "build_client", lambda *args: object())
+    monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
+    monkeypatch.setattr(cli, "connect_valkey", lambda settings: _valkey())
+    monkeypatch.setattr(cli, "archive_ohlcv", day.archive)
+
+    cli.run(settings, clock=day.clock, sleep=day.sleep)
+
+    assert snapshots == [_kst(8, 55)]
+    assert day.passes[0] == _kst(9, 0, 5)
+
+
 def test_overrunning_pass_is_followed_immediately_and_warned(monkeypatch, caplog):
     day = Day(_kst(8, 55), work={_kst(9, 0, 5): 70})
 
@@ -253,7 +277,7 @@ def test_overrunning_pass_is_followed_immediately_and_warned(monkeypatch, caplog
         _run(monkeypatch, day)
 
     assert day.passes[:3] == [_kst(9, 0, 5), _kst(9, 1, 15), _kst(9, 2, 5)]
-    assert day.sleeps[1] == 0
+    assert day.sleeps[2] == 0
     slow = [record for record in caplog.records if record.getMessage() == "archive_pass_slow"]
     assert len(slow) == 1
     assert slow[0].levelno == logging.WARNING
