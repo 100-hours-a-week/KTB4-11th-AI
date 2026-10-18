@@ -74,6 +74,17 @@ class ChartClient:
             next_key=next_key,
         )
 
+    def stock_info(self, symbol: str) -> dict[str, str]:
+        self._avoid_rate_limit()
+        body = self._client.fetch_page(
+            api_id="ka10001", path="/api/dostk/stkinfo", body={"stk_cd": symbol}
+        ).body
+        if body.get("return_code") not in (None, 0, "0"):
+            raise RuntimeError(body.get("return_msg") or "stock info request failed")
+        if body.get("stk_cd") not in (None, symbol):
+            raise ValueError(f"stock info symbol mismatch: {body.get('stk_cd')!r}")
+        return body
+
     def index_quote(self, name: str) -> dict[str, float]:
         market, code = {"KOSPI": ("0", "001"), "KOSPI200": ("2", "201")}[name]
         self._avoid_rate_limit()

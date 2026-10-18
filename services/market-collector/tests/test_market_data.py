@@ -155,7 +155,7 @@ def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monke
     symbols = [f"{index:06d}" for index in range(40)]
     valkey = Valkey()
 
-    written = cli.archive_ohlcv(
+    written = cli.collect_market_data(
         Settings(), symbols, MarketClient(), valkey, datetime(2026, 10, 15, 9, 0, tzinfo=KST), False
     )
 
@@ -205,7 +205,7 @@ def test_failed_index_and_popularity_requests_keep_previous_values(monkeypatch, 
     monkeypatch.setenv("MARKET_COLLECTOR_VALKEY_HOST", "localhost")
     valkey = Valkey()
 
-    written = cli.archive_ohlcv(
+    written = cli.collect_market_data(
         Settings(),
         [f"{index:06d}" for index in range(20)],
         MarketClient(),

@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from time import perf_counter
 from typing import Any
 
@@ -11,8 +11,8 @@ __all__ = ["Candle", "CandleRow", "Store"]
 TIMEFRAMES = frozenset({"1m", "1d"})
 CHECKPOINT_DAYS = 7
 CHECKPOINT_QUERIES = {
-    timeframe: f"SELECT symbol, '{timeframe}' AS timeframe, ts AS latest_ts FROM bars\n"
-    f"WHERE timeframe = '{timeframe}'\nLATEST ON ts PARTITION BY symbol"
+    timeframe: f"SELECT symbol, '{timeframe}' AS timeframe, timestamp AS latest_ts FROM bars\n"
+    f"WHERE timeframe = '{timeframe}'\nLATEST ON timestamp PARTITION BY symbol"
     for timeframe in ("1m", "1d")
 }
 CHECKPOINT_SQL = "\nUNION ALL\n".join(CHECKPOINT_QUERIES.values())
@@ -27,7 +27,7 @@ def checkpoint_query(
     placeholders = ", ".join(f"${i}" for i in range(1, len(symbols) + 1))
     predicate = f" AND symbol IN ({placeholders})"
     if recent:
-        predicate += f" AND ts > dateadd('d', -{CHECKPOINT_DAYS}, now())"
+        predicate += f" AND timestamp > dateadd('d', -{CHECKPOINT_DAYS}, now())"
     timeframes = tuple(CHECKPOINT_QUERIES) if timeframe is None else (timeframe,)
     return "\nUNION ALL\n".join(
         CHECKPOINT_QUERIES[tf].replace(
@@ -69,6 +69,20 @@ def _as_utc(timestamp: datetime) -> datetime:
 class Store:
     def __init__(self, db: Any) -> None:
         self._db = db
+
+    def write_corporation(
+        self, symbol: str, trade_date: date, fetched_at: datetime, values: dict[str, int | None]
+    ) -> None:
+        with self._db.sender() as sender:
+            sender.row(
+                "corporations",
+                symbols={"symbol": symbol},
+                columns=_without_nones(
+                    {"trade_date": trade_date.isoformat(), "fetched_at": fetched_at, **values}
+                ),
+                at=datetime.combine(trade_date, datetime.min.time(), UTC),
+            )
+            sender.flush()
 
     def write_candles(self, timeframe: str, rows: Iterable[CandleRow]) -> int:
         if timeframe not in TIMEFRAMES:
@@ -160,9 +174,9 @@ class Store:
     def read_regular_candles(self, timeframe: str, symbol: str, limit: int = 300) -> list[Candle]:
         if timeframe not in TIMEFRAMES:
             raise KeyError(f"unknown timeframe: {timeframe}")
-        sql = """SELECT ts, high, low, close FROM bars
+        sql = """SELECT timestamp AS ts, high, low, close FROM bars
         WHERE symbol = $1 AND timeframe = $2 AND session = 'regular'
-        ORDER BY ts DESC LIMIT $3"""
+        ORDER BY timestamp DESC LIMIT $3"""
         with self._db.query(sql, [symbol, timeframe, limit]) as result:
             records = result.to_pandas().to_dict("records")
         return [Candle(**record) for record in reversed(records)]

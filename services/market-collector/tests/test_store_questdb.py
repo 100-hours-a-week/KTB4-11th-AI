@@ -18,9 +18,9 @@ def checkpoint_db():
     table = f"checkpoint_test_{uuid4().hex}"
     with questdb.connect(conf) as db:
         db.execute(
-            f"CREATE TABLE {table} (ts TIMESTAMP, symbol SYMBOL INDEX, "
-            "timeframe VARCHAR, session SYMBOL) TIMESTAMP(ts) PARTITION BY DAY "
-            "WAL DEDUP UPSERT KEYS(ts, symbol, timeframe)"
+            f"CREATE TABLE {table} (timestamp TIMESTAMP, symbol SYMBOL INDEX, "
+            "timeframe VARCHAR, session SYMBOL) TIMESTAMP(timestamp) PARTITION BY DAY "
+            "WAL DEDUP UPSERT KEYS(timestamp, symbol, timeframe)"
         )
 
         class CheckpointDatabase:
@@ -85,7 +85,7 @@ def test_checkpoint_latest_matches_aggregate_and_handles_sparse_history(checkpoi
         ("active", "1m"): datetime(2026, 9, 23, 7, tzinfo=UTC),
     }
     with checkpoint_db.query(
-        "SELECT symbol, timeframe, max(ts) latest_ts FROM bars "
+        "SELECT symbol, timeframe, max(timestamp) latest_ts FROM bars "
         "WHERE timeframe IN ('1m', '1d') GROUP BY symbol, timeframe"
     ) as result:
         aggregate = {
@@ -113,7 +113,7 @@ def test_checkpoint_latest_on_large_partitioned_history(checkpoint_db):
     assert "GroupBy" not in plan
     assert plan.count("Interval backward scan") == 2
     with checkpoint_db.query(
-        "SELECT symbol, timeframe, max(ts) latest_ts FROM bars "
+        "SELECT symbol, timeframe, max(timestamp) latest_ts FROM bars "
         "WHERE timeframe IN ('1m', '1d') GROUP BY symbol, timeframe"
     ) as result:
         aggregate = {
@@ -173,7 +173,7 @@ def test_recent_and_fallback_queries_preserve_the_seven_day_boundary_and_current
     latest = Store(checkpoint_db).latest_bar_timestamps(targets)
     queries = list(checkpoint_db.queries)
     with checkpoint_db.query(
-        "SELECT symbol, timeframe, max(ts) latest_ts FROM bars"
+        "SELECT symbol, timeframe, max(timestamp) latest_ts FROM bars"
         " WHERE timeframe IN ('1m', '1d') AND symbol IN ($1, $2, $3) GROUP BY symbol, timeframe",
         ["boundary", "inside", "stale"],
     ) as result:

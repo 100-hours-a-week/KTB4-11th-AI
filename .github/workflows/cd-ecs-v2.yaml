@@ -107,7 +107,7 @@ jobs:
           CONTAINER: ${{ matrix.service }}
         run: |
           set -euo pipefail
-          template=".aws/ecs/${CONTAINER}.json"
+          template="infrastructure/ecs/${CONTAINER}.json"
           jq -e --arg family "$FAMILY" --arg name "$CONTAINER" \
             '.family == $family and ([.containerDefinitions[] | select(.name == $name)] | length) == 1' \
             "$template" > /dev/null

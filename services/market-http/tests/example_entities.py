@@ -19,6 +19,8 @@ PRICE = Price(
     rate=-0.48,
     volume=500,
     timestamp=datetime.fromisoformat("2026-10-15T09:01:23+09:00"),
+    upper_limit_price=107200,
+    lower_limit_price=57700,
 )
 ORDERBOOK = Orderbook(
     code="005930",
