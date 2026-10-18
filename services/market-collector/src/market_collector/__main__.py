@@ -8,6 +8,7 @@ from ktb_core.krx import KST, MARKET_CLOSE, MARKET_OPEN, is_trading_day
 from ktb_core.logging import get_logger, setup_logging, start_logging
 from redis import Redis
 
+from market_collector.corporations import collect_corporations
 from market_collector.kiwoom.official import ChartClient, build_client
 from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
@@ -21,7 +22,7 @@ CLOSE_DELAY = timedelta(minutes=5)
 PASS_BUDGET = 60.0
 
 
-def archive_ohlcv(
+def collect_market_data(
     settings: Settings,
     symbols: list[str],
     client: ChartClient,
@@ -100,12 +101,19 @@ def run(
         passes.append(close_at + CLOSE_DELAY + SETTLE)
         pending = [at for at in passes if at > local] or [local]
 
+        try:
+            collect_corporations(settings, symbols, client, clock())
+        except Exception:
+            log.exception("corporation_snapshot_pass_failed")
+
         close_failed = False
         for at in pending:
             sleep(max(0.0, (at - clock()).total_seconds()))
             started = clock()
             try:
-                archive_ohlcv(settings, symbols, client, valkey, started, daily=at == pending[-1])
+                collect_market_data(
+                    settings, symbols, client, valkey, started, daily=at == pending[-1]
+                )
             except Exception:
                 log.exception("archive_pass_failed", scheduled=at.isoformat())
                 close_failed = at == pending[-1]

@@ -72,6 +72,31 @@ def test_chart_client_never_exceeds_five_requests_per_second(monkeypatch):
     assert clock.sleeps == [0.2]
 
 
+def test_stock_info_uses_ka10001_and_shared_request_pacing(monkeypatch):
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def fetch_page(self, **kwargs):
+            self.calls.append(kwargs)
+            return KiwoomResponse(
+                {"base_pric": "+100", "return_code": 0}, Continuation(False, None, "N"), {}
+            )
+
+    client = Client()
+    clock = Clock()
+    monkeypatch.setattr(official, "time", clock, raising=False)
+    chart = ChartClient(client)
+    assert chart.stock_info("005930")["base_pric"] == "+100"
+    assert chart.stock_info("000660")["base_pric"] == "+100"
+    assert clock.sleeps == [0.2]
+    assert client.calls[0] == {
+        "api_id": "ka10001",
+        "path": "/api/dostk/stkinfo",
+        "body": {"stk_cd": "005930"},
+    }
+
+
 class Clock:
     def __init__(self):
         self.now = 0.0

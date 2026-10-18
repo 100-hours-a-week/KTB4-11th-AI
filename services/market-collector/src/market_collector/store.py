@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from time import perf_counter
 from typing import Any
 
@@ -69,6 +69,20 @@ def _as_utc(timestamp: datetime) -> datetime:
 class Store:
     def __init__(self, db: Any) -> None:
         self._db = db
+
+    def write_corporation(
+        self, symbol: str, trade_date: date, fetched_at: datetime, values: dict[str, int | None]
+    ) -> None:
+        with self._db.sender() as sender:
+            sender.row(
+                "corporations",
+                symbols={"symbol": symbol},
+                columns=_without_nones(
+                    {"trade_date": trade_date.isoformat(), "fetched_at": fetched_at, **values}
+                ),
+                at=datetime.combine(trade_date, datetime.min.time(), UTC),
+            )
+            sender.flush()
 
     def write_candles(self, timeframe: str, rows: Iterable[CandleRow]) -> int:
         if timeframe not in TIMEFRAMES:
