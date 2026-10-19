@@ -92,8 +92,6 @@ jobs:
           scp "$app_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.env.next"
           scp scripts/run-morning-pipeline.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/run-morning-pipeline.sh"
-          scp scripts/wait-for-market-syncer.sh \
-            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/wait-for-market-syncer.sh"
           scp scripts/publish-scheduled-job-metric.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/publish-scheduled-job-metric.sh"
           scp infrastructure/systemd/ktb-*.service.in \
@@ -161,8 +159,6 @@ jobs:
           # systemd 파일도 운영 경로에 설치하기 전에 렌더링하고 구문을 확인합니다.
           test -f "$schedule_stage/run-morning-pipeline.sh"
           bash -n "$schedule_stage/run-morning-pipeline.sh"
-          test -f "$schedule_stage/wait-for-market-syncer.sh"
-          bash -n "$schedule_stage/wait-for-market-syncer.sh"
           test -f "$schedule_stage/publish-scheduled-job-metric.sh"
           bash -n "$schedule_stage/publish-scheduled-job-metric.sh"
 
@@ -219,9 +215,6 @@ jobs:
             "$schedule_stage/run-morning-pipeline.sh" \
             "$deploy_dir/scripts/run-morning-pipeline.sh"
           install -D -m 0755 \
-            "$schedule_stage/wait-for-market-syncer.sh" \
-            "$deploy_dir/scripts/wait-for-market-syncer.sh"
-          install -D -m 0755 \
             "$schedule_stage/publish-scheduled-job-metric.sh" \
             "$deploy_dir/scripts/publish-scheduled-job-metric.sh"
           sudo -n systemd-analyze verify \
@@ -236,11 +229,16 @@ jobs:
           # 예전 상시 실행 방식의 timer가 남아 있어도 새 단발 스케줄과 중복되지 않게 합니다.
           for legacy_timer in \
             ktb-market-collector-start.timer \
-            ktb-market-collector-stop.timer; do
+            ktb-market-collector-stop.timer \
+            ktb-market-syncer.timer; do
             if systemctl cat "$legacy_timer" >/dev/null 2>&1; then
               sudo -n systemctl disable --now "$legacy_timer"
             fi
           done
+
+          # market-syncer는 morning pipeline 안에서 실행하므로 예전 standalone timer 파일도 제거합니다.
+          sudo -n rm -f /etc/systemd/system/ktb-market-syncer.timer
+          sudo -n systemctl daemon-reload
 
           legacy_collector_id="$(docker compose --env-file .env --env-file .image.env \
             -f compose.prod.yaml ps -q market-collector)"
@@ -254,14 +252,12 @@ jobs:
           # 모든 운영 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
-            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer
 
           for timer in \
             ktb-market-collector.timer \
-            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer; do
@@ -270,7 +266,6 @@ jobs:
           done
 
           test -x "$deploy_dir/scripts/run-morning-pipeline.sh"
-          test -x "$deploy_dir/scripts/wait-for-market-syncer.sh"
           test -x "$deploy_dir/scripts/publish-scheduled-job-metric.sh"
           systemctl list-timers --all --no-pager | grep 'ktb-'
 
