@@ -21,8 +21,17 @@ def test_defaults(monkeypatch):
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000
     assert settings.valkey_auth_mode == "none"
+    assert settings.valkey_max_connections is None
     assert settings.docs_enabled is True
     assert settings.docs_path_prefix == ""
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_valkey_max_connections_must_be_positive(monkeypatch, value):
+    _populate(monkeypatch, MARKET_HTTP_VALKEY_MAX_CONNECTIONS=value)
+
+    with pytest.raises(ValidationError, match="valkey_max_connections"):
+        Settings()
 
 
 def test_docs_settings_from_environment(monkeypatch):
