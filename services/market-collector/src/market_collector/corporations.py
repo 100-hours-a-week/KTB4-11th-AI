@@ -30,8 +30,10 @@ def stock_values(raw: dict[str, str]) -> dict[str, int | None]:
             values[target] = None
             continue
         value = int(text)
-        if source in ("base_pric", "upl_pric", "lst_pric") and value <= 0:
-            raise ValueError(f"invalid {source}: {text}")
+        if source in ("base_pric", "upl_pric", "lst_pric"):
+            if value == 0:
+                raise ValueError(f"invalid {source}: {text}")
+            value = abs(value)
         values[target] = value
     return values
 
