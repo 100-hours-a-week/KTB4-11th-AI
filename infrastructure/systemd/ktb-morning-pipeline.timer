@@ -1,8 +1,8 @@
 [Unit]
-Description=Run the KTB pre-market portfolio pipeline daily
+Description=Run the KTB pre-market portfolio pipeline on weekdays
 
 [Timer]
-OnCalendar=*-*-* 06:00:00 Asia/Seoul
+OnCalendar=Mon..Fri *-*-* 06:00:00 Asia/Seoul
 AccuracySec=1s
 Persistent=false
 Unit=ktb-morning-pipeline.service
