@@ -40,6 +40,8 @@ def fetch_page(
         cont_yn="Y" if next_key else None,
         next_key=next_key,
     )
+    if response.body.get("return_code") not in (None, 0, "0"):
+        raise RuntimeError(response.body.get("return_msg") or f"{api_id} request failed")
     rows = response.body.get(array_field, [])
     if not isinstance(rows, list):
         raise TypeError(f"{array_field} is not a list: {type(rows)!r}")
@@ -84,6 +86,30 @@ class ChartClient:
         if body.get("stk_cd") not in (None, symbol):
             raise ValueError(f"stock info symbol mismatch: {body.get('stk_cd')!r}")
         return body
+
+    def stock_metadata(self) -> dict[str, tuple[str, str | None]]:
+        metadata = {}
+        next_key = None
+        seen = set()
+        while True:
+            self._avoid_rate_limit()
+            page = fetch_page(
+                self._client,
+                api_id="ka10099",
+                path="/api/dostk/stkinfo",
+                body={"mrkt_tp": "0"},
+                array_field="list",
+                next_key=next_key,
+            )
+            for row in page.rows:
+                if row.get("code") and row.get("name"):
+                    metadata[row["code"]] = (row["name"], row.get("upName") or None)
+            if not page.has_more:
+                return metadata
+            if not page.next_key or page.next_key in seen:
+                raise RuntimeError("stalled stock list paging")
+            seen.add(page.next_key)
+            next_key = page.next_key
 
     def index_quote(self, name: str) -> dict[str, float]:
         market, code = {"KOSPI": ("0", "001"), "KOSPI200": ("2", "201")}[name]
