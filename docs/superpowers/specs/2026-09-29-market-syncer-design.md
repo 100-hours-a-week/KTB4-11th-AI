@@ -151,7 +151,7 @@ The repository does not contain an EC2 power-on scheduler or another authoritati
 
 A successful market-syncer service run touches `@@DEPLOY_DIR@@/.market-syncer-success`. Consumers use `scripts/wait-for-market-syncer.sh` to require a success marker from the current Asia/Seoul calendar date:
 
-- the 06:00 morning pipeline waits up to 90 minutes, which also covers a late boot or market-syncer retry without moving the pipeline's timer;
+- the 06:00 morning pipeline waits up to 90 minutes, which also covers a late boot or market-syncer retry without moving the pipeline's timer; its systemd start timeout is increased by the same 90 minutes so the existing 2h50m pipeline execution budget is preserved;
 - market-streamer and market-collector check immediately before their 08:50 and 08:55 starts and fail instead of starting on a stale reference snapshot.
 
 This keeps market-syncer operationally independent while still enforcing "reference data first" at each scheduled consumer boundary.
