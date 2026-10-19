@@ -14,6 +14,7 @@ Type=oneshot
 User=@@DEPLOY_USER@@
 WorkingDirectory=@@DEPLOY_DIR@@
 ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.market-syncer.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T market-syncer
+ExecStartPost=/usr/bin/touch @@DEPLOY_DIR@@/.market-syncer-success
 TimeoutStartSec=50m
 Restart=on-failure
 # 재시도 중간 실패는 failed 상태를 거치지 않게 해 OnFailure=가 최종 실패에만 실행되게 합니다.
