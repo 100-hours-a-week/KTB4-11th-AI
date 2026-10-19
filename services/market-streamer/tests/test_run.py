@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from datetime import datetime
 
 import pytest
@@ -174,6 +175,55 @@ def test_stream_publishes_real_entries_in_arrival_order(monkeypatch):
         ("price", "005930"),
         ("orderbook", "000660"),
     ]
+
+
+def test_registration_logs_each_code_at_debug_level_and_the_requested_count(monkeypatch, caplog):
+    _record(monkeypatch)
+    codes = ["000660", "005930"]
+
+    class RegistrationClient:
+        async def subscribe(self, **kwargs):
+            pass
+
+        async def iter_messages(self):
+            yield REG_OK
+
+        async def close(self):
+            raise asyncio.CancelledError
+
+    with caplog.at_level("DEBUG", logger=stream.__name__), pytest.raises(asyncio.CancelledError):
+        asyncio.run(stream.stream_market_data(RegistrationClient(), object(), codes))
+
+    registrations = [record for record in caplog.records if record.message == "kiwoom_registering"]
+    assert [record.levelno for record in registrations] == [logging.DEBUG, logging.DEBUG]
+    assert [record.fields for record in registrations] == [
+        {"stock_code": "000660", "registered_count": 1, "requested_count": 2},
+        {"stock_code": "005930", "registered_count": 2, "requested_count": 2},
+    ]
+    registered = next(record for record in caplog.records if record.message == "kiwoom_registered")
+    assert registered.fields == {"requested_count": 2}
+
+
+def test_rejected_registration_logs_the_requested_count(monkeypatch, caplog):
+    _record(monkeypatch)
+
+    class RejectedRegistrationClient:
+        async def subscribe(self, **kwargs):
+            pass
+
+        async def iter_messages(self):
+            yield REG_REJECTED
+
+        async def close(self):
+            raise asyncio.CancelledError
+
+    with caplog.at_level("ERROR", logger=stream.__name__), pytest.raises(asyncio.CancelledError):
+        asyncio.run(
+            stream.stream_market_data(RejectedRegistrationClient(), object(), ["000660", "005930"])
+        )
+
+    failed = next(record for record in caplog.records if record.message == "kiwoom_stream_failed")
+    assert failed.fields == {"requested_count": 2}
 
 
 def test_rejected_registration_backs_off_exponentially(monkeypatch):

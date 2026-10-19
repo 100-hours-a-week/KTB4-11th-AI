@@ -161,6 +161,14 @@ async def stream_market_data(
     delay = 1.0
     while True:
         try:
+            requested_count = len(codes)
+            for registered_count, stock_code in enumerate(codes, start=1):
+                log.debug(
+                    "kiwoom_registering",
+                    stock_code=stock_code,
+                    registered_count=registered_count,
+                    requested_count=requested_count,
+                )
             body = build_reg_packet(codes, ["0B", "0D"])
             await client.subscribe(api_url=WEBSOCKET_PATH, body=body)
             async for message in client.iter_messages():
@@ -169,7 +177,7 @@ async def stream_market_data(
                     if (normalize_return_code(message.get("return_code")) or 0) != 0:
                         raise RuntimeError(f"REG rejected: {message.get('return_msg')}")
                     delay = 1.0
-                    log.info("kiwoom_registered", codes=len(codes))
+                    log.info("kiwoom_registered", requested_count=requested_count)
                 elif trnm == "REAL":
                     today = datetime.now(KST).date()
                     entries = message.get("data") or []
@@ -188,7 +196,7 @@ async def stream_market_data(
                                 await publish_orderbooks(valkey, orderbooks)
             log.warning("kiwoom_stream_closed")
         except Exception:
-            log.exception("kiwoom_stream_failed")
+            log.exception("kiwoom_stream_failed", requested_count=len(codes))
         finally:
             await client.close()
         await asyncio.sleep(delay)
