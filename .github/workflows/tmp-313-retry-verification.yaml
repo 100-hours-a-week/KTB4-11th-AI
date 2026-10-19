@@ -1,0 +1,144 @@
+name: Temporary Market Sync Retry Verification
+
+on:
+  pull_request:
+    branches:
+      - chore/313-market-syncer-daily
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify shell syntax and removed helper
+        run: |
+          set -euo pipefail
+          bash -n scripts/run-morning-pipeline.sh
+          test ! -e scripts/wait-for-market-syncer.sh
+          test ! -e infrastructure/systemd/ktb-market-syncer.timer
+          ! grep -q 'wait-for-market-syncer' .github/workflows/cd.yaml
+          ! grep -q 'wait-for-market-syncer' .github/workflows/cd-dev.yaml
+
+      - name: Verify retry then success
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/bin" "$tmp/work"
+
+          cat > "$tmp/bin/docker" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          service="${@: -1}"
+          echo "$service" >> "$FAKE_LOG"
+
+          if [[ "$service" == "market-syncer" ]]; then
+            count=0
+            [[ -f "$FAKE_STATE" ]] && count="$(cat "$FAKE_STATE")"
+            count=$((count + 1))
+            printf '%s\n' "$count" > "$FAKE_STATE"
+            if (( count < FAKE_MARKET_SUCCEED_ON )); then
+              exit 1
+            fi
+          fi
+          SH
+          chmod +x "$tmp/bin/docker"
+
+          cat > "$tmp/bin/sleep" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "sleep:$1" >> "$FAKE_LOG"
+          SH
+          chmod +x "$tmp/bin/sleep"
+
+          export PATH="$tmp/bin:$PATH"
+          export FAKE_LOG="$tmp/log"
+          export FAKE_STATE="$tmp/state"
+          export FAKE_MARKET_SUCCEED_ON=3
+
+          (
+            cd "$tmp/work"
+            bash "$GITHUB_WORKSPACE/scripts/run-morning-pipeline.sh"
+          )
+
+          cat > "$tmp/expected" <<'EOF'
+          market-syncer
+          sleep:300
+          market-syncer
+          sleep:300
+          market-syncer
+          news-clusterer
+          news-graph-builder
+          portfolio-builder
+          EOF
+          diff -u "$tmp/expected" "$tmp/log"
+          test -f "$tmp/work/.market-syncer-success"
+
+      - name: Verify final failure stops downstream jobs
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/bin" "$tmp/work"
+
+          cat > "$tmp/bin/docker" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          service="${@: -1}"
+          echo "$service" >> "$FAKE_LOG"
+          if [[ "$service" == "market-syncer" ]]; then
+            exit 1
+          fi
+          SH
+          chmod +x "$tmp/bin/docker"
+
+          cat > "$tmp/bin/sleep" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          echo "sleep:$1" >> "$FAKE_LOG"
+          SH
+          chmod +x "$tmp/bin/sleep"
+
+          export PATH="$tmp/bin:$PATH"
+          export FAKE_LOG="$tmp/log"
+
+          if (
+            cd "$tmp/work"
+            bash "$GITHUB_WORKSPACE/scripts/run-morning-pipeline.sh"
+          ); then
+            echo "pipeline unexpectedly succeeded" >&2
+            exit 1
+          fi
+
+          cat > "$tmp/expected" <<'EOF'
+          market-syncer
+          sleep:300
+          market-syncer
+          sleep:300
+          market-syncer
+          EOF
+          diff -u "$tmp/expected" "$tmp/log"
+          test ! -e "$tmp/work/.market-syncer-success"
+          ! grep -qE 'news-clusterer|news-graph-builder|portfolio-builder' "$tmp/log"
+
+      - name: Verify rendered systemd units
+        run: |
+          set -euo pipefail
+          render="$(mktemp -d)"
+          deploy="$(mktemp -d)"
+          mkdir -p "$deploy/scripts"
+          cp scripts/run-morning-pipeline.sh scripts/publish-scheduled-job-metric.sh "$deploy/scripts/"
+          chmod +x "$deploy/scripts/"*.sh
+
+          for template in infrastructure/systemd/ktb-*.service.in; do
+            unit="$(basename "$template" .in)"
+            sed \
+              -e "s|@@DEPLOY_USER@@|$(id -un)|g" \
+              -e "s|@@DEPLOY_DIR@@|$deploy|g" \
+              "$template" > "$render/$unit"
+          done
+          cp infrastructure/systemd/ktb-*.timer "$render/"
+
+          sudo systemd-analyze verify "$render"/ktb-*.service "$render"/ktb-*.timer
