@@ -1,9 +1,9 @@
 name: Temporary EC2 Schedule Diagnostics
 
 on:
-  push:
+  pull_request:
     branches:
-      - chore/313-ec2-diagnostics-temp
+      - dev
 
 permissions:
   contents: read
