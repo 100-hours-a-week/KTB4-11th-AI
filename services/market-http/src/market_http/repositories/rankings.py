@@ -8,6 +8,7 @@ import questdb
 from ktb_core.krx import KST, is_trading_day
 from redis.asyncio import Redis
 
+from market_http.repositories.prices import get_cached_prices
 from market_http.repositories.questdb import as_utc, records
 
 RankingType = Literal["volume", "trade_value", "gainers", "losers", "popular"]
@@ -70,7 +71,7 @@ async def enrich_rankings(
     codes = [item["code"] for item in items]
     details, prices = await asyncio.gather(
         asyncio.to_thread(questdb_ranking_details, conf, codes),
-        valkey.mget([f"price:{code}" for code in codes]),
+        get_cached_prices(valkey, codes),
     )
     for item, code, price in zip(items, codes, prices, strict=True):
         item.update(details.get(code, {}))

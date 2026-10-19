@@ -41,8 +41,27 @@ class Valkey:
     async def get(self, key):
         return self.sets.get(key)
 
-    async def mget(self, keys):
-        return [self.sets.get(key) for key in keys]
+    def pipeline(self, transaction):
+        assert transaction is False
+
+        class Pipeline:
+            def __init__(self, sets):
+                self.sets = sets
+                self.keys = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            def get(self, key):
+                self.keys.append(key)
+
+            async def execute(self):
+                return [self.sets.get(key) for key in self.keys]
+
+        return Pipeline(self.sets)
 
 
 def test_rankings_switch_at_0910_and_keep_signed_change_rate():
