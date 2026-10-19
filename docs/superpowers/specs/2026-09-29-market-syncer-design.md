@@ -2,7 +2,7 @@
 
 `market-syncer` is the only service that synchronizes market **reference data** from Kiwoom and
 OpenDART: KOSPI corporations, their KOSPI 200 membership, and Kiwoom themes. The scope is fixed:
-the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLCV; `market-collector` keeps that job.
+the only market is KOSPI and the only index is KOSPI 200. It does not own the user-facing market-data path: `market-streamer` receives live Kiwoom `0B`/`0D` WebSocket data into Valkey, and `market-http` serves current prices/orderbooks from Valkey and historical bars from QuestDB. Historical OHLCV ingestion into QuestDB remains a `market-collector` responsibility.
 
 ## Why
 
@@ -68,11 +68,9 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
 `OpenDartReader`.
 
 **Kiwoom (`kiwoom`)**
-- Build the client as `market-collector` does: `KiwoomAuth(mode, StaticSecretProvider(app_key,
-  secret_key), MemoryTokenStore())` and `KiwoomClient(auth)`. The SDK issues and refreshes the
-  token, so `fetch_token` and the hand-written paging loop are deleted.
-- Paging uses `client.iterate_pages(api_id=, path=, body=, max_pages=0, page_delay_seconds=)`, with
-  the `next_key` stall guard that `market-collector`'s `IndexClient` has.
+- `market-syncer` uses the same official Kiwoom authentication primitives used by the current market services: `KiwoomAuth(mode, StaticSecretProvider(app_key, secret_key), MemoryTokenStore())` and `KiwoomClient(auth)`. The SDK issues and refreshes the token, so `fetch_token` and the hand-written paging loop are deleted.
+- This is separate from the live path: `market-streamer` owns the long-running Kiwoom `0B`/`0D` WebSocket session, while `market-http` is the read-facing HTTP surface over Valkey and QuestDB and does not authenticate to Kiwoom directly.
+- Paging uses `client.iterate_pages(api_id=, path=, body=, max_pages=0, page_delay_seconds=)` with a `next_key` stall guard so a broken continuation cannot loop forever.
 - Calls: `ka10099` (KOSPI stocks, `mrkt_tp=0`), `ka20002` (KOSPI 200), `ka90001` (themes),
   `ka90002` (theme members).
 - `KIWOOM_BASE_URI` is replaced by `KIWOOM_MODE` (`real` or `demo`), the SDK's way to choose the
@@ -139,7 +137,7 @@ The reference datasets do not need hourly refreshes:
 |---|---|---|---|
 | KOSPI corporations | Kiwoom `ka10099` plus one OpenDART corporation-code download | Low. Listing and corporation-code mappings are reference data, not intraday prices. | Existing rows remain usable, but consumers must not treat a failed refresh as today's successful snapshot. |
 | KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than a universe that changes during one run. | The previous snapshot remains in PostgreSQL; the freshness gate prevents scheduled consumers from starting until today's sync succeeds. |
-| Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. The earlier market-collector design already treated theme membership as a daily snapshot, not an intraday signal. | The previous theme snapshot remains; the service exits non-zero and retries. |
+| Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; the service exits non-zero and retries. |
 
 One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to five weekday executions reduces scheduled executions from 168 to 5 per week, about 97%, and proportionally reduces this reference-data request load.
 
