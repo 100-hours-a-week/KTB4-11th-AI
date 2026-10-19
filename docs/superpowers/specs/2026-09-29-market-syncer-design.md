@@ -145,7 +145,7 @@ One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme
 
 `ktb-market-syncer.timer` runs independently at `Mon..Fri 05:55:00 Asia/Seoul`. The existing `ktb-morning-pipeline.timer` remains at 06:00 and `scripts/run-morning-pipeline.sh` does not invoke market-syncer.
 
-The repository does not contain an EC2 power-on scheduler or another authoritative server boot schedule. Because direct EC2 inspection is an operational check, the repository cannot prove whether the host is already up at 05:55. `Persistent=true` covers that uncertainty: if the host is down at 05:55, systemd triggers the missed market-syncer run after the host returns.
+Runtime inspection on 2026-10-19 confirmed that the AI EC2 hosts are not being started around the 06:00 pipeline window. The production host had been continuously booted since 2026-09-27 17:49 KST, and the development host since 2026-10-08 07:19 UTC (16:19 KST). The Cloud Terraform repository also has no EC2 start/stop scheduler for these AI hosts. Therefore the independent 05:55 timer normally runs on an already-running host and gives the 06:00 morning pipeline a five-minute head start. `Persistent=true` remains as recovery protection if a host is actually down at 05:55 and returns later.
 
 A successful market-syncer service run touches `@@DEPLOY_DIR@@/.market-syncer-success`. Consumers use `scripts/wait-for-market-syncer.sh` to require a success marker from the current Asia/Seoul calendar date:
 
@@ -183,7 +183,7 @@ systemctl cat ktb-market-streamer.service
 systemctl cat ktb-market-collector.service
 ```
 
-After deployment, the remaining environment-only verification is to inspect the real development and production EC2 timers and recent logs and confirm the host's actual boot schedule. Those checks cannot be established from repository state alone.
+Runtime verification on 2026-10-19 checked both development and production EC2 directly. Both had the existing 06:00 KST morning-pipeline timer enabled and the existing hourly market-syncer timer enabled; recent boot history showed no daily reboot around 06:00. Production was running in `Asia/Seoul`; development used `Etc/UTC`, but the timer explicitly specifies `Asia/Seoul`, so its 06:00 KST trigger appeared as 21:00 UTC on the previous day. After this change is deployed, the final operational check is only to confirm that the installed market-syncer timer has changed from hourly to 05:55 KST and that its first daily run succeeds.
 
 ## Rollout
 
