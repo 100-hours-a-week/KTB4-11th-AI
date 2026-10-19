@@ -1,0 +1,11 @@
+[Unit]
+Description=Run KTB market reference data synchronization once before the weekday morning pipeline
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 05:55:00 Asia/Seoul
+AccuracySec=1s
+Persistent=true
+Unit=ktb-market-syncer.service
+
+[Install]
+WantedBy=timers.target
