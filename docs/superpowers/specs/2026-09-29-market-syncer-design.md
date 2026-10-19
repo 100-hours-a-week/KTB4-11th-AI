@@ -136,7 +136,7 @@ The reference datasets do not need hourly refreshes:
 | Dataset | Change/fetch shape | Hourly value | Daily failure impact |
 |---|---|---|---|
 | KOSPI corporations | Kiwoom `ka10099` plus one OpenDART corporation-code download | Low. Listing and corporation-code mappings are reference data, not intraday prices. | Existing rows remain usable. If the daily refresh cannot succeed after retries, the morning pipeline stops before graph/portfolio work. |
-| KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL. Daytime consumers that directly use the universe require a current-day successful sync marker. |
+| KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL. The morning pipeline stops before graph/portfolio work if the daily refresh cannot succeed. |
 | Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; the combined morning pipeline fails if the sync cannot complete. |
 
 One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to the weekday morning pipeline reduces scheduled market-sync executions from 168 to 5 per week, about 97%.
@@ -158,9 +158,9 @@ There is no standalone `ktb-market-syncer.timer`. The existing `ktb-morning-pipe
   portfolio-builder
 ```
 
-After a successful market-syncer run, the pipeline touches `.market-syncer-success`. `news-preprocessor` keeps its hourly timer, but weekday runs from 06:00 onward require that marker to be from the current Asia/Seoul date. `market-streamer` and `market-collector` perform the same current-day check before their 08:50 and 08:55 starts. This keeps the hourly news schedule and market-open timers independent while preventing them from consuming a stale daily universe after the scheduled refresh boundary.
+The morning pipeline owns the ordering guarantee for its own downstream jobs only. `news-preprocessor`, `market-streamer`, and `market-collector` keep their existing independent schedules without an additional market-sync freshness gate.
 
-The standalone `ktb-market-syncer.service` remains available for manual recovery. Its successful completion also touches the same marker, so an operator can recover a failed morning sync without rerunning the whole pipeline.
+The standalone `ktb-market-syncer.service` remains available for manual recovery when only the reference-data refresh needs to be rerun.
 
 ### Failure, retry, and restart behavior
 
@@ -185,10 +185,6 @@ sudo systemctl start ktb-market-syncer.service
 systemctl status ktb-market-syncer.service --no-pager
 journalctl -u ktb-market-syncer.service -n 200 --no-pager
 
-# verify later consumers
-systemctl cat ktb-news-preprocessor.service
-systemctl cat ktb-market-streamer.service
-systemctl cat ktb-market-collector.service
 ```
 
 Runtime verification on 2026-10-19 confirmed the existing 06:00 KST morning-pipeline timer on both development and production EC2, the old hourly market-syncer timer, and no daily reboot around 06:00. Production uses `Asia/Seoul`; development uses `Etc/UTC`, but the timer explicitly specifies `Asia/Seoul`, so its 06:00 KST trigger is represented as 21:00 UTC on the previous day. After deployment, the final runtime check is to confirm that the old market-syncer timer is gone and that the 06:00 pipeline log begins with market-syncer.
