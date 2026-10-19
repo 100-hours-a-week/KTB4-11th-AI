@@ -63,7 +63,17 @@ INDEX_EXAMPLE = {
 RANKING_EXAMPLE = {
     "as_of": "2026-10-15",
     "updated_at": "2026-10-15T09:01:00+09:00",
-    "items": [{"rank": 1, "code": "005930", "score": 150000.0}],
+    "items": [
+        {
+            "rank": 1,
+            "code": "005930",
+            "score": 150000.0,
+            "stock_name": "삼성전자",
+            "sector_name": "전기전자",
+            "price": 82100,
+            "change_rate": -0.48,
+        }
+    ],
 }
 
 HEALTH_EXAMPLE = {"status": "ok"}

@@ -43,11 +43,19 @@ def collect_corporations(
 ) -> None:
     day = now.astimezone(KST).date()
     succeeded = 0
+    try:
+        metadata = client.stock_metadata()
+    except Exception:
+        log.exception("stock_metadata_failed")
+        metadata = {}
     with questdb.connect(settings.questdb_conf) as db:
         store = Store(db)
         for symbol in symbols:
             try:
-                values = stock_values(client.stock_info(symbol))
+                values: dict[str, int | str | None] = {**stock_values(client.stock_info(symbol))}
+                names = metadata.get(symbol)
+                if names:
+                    values.update(stock_name=names[0], sector_name=names[1])
                 store.write_corporation(symbol, day, datetime.now(UTC), values)
                 succeeded += 1
             except Exception:

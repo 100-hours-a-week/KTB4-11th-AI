@@ -1,10 +1,85 @@
+import asyncio
+import json
 from datetime import date, datetime, time, timedelta
 from typing import Literal
 
+import pandas as pd
+import questdb
 from ktb_core.krx import KST, is_trading_day
 from redis.asyncio import Redis
 
+from market_http.repositories.questdb import as_utc, records
+
 RankingType = Literal["volume", "trade_value", "gainers", "losers", "popular"]
+
+
+def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, dict[str, object]]:
+    placeholders = ", ".join(f"${index}" for index in range(1, len(codes) + 1))
+    with questdb.connect(conf) as db:
+        metadata = records(
+            db,
+            "SELECT symbol, stock_name, sector_name"
+            f" FROM corporations WHERE symbol IN ({placeholders})"
+            " AND stock_name IS NOT NULL LATEST ON timestamp PARTITION BY symbol",
+            codes,
+        )
+        base_prices = records(
+            db,
+            "SELECT symbol, base_price, trade_date"
+            f" FROM corporations WHERE symbol IN ({placeholders})"
+            " LATEST ON timestamp PARTITION BY symbol",
+            codes,
+        )
+        prices = records(
+            db,
+            "SELECT symbol, timestamp, close FROM bars WHERE timeframe = '1m'"
+            f" AND symbol IN ({placeholders}) LATEST ON timestamp PARTITION BY symbol",
+            codes,
+        )
+    details = {
+        row["symbol"]: {
+            "stock_name": row["stock_name"],
+            "sector_name": row["sector_name"] if pd.notna(row["sector_name"]) else None,
+        }
+        for row in metadata
+    }
+    snapshots = {row["symbol"]: row for row in base_prices}
+    for row in prices:
+        code = row["symbol"]
+        price = int(row["close"])
+        snapshot = snapshots.get(code)
+        rate = None
+        if (
+            snapshot
+            and snapshot["trade_date"]
+            == as_utc(row["timestamp"]).astimezone(KST).date().isoformat()
+        ):
+            base = snapshot["base_price"]
+            if pd.notna(base) and base:
+                rate = round((price - int(base)) / int(base) * 100, 2)
+        details.setdefault(code, {}).update(price=price, change_rate=rate)
+    return details
+
+
+async def enrich_rankings(
+    valkey: Redis, conf: str, ranking: dict[str, object]
+) -> dict[str, object]:
+    items = ranking["items"]
+    if not items:
+        return ranking
+    codes = [item["code"] for item in items]
+    details, prices = await asyncio.gather(
+        asyncio.to_thread(questdb_ranking_details, conf, codes),
+        valkey.mget([f"price:{code}" for code in codes]),
+    )
+    for item, code, price in zip(items, codes, prices, strict=True):
+        item.update(details.get(code, {}))
+        if price is not None:
+            tick = json.loads(price)
+            item.update(price=tick["price"], change_rate=tick["rate"])
+        for field in ("stock_name", "sector_name", "price", "change_rate"):
+            item.setdefault(field, None)
+    return ranking
 
 
 def previous_trading_day(day: date) -> date:
