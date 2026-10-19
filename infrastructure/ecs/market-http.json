@@ -91,6 +91,10 @@
         {
           "name": "MARKET_HTTP_METRICS_SERVICE_NAME",
           "value": "stockspoon-v2-prod-market-http"
+        },
+        {
+          "name": "MARKET_HTTP_VALKEY_MAX_CONNECTIONS",
+          "value": "1000"
         }
       ],
       "mountPoints": [],
