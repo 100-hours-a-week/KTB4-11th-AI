@@ -34,7 +34,6 @@ until run_job market-syncer; do
   ((market_syncer_attempt += 1))
 done
 
-touch .market-syncer-success
 
 run_job news-clusterer
 run_job news-graph-builder
