@@ -25,6 +25,7 @@ def test_defaults(monkeypatch):
     assert settings.kiwoom_mode == "real"
     assert settings.index_name == "KOSPI200"
     assert settings.stop_at == time(15, 40)
+    assert settings.test_mode is False
     assert settings.valkey_port == 6379
     assert settings.valkey_tls is False
     assert settings.valkey_auth_mode == "none"
@@ -35,6 +36,13 @@ def test_stop_at_is_parsed_from_hh_mm(monkeypatch):
     _populate(monkeypatch, MARKET_STREAMER_STOP_AT="15:45")
 
     assert Settings().stop_at == time(15, 45)
+
+
+@pytest.mark.parametrize("value, expected", [("true", True), ("false", False)])
+def test_test_mode_is_parsed(monkeypatch, value, expected):
+    _populate(monkeypatch, MARKET_STREAMER_TEST_MODE=value)
+
+    assert Settings().test_mode is expected
 
 
 def test_iam_needs_username_and_cache_name(monkeypatch):

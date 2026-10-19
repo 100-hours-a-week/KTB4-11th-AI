@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     kiwoom_mode: Literal["real", "demo"] = "real"
     index_name: str = "KOSPI200"
     stop_at: time = time(15, 40)
+    test_mode: bool = False
     valkey_host: str = Field(min_length=1)
     valkey_port: int = 6379
     valkey_username: str | None = None

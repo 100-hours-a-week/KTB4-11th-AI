@@ -129,6 +129,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_STREAMER_KIWOOM_MODE` | market-streamer (`real` or `demo`) | `real` |
 | `MARKET_STREAMER_INDEX_NAME` | market-streamer (index whose members are subscribed) | `KOSPI200` |
 | `MARKET_STREAMER_STOP_AT` | market-streamer (KST `HH:MM`; a process started at or after it exits at once) | `15:40` |
+| `MARKET_STREAMER_TEST_MODE` | market-streamer (`true` keeps receiving and publishing past `STOP_AT`; Kiwoom may send no after-hours events) | `false` |
 | `MARKET_STREAMER_VALKEY_HOST` | market-streamer (price cache host) | required |
 | `MARKET_STREAMER_VALKEY_PORT` | market-streamer | `6379` |
 | `MARKET_STREAMER_VALKEY_USERNAME` | market-streamer (required with `iam`) | — |

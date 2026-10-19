@@ -231,8 +231,11 @@ async def run(settings: Settings, now: datetime) -> None:
     try:
         await valkey.ping()
         try:
-            async with asyncio.timeout(seconds_until(settings.stop_at, now)):
+            if settings.test_mode:
                 await stream_market_data(client, valkey, codes)
+            else:
+                async with asyncio.timeout(seconds_until(settings.stop_at, now)):
+                    await stream_market_data(client, valkey, codes)
         except TimeoutError:
             log.info("market_streamer_stopped", stop_at=settings.stop_at.isoformat())
     finally:

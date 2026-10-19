@@ -339,14 +339,17 @@ def test_run_fails_when_valkey_is_unreachable_and_still_closes_it(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "now",
+    "now, stop_at",
     [
-        datetime(2026, 10, 13, 15, 39, 59, 900000, tzinfo=KST),
-        datetime(2026, 10, 13, 16, 0, tzinfo=KST),
+        (datetime(2026, 10, 13, 15, 39, 59, 900000, tzinfo=KST), "15:40"),
+        (datetime(2026, 10, 13, 16, 0, tzinfo=KST), "15:40"),
+        (datetime(2026, 10, 13, 15, 44, 59, 900000, tzinfo=KST), "15:45"),
     ],
 )
-def test_run_exits_cleanly_at_the_stop_time(monkeypatch, now):
+def test_run_exits_cleanly_at_the_stop_time(monkeypatch, now, stop_at):
     _set_env(monkeypatch)
+    monkeypatch.setenv("MARKET_STREAMER_STOP_AT", stop_at)
+    monkeypatch.setenv("MARKET_STREAMER_TEST_MODE", "false")
     closed = []
 
     class FakeValkey:
@@ -369,3 +372,48 @@ def test_run_exits_cleanly_at_the_stop_time(monkeypatch, now):
     asyncio.run(stream.run(Settings(), now))
 
     assert closed == ["valkey"]
+
+
+@pytest.mark.parametrize(
+    "now",
+    [datetime(2026, 10, 13, 15, 39, tzinfo=KST), datetime(2026, 10, 13, 16, 0, tzinfo=KST)],
+)
+def test_test_mode_streams_past_stop_time_and_closes_on_cancellation(monkeypatch, now):
+    _set_env(monkeypatch)
+    monkeypatch.setenv("MARKET_STREAMER_TEST_MODE", "true")
+    closed = []
+    started = asyncio.Event()
+
+    class FakeClient:
+        def __init__(self, auth, **kwargs):
+            pass
+
+        async def close(self):
+            closed.append("client")
+
+    class FakeValkey:
+        async def ping(self):
+            return True
+
+        async def aclose(self):
+            closed.append("valkey")
+
+    async def forever(client, valkey, codes):
+        started.set()
+        await asyncio.Event().wait()
+
+    async def cancel_run():
+        task = asyncio.create_task(stream.run(Settings(), now))
+        await asyncio.wait_for(started.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    monkeypatch.setattr(stream, "KiwoomWebSocketClient", FakeClient)
+    monkeypatch.setattr(stream, "load_codes", lambda dsn, index_name: ["005930"])
+    monkeypatch.setattr(stream, "connect_valkey", lambda settings: FakeValkey())
+    monkeypatch.setattr(stream, "stream_market_data", forever)
+
+    asyncio.run(cancel_run())
+
+    assert closed == ["client", "valkey"]
