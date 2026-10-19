@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime
 
 import pytest
+from market_collector import corporations
 from market_collector.corporations import collect_corporations, stock_values
 from market_collector.store import Store
 
@@ -32,6 +33,80 @@ def test_required_price_rejects_zero(field):
     raw[field] = "0"
     with pytest.raises(ValueError, match=field):
         stock_values(raw)
+
+
+def test_stock_values_normalizes_signed_prices_but_preserves_negative_eps():
+    assert stock_values(
+        {"base_pric": "12000", "upl_pric": "+15000", "lst_pric": "-11000", "eps": "-23", "bps": "4"}
+    ) == {
+        "base_price": 12000,
+        "upper_limit_price": 15000,
+        "lower_limit_price": 11000,
+        "eps": -23,
+        "bps": 4,
+    }
+
+
+def test_stock_values_rejects_malformed_price_with_original_value():
+    with pytest.raises(ValueError, match="not-a-price"):
+        stock_values(
+            {
+                "base_pric": "12000",
+                "upl_pric": "+15000",
+                "lst_pric": "not-a-price",
+                "eps": "-23",
+                "bps": "4",
+            }
+        )
+
+
+def test_collect_corporations_writes_snapshot_with_signed_price(monkeypatch):
+    written = []
+
+    class Connection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Client:
+        def stock_metadata(self):
+            return {}
+
+        def stock_info(self, symbol):
+            return {
+                "base_pric": "12000",
+                "upl_pric": "+15000",
+                "lst_pric": "-11000",
+                "eps": "-23",
+                "bps": "4",
+            }
+
+    class SnapshotStore:
+        def __init__(self, db):
+            pass
+
+        def write_corporation(self, symbol, day, fetched_at, values):
+            written.append((symbol, day, values))
+
+    monkeypatch.setattr(corporations.questdb, "connect", lambda conf: Connection())
+    monkeypatch.setattr(corporations, "Store", SnapshotStore)
+    settings = type("Settings", (), {"questdb_conf": "test"})()
+    collect_corporations(settings, ["000080"], Client(), None, datetime(2026, 10, 19, tzinfo=UTC))
+    assert written == [
+        (
+            "000080",
+            date(2026, 10, 19),
+            {
+                "base_price": 12000,
+                "upper_limit_price": 15000,
+                "lower_limit_price": 11000,
+                "eps": -23,
+                "bps": 4,
+            },
+        )
+    ]
 
 
 def test_store_uses_trade_day_timestamp_as_dedup_key():
