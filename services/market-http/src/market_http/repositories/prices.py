@@ -70,7 +70,7 @@ def questdb_prices(conf: str, codes: list[str]) -> list[TickPrice]:
         return [price for code in codes if (price := questdb_price(db, code)) is not None]
 
 
-async def _get_many(valkey: Redis, codes: list[str]) -> list[str | None]:
+async def get_cached_prices(valkey: Redis, codes: list[str]) -> list[str | None]:
     async with valkey.pipeline(transaction=False) as pipe:
         for code in codes:
             pipe.get(price_key(code))
@@ -78,7 +78,7 @@ async def _get_many(valkey: Redis, codes: list[str]) -> list[str | None]:
 
 
 async def current_prices(valkey: Redis, conf: str, codes: list[str]) -> list[Price]:
-    values = dict(zip(codes, await _get_many(valkey, codes), strict=True))
+    values = dict(zip(codes, await get_cached_prices(valkey, codes), strict=True))
     missing = [code for code, value in values.items() if value is None]
     if missing:
         filled = await asyncio.to_thread(questdb_prices, conf, missing)
@@ -87,7 +87,7 @@ async def current_prices(valkey: Redis, conf: str, codes: list[str]) -> list[Pri
                 for price in filled:
                     pipe.set(price_key(price.code), price.model_dump_json(), nx=True)
                 await pipe.execute()
-            refreshed = await _get_many(valkey, missing)
+            refreshed = await get_cached_prices(valkey, missing)
             values.update(zip(missing, refreshed, strict=True))
     ticks = [TickPrice.model_validate_json(value) for value in values.values() if value is not None]
     if not ticks:

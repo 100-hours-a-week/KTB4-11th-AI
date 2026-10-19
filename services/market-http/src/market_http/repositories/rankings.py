@@ -1,5 +1,3 @@
-import asyncio
-import json
 from datetime import date, datetime, time, timedelta
 from typing import Literal
 
@@ -59,27 +57,6 @@ def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, dict[str, 
                 rate = round((price - int(base)) / int(base) * 100, 2)
         details.setdefault(code, {}).update(price=price, change_rate=rate)
     return details
-
-
-async def enrich_rankings(
-    valkey: Redis, conf: str, ranking: dict[str, object]
-) -> dict[str, object]:
-    items = ranking["items"]
-    if not items:
-        return ranking
-    codes = [item["code"] for item in items]
-    details, prices = await asyncio.gather(
-        asyncio.to_thread(questdb_ranking_details, conf, codes),
-        valkey.mget([f"price:{code}" for code in codes]),
-    )
-    for item, code, price in zip(items, codes, prices, strict=True):
-        item.update(details.get(code, {}))
-        if price is not None:
-            tick = json.loads(price)
-            item.update(price=tick["price"], change_rate=tick["rate"])
-        for field in ("stock_name", "sector_name", "price", "change_rate"):
-            item.setdefault(field, None)
-    return ranking
 
 
 def previous_trading_day(day: date) -> date:

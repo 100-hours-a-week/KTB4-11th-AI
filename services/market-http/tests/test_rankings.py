@@ -8,6 +8,7 @@ from ktb_core.krx import KST
 from market_http.app import create_app
 from market_http.repositories import rankings as ranking_repository
 from market_http.repositories.rankings import read_rankings
+from market_http.services import rankings as ranking_service
 
 from .example_entities import INDEX, RANKING
 
@@ -41,8 +42,27 @@ class Valkey:
     async def get(self, key):
         return self.sets.get(key)
 
-    async def mget(self, keys):
-        return [self.sets.get(key) for key in keys]
+    def pipeline(self, transaction):
+        assert transaction is False
+
+        class Pipeline:
+            def __init__(self, sets):
+                self.sets = sets
+                self.keys = []
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            def get(self, key):
+                self.keys.append(key)
+
+            async def execute(self):
+                return [self.sets.get(key) for key in self.keys]
+
+        return Pipeline(self.sets)
 
 
 def test_rankings_switch_at_0910_and_keep_signed_change_rate():
@@ -94,7 +114,7 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
         }
     )
     monkeypatch.setattr(
-        ranking_repository,
+        ranking_service,
         "questdb_ranking_details",
         lambda conf, codes: {"005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}},
     )
@@ -114,7 +134,7 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
 
 
 def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
-    monkeypatch.setattr(ranking_repository, "questdb_ranking_details", lambda conf, codes: {})
+    monkeypatch.setattr(ranking_service, "questdb_ranking_details", lambda conf, codes: {})
     valkey = Valkey({"ranking:popular": {"005930": 100, "000660": 50}})
 
     with TestClient(create_app(valkey, "unused")) as client:
