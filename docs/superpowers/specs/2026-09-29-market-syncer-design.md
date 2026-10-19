@@ -170,7 +170,7 @@ The manual `ktb-market-syncer.service` keeps `Restart=on-failure`, `RestartSec=5
 
 The standalone market-syncer timer and its old `Persistent=true` behavior are removed. The combined run inherits the existing morning pipeline timer's `Persistent=false`: if the host is down at 06:00, systemd does not replay that morning pipeline later. Runtime inspection on 2026-10-19 showed that the production AI EC2 had been continuously booted since 2026-09-27 17:49 KST and the development AI EC2 since 2026-10-08 07:19 UTC (16:19 KST), and the Cloud Terraform repository contains no daily EC2 start/stop scheduler for these hosts. The next normal execution after a missed morning is therefore the next weekday at 06:00, unless an operator starts `ktb-morning-pipeline.service` or `ktb-market-syncer.service` manually.
 
-Both CD workflows remove any previously installed `ktb-market-syncer.timer`, render the remaining units, run `systemd-analyze verify`, and keep the existing 06:00 morning-pipeline timer enabled.
+The legacy `ktb-market-syncer.timer` was removed once from both development and production EC2 during the migration. The normal CD workflows do not repeat that one-time cleanup; they render and verify the remaining units and keep the existing 06:00 morning-pipeline timer enabled.
 
 ### Operator commands
 
