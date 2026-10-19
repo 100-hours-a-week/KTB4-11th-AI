@@ -41,9 +41,6 @@ class Valkey:
     async def get(self, key):
         return self.sets.get(key)
 
-    async def hmget(self, key, codes):
-        return [self.sets.get(key, {}).get(code) for code in codes]
-
     async def mget(self, keys):
         return [self.sets.get(key) for key in keys]
 
@@ -84,7 +81,7 @@ def test_rankings_fall_back_when_current_day_is_missing():
     assert result["items"] == [{"rank": 1, "code": "005930", "score": 100.0}]
 
 
-def test_http_serves_indices_and_popular_rankings():
+def test_http_serves_indices_and_popular_rankings(monkeypatch):
     index_payload = INDEX.model_dump(mode="json")
     index_payload["ts"] = index_payload.pop("timestamp")
     assert RANKING.updated_at is not None
@@ -93,11 +90,13 @@ def test_http_serves_indices_and_popular_rankings():
             "index:KOSPI": json.dumps(index_payload),
             "ranking:popular": {RANKING.items[0].code: RANKING.items[0].score, "000660": 1},
             "ranking:popular:updated_at": RANKING.updated_at.isoformat(),
-            "stock:metadata": {
-                "005930": json.dumps({"stock_name": "삼성전자", "sector_name": "전기전자"})
-            },
             "price:005930": json.dumps({"code": "005930", "price": 82100, "rate": -0.48}),
         }
+    )
+    monkeypatch.setattr(
+        ranking_repository,
+        "questdb_ranking_details",
+        lambda conf, codes: {"005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}},
     )
 
     with TestClient(create_app(valkey, "unused")) as client:

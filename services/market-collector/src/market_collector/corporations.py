@@ -1,10 +1,8 @@
-import json
 from datetime import UTC, datetime
 
 import questdb
 from ktb_core.krx import KST
 from ktb_core.logging import get_logger
-from redis import Redis
 
 from market_collector.kiwoom.official import ChartClient
 from market_collector.settings import Settings
@@ -41,7 +39,7 @@ def stock_values(raw: dict[str, str]) -> dict[str, int | None]:
 
 
 def collect_corporations(
-    settings: Settings, symbols: list[str], client: ChartClient, valkey: Redis, now: datetime
+    settings: Settings, symbols: list[str], client: ChartClient, now: datetime
 ) -> None:
     day = now.astimezone(KST).date()
     succeeded = 0
@@ -50,7 +48,6 @@ def collect_corporations(
     except Exception:
         log.exception("stock_metadata_failed")
         metadata = {}
-    cached = {}
     with questdb.connect(settings.questdb_conf) as db:
         store = Store(db)
         for symbol in symbols:
@@ -60,17 +57,11 @@ def collect_corporations(
                 if names:
                     values.update(stock_name=names[0], sector_name=names[1])
                 store.write_corporation(symbol, day, datetime.now(UTC), values)
-                if names:
-                    cached[symbol] = json.dumps(
-                        {"stock_name": names[0], "sector_name": names[1]}, ensure_ascii=False
-                    )
                 succeeded += 1
             except Exception:
                 log.exception(
                     "corporation_snapshot_failed", symbol=symbol, trade_date=day.isoformat()
                 )
-    if cached:
-        valkey.hset("stock:metadata", mapping=cached)
     log.info(
         "corporation_snapshot_complete",
         succeeded=succeeded,

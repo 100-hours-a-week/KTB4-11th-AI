@@ -68,20 +68,12 @@ async def enrich_rankings(
     if not items:
         return ranking
     codes = [item["code"] for item in items]
-    metadata, prices = await asyncio.gather(
-        valkey.hmget("stock:metadata", codes),
+    details, prices = await asyncio.gather(
+        asyncio.to_thread(questdb_ranking_details, conf, codes),
         valkey.mget([f"price:{code}" for code in codes]),
     )
-    missing = [
-        code
-        for code, meta, price in zip(codes, metadata, prices, strict=True)
-        if meta is None or price is None
-    ]
-    fallback = await asyncio.to_thread(questdb_ranking_details, conf, missing) if missing else {}
-    for item, code, meta, price in zip(items, codes, metadata, prices, strict=True):
-        item.update(fallback.get(code, {}))
-        if meta is not None:
-            item.update(json.loads(meta))
+    for item, code, price in zip(items, codes, prices, strict=True):
+        item.update(details.get(code, {}))
         if price is not None:
             tick = json.loads(price)
             item.update(price=tick["price"], change_rate=tick["rate"])

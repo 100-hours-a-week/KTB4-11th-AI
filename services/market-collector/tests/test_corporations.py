@@ -93,7 +93,7 @@ def test_collect_corporations_writes_snapshot_with_signed_price(monkeypatch):
     monkeypatch.setattr(corporations.questdb, "connect", lambda conf: Connection())
     monkeypatch.setattr(corporations, "Store", SnapshotStore)
     settings = type("Settings", (), {"questdb_conf": "test"})()
-    collect_corporations(settings, ["000080"], Client(), None, datetime(2026, 10, 19, tzinfo=UTC))
+    collect_corporations(settings, ["000080"], Client(), datetime(2026, 10, 19, tzinfo=UTC))
     assert written == [
         (
             "000080",
@@ -180,7 +180,6 @@ def test_collector_joins_stock_list_metadata_with_daily_snapshot(monkeypatch):
     from market_collector import corporations
 
     writes = []
-    cache = []
 
     class Store:
         def write_corporation(self, *args):
@@ -202,15 +201,10 @@ def test_collector_joins_stock_list_metadata_with_daily_snapshot(monkeypatch):
     monkeypatch.setattr(corporations.questdb, "connect", lambda conf: nullcontext(object()))
     monkeypatch.setattr(corporations, "Store", lambda db: Store())
     settings = type("Settings", (), {"questdb_conf": "unused"})()
-    valkey = type("Valkey", (), {"hset": lambda self, key, mapping: cache.append((key, mapping))})()
-
-    collect_corporations(settings, ["005930"], Client(), valkey, datetime(2026, 10, 19, tzinfo=UTC))
+    collect_corporations(settings, ["005930"], Client(), datetime(2026, 10, 19, tzinfo=UTC))
 
     assert writes[0][3]["stock_name"] == "삼성전자"
     assert writes[0][3]["sector_name"] == "전기전자"
-    assert cache == [
-        ("stock:metadata", {"005930": '{"stock_name": "삼성전자", "sector_name": "전기전자"}'})
-    ]
 
 
 def test_metadata_failure_keeps_price_limit_snapshots(monkeypatch):
@@ -240,9 +234,7 @@ def test_metadata_failure_keeps_price_limit_snapshots(monkeypatch):
     monkeypatch.setattr(corporations.questdb, "connect", lambda conf: nullcontext(object()))
     monkeypatch.setattr(corporations, "Store", lambda db: Store())
     settings = type("Settings", (), {"questdb_conf": "unused"})()
-    valkey = type("Valkey", (), {"hset": lambda self, key, mapping: None})()
-
-    collect_corporations(settings, ["005930"], Client(), valkey, datetime(2026, 10, 19, tzinfo=UTC))
+    collect_corporations(settings, ["005930"], Client(), datetime(2026, 10, 19, tzinfo=UTC))
 
     assert writes[0][3]["base_price"] == 80000
     assert "stock_name" not in writes[0][3]
