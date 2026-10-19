@@ -13,7 +13,6 @@ StartLimitBurst=5
 Type=simple
 User=@@DEPLOY_USER@@
 WorkingDirectory=@@DEPLOY_DIR@@
-ExecStartPre=/usr/bin/bash -c 'marker="@@DEPLOY_DIR@@/.market-syncer-success"; test -f "$marker" && test "$(TZ=Asia/Seoul date -r "$marker" +%%F)" = "$(TZ=Asia/Seoul date +%%F)"'
 ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.market-streamer.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T market-streamer
 Restart=on-failure
 RestartMode=direct
