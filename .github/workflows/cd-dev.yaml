@@ -234,6 +234,7 @@ jobs:
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
             ktb-market-streamer.timer \
+            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer
@@ -241,6 +242,7 @@ jobs:
           for timer in \
             ktb-market-collector.timer \
             ktb-market-streamer.timer \
+            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer; do
