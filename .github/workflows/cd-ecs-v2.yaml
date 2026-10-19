@@ -1,195 +1,187 @@
-name: CD ECS V2
+name: AI V2 ECS CD
 
-# dev 브랜치의 CI Dev가 성공하면, 그 커밋 이미지로 V2 운영 ECS의 market-http를 배포합니다.
-# 나머지 AI 서비스는 cd-dev.yaml(개발 EC2)과 cd.yaml(운영 EC2)이 담당합니다.
 on:
-  workflow_run:
-    workflows: ["CI Dev"]
-    # workflow_run은 success 타입을 지원하지 않아 completed로 받은 뒤 job의 if에서 성공만 허용합니다.
-    types: [completed]
-    branches: [dev]
-  # 재배포나 장 마감 후로 미룬 배포를 수동으로 실행합니다. dev 브랜치에서 실행해야 합니다.
+  workflow_call:
+    inputs:
+      image_tag:
+        required: true
+        type: string
+      image_digest:
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Commit SHA from a successful dev CI run (including older releases)
+        required: true
+        type: string
 
-permissions:
-  contents: read
-  id-token: write # GitHub OIDC로 ECS 배포 Role을 assume
-
-# 배포가 겹쳐 서로 덮어쓰지 않도록 순서대로 실행합니다.
 concurrency:
-  group: ecs-v2-production
+  group: ecs-production-market-http
   cancel-in-progress: false
 
-env:
-  AWS_REGION: ap-northeast-2
-  CLUSTER: stockspoon-v2-prod-cluster
-  # CI Dev가 push한 이미지입니다. (cd-dev.yaml과 같은 태그 규칙)
-  DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-  IMAGE: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.event.workflow_run.head_sha || github.sha }}
-
 jobs:
-  check:
-    # push로 실행된 CI Dev가 성공했을 때, 또는 dev에서 수동 실행했을 때만 배포합니다.
-    if: >-
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev')
-    runs-on: ubuntu-latest
+  deploy:
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     permissions:
       contents: read
       actions: read
-    outputs:
-      deploy: ${{ steps.freshness.outputs.deploy }}
+      id-token: write
+    env:
+      AWS_REGION: ap-northeast-2
+      ECS_CLUSTER: stockspoon-v2-prod-cluster
+      ECS_SERVICE: stockspoon-v2-prod-market-http
+      TASK_FAMILY: stockspoon-v2-prod-market-http
+      CONTAINER_NAME: market-http
+      TASK_TEMPLATE: infrastructure/ecs/market-http.json
+      IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+      IMAGE_DIGEST: ${{ inputs.image_digest }}
     steps:
-      # 대기 중 dev가 갱신됐으면 과거 이미지를 뒤늦게 배포하지 않습니다.
-      - name: Check deployment freshness
-        id: freshness
+      - name: Validate deployment source
+        id: source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          current_dev_sha="$(gh api "repos/${{ github.repository }}/commits/dev" --jq .sha)"
-          test -n "$current_dev_sha" || { echo "Unable to resolve refs/heads/dev" >&2; exit 1; }
-
-          if [[ "$DEPLOY_SHA" == "$current_dev_sha" ]]; then
-            echo "deploy=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "deploy=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::Skipping stale deployment: target=$DEPLOY_SHA current=$current_dev_sha"
-          fi
-
-      - name: Verify successful CI for manual deployment
-        if: github.event_name == 'workflow_dispatch' && steps.freshness.outputs.deploy == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          run="$(gh api --method GET \
-            "repos/${{ github.repository }}/actions/workflows/ci-dev.yaml/runs" \
-            -f branch=dev -f event=push -f head_sha="$DEPLOY_SHA" -f per_page=1 \
+          set -Eeuo pipefail
+          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            ci_run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci-dev.yaml/runs" \
+            -f branch=dev -f event=push -f head_sha="$IMAGE_TAG" -f status=success -f per_page=1 \
             --jq '.workflow_runs[0] // null')"
-
-          if ! jq -e --arg sha "$DEPLOY_SHA" \
+            jq -e --arg sha "$IMAGE_TAG" \
             '.head_sha == $sha and .head_branch == "dev" and .event == "push" and .status == "completed" and .conclusion == "success"' \
-            <<<"$run" > /dev/null; then
-            echo "::error::No successful completed CI Dev push run for $DEPLOY_SHA"
-            exit 1
+            <<<"$ci_run" > /dev/null
+            release_dir="$(mktemp -d)"
+            trap 'rm -rf "$release_dir"' EXIT
+            gh run download "$(jq -r .id <<<"$ci_run")" --repo "$GITHUB_REPOSITORY" \
+            --name ecs-release --dir "$release_dir"
+            jq -e --arg sha "$IMAGE_TAG" --arg repository "$IMAGE_REPOSITORY" \
+            '.sha == $sha and .repository == $repository' "$release_dir/ecs-release.json" > /dev/null
+            IMAGE_DIGEST="$(jq -r .digest "$release_dir/ecs-release.json")"
+          else
+            [[ "$IMAGE_TAG" == "$GITHUB_SHA" ]] || { echo 'Source SHA does not match caller' >&2; exit 1; }
+            current_dev_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)"
+            [[ "$current_dev_sha" =~ ^[0-9a-f]{40}$ ]]
+            if [[ "$IMAGE_TAG" != "$current_dev_sha" ]]; then
+              echo '::notice::Skipping stale automatic deployment'
+              echo 'deploy=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
-          echo "Verified CI: $(jq -r .html_url <<<"$run")"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Invalid image digest' >&2; exit 1; }
+          echo "IMAGE=${IMAGE_REPOSITORY}@${IMAGE_DIGEST}" >> "$GITHUB_ENV"
+          echo 'deploy=true' >> "$GITHUB_OUTPUT"
 
-  deploy:
-    needs: check
-    if: needs.check.outputs.deploy == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    strategy:
-      # V2 ECS에는 market-http(무중단 Rolling)만 있습니다. market-streamer는 ECS에서 운영하지 않습니다.
-      max-parallel: 1
-      fail-fast: true
-      matrix:
-        service: [market-http]
-    steps:
       - uses: actions/checkout@v7
+        if: steps.source.outputs.deploy == 'true'
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.image_tag }}
+          persist-credentials: false
 
-      - name: Configure AWS credentials (ECS deploy)
+      - name: Verify task definition source
+        if: steps.source.outputs.deploy == 'true'
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$IMAGE_TAG" ]]
+          jq -e --arg family "$TASK_FAMILY" --arg name "$CONTAINER_NAME" \
+            '.family == $family and ([.containerDefinitions[] | select(.name == $name)] | length) == 1' \
+            "$TASK_TEMPLATE" > /dev/null
+
+      - name: Configure AWS credentials with OIDC
+        if: steps.source.outputs.deploy == 'true'
         uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_ECS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Register task definition with the new image
-        id: taskdef
-        env:
-          FAMILY: stockspoon-v2-prod-${{ matrix.service }}
-          CONTAINER: ${{ matrix.service }}
+      - name: Register task definition revision
+        if: steps.source.outputs.deploy == 'true'
+        id: register
         run: |
-          set -euo pipefail
-          template="infrastructure/ecs/${CONTAINER}.json"
-          jq -e --arg family "$FAMILY" --arg name "$CONTAINER" \
-            '.family == $family and ([.containerDefinitions[] | select(.name == $name)] | length) == 1' \
-            "$template" > /dev/null
-
-          jq --arg image "$IMAGE" --arg name "$CONTAINER" '
-            .containerDefinitions |= map(if .name == $name then .image = $image else . end)
-          ' "$template" > next.json
-
+          set -Eeuo pipefail
+          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" \
+            '.containerDefinitions |= map(if .name == $name then .image = $image else . end)' \
+            "$TASK_TEMPLATE" > next.json
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
             --query taskDefinition.taskDefinitionArn --output text)"
-          echo "arn=$arn" >> "$GITHUB_OUTPUT"
-          echo "::notice::Registered $arn ($IMAGE)"
+          [[ -n "$arn" && "$arn" != 'None' ]]
+          echo "task_definition_arn=$arn" >> "$GITHUB_OUTPUT"
 
-      # Circuit Breaker(rollback)가 켜져 있어 실패하면 ECS가 이전 리비전으로 되돌립니다.
-      - name: Update service
+      - name: Update ECS service
+        if: steps.source.outputs.deploy == 'true'
         id: update
         env:
-          SERVICE: stockspoon-v2-prod-${{ matrix.service }}
-          TASK_DEFINITION: ${{ steps.taskdef.outputs.arn }}
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
         run: |
-          set -euo pipefail
-          response="$(aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
-            --task-definition "$TASK_DEFINITION")"
-          deployment_id="$(jq -r --arg arn "$TASK_DEFINITION" \
-            '.service.deployments[] | select(.status == "PRIMARY" and .taskDefinition == $arn) | .id' \
+          set -Eeuo pipefail
+          response="$(aws ecs update-service --cluster "$ECS_CLUSTER" --service "$ECS_SERVICE" \
+            --task-definition "$TASK_DEFINITION_ARN")"
+          deployment_id="$(jq -r --arg arn "$TASK_DEFINITION_ARN" \
+            '[.service.deployments[] | select(.status == "PRIMARY" and .taskDefinition == $arn)] | .[0].id // empty' \
             <<<"$response")"
-          if [[ -z "$deployment_id" || "$deployment_id" == "null" ]]; then
-            echo "::error::Could not find the new deployment for $TASK_DEFINITION"
-            exit 1
-          fi
+          [[ -n "$deployment_id" ]] || { echo 'New deployment not found' >&2; exit 1; }
           echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment completion
+        if: steps.source.outputs.deploy == 'true'
         env:
-          SERVICE: stockspoon-v2-prod-${{ matrix.service }}
-          TASK_DEFINITION: ${{ steps.taskdef.outputs.arn }}
           DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
         run: |
-          set -euo pipefail
-          deadline=$((SECONDS + 25 * 60))
-
+          set -Eeuo pipefail
+          deadline=$((SECONDS + 35 * 60))
           print_events() {
-            aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" \
-              --query 'services[0].events[:10].[createdAt,message]' --output text || true
+            aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE" \
+            --query 'services[0].events[:10].[createdAt,message]' --output text || true
           }
-
           while (( SECONDS < deadline )); do
-            response="$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE")"
+            response="$(aws ecs describe-services --cluster "$ECS_CLUSTER" --services "$ECS_SERVICE")"
             deployment="$(jq --arg id "$DEPLOYMENT_ID" \
-              '[.services[0].deployments[]? | select(.id == $id)] | .[0] // null' \
-              <<<"$response")"
-
-            if ! jq -e --arg arn "$TASK_DEFINITION" \
-              '. != null and .status == "PRIMARY" and .taskDefinition == $arn' \
-              <<<"$deployment" > /dev/null; then
-              echo "::error::Deployment $DEPLOYMENT_ID was rolled back, replaced or not returned"
+            '[.services[0].deployments[]? | select(.id == $id)] | .[0] // null' <<<"$response")"
+            if ! jq -e --arg arn "$TASK_DEFINITION_ARN" \
+            '. != null and .status == "PRIMARY" and .taskDefinition == $arn' <<<"$deployment" > /dev/null; then
+              echo '::error::Deployment was rolled back, replaced or not returned'
               print_events
               exit 1
             fi
-
             state="$(jq -r .rolloutState <<<"$deployment")"
-            echo "Deployment $DEPLOYMENT_ID: $state"
+            echo "Deployment $DEPLOYMENT_ID: $state running=$(jq -r .runningCount <<<"$deployment")/$(jq -r .desiredCount <<<"$deployment") failed=$(jq -r .failedTasks <<<"$deployment")"
             case "$state" in
-              COMPLETED)
-                echo "Deployment completed: $TASK_DEFINITION"
-                exit 0
-                ;;
-              FAILED)
-                echo "::error::Deployment failed: $(jq -r .rolloutStateReason <<<"$deployment")"
-                print_events
-                exit 1
-                ;;
+              COMPLETED) exit 0 ;;
               IN_PROGRESS) ;;
               *)
-                echo "::error::Unexpected rollout state: $state"
+                echo "::error::Deployment failed: $(jq -r '.rolloutStateReason // .rolloutState' <<<"$deployment")"
                 print_events
                 exit 1
                 ;;
             esac
             sleep 15
           done
-
-          echo "::error::Timed out waiting for deployment $DEPLOYMENT_ID"
+          echo '::error::Timed out waiting for deployment'
           print_events
           exit 1
+
+      - name: Add deployment summary
+        if: always()
+        env:
+          RESULT: ${{ job.status }}
+          DEPLOY: ${{ steps.source.outputs.deploy }}
+          TASK_DEFINITION_ARN: ${{ steps.register.outputs.task_definition_arn }}
+          DEPLOYMENT_ID: ${{ steps.update.outputs.deployment_id }}
+        run: |
+          {
+            echo '### V2 ECS deployment'
+            echo "- commit: $IMAGE_TAG"
+            echo "- image: ${IMAGE:-unresolved}"
+            echo "- service: $ECS_CLUSTER/$ECS_SERVICE"
+            echo "- task definition: $TASK_DEFINITION_ARN"
+            echo "- deployment: $DEPLOYMENT_ID"
+            if [[ "$DEPLOY" == 'false' ]]; then
+              echo '- result: skipped (stale automatic deployment)'
+            else
+              echo "- result: $RESULT"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
