@@ -19,8 +19,8 @@ the only market is KOSPI and the only index is KOSPI 200. It does not own the us
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | nothing else |
 
 - market-syncer never writes `entities`, `relations` or `cluster_*`, and never writes QuestDB.
-- Trigger: the daily 06:00 KST morning pipeline; `market-syncer` is the first `run_job` in `scripts/run-morning-pipeline.sh`, and `main()` runs once and exits.
-- The pipeline order is `market-syncer → news-clusterer → news-graph-builder → portfolio-builder`.
+- Trigger: an independent systemd timer at 06:00 KST every day; `main()` runs once and exits.
+- `scripts/run-morning-pipeline.sh` remains a separate helper and does not schedule market-syncer on the server.
 
 ## Schema (Alembic `0006`, Postgres)
 
@@ -139,42 +139,38 @@ The reference datasets do not need hourly refreshes:
 | KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL; the sync service exits non-zero and retries. |
 | Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; the sync service exits non-zero and retries. |
 
-One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one daily execution inside the 06:00 morning pipeline reduces scheduled market-sync executions from 168 to 7 per week, about 96%.
+One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one daily execution at 06:00 reduces scheduled market-sync executions from 168 to 7 per week, about 96%.
 
-### Combined 06:00 schedule
+### Independent daily 06:00 schedule
 
-There is no standalone `ktb-market-syncer.timer`. The `ktb-morning-pipeline.timer` runs every calendar day at `*-*-* 06:00:00 Asia/Seoul`.
-
-`scripts/run-morning-pipeline.sh` stays simple and only adds market-syncer as the first scheduled job:
+`ktb-market-syncer.timer` runs every calendar day at `*-*-* 06:00:00 Asia/Seoul` and starts `ktb-market-syncer.service` directly.
 
 ```text
-06:00 daily morning-pipeline.timer
-  -> market-syncer
-  -> news-clusterer
-  -> news-graph-builder
-  -> portfolio-builder
+06:00 market-syncer.timer
+  -> market-syncer.service
 ```
 
-The script relies on `set -Eeuo pipefail`, so if market-syncer exits non-zero, the pipeline stops immediately and no downstream job starts.
+`scripts/run-morning-pipeline.sh` is kept separate and does not contain market-syncer. The other scheduled services keep their own timers and execution times.
 
 ### Failure, retry, and restart behavior
 
-Retry stays in systemd rather than being implemented in `run-morning-pipeline.sh`. `ktb-morning-pipeline.service` uses `Restart=on-failure`, `RestartMode=direct`, `RestartSec=5m`, `StartLimitIntervalSec=1h`, and `StartLimitBurst=3`. If market-syncer causes the pipeline to fail, systemd retries the whole morning pipeline after five minutes, starting again from market-syncer.
+`ktb-market-syncer.service` keeps the repository's existing systemd retry policy: `Restart=on-failure`, `RestartMode=direct`, `RestartSec=5m`, `StartLimitIntervalSec=1h`, and `StartLimitBurst=3`. A failed synchronization is retried by systemd without custom retry code in a shell pipeline.
 
-The standalone `ktb-market-syncer.service` remains available for manual recovery, but it has no timer of its own.
+`ktb-market-syncer.timer` uses `Persistent=true`. If the host is down at 06:00, systemd starts the missed run after the host returns. The next regular activation remains the next calendar day at 06:00.
+
+Both production and development CD install, enable, and verify `ktb-market-syncer.timer` alongside the other scheduled timers.
 
 ### Operator commands
 
 ```bash
 systemctl list-timers --all --no-pager | grep 'ktb-'
-systemctl cat ktb-morning-pipeline.timer
-systemctl cat ktb-morning-pipeline.service
-journalctl -u ktb-morning-pipeline.service -n 200 --no-pager
+systemctl cat ktb-market-syncer.timer
+systemctl cat ktb-market-syncer.service
+systemctl status ktb-market-syncer.service --no-pager
+journalctl -u ktb-market-syncer.service -n 200 --no-pager
 
 # manual market reference refresh / recovery
 sudo systemctl start ktb-market-syncer.service
-systemctl status ktb-market-syncer.service --no-pager
-journalctl -u ktb-market-syncer.service -n 200 --no-pager
 ```
 
 Runtime verification on 2026-10-19 confirmed that production had been continuously booted since 2026-09-27 17:49 KST and development since 2026-10-08 07:19 UTC (16:19 KST), with no daily EC2 start/stop scheduler in the Cloud Terraform repository.
@@ -184,7 +180,7 @@ Runtime verification on 2026-10-19 confirmed that production had been continuous
 The migration renames columns that three services read, so migration, market-syncer,
 news-graph-builder and market-collector ship together. They are scheduled batch jobs, so the gap is one missed
 tick. Run the migration job first, then market-syncer once by hand to confirm the tables, then
-enable the morning pipeline and later market jobs.
+enable the market-syncer timer and later market jobs.
 
 ## Testing
 
