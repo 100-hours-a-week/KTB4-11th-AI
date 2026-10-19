@@ -19,7 +19,7 @@ the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLC
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | nothing else |
 
 - market-syncer never writes `entities`, `relations` or `cluster_*`, and never writes QuestDB.
-- Trigger: cron, `main()` runs once and exits (same as the other batch services).
+- Trigger: systemd timer at 04:05 KST every day; `main()` runs once and exits. The timer keeps `Persistent=true`, so a missed daily run starts after the host returns.
 - Runs before `news-graph-builder` and `market-collector` in the schedule.
 
 ## Schema (Alembic `0006`, Postgres)
@@ -129,10 +129,30 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
 | `DART_API_KEY` | required |
 | `LOG_LEVEL` | `INFO` |
 
+## Schedule and operations
+
+`market-syncer` refreshes reference snapshots rather than intraday price data, so it runs once per day instead of every hour. The daily timer is `04:05 Asia/Seoul`: it avoids the hourly `news-preprocessor` tick at `:00`, leaves 1 hour 55 minutes before the 06:00 morning pipeline, and completes well before `market-streamer` at 08:50 and `market-collector` at 08:55 under the normal schedule.
+
+The timer keeps `Persistent=true`. If the host is down at 04:05, systemd starts the missed run after the host returns. The service itself keeps `Restart=on-failure`, `RestartSec=5m`, `TimeoutStartSec=50m`, and the existing start-rate limit. Operators should verify a late boot before market open because missed persistent timers may be queued close to consumer jobs.
+
+The production and development CD workflows already upload every `ktb-*.service.in` and `ktb-*.timer`, run `systemd-analyze verify`, install the units, call `daemon-reload`, enable `ktb-market-syncer.timer`, and print `systemctl list-timers`; changing the timer file therefore updates both environments without a workflow-specific schedule change.
+
+Useful operator commands:
+
+```bash
+systemctl list-timers --all --no-pager | grep ktb-market-syncer
+systemctl cat ktb-market-syncer.timer
+sudo systemctl start ktb-market-syncer.service
+systemctl status ktb-market-syncer.service --no-pager
+journalctl -u ktb-market-syncer.service -n 200 --no-pager
+```
+
+After deployment, verify the next trigger is 04:05 KST and check the first scheduled run plus one manual run. A failed run should retry according to the service restart policy; after a reboot that missed 04:05, `Persistent=true` should cause one catch-up activation.
+
 ## Rollout
 
 The migration renames columns that three services read, so migration, market-syncer,
-news-graph-builder and market-collector ship together. They are cron jobs, so the gap is one missed
+news-graph-builder and market-collector ship together. They are scheduled batch jobs, so the gap is one missed
 tick. Run the migration job first, then market-syncer once by hand to confirm the tables, then
 enable the others.
 
