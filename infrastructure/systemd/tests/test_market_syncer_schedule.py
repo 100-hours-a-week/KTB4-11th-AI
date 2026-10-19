@@ -39,6 +39,7 @@ def test_reference_consumers_require_fresh_sync() -> None:
     collector = read(SYSTEMD / "ktb-market-collector.service.in")
 
     assert "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 5400" in morning
+    assert "TimeoutStartSec=4h20m" in morning
     assert "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 0" in streamer
     assert "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 0" in collector
 
