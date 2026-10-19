@@ -35,11 +35,16 @@ def test_market_syncer_retries_and_records_success() -> None:
 
 def test_reference_consumers_require_fresh_sync() -> None:
     morning = read(SYSTEMD / "ktb-morning-pipeline.service.in")
+    preprocessor = read(SYSTEMD / "ktb-news-preprocessor.service.in")
     streamer = read(SYSTEMD / "ktb-market-streamer.service.in")
     collector = read(SYSTEMD / "ktb-market-collector.service.in")
 
     assert "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 5400" in morning
     assert "TimeoutStartSec=4h20m" in morning
+    assert (
+        "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 0 after-weekday-sync"
+        in preprocessor
+    )
     assert "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 0" in streamer
     assert "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 0" in collector
 
