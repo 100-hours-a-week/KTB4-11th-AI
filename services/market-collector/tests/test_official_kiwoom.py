@@ -97,6 +97,56 @@ def test_stock_info_uses_ka10001_and_shared_request_pacing(monkeypatch):
     }
 
 
+def test_stock_metadata_reads_all_kospi_pages():
+    class Client:
+        def __init__(self):
+            self.calls = []
+
+        def fetch_page(self, **kwargs):
+            self.calls.append(kwargs)
+            rows = (
+                [{"code": "005930", "name": "삼성전자", "upName": "전기전자"}]
+                if len(self.calls) == 1
+                else [{"code": "000660", "name": "SK하이닉스", "upName": "전기전자"}]
+            )
+            continuation = (
+                Continuation(True, "NEXT", "Y")
+                if len(self.calls) == 1
+                else Continuation(False, None, "N")
+            )
+            return KiwoomResponse({"list": rows, "return_code": 0}, continuation, {})
+
+    client = Client()
+
+    assert ChartClient(client).stock_metadata() == {
+        "005930": ("삼성전자", "전기전자"),
+        "000660": ("SK하이닉스", "전기전자"),
+    }
+    assert client.calls[0] == {
+        "api_id": "ka10099",
+        "path": "/api/dostk/stkinfo",
+        "body": {"mrkt_tp": "0"},
+        "cont_yn": None,
+        "next_key": None,
+    }
+    assert client.calls[1]["next_key"] == "NEXT"
+
+
+def test_stock_metadata_rejects_api_failure():
+    class Client:
+        def fetch_page(self, **kwargs):
+            return KiwoomResponse(
+                {"return_code": -1, "return_msg": "unavailable"},
+                Continuation(False, None, "N"),
+                {},
+            )
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="unavailable"):
+        ChartClient(Client()).stock_metadata()
+
+
 class Clock:
     def __init__(self):
         self.now = 0.0

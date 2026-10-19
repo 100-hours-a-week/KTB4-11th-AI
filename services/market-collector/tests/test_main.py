@@ -252,7 +252,7 @@ def test_snapshot_runs_at_launch_and_failure_does_not_stop_bars(monkeypatch, sta
     day = Day(start)
     snapshots = []
 
-    def snapshot(settings, symbols, client, now):
+    def snapshot(settings, symbols, client, valkey, now):
         assert day.sleeps == []
         snapshots.append(now.astimezone(KST))
         day.now += timedelta(seconds=40)

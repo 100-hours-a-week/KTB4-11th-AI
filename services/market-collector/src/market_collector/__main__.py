@@ -102,7 +102,7 @@ def run(
         pending = [at for at in passes if at > local] or [local]
 
         try:
-            collect_corporations(settings, symbols, client, clock())
+            collect_corporations(settings, symbols, client, valkey, clock())
         except Exception:
             log.exception("corporation_snapshot_pass_failed")
 

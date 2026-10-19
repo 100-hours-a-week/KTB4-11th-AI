@@ -71,7 +71,11 @@ class Store:
         self._db = db
 
     def write_corporation(
-        self, symbol: str, trade_date: date, fetched_at: datetime, values: dict[str, int | None]
+        self,
+        symbol: str,
+        trade_date: date,
+        fetched_at: datetime,
+        values: dict[str, int | str | None],
     ) -> None:
         with self._db.sender() as sender:
             sender.row(
