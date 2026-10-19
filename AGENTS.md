@@ -140,6 +140,7 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_HTTP_QUESTDB_CONF` | market-http (official client config, e.g. `ws::addr=localhost:9000;`) | required |
 | `MARKET_HTTP_VALKEY_HOST` | market-http (price cache host) | required |
 | `MARKET_HTTP_VALKEY_PORT` | market-http | `6379` |
+| `MARKET_HTTP_VALKEY_MAX_CONNECTIONS` | market-http; positive connection-pool limit for SSE load tests | — |
 | `MARKET_HTTP_VALKEY_USERNAME` | market-http (required with `iam`) | — |
 | `MARKET_HTTP_VALKEY_CACHE_NAME` | market-http (ElastiCache serverless cache name; required with `iam`) | — |
 | `MARKET_HTTP_VALKEY_TLS` | market-http (production Compose `true`) | `false` |
