@@ -15,6 +15,6 @@ User=@@DEPLOY_USER@@
 WorkingDirectory=@@DEPLOY_DIR@@
 ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 5400
 ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.morning-pipeline.lock @@DEPLOY_DIR@@/scripts/run-morning-pipeline.sh
-TimeoutStartSec=2h50m
+TimeoutStartSec=4h20m
 Restart=no
 KillMode=mixed
