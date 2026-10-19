@@ -1,5 +1,5 @@
 [Unit]
-Description=KTB hourly market reference data synchronization job
+Description=KTB daily market reference data synchronization job
 Wants=network-online.target
 After=network-online.target docker.service
 Requires=docker.service
