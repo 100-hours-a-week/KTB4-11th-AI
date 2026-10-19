@@ -44,6 +44,17 @@ def test_reference_consumers_require_fresh_sync() -> None:
     assert "ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 0" in collector
 
 
+def test_both_cd_workflows_install_and_enable_the_sync_schedule() -> None:
+    for name in ("cd.yaml", "cd-dev.yaml"):
+        workflow = read(ROOT / ".github" / "workflows" / name)
+        assert "scripts/wait-for-market-syncer.sh" in workflow
+        assert "ktb-market-syncer.timer" in workflow
+        assert "systemd-analyze verify" in workflow
+
+        legacy_block = workflow.split("for legacy_timer in", 1)[1].split("done", 1)[0]
+        assert "ktb-market-syncer.timer" not in legacy_block
+
+
 def test_freshness_gate_accepts_today_marker(tmp_path: Path) -> None:
     marker = tmp_path / ".market-syncer-success"
     marker.touch()
