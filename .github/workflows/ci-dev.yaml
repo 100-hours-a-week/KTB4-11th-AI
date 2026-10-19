@@ -19,11 +19,11 @@ permissions:
 
 concurrency:
   group: ci-dev-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     services:
       postgres:
@@ -97,7 +97,7 @@ jobs:
         run: uv run pytest
 
   dependency-audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
@@ -117,7 +117,7 @@ jobs:
           exit "$audit_status"
 
   verify-exported-requirements:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
@@ -135,7 +135,7 @@ jobs:
           git diff --exit-code -- docker/requirements/
 
   build-images:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     strategy:
       matrix:
@@ -168,8 +168,10 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
   build-app-image:
+    outputs:
+      image_digest: ${{ steps.image.outputs.digest }}
     needs: lint-and-test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -191,6 +193,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push application image
+        id: image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -201,8 +204,27 @@ jobs:
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
 
+      - name: Record release image
+        if: github.event_name == 'push'
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n --arg sha "$GITHUB_SHA" --arg digest "$IMAGE_DIGEST" --arg repository "$IMAGE_REPOSITORY" \
+            '{sha: $sha, digest: $digest, repository: $repository}' > ecs-release.json
+
+      - name: Upload release image record
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-release
+          path: ecs-release.json
+          retention-days: 90
+
   python-314-compatibility:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true
 
     services:
@@ -231,3 +253,27 @@ jobs:
       - run: uv sync --all-packages --locked --group migrations --python 3.14
       - run: uv run --python 3.14 alembic upgrade head
       - run: uv run --python 3.14 pytest
+
+  deploy-dev:
+    needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-314-compatibility]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/cd-dev.yaml
+    with:
+      image_tag: ${{ github.sha }}
+      image_digest: ${{ needs.build-app-image.outputs.image_digest }}
+    secrets: inherit
+
+  deploy-ecs:
+    needs: [build-app-image, deploy-dev]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/cd-ecs-v2.yaml
+    with:
+      image_tag: ${{ github.sha }}
+      image_digest: ${{ needs.build-app-image.outputs.image_digest }}
+    secrets: inherit

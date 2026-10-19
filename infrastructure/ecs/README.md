@@ -5,10 +5,10 @@
 ## 배포 흐름
 
 ```text
-dev push → CI Dev 성공·ECR 업로드 완료 → CD ECS V2 → market-http 배포
+dev push → CI 검사·이미지 push → CD Dev 개발 EC2 배포·헬스체크 성공 → AI V2 ECS CD → market-http 배포
 ```
 
-CD는 성공한 CI의 커밋을 checkout하고, 같은 커밋의 템플릿에 해당 SHA의 이미지 주소를 넣어 새 Task Definition 리비전을 등록합니다. 이후 서비스를 갱신하고 배포 ID를 기준으로 완료 여부를 확인합니다.
+CD는 성공한 CI의 커밋을 checkout하고, 같은 커밋의 템플릿에 CI에서 기록한 이미지 digest 주소를 넣어 새 Task Definition 리비전을 등록합니다. 이후 서비스를 갱신하고 배포 ID를 기준으로 완료 여부를 확인합니다.
 
 AWS 최신 리비전을 복사하거나 ECR 최신 이미지를 검색하지 않습니다.
 
@@ -24,11 +24,13 @@ AWS 최신 리비전을 복사하거나 ECR 최신 이미지를 검색하지 않
 
 ## 수동 배포
 
-GitHub Actions의 `CD ECS V2`에서 실행 브랜치로 `dev`를 지정합니다.
+GitHub Actions의 `AI V2 ECS CD`에서 실행 브랜치로 `dev`를 지정하고 `image_tag`에 40자리 커밋 SHA를 입력합니다.
 
-수동 배포도 해당 SHA의 dev push에 대한 `CI Dev`가 완료·성공한 경우에만 허용합니다. CI 기록이 없거나 진행 중·실패 상태이면 배포하지 않습니다.
+해당 SHA의 dev push CI가 완료·성공했고 `ecs-release` artifact가 남아 있어야 합니다. 이 artifact의 SHA·저장소·digest를 검증해 당시 이미지를 배포합니다. 이전 릴리스도 지정할 수 있으므로 수동 롤백에는 최신 dev 검사를 적용하지 않습니다. artifact 보존 기간은 90일이며, 변경 전 릴리스처럼 기록이 없으면 수동 배포는 실패합니다.
 
-자동·수동 배포 모두 대상 SHA가 현재 dev의 SHA와 일치하는지 확인합니다. dev가 이미 갱신됐다면 이전 SHA의 배포는 건너뜁니다.
+자동 배포는 현재 dev와 SHA가 다르면 생략합니다. 개발·운영은 같은 digest를 사용하며 운영 배포 대기는 최대 35분입니다. 진행 중인 push CI·배포는 새 push로 취소하지 않습니다.
+
+운영 인증은 기존 OIDC Role을 유지합니다. `production` Environment 승인 도입은 AWS Role 신뢰 정책의 OIDC subject를 함께 변경한 뒤 적용해야 합니다.
 
 ## Cloud와의 역할 분담
 
