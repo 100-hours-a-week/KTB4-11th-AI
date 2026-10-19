@@ -20,7 +20,7 @@ the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLC
 
 - market-syncer never writes `entities`, `relations` or `cluster_*`, and never writes QuestDB.
 - Trigger: an independent systemd timer at 05:55 KST on weekdays; `main()` runs once and exits.
-- The 06:00 morning pipeline remains unchanged. It waits for a successful market-syncer run from the current KST date before starting its own jobs. `market-streamer` and `market-collector` perform the same freshness check before their 08:50 and 08:55 starts.
+- The 06:00 morning pipeline remains unchanged. It waits for a successful market-syncer run from the current KST date before starting its own jobs. The hourly `news-preprocessor` requires today's sync from 05:55 onward on weekdays, while pre-05:55 and weekend runs keep using the latest available snapshot. `market-streamer` and `market-collector` perform the same current-day freshness check before their 08:50 and 08:55 starts.
 
 ## Schema (Alembic `0006`, Postgres)
 
@@ -152,6 +152,7 @@ The repository does not contain an EC2 power-on scheduler or another authoritati
 A successful market-syncer service run touches `@@DEPLOY_DIR@@/.market-syncer-success`. Consumers use `scripts/wait-for-market-syncer.sh` to require a success marker from the current Asia/Seoul calendar date:
 
 - the 06:00 morning pipeline waits up to 90 minutes, which also covers a late boot or market-syncer retry without moving the pipeline's timer; its systemd start timeout is increased by the same 90 minutes so the existing 2h50m pipeline execution budget is preserved;
+- the hourly news-preprocessor requires a current-day marker only after the weekday 05:55 sync boundary, so midnight/early-morning and weekend ingestion are not blocked;
 - market-streamer and market-collector check immediately before their 08:50 and 08:55 starts and fail instead of starting on a stale reference snapshot.
 
 This keeps market-syncer operationally independent while still enforcing "reference data first" at each scheduled consumer boundary.
@@ -162,7 +163,7 @@ This keeps market-syncer operationally independent while still enforcing "refere
 
 `Persistent=true` on the timer means a missed 05:55 activation is caught up after a reboot. The next regular activation remains the following weekday at 05:55. The morning pipeline itself remains `Persistent=false`; if the host boots after its 06:00 timer has already been missed, that pipeline is not replayed automatically.
 
-The CI schedule tests assert the 05:55/06:00 separation, `Persistent=true`, retry settings, absence of market-syncer from the morning-pipeline script, and freshness guards on the morning pipeline, market-streamer, and market-collector. Both CD workflows render and run `systemd-analyze verify` on the units before installing them.
+The CI schedule tests assert the 05:55/06:00 separation, `Persistent=true`, retry settings, absence of market-syncer from the morning-pipeline script, and freshness guards on the morning pipeline, news-preprocessor, market-streamer, and market-collector. Both CD workflows render and run `systemd-analyze verify` on the units before installing them.
 
 ### Operator commands
 
@@ -179,6 +180,7 @@ sudo systemctl start ktb-market-syncer.service
 # verify consumer schedule and freshness gating
 systemctl cat ktb-morning-pipeline.timer
 systemctl cat ktb-morning-pipeline.service
+systemctl cat ktb-news-preprocessor.service
 systemctl cat ktb-market-streamer.service
 systemctl cat ktb-market-collector.service
 ```
