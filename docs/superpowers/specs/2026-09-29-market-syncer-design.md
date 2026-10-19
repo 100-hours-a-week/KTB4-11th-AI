@@ -19,7 +19,7 @@ the only market is KOSPI and the only index is KOSPI 200. It does not own the us
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | nothing else |
 
 - market-syncer never writes `entities`, `relations` or `cluster_*`, and never writes QuestDB.
-- Trigger: the existing weekday 06:00 KST morning pipeline; `market-syncer` is the first `run_job` in `scripts/run-morning-pipeline.sh`, and `main()` runs once and exits.
+- Trigger: the daily 06:00 KST morning pipeline; `market-syncer` is the first `run_job` in `scripts/run-morning-pipeline.sh`, and `main()` runs once and exits.
 - The pipeline order is `market-syncer → news-clusterer → news-graph-builder → portfolio-builder`.
 
 ## Schema (Alembic `0006`, Postgres)
@@ -83,7 +83,7 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
   goes away.
 - The constructor writes a `docs_cache/` pickle into the working directory and reads `.env`. The
   image therefore needs a writable working directory (a `WORKDIR` under `/tmp` or a tmpfs mount),
-  and the cache is harmless because the job runs once on each scheduled weekday morning.
+  and the cache is harmless because the job runs once on each scheduled morning.
 - The existing error handling stays: the DART status error is a `ValueError` holding a
   `{'status', 'message'}` dict and is re-raised as a `RuntimeError` without the key in the message.
 - `stock_code` NaN handling (`fillna("")`) stays.
@@ -139,16 +139,16 @@ The reference datasets do not need hourly refreshes:
 | KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL; the sync service exits non-zero and retries. |
 | Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; the sync service exits non-zero and retries. |
 
-One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one weekday execution inside the 06:00 morning pipeline reduces scheduled market-sync executions from 168 to 5 per week, about 97%.
+One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one daily execution inside the 06:00 morning pipeline reduces scheduled market-sync executions from 168 to 7 per week, about 96%.
 
 ### Combined 06:00 schedule
 
-There is no standalone `ktb-market-syncer.timer`. The existing `ktb-morning-pipeline.timer` stays at `Mon..Fri *-*-* 06:00:00 Asia/Seoul`.
+There is no standalone `ktb-market-syncer.timer`. The `ktb-morning-pipeline.timer` runs every calendar day at `*-*-* 06:00:00 Asia/Seoul`.
 
 `scripts/run-morning-pipeline.sh` stays simple and only adds market-syncer as the first scheduled job:
 
 ```text
-06:00 morning-pipeline.timer
+06:00 daily morning-pipeline.timer
   -> market-syncer
   -> news-clusterer
   -> news-graph-builder
