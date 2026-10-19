@@ -13,6 +13,7 @@ StartLimitBurst=5
 Type=simple
 User=@@DEPLOY_USER@@
 WorkingDirectory=@@DEPLOY_DIR@@
+ExecStartPre=@@DEPLOY_DIR@@/scripts/wait-for-market-syncer.sh 0
 ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.market-collector.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T market-collector
 Restart=on-failure
 RestartMode=direct
