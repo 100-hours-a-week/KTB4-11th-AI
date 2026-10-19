@@ -138,6 +138,33 @@ def test_stream_publishes_ticks_and_registers_again_after_disconnect(monkeypatch
     assert delays == [1.0, 1.0]
 
 
+@pytest.mark.parametrize("count", [199, 200, 201])
+def test_registration_limits_codes_on_reconnect(monkeypatch, caplog, count):
+    _record(monkeypatch)
+    first, second = FakeSocket([LOGIN_OK, REG_OK]), FakeSocket([LOGIN_OK, REG_OK])
+    codes = [f"{code:06d}" for code in range(count)]
+
+    with caplog.at_level("WARNING", logger=stream.__name__), pytest.raises(asyncio.CancelledError):
+        asyncio.run(stream.stream_market_data(_client([first, second]), object(), codes))
+
+    for socket in (first, second):
+        assert socket.sent[1]["data"] == [{"item": codes[:200], "type": ["0B", "0D"]}]
+    warnings = [
+        record
+        for record in caplog.records
+        if record.message == "kiwoom_registration_limit_exceeded"
+    ]
+    if count > 200:
+        assert len(warnings) == 1
+        assert warnings[0].fields == {
+            "total_count": count,
+            "subscribed_count": 200,
+            "excluded_codes": codes[200:],
+        }
+    else:
+        assert warnings == []
+
+
 def test_malformed_orderbook_does_not_suppress_valid_tick(monkeypatch):
     published, books, _ = _record(monkeypatch)
     malformed = {**ORDERBOOK, "values": {"21": "bad"}}

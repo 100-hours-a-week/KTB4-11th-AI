@@ -158,6 +158,14 @@ async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, objec
 async def stream_market_data(
     client: KiwoomWebSocketClient, valkey: Redis, codes: list[str]
 ) -> None:
+    if len(codes) > 200:
+        log.warning(
+            "kiwoom_registration_limit_exceeded",
+            total_count=len(codes),
+            subscribed_count=200,
+            excluded_codes=codes[200:],
+        )
+    codes = codes[:200]
     delay = 1.0
     while True:
         try:
