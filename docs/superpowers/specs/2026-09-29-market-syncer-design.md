@@ -3,6 +3,7 @@
 `market-syncer` is the only service that synchronizes market **reference data** from Kiwoom and
 OpenDART: KOSPI corporations, their KOSPI 200 membership, and Kiwoom themes. The scope is fixed:
 the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLCV; `market-collector` keeps that job.
+
 ## Why
 
 - Today `news-graph-builder` syncs companies and themes at the start of every run, so a graph
