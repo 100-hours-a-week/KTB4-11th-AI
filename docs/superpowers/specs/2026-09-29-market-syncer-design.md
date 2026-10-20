@@ -159,7 +159,15 @@ The script retains `set -Eeuo pipefail`; a failed market-syncer stops the script
 
 The timer keeps `Persistent=false` as in the original morning pipeline; if the host is down at 06:00, it does not catch up on boot. A manual recovery can start `ktb-morning-pipeline.service` after the problem is corrected.
 
-Production and development CD both install/enable `ktb-morning-pipeline.timer` and no longer enable the market-syncer timer.
+Production and development CD both install/enable `ktb-morning-pipeline.timer`.
+During the #313 rollout, both CD workflows also perform an idempotent, one-time migration
+for previously deployed hosts: disable and stop the old `ktb-market-syncer.timer` if
+present, delete the stale unit file from `/etc/systemd/system/`, then run
+`systemctl daemon-reload`. Post-deploy checks require the old timer to be absent,
+disabled, inactive, and missing from `systemctl list-timers`, while
+`ktb-morning-pipeline.timer` must be enabled, active, and have a next activation.
+After successful rollout to both environments, the one-time migration block can be
+removed from the CD workflows in a separate cleanup change.
 
 ### Operator commands
 
