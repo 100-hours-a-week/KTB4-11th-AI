@@ -163,9 +163,9 @@ Production and development CD both install/enable `ktb-morning-pipeline.timer`.
 During the #313 rollout, both CD workflows also perform an idempotent, one-time migration
 for previously deployed hosts: disable and stop the old `ktb-market-syncer.timer` if
 present, delete the stale unit file from `/etc/systemd/system/`, then run
-`systemctl daemon-reload`. Post-deploy checks require the old timer to be absent,
-disabled, inactive, and missing from `systemctl list-timers`, while
-`ktb-morning-pipeline.timer` must be enabled, active, and have a next activation.
+`systemctl daemon-reload`. Post-deploy checks require the old timer unit to be absent, disabled, and
+inactive. The morning-pipeline timer is checked as enabled and active in the
+same CD verification loop as other scheduled services.
 After successful rollout to both environments, the one-time migration block can be
 removed from the CD workflows in a separate cleanup change.
 
