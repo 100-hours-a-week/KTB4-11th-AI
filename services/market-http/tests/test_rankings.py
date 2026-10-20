@@ -101,6 +101,25 @@ def test_rankings_fall_back_when_current_day_is_missing():
     assert result["items"] == [{"rank": 1, "code": "005930", "score": 100.0}]
 
 
+def test_popular_rankings_read_hash_tagged_keys():
+    valkey = Valkey(
+        {
+            "ranking:{popular}": {"005930": 100},
+            "ranking:{popular}:updated_at": "2026-10-15T09:01:00+09:00",
+        }
+    )
+
+    result = asyncio.run(
+        read_rankings(valkey, "popular", 5, datetime(2026, 10, 15, 10, tzinfo=KST))
+    )
+
+    assert result == {
+        "as_of": "2026-10-15",
+        "updated_at": "2026-10-15T09:01:00+09:00",
+        "items": [{"rank": 1, "code": "005930", "score": 100}],
+    }
+
+
 def test_http_serves_indices_and_popular_rankings(monkeypatch):
     index_payload = INDEX.model_dump(mode="json")
     index_payload["ts"] = index_payload.pop("timestamp")
@@ -108,8 +127,8 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
     valkey = Valkey(
         {
             "index:KOSPI": json.dumps(index_payload),
-            "ranking:popular": {RANKING.items[0].code: RANKING.items[0].score, "000660": 1},
-            "ranking:popular:updated_at": RANKING.updated_at.isoformat(),
+            "ranking:{popular}": {RANKING.items[0].code: RANKING.items[0].score, "000660": 1},
+            "ranking:{popular}:updated_at": RANKING.updated_at.isoformat(),
             "price:005930": json.dumps({"code": "005930", "price": 82100, "rate": -0.48}),
         }
     )
@@ -135,7 +154,7 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
 
 def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
     monkeypatch.setattr(ranking_service, "questdb_ranking_details", lambda conf, codes: {})
-    valkey = Valkey({"ranking:popular": {"005930": 100, "000660": 50}})
+    valkey = Valkey({"ranking:{popular}": {"005930": 100, "000660": 50}})
 
     with TestClient(create_app(valkey, "unused")) as client:
         response = client.get("/rankings/popular")

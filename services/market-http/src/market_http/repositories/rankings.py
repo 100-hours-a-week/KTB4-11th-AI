@@ -70,8 +70,8 @@ async def read_rankings(
     valkey: Redis, kind: RankingType, limit: int, now: datetime
 ) -> dict[str, object]:
     if kind == "popular":
-        key = "ranking:popular"
-        updated_at = await valkey.get("ranking:popular:updated_at")
+        key = "ranking:{popular}"
+        updated_at = await valkey.get("ranking:{popular}:updated_at")
         as_of = updated_at[:10] if updated_at else None
     else:
         local = now.astimezone(KST)

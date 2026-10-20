@@ -8,6 +8,7 @@ from market_collector import __main__ as cli
 from market_collector.kiwoom import official
 from market_collector.kiwoom.official import ChartClient
 from market_collector.settings import Settings
+from redis.cluster import key_slot
 
 
 class Client:
@@ -165,7 +166,9 @@ def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monke
         "KOSPI200",
         "popular",
     ]
-    assert valkey.ranks["ranking:popular"] == {"000000": 1}
+    assert valkey.ranks["ranking:{popular}"] == {"000000": 1}
+    assert "ranking:{popular}:updated_at" in valkey.values
+    assert key_slot(b"ranking:{popular}") == key_slot(b"ranking:{popular}:updated_at")
     assert "index:KOSPI" in valkey.values
     assert "index:KOSPI200" in valkey.values
 
@@ -186,7 +189,7 @@ def test_failed_index_and_popularity_requests_keep_previous_values(monkeypatch, 
 
     class Valkey:
         def __init__(self):
-            self.values = {"index:KOSPI": "old", "ranking:popular": "old"}
+            self.values = {"index:KOSPI": "old", "ranking:{popular}": "old"}
 
         def set(self, key, value):
             self.values[key] = value
@@ -216,5 +219,5 @@ def test_failed_index_and_popularity_requests_keep_previous_values(monkeypatch, 
 
     assert written == 20
     assert len(events) == 20
-    assert valkey.values == {"index:KOSPI": "old", "ranking:popular": "old"}
+    assert valkey.values == {"index:KOSPI": "old", "ranking:{popular}": "old"}
     assert sum(record.levelname == "ERROR" for record in caplog.records) == 3
