@@ -224,6 +224,15 @@ jobs:
             "$schedule_render_dir"/ktb-*.service \
             "$schedule_render_dir"/ktb-*.timer \
             /etc/systemd/system/
+
+          # #313 1회성 마이그레이션: 기존 hourly timer를 확실히 중단·삭제합니다.
+          # 이미 제거된 서버에서도 재배포할 수 있도록 존재 여부를 확인합니다.
+          if systemctl cat ktb-market-syncer.timer >/dev/null 2>&1 \
+            || systemctl is-active --quiet ktb-market-syncer.timer \
+            || systemctl is-enabled --quiet ktb-market-syncer.timer; then
+            sudo -n systemctl disable --now ktb-market-syncer.timer
+          fi
+          sudo -n rm -f /etc/systemd/system/ktb-market-syncer.timer
           sudo -n systemctl daemon-reload
 
           # 예전 상시 실행 방식의 timer가 남아 있어도 새 단발 스케줄과 중복되지 않게 합니다.
@@ -259,6 +268,22 @@ jobs:
             systemctl is-enabled --quiet "$timer"
             systemctl is-active --quiet "$timer"
           done
+
+          # #313 검증: 이전 hourly timer가 없고 morning pipeline만 다음 실행을 예약해야 합니다.
+          test ! -e /etc/systemd/system/ktb-market-syncer.timer
+          if systemctl cat ktb-market-syncer.timer >/dev/null 2>&1 \
+            || systemctl is-active --quiet ktb-market-syncer.timer \
+            || systemctl is-enabled --quiet ktb-market-syncer.timer \
+            || systemctl list-timers --all --no-legend --no-pager | grep -Fq 'ktb-market-syncer.timer'; then
+            echo "::error::Legacy ktb-market-syncer.timer is still installed or scheduled" >&2
+            exit 1
+          fi
+          next_morning_run="$(systemctl show -p NextElapseUSecRealtime --value ktb-morning-pipeline.timer)"
+          if [[ -z "$next_morning_run" || "$next_morning_run" == "n/a" ]]; then
+            echo "::error::Morning pipeline has no next scheduled run" >&2
+            exit 1
+          fi
+          echo "Next morning pipeline run: $next_morning_run"
 
           test -x "$deploy_dir/scripts/run-morning-pipeline.sh"
           test -x "$deploy_dir/scripts/publish-scheduled-job-metric.sh"
