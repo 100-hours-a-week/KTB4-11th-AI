@@ -19,8 +19,7 @@ the only market is KOSPI and the only index is KOSPI 200. It does not own the us
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | nothing else |
 
 - market-syncer never writes `entities`, `relations` or `cluster_*`, and never writes QuestDB.
-- Trigger: an independent systemd timer at 06:00 KST every day; `main()` runs once and exits.
-- `scripts/run-morning-pipeline.sh` remains a separate helper and does not schedule market-syncer on the server.
+- Trigger: `ktb-morning-pipeline.timer` at 06:00 KST every day; `scripts/run-morning-pipeline.sh` runs `market-syncer` first before its existing jobs.
 
 ## Schema (Alembic `0006`, Postgres)
 
@@ -135,41 +134,46 @@ The reference datasets do not need hourly refreshes:
 
 | Dataset | Change/fetch shape | Hourly value | Daily failure impact |
 |---|---|---|---|
-| KOSPI corporations | Kiwoom `ka10099` plus one OpenDART corporation-code download | Low. Listing and corporation-code mappings are reference data, not intraday prices. | Existing rows remain usable; the sync service reports failure and retries. |
-| KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL; the sync service exits non-zero and retries. |
-| Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; the sync service exits non-zero and retries. |
+| KOSPI corporations | Kiwoom `ka10099` plus one OpenDART corporation-code download | Low. Listing and corporation-code mappings are reference data, not intraday prices. | Existing rows remain usable; a failed sync stops the morning pipeline before downstream jobs. |
+| KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL; a failed sync stops downstream pipeline jobs. |
+| Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; a failed sync stops the morning pipeline. |
 
-One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one daily execution at 06:00 reduces scheduled market-sync executions from 168 to 7 per week, about 96%.
+One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one daily 06:00 morning-pipeline execution reduces scheduled market-sync executions from 168 to 7 per week, about 96%.
 
-### Independent daily 06:00 schedule
+### Daily 06:00 morning pipeline
 
-`ktb-market-syncer.timer` runs every calendar day at `*-*-* 06:00:00 Asia/Seoul` and starts `ktb-market-syncer.service` directly.
+The existing `ktb-morning-pipeline.timer` runs every day at `*-*-* 06:00:00 Asia/Seoul`. `scripts/run-morning-pipeline.sh` starts market-syncer as its first job, then runs the previous stages in order:
 
 ```text
-06:00 market-syncer.timer
-  -> market-syncer.service
+06:00 ktb-morning-pipeline.timer
+  -> market-syncer
+  -> news-clusterer
+  -> news-graph-builder
+  -> portfolio-builder
 ```
 
-`scripts/run-morning-pipeline.sh` is kept separate and does not contain market-syncer. The other scheduled services keep their own timers and execution times.
+There is **no standalone `ktb-market-syncer.timer`**; the market-syncer service unit remains available for manual troubleshooting. Other services (including market-collector, market-streamer, and news-preprocessor) keep their independent schedules.
 
-### Failure, retry, and restart behavior
+### Failure handling
 
-`ktb-market-syncer.service` keeps the repository's existing systemd retry policy: `Restart=on-failure`, `RestartMode=direct`, `RestartSec=5m`, `StartLimitIntervalSec=1h`, and `StartLimitBurst=3`. A failed synchronization is retried by systemd without custom retry code in a shell pipeline.
+The script retains `set -Eeuo pipefail`; a failed market-syncer stops the script before news-clusterer, news-graph-builder, and portfolio-builder. The existing morning-pipeline systemd unit uses `Restart=no`, so the pipeline reports a failure through its `OnFailure` hook and does **not** automatically retry. The standalone market-syncer service has its own retry policy, but that policy does not apply when the pipeline invokes the Docker Compose job directly. No additional success markers or pre-start gates are introduced.
 
-`ktb-market-syncer.timer` uses `Persistent=true`. If the host is down at 06:00, systemd starts the missed run after the host returns. The next regular activation remains the next calendar day at 06:00.
+The timer keeps `Persistent=false` as in the original morning pipeline; if the host is down at 06:00, it does not catch up on boot. A manual recovery can start `ktb-morning-pipeline.service` after the problem is corrected.
 
-Both production and development CD install, enable, and verify `ktb-market-syncer.timer` alongside the other scheduled timers.
+Production and development CD both install/enable `ktb-morning-pipeline.timer` and no longer enable the market-syncer timer.
 
 ### Operator commands
 
 ```bash
 systemctl list-timers --all --no-pager | grep 'ktb-'
-systemctl cat ktb-market-syncer.timer
-systemctl cat ktb-market-syncer.service
-systemctl status ktb-market-syncer.service --no-pager
-journalctl -u ktb-market-syncer.service -n 200 --no-pager
+systemctl cat ktb-morning-pipeline.timer
+systemctl cat ktb-morning-pipeline.service
+journalctl -u ktb-morning-pipeline.service -n 200 --no-pager
 
-# manual market reference refresh / recovery
+# rerun the full pipeline after addressing an error
+sudo systemctl start ktb-morning-pipeline.service
+
+# run market-syncer only for manual troubleshooting
 sudo systemctl start ktb-market-syncer.service
 ```
 
@@ -180,7 +184,7 @@ Runtime verification on 2026-10-19 confirmed that production had been continuous
 The migration renames columns that three services read, so migration, market-syncer,
 news-graph-builder and market-collector ship together. They are scheduled batch jobs, so the gap is one missed
 tick. Run the migration job first, then market-syncer once by hand to confirm the tables, then
-enable the market-syncer timer and later market jobs.
+enable the morning-pipeline timer and later market jobs.
 
 ## Testing
 
