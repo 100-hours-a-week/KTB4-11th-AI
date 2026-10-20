@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 from scalar_fastapi import get_scalar_api_reference
+from sqlalchemy.engine import Engine
 
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
 from market_http.metrics import SSEConnectionMetrics
@@ -23,6 +24,7 @@ def create_app(
     valkey: Redis,
     questdb_conf: str,
     *,
+    postgres_engine: Engine | None = None,
     docs_enabled: bool = True,
     docs_path_prefix: str = "",
     cors_origins: list[str] | None = None,
@@ -51,6 +53,7 @@ def create_app(
     )
     app.state.valkey = valkey
     app.state.questdb_conf = questdb_conf
+    app.state.postgres_engine = postgres_engine
     app.state.sse_metrics = sse_metrics
     app.add_middleware(
         CORSMiddleware,
