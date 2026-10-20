@@ -36,6 +36,7 @@ jobs:
       TASK_FAMILY: stockspoon-v2-prod-market-http
       CONTAINER_NAME: market-http
       TASK_TEMPLATE: infrastructure/ecs/market-http.json
+      POSTGRES_DSN_SECRET_ARN: ${{ vars.MARKET_HTTP_POSTGRES_DSN_SECRET_ARN }}
       IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
       IMAGE_TAG: ${{ inputs.image_tag }}
       IMAGE_DIGEST: ${{ inputs.image_digest }}
@@ -102,8 +103,9 @@ jobs:
         id: register
         run: |
           set -Eeuo pipefail
-          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" \
-            '.containerDefinitions |= map(if .name == $name then .image = $image else . end)' \
+          [[ -n "$POSTGRES_DSN_SECRET_ARN" ]] || { echo 'MARKET_HTTP_POSTGRES_DSN_SECRET_ARN is required' >&2; exit 1; }
+          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" --arg secret "$POSTGRES_DSN_SECRET_ARN" \
+            '.containerDefinitions |= map(if .name == $name then .image = $image | .secrets = [{"name": "MARKET_HTTP_POSTGRES_DSN", "valueFrom": $secret}] else . end)' \
             "$TASK_TEMPLATE" > next.json
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
             --query taskDefinition.taskDefinitionArn --output text)"

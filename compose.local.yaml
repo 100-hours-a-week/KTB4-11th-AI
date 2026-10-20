@@ -200,6 +200,7 @@ services:
       dockerfile: docker/market-http.Dockerfile
     environment:
       MARKET_HTTP_QUESTDB_CONF: ws::addr=questdb:9000;connect_timeout=5000;
+      MARKET_HTTP_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       MARKET_HTTP_VALKEY_HOST: valkey
       MARKET_HTTP_CORS_ORIGINS: ${MARKET_HTTP_CORS_ORIGINS:-[]}
       MARKET_HTTP_CORS_HEADERS: ${MARKET_HTTP_CORS_HEADERS:-[]}
@@ -207,6 +208,8 @@ services:
     ports:
       - "127.0.0.1:8001:8000"
     depends_on:
+      postgres:
+        condition: service_healthy
       questdb:
         condition: service_healthy
       valkey:

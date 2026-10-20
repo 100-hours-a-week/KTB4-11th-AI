@@ -1,3 +1,4 @@
+import sqlalchemy as sa
 import uvicorn
 from ktb_core.logging import setup_logging
 
@@ -13,6 +14,7 @@ def main() -> None:
     app = create_app(
         connect_valkey(settings),
         settings.questdb_conf,
+        postgres_engine=sa.create_engine(settings.postgres_dsn, pool_pre_ping=True),
         docs_enabled=settings.docs_enabled,
         docs_path_prefix=settings.docs_path_prefix,
         cors_origins=settings.cors_origins,

@@ -3,6 +3,7 @@ import json
 from contextlib import nullcontext
 from datetime import datetime
 
+import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from ktb_core.krx import KST
 from market_http.app import create_app
@@ -134,9 +135,10 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
     )
     monkeypatch.setattr(
         ranking_service,
-        "questdb_ranking_details",
+        "corporation_metadata",
         lambda conf, codes: {"005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}},
     )
+    monkeypatch.setattr(ranking_service, "questdb_ranking_details", lambda conf, codes: {})
 
     with TestClient(create_app(valkey, "unused")) as client:
         index = client.get("/indices/KOSPI")
@@ -154,6 +156,7 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
 
 def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
     monkeypatch.setattr(ranking_service, "questdb_ranking_details", lambda conf, codes: {})
+    monkeypatch.setattr(ranking_service, "corporation_metadata", lambda engine, codes: {})
     valkey = Valkey({"ranking:{popular}": {"005930": 100, "000660": 50}})
 
     with TestClient(create_app(valkey, "unused")) as client:
@@ -180,6 +183,28 @@ def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
             "change_rate": None,
         },
     ]
+
+
+def test_corporation_metadata_reads_matching_codes_from_postgres():
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "CREATE TABLE corporations "
+                "(stock_code TEXT PRIMARY KEY, name TEXT, sector_name TEXT)"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO corporations VALUES ('005930', '삼성전자', '전기전자'),"
+                " ('000660', 'SK하이닉스', NULL)"
+            )
+        )
+
+    assert ranking_repository.corporation_metadata(engine, ["005930", "999999"]) == {
+        "005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}
+    }
+    engine.dispose()
 
 
 def test_questdb_details_batch_latest_price_and_matching_day_base(monkeypatch):
@@ -229,18 +254,16 @@ def test_questdb_details_batch_latest_price_and_matching_day_base(monkeypatch):
 
     assert ranking_repository.questdb_ranking_details("unused", ["005930", "000660"]) == {
         "005930": {
-            "stock_name": "삼성전자",
-            "sector_name": "전기전자",
             "price": 82100,
             "change_rate": -0.48,
         }
     }
-    assert len(queries) == 3
+    assert len(queries) == 2
     assert all(binds == ["005930", "000660"] for _, binds in queries)
     assert all("LATEST ON timestamp PARTITION BY symbol" in sql for sql, _ in queries)
 
 
-def test_questdb_details_use_today_base_when_today_name_is_missing(monkeypatch):
+def test_questdb_details_use_today_base(monkeypatch):
     class Result:
         def __init__(self, rows):
             self.rows = rows
@@ -258,18 +281,6 @@ def test_questdb_details_use_today_base_when_today_name_is_missing(monkeypatch):
 
     class DB:
         def query(self, sql, binds):
-            if "stock_name IS NOT NULL" in sql:
-                return Result(
-                    [
-                        {
-                            "symbol": "005930",
-                            "stock_name": "삼성전자",
-                            "sector_name": "전기전자",
-                            "base_price": 81000,
-                            "trade_date": "2026-10-14",
-                        }
-                    ]
-                )
             if "FROM corporations" in sql:
                 return Result(
                     [{"symbol": "005930", "base_price": 82500, "trade_date": "2026-10-15"}]
@@ -288,8 +299,6 @@ def test_questdb_details_use_today_base_when_today_name_is_missing(monkeypatch):
 
     assert ranking_repository.questdb_ranking_details("unused", ["005930"]) == {
         "005930": {
-            "stock_name": "삼성전자",
-            "sector_name": "전기전자",
             "price": 82100,
             "change_rate": -0.48,
         }

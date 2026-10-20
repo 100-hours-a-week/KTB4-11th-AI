@@ -617,6 +617,7 @@ psycopg==3.3.6 \
     --hash=sha256:c081f2250df751a943036e42db6df4571c66cd0aabe8291a7a506512b12007d2
     # via
     #   market-collector
+    #   market-http
     #   market-streamer
     #   market-syncer
     #   news-clusterer
@@ -915,6 +916,7 @@ sqlalchemy==2.1.1 \
     # via
     #   alembic
     #   market-collector
+    #   market-http
     #   market-streamer
     #   market-syncer
     #   news-clusterer
