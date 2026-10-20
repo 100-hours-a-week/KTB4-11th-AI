@@ -11,6 +11,8 @@ class Settings(BaseSettings):
 
     questdb_conf: str
     postgres_dsn: str
+    postgres_pool_size: int = Field(default=5, gt=0)
+    postgres_timeout_seconds: int = Field(default=5, gt=0)
     valkey_host: str = Field(min_length=1)
     valkey_port: int = 6379
     valkey_max_connections: int | None = Field(default=None, gt=0)

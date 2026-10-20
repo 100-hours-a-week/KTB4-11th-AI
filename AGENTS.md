@@ -139,6 +139,8 @@ Each service reads its own prefix through `pydantic-settings`; values without "r
 | `MARKET_STREAMER_LOG_LEVEL` | market-streamer | `INFO` |
 | `MARKET_HTTP_QUESTDB_CONF` | market-http (official client config, e.g. `ws::addr=localhost:9000;`) | required |
 | `MARKET_HTTP_POSTGRES_DSN` | market-http (ranking stock names and sectors from `corporations`) | required |
+| `MARKET_HTTP_POSTGRES_POOL_SIZE` | market-http (maximum PostgreSQL connections per process; no overflow) | `5` |
+| `MARKET_HTTP_POSTGRES_TIMEOUT_SECONDS` | market-http (pool wait, connection, and statement timeout) | `5` |
 | `MARKET_HTTP_VALKEY_HOST` | market-http (price cache host) | required |
 | `MARKET_HTTP_VALKEY_PORT` | market-http | `6379` |
 | `MARKET_HTTP_VALKEY_MAX_CONNECTIONS` | market-http; positive connection-pool limit for SSE load tests | — |
