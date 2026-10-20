@@ -190,7 +190,7 @@ services:
     <<: *app
     profiles: ["jobs"]
     command: ["news-clusterer"]
-    mem_limit: 1400m
+    mem_limit: 2g
     environment:
       <<: *postgres-environment
       NEWS_CLUSTERER_EPS: ${NEWS_CLUSTERER_EPS:-0.36}
