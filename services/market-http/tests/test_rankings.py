@@ -136,7 +136,9 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
     monkeypatch.setattr(
         ranking_service,
         "corporation_metadata",
-        lambda conf, codes: {"005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}},
+        lambda conf, codes: {
+            "005930": ranking_repository.CorporationMetadata("삼성전자", "전기전자")
+        },
     )
     monkeypatch.setattr(ranking_service, "questdb_ranking_details", lambda conf, codes: {})
 
@@ -202,8 +204,8 @@ def test_corporation_metadata_reads_matching_codes_from_postgres():
         )
 
     assert ranking_repository.corporation_metadata(engine, ["005930", "000660", "999999"]) == {
-        "005930": {"stock_name": "삼성전자", "sector_name": "전기전자"},
-        "000660": {"stock_name": "SK하이닉스", "sector_name": ""},
+        "005930": ranking_repository.CorporationMetadata("삼성전자", "전기전자"),
+        "000660": ranking_repository.CorporationMetadata("SK하이닉스", ""),
     }
     engine.dispose()
 
@@ -254,10 +256,7 @@ def test_questdb_details_batch_latest_price_and_matching_day_base(monkeypatch):
     monkeypatch.setattr(ranking_repository.questdb, "connect", lambda conf: nullcontext(DB()))
 
     assert ranking_repository.questdb_ranking_details("unused", ["005930", "000660"]) == {
-        "005930": {
-            "price": 82100,
-            "change_rate": -0.48,
-        }
+        "005930": ranking_repository.RankingPriceDetails(82100, -0.48)
     }
     assert len(queries) == 2
     assert all(binds == ["005930", "000660"] for _, binds in queries)
@@ -299,8 +298,5 @@ def test_questdb_details_use_today_base(monkeypatch):
     monkeypatch.setattr(ranking_repository.questdb, "connect", lambda conf: nullcontext(DB()))
 
     assert ranking_repository.questdb_ranking_details("unused", ["005930"]) == {
-        "005930": {
-            "price": 82100,
-            "change_rate": -0.48,
-        }
+        "005930": ranking_repository.RankingPriceDetails(82100, -0.48)
     }

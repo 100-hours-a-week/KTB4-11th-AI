@@ -1,5 +1,6 @@
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
-from typing import Literal, TypedDict
+from typing import Literal
 
 import pandas as pd
 import questdb
@@ -12,12 +13,14 @@ from market_http.repositories.questdb import as_utc, records
 RankingType = Literal["volume", "trade_value", "gainers", "losers", "popular"]
 
 
-class CorporationMetadata(TypedDict):
+@dataclass(frozen=True)
+class CorporationMetadata:
     stock_name: str
     sector_name: str
 
 
-class RankingPriceDetails(TypedDict):
+@dataclass(frozen=True)
+class RankingPriceDetails:
     price: int
     change_rate: float | None
 
@@ -29,8 +32,7 @@ def corporation_metadata(engine: sa.Engine, codes: list[str]) -> dict[str, Corpo
     with engine.connect() as conn:
         rows = conn.execute(statement, {"codes": codes}).mappings()
         return {
-            row["stock_code"]: {"stock_name": row["name"], "sector_name": row["sector_name"]}
-            for row in rows
+            row["stock_code"]: CorporationMetadata(row["name"], row["sector_name"]) for row in rows
         }
 
 
@@ -65,7 +67,7 @@ def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, RankingPri
             base = snapshot["base_price"]
             if pd.notna(base) and base:
                 rate = round((price - int(base)) / int(base) * 100, 2)
-        details[code] = {"price": price, "change_rate": rate}
+        details[code] = RankingPriceDetails(price, rate)
     return details
 
 

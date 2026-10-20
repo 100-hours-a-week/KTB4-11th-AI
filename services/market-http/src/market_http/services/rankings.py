@@ -31,9 +31,13 @@ async def get_rankings(
         get_cached_prices(valkey, codes),
     )
     for item, code, price in zip(items, codes, prices, strict=True):
-        item.update(details.get(code, {}))
-        item.update(metadata.get(code, {}))
-        if code not in metadata:
+        detail = details.get(code)
+        if detail is not None:
+            item.update(price=detail.price, change_rate=detail.change_rate)
+        corporation = metadata.get(code)
+        if corporation is not None:
+            item.update(stock_name=corporation.stock_name, sector_name=corporation.sector_name)
+        else:
             log.warning("ranking_metadata_missing", code=code, kind=kind)
         if price is not None:
             tick = json.loads(price)
