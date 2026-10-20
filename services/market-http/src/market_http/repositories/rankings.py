@@ -11,16 +11,9 @@ from market_http.repositories.questdb import as_utc, records
 RankingType = Literal["volume", "trade_value", "gainers", "losers", "popular"]
 
 
-def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, dict[str, object]]:
+def questdb_ranking_prices(conf: str, codes: list[str]) -> dict[str, dict[str, object]]:
     placeholders = ", ".join(f"${index}" for index in range(1, len(codes) + 1))
     with questdb.connect(conf) as db:
-        metadata = records(
-            db,
-            "SELECT symbol, stock_name, sector_name"
-            f" FROM corporations WHERE symbol IN ({placeholders})"
-            " AND stock_name IS NOT NULL LATEST ON timestamp PARTITION BY symbol",
-            codes,
-        )
         base_prices = records(
             db,
             "SELECT symbol, base_price, trade_date"
@@ -34,13 +27,7 @@ def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, dict[str, 
             f" AND symbol IN ({placeholders}) LATEST ON timestamp PARTITION BY symbol",
             codes,
         )
-    details = {
-        row["symbol"]: {
-            "stock_name": row["stock_name"],
-            "sector_name": row["sector_name"] if pd.notna(row["sector_name"]) else None,
-        }
-        for row in metadata
-    }
+    details: dict[str, dict[str, object]] = {}
     snapshots = {row["symbol"]: row for row in base_prices}
     for row in prices:
         code = row["symbol"]
