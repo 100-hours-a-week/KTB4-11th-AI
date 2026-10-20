@@ -51,7 +51,11 @@ def market_data(monkeypatch):
     monkeypatch.setattr(
         entry,
         "fetch_kospi",
-        lambda c, **kwargs: [("005930", "삼성전자"), ("000660", "SK하이닉스"), ("069500", "ETF")],
+        lambda c, **kwargs: [
+            ("005930", "삼성전자", "전기전자"),
+            ("000660", "SK하이닉스", "전기전자"),
+            ("069500", "ETF", None),
+        ],
     )
     monkeypatch.setattr(entry, "fetch_corp_codes", fetch_corp_codes)
     monkeypatch.setattr(entry, "fetch_kospi200_codes", lambda c, **kwargs: {"005930", "999999"})
