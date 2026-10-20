@@ -22,6 +22,9 @@ concurrency:
 
 jobs:
   deploy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -40,8 +43,6 @@ jobs:
       IMAGE_TAG: ${{ inputs.image_tag }}
       IMAGE_DIGEST: ${{ inputs.image_digest }}
       CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-      CI_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
-      CI_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
     steps:
       - name: Validate deployment source
         id: source
@@ -51,7 +52,6 @@ jobs:
           set -Eeuo pipefail
           [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
           if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
-            [[ "$GITHUB_REF" == 'refs/heads/main' ]] || { echo 'Manual ECS deployments require main' >&2; exit 1; }
             ci_run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci-main.yaml/runs" \
             -f branch=main -f event=push -f head_sha="$IMAGE_TAG" -f status=success -f per_page=1 \
             --jq '.workflow_runs[0] // null')"
@@ -66,8 +66,6 @@ jobs:
             '.sha == $sha and .repository == $repository' "$release_dir/ecs-release.json" > /dev/null
             IMAGE_DIGEST="$(jq -r .digest "$release_dir/ecs-release.json")"
           else
-            [[ "$GITHUB_EVENT_NAME" == "workflow_run" && "$CI_RUN_HEAD_BRANCH" == "main" && "$CI_RUN_CONCLUSION" == "success" ]] ||
-              { echo 'Only successful main CI releases can deploy ECS' >&2; exit 1; }
             [[ "$IMAGE_TAG" == "$CI_RUN_HEAD_SHA" ]] ||
               { echo 'Source SHA does not match the main CI release' >&2; exit 1; }
             current_main_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
