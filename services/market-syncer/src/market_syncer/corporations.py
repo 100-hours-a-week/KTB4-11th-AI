@@ -15,19 +15,23 @@ def has_corporations(conn: sa.Connection) -> bool:
 
 
 def sync_corporations(
-    conn: sa.Connection, kospi: Sequence[tuple[str, str]], dart: Sequence[DartCorporation]
+    conn: sa.Connection, kospi: Sequence[tuple[str, str, str | None]], dart: Sequence[DartCorporation]
 ) -> int:
     by_stock_code = {company.stock_code: company for company in dart}
-    joined = {code: (by_stock_code[code], name) for code, name in kospi if code in by_stock_code}
+    joined = {
+        code: (by_stock_code[code], name, sector)
+        for code, name, sector in kospi
+        if code in by_stock_code
+    }
     if not joined:
         raise ValueError(f"none of {len(kospi)} KOSPI codes matched a DART stock_code")
 
-    upsert_corporations(conn, [company for company, _ in joined.values()])
+    upsert_corporations(conn, [(company, sector) for company, _, sector in joined.values()])
     insert_aliases(
         conn,
         [
             (alias, company.stock_code)
-            for company, kiwoom_name in joined.values()
+            for company, kiwoom_name, _ in joined.values()
             for alias in dict.fromkeys(
                 normalize(name)
                 for name in (company.corp_name, kiwoom_name, company.corp_eng_name or "")
@@ -38,7 +42,9 @@ def sync_corporations(
     return len(joined)
 
 
-def upsert_corporations(conn: sa.Connection, rows: Sequence[DartCorporation]) -> None:
+def upsert_corporations(
+    conn: sa.Connection, rows: Sequence[tuple[DartCorporation, str | None]]
+) -> None:
     statement = insert(corporations).values(
         [
             {
@@ -46,8 +52,9 @@ def upsert_corporations(conn: sa.Connection, rows: Sequence[DartCorporation]) ->
                 "corp_code": company.corp_code,
                 "name": company.corp_name,
                 "eng_name": company.corp_eng_name,
+                "sector_name": sector,
             }
-            for company in rows
+            for company, sector in rows
         ]
     )
     conn.execute(
@@ -57,6 +64,9 @@ def upsert_corporations(conn: sa.Connection, rows: Sequence[DartCorporation]) ->
                 "corp_code": statement.excluded.corp_code,
                 "name": statement.excluded.name,
                 "eng_name": statement.excluded.eng_name,
+                "sector_name": sa.func.coalesce(
+                    statement.excluded.sector_name, corporations.c.sector_name
+                ),
                 "synced_at": sa.func.now(),
             },
         )
