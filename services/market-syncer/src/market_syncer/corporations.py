@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from market_syncer.dart import DartCorporation
 from market_syncer.database import corporation_aliases, corporation_indices, corporations
+from market_syncer.kiwoom import KospiStock
 
 __all__ = ["has_corporations", "replace_index", "sync_corporations"]
 
@@ -16,14 +17,14 @@ def has_corporations(conn: sa.Connection) -> bool:
 
 def sync_corporations(
     conn: sa.Connection,
-    kospi: Sequence[tuple[str, str, str]],
+    kospi: Sequence[KospiStock],
     dart: Sequence[DartCorporation],
 ) -> int:
     by_stock_code = {company.stock_code: company for company in dart}
     joined = {
-        code: (by_stock_code[code], name, sector)
-        for code, name, sector in kospi
-        if code in by_stock_code
+        stock.stock_code: (by_stock_code[stock.stock_code], stock)
+        for stock in kospi
+        if stock.stock_code in by_stock_code
     }
     if not joined:
         raise ValueError(f"none of {len(kospi)} KOSPI codes matched a DART stock_code")
@@ -35,9 +36,9 @@ def sync_corporations(
                 "corp_code": company.corp_code,
                 "name": company.corp_name,
                 "eng_name": company.corp_eng_name,
-                "sector_name": sector,
+                "sector_name": stock.sector_name,
             }
-            for company, _, sector in joined.values()
+            for company, stock in joined.values()
         ]
     )
     conn.execute(
@@ -59,10 +60,10 @@ def sync_corporations(
         conn,
         [
             (alias, company.stock_code)
-            for company, kiwoom_name, _ in joined.values()
+            for company, stock in joined.values()
             for alias in dict.fromkeys(
                 normalize(name)
-                for name in (company.corp_name, kiwoom_name, company.corp_eng_name or "")
+                for name in (company.corp_name, stock.stock_name, company.corp_eng_name or "")
             )
             if alias
         ],

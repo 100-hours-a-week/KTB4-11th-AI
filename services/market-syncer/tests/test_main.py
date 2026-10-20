@@ -5,7 +5,7 @@ import pytest
 import sqlalchemy as sa
 from market_syncer import __main__ as entry
 from market_syncer.dart import DartCorporation
-from market_syncer.kiwoom import Theme, ThemeMember
+from market_syncer.kiwoom import KospiStock, Theme, ThemeMember
 
 SAMSUNG = DartCorporation("00126380", "삼성전자", "SAMSUNG ELECTRONICS CO,.LTD", "005930")
 HYNIX = DartCorporation("00164779", "SK하이닉스", None, "000660")
@@ -52,9 +52,9 @@ def market_data(monkeypatch):
         entry,
         "fetch_kospi",
         lambda c, **kwargs: [
-            ("005930", "삼성전자", "전기전자"),
-            ("000660", "SK하이닉스", "전기전자"),
-            ("069500", "ETF", ""),
+            KospiStock("005930", "삼성전자", "전기전자"),
+            KospiStock("000660", "SK하이닉스", "전기전자"),
+            KospiStock("069500", "ETF", ""),
         ],
     )
     monkeypatch.setattr(entry, "fetch_corp_codes", fetch_corp_codes)

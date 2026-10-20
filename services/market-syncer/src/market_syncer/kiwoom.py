@@ -9,6 +9,7 @@ from kiwoom.core.token_store import MemoryTokenStore
 from market_syncer.settings import Settings
 
 __all__ = [
+    "KospiStock",
     "Theme",
     "ThemeMember",
     "build_client",
@@ -19,6 +20,12 @@ __all__ = [
     "fetch_themes",
     "strip_market_suffix",
 ]
+
+
+class KospiStock(NamedTuple):
+    stock_code: str
+    stock_name: str
+    sector_name: str
 
 
 class Theme(NamedTuple):
@@ -75,7 +82,7 @@ def fetch_rows(
     return rows
 
 
-def fetch_kospi(client: KiwoomClient, *, interval: float) -> list[tuple[str, str, str]]:
+def fetch_kospi(client: KiwoomClient, *, interval: float) -> list[KospiStock]:
     rows = fetch_rows(
         client,
         api_id="ka10099",
@@ -84,7 +91,7 @@ def fetch_kospi(client: KiwoomClient, *, interval: float) -> list[tuple[str, str
         array_field="list",
         interval=interval,
     )
-    return [(row["code"], row["name"], row["upName"]) for row in rows]
+    return [KospiStock(row["code"], row["name"], row["upName"]) for row in rows]
 
 
 def fetch_kospi200_codes(client: KiwoomClient, *, interval: float) -> set[str]:
