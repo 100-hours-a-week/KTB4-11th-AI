@@ -26,7 +26,7 @@
         },
         {
           "name": "MARKET_HTTP_QUESTDB_CONF",
-          "value": "ws::addr=10.0.1.75:9000;"
+          "value": "ws::addr=10.0.1.75:9000;connect_timeout=5000;"
         },
         {
           "name": "MARKET_HTTP_VALKEY_HOST",
