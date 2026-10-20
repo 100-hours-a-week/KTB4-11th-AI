@@ -911,6 +911,8 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "questdb" },
     { name = "redis" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
     { name = "scalar-fastapi" },
     { name = "uvicorn" },
 ]
@@ -925,6 +927,8 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "questdb", specifier = ">=5.0" },
     { name = "redis", specifier = ">=6.4" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
+    { name = "sqlalchemy", specifier = ">=2.0.54" },
     { name = "scalar-fastapi", specifier = ">=1.0" },
     { name = "uvicorn", specifier = ">=0.54" },
 ]
