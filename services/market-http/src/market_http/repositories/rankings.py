@@ -1,5 +1,5 @@
 from datetime import date, datetime, time, timedelta
-from typing import Literal
+from typing import Literal, TypedDict
 
 import pandas as pd
 import questdb
@@ -12,7 +12,17 @@ from market_http.repositories.questdb import as_utc, records
 RankingType = Literal["volume", "trade_value", "gainers", "losers", "popular"]
 
 
-def corporation_metadata(engine: sa.Engine, codes: list[str]) -> dict[str, dict[str, object]]:
+class CorporationMetadata(TypedDict):
+    stock_name: str
+    sector_name: str
+
+
+class RankingPriceDetails(TypedDict):
+    price: int
+    change_rate: float | None
+
+
+def corporation_metadata(engine: sa.Engine, codes: list[str]) -> dict[str, CorporationMetadata]:
     statement = sa.text(
         "SELECT stock_code, name, sector_name FROM corporations WHERE stock_code IN :codes"
     ).bindparams(sa.bindparam("codes", expanding=True))
@@ -24,7 +34,7 @@ def corporation_metadata(engine: sa.Engine, codes: list[str]) -> dict[str, dict[
         }
 
 
-def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, dict[str, object]]:
+def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, RankingPriceDetails]:
     placeholders = ", ".join(f"${index}" for index in range(1, len(codes) + 1))
     with questdb.connect(conf) as db:
         base_prices = records(
@@ -40,7 +50,7 @@ def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, dict[str, 
             f" AND symbol IN ({placeholders}) LATEST ON timestamp PARTITION BY symbol",
             codes,
         )
-    details: dict[str, dict[str, object]] = {}
+    details: dict[str, RankingPriceDetails] = {}
     snapshots = {row["symbol"]: row for row in base_prices}
     for row in prices:
         code = row["symbol"]
@@ -55,7 +65,7 @@ def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, dict[str, 
             base = snapshot["base_price"]
             if pd.notna(base) and base:
                 rate = round((price - int(base)) / int(base) * 100, 2)
-        details.setdefault(code, {}).update(price=price, change_rate=rate)
+        details[code] = {"price": price, "change_rate": rate}
     return details
 
 
