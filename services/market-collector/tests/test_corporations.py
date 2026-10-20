@@ -137,15 +137,11 @@ def test_store_uses_trade_day_timestamp_as_dedup_key():
         "lower_limit_price": 70,
         "eps": None,
         "bps": 10,
-        "stock_name": "삼성전자",
-        "sector_name": "전기전자",
     }
     store.write_corporation("005930", day, datetime(2026, 10, 18, 23, 55, tzinfo=UTC), values)
     store.write_corporation("005930", day, datetime(2026, 10, 18, 23, 56, tzinfo=UTC), values)
     assert calls[0][1]["at"] == calls[1][1]["at"] == datetime(2026, 10, 19, tzinfo=UTC)
     assert calls[0][1]["symbols"] == {"symbol": "005930"}
-    assert calls[0][1]["columns"]["stock_name"] == "삼성전자"
-    assert calls[0][1]["columns"]["sector_name"] == "전기전자"
     assert "eps" not in calls[0][1]["columns"]
 
 
@@ -166,75 +162,5 @@ def test_migration_has_wal_dedup_and_required_columns():
     ):
         assert column in migration
 
-    metadata_migration = (
-        Path(__file__).parents[3]
-        / "infrastructure/questdb/migrations/0004_corporation_metadata.sql"
-    ).read_text()
-    assert "ADD COLUMN stock_name VARCHAR" in metadata_migration
-    assert "ADD COLUMN sector_name VARCHAR" in metadata_migration
 
 
-def test_collector_joins_stock_list_metadata_with_daily_snapshot(monkeypatch):
-    from contextlib import nullcontext
-
-    from market_collector import corporations
-
-    writes = []
-
-    class Store:
-        def write_corporation(self, *args):
-            writes.append(args)
-
-    class Client:
-        def stock_metadata(self):
-            return {"005930": ("삼성전자", "전기전자")}
-
-        def stock_info(self, symbol):
-            return {
-                "base_pric": "80000",
-                "upl_pric": "104000",
-                "lst_pric": "56000",
-                "eps": "0",
-                "bps": "0",
-            }
-
-    monkeypatch.setattr(corporations.questdb, "connect", lambda conf: nullcontext(object()))
-    monkeypatch.setattr(corporations, "Store", lambda db: Store())
-    settings = type("Settings", (), {"questdb_conf": "unused"})()
-    collect_corporations(settings, ["005930"], Client(), datetime(2026, 10, 19, tzinfo=UTC))
-
-    assert writes[0][3]["stock_name"] == "삼성전자"
-    assert writes[0][3]["sector_name"] == "전기전자"
-
-
-def test_metadata_failure_keeps_price_limit_snapshots(monkeypatch):
-    from contextlib import nullcontext
-
-    from market_collector import corporations
-
-    writes = []
-
-    class Store:
-        def write_corporation(self, *args):
-            writes.append(args)
-
-    class Client:
-        def stock_metadata(self):
-            raise RuntimeError("stock list unavailable")
-
-        def stock_info(self, symbol):
-            return {
-                "base_pric": "80000",
-                "upl_pric": "104000",
-                "lst_pric": "56000",
-                "eps": "0",
-                "bps": "0",
-            }
-
-    monkeypatch.setattr(corporations.questdb, "connect", lambda conf: nullcontext(object()))
-    monkeypatch.setattr(corporations, "Store", lambda db: Store())
-    settings = type("Settings", (), {"questdb_conf": "unused"})()
-    collect_corporations(settings, ["005930"], Client(), datetime(2026, 10, 19, tzinfo=UTC))
-
-    assert writes[0][3]["base_price"] == 80000
-    assert "stock_name" not in writes[0][3]
