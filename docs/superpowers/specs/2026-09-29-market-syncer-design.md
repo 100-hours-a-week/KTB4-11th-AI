@@ -19,7 +19,7 @@ the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLC
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | nothing else |
 
 - market-syncer never writes `entities`, `relations` or `cluster_*`, and never writes QuestDB.
-- Trigger: `ktb-morning-pipeline.timer` at 06:00 KST every day; `scripts/run-morning-pipeline.sh` runs `market-syncer` first before its existing jobs.
+- Trigger: `ktb-morning-pipeline.timer` at 06:00 KST on weekdays (Mon–Fri); `scripts/run-morning-pipeline.sh` runs `market-syncer` first before its existing jobs.
 
 ## Schema (Alembic `0006`, Postgres)
 
@@ -137,14 +137,14 @@ The reference datasets do not need hourly refreshes:
 | KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL; a failed sync stops downstream pipeline jobs. |
 | Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; a failed sync stops the morning pipeline. |
 
-One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one daily 06:00 morning-pipeline execution reduces scheduled market-sync executions from 168 to 7 per week, about 96%.
+One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one weekday 06:00 morning-pipeline execution reduces scheduled market-sync executions from 168 to 5 per week, about 97%.
 
-### Daily 06:00 morning pipeline
+### Weekday 06:00 morning pipeline
 
-The existing `ktb-morning-pipeline.timer` runs every day at `*-*-* 06:00:00 Asia/Seoul`. `scripts/run-morning-pipeline.sh` starts market-syncer as its first job, then runs the previous stages in order:
+The intended `ktb-morning-pipeline.timer` schedule is Monday through Friday at `Mon..Fri *-*-* 06:00:00 Asia/Seoul`. The actual timer configuration must match this weekday schedule. `scripts/run-morning-pipeline.sh` starts market-syncer as its first job, then runs the previous stages in order:
 
 ```text
-06:00 ktb-morning-pipeline.timer
+06:00 KST (Mon–Fri) ktb-morning-pipeline.timer
   -> market-syncer
   -> news-clusterer
   -> news-graph-builder
