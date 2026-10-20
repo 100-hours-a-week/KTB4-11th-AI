@@ -225,17 +225,16 @@ jobs:
             "$schedule_render_dir"/ktb-*.timer \
             /etc/systemd/system/
 
+          sudo -n systemctl daemon-reload
+
           # 이전 timer가 남아 있으면 중복 실행을 방지합니다.
           for legacy_timer in \
             ktb-market-collector-start.timer \
-            ktb-market-collector-stop.timer \
-            ktb-market-syncer.timer; do
+            ktb-market-collector-stop.timer; do
             if systemctl cat "$legacy_timer" >/dev/null 2>&1; then
               sudo -n systemctl disable --now "$legacy_timer"
             fi
           done
-          sudo -n rm -f /etc/systemd/system/ktb-market-syncer.timer
-          sudo -n systemctl daemon-reload
 
           legacy_collector_id="$(docker compose --env-file .env --env-file .image.env \
             -f compose.prod.yaml ps -q market-collector)"
@@ -261,11 +260,6 @@ jobs:
             systemctl is-enabled --quiet "$timer"
             systemctl is-active --quiet "$timer"
           done
-
-          test ! -e /etc/systemd/system/ktb-market-syncer.timer
-          ! systemctl cat ktb-market-syncer.timer >/dev/null 2>&1
-          ! systemctl is-enabled --quiet ktb-market-syncer.timer
-          ! systemctl is-active --quiet ktb-market-syncer.timer
 
           test -x "$deploy_dir/scripts/run-morning-pipeline.sh"
           test -x "$deploy_dir/scripts/publish-scheduled-job-metric.sh"
