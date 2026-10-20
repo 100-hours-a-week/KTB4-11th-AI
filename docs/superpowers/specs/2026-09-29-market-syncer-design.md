@@ -68,7 +68,6 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
 
 **Kiwoom (`kiwoom`)**
 - `market-syncer` uses the same official Kiwoom authentication primitives used by the current market services: `KiwoomAuth(mode, StaticSecretProvider(app_key, secret_key), MemoryTokenStore())` and `KiwoomClient(auth)`. The SDK issues and refreshes the token, so `fetch_token` and the hand-written paging loop are deleted.
-- This is separate from the live path: `market-streamer` owns the long-running Kiwoom `0B`/`0D` WebSocket session, while `market-http` is the read-facing HTTP surface over Valkey and QuestDB and does not authenticate to Kiwoom directly.
 - Paging uses `client.iterate_pages(api_id=, path=, body=, max_pages=0, page_delay_seconds=)` with a `next_key` stall guard so a broken continuation cannot loop forever.
 - Calls: `ka10099` (KOSPI stocks, `mrkt_tp=0`), `ka20002` (KOSPI 200), `ka90001` (themes),
   `ka90002` (theme members).
