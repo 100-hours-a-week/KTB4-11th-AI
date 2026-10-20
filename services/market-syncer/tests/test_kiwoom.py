@@ -98,7 +98,7 @@ def test_fetch_rows_rejects_a_non_list_array():
 def test_fetch_kospi_lists_code_name_and_sector_from_ka10099():
     rows = [
         {"code": "005930", "name": "삼성전자", "upName": "전기전자"},
-        {"code": "000660", "name": "SK하이닉스"},
+        {"code": "000660", "name": "SK하이닉스", "upName": ""},
     ]
     client = FakeClient([({"list": rows}, None)])
 
