@@ -96,10 +96,16 @@ def test_fetch_rows_rejects_a_non_list_array():
 
 
 def test_fetch_kospi_lists_code_and_name_from_ka10099():
-    rows = [{"code": "005930", "name": "삼성전자"}, {"code": "000660", "name": "SK하이닉스"}]
+    rows = [
+        {"code": "005930", "name": "삼성전자", "upName": "전기전자"},
+        {"code": "000660", "name": "SK하이닉스"},
+    ]
     client = FakeClient([({"list": rows}, None)])
 
-    assert fetch_kospi(client, interval=0) == [("005930", "삼성전자"), ("000660", "SK하이닉스")]
+    assert fetch_kospi(client, interval=0) == [
+        ("005930", "삼성전자", "전기전자"),
+        ("000660", "SK하이닉스", None),
+    ]
     assert client.calls[0]["api_id"] == "ka10099"
     assert client.calls[0]["path"] == "/api/dostk/stkinfo"
     assert client.calls[0]["body"] == {"mrkt_tp": "0"}
