@@ -132,11 +132,10 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
             "price:005930": json.dumps({"code": "005930", "price": 82100, "rate": -0.48}),
         }
     )
-    monkeypatch.setattr(
-        ranking_service,
-        "questdb_ranking_details",
-        lambda conf, codes: {"005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}},
-    )
+    monkeypatch.setattr(ranking_service, "postgres_stock_metadata", lambda engine, codes: {
+        "005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}
+    })
+    monkeypatch.setattr(ranking_service, "questdb_ranking_prices", lambda conf, codes: {})
 
     with TestClient(create_app(valkey, "unused")) as client:
         index = client.get("/indices/KOSPI")
@@ -153,7 +152,8 @@ def test_http_serves_indices_and_popular_rankings(monkeypatch):
 
 
 def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
-    monkeypatch.setattr(ranking_service, "questdb_ranking_details", lambda conf, codes: {})
+    monkeypatch.setattr(ranking_service, "postgres_stock_metadata", lambda engine, codes: {})
+    monkeypatch.setattr(ranking_service, "questdb_ranking_prices", lambda conf, codes: {})
     valkey = Valkey({"ranking:{popular}": {"005930": 100, "000660": 50}})
 
     with TestClient(create_app(valkey, "unused")) as client:
@@ -180,6 +180,33 @@ def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
             "change_rate": None,
         },
     ]
+
+
+def test_postgres_metadata_batch_lookup():
+    from market_http.repositories.stock_metadata import postgres_stock_metadata
+
+    class Result:
+        def mappings(self):
+            return [{"stock_code": "005930", "name": "삼성전자", "sector_name": "전기전자"}]
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, statement, params):
+            assert params == {"codes": ["005930", "000660"]}
+            return Result()
+
+    class Engine:
+        def connect(self):
+            return Conn()
+
+    assert postgres_stock_metadata(Engine(), ["005930", "000660"]) == {
+        "005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}
+    }
 
 
 def test_questdb_details_batch_latest_price_and_matching_day_base(monkeypatch):
@@ -227,15 +254,13 @@ def test_questdb_details_batch_latest_price_and_matching_day_base(monkeypatch):
 
     monkeypatch.setattr(ranking_repository.questdb, "connect", lambda conf: nullcontext(DB()))
 
-    assert ranking_repository.questdb_ranking_details("unused", ["005930", "000660"]) == {
+    assert ranking_repository.questdb_ranking_prices("unused", ["005930", "000660"]) == {
         "005930": {
-            "stock_name": "삼성전자",
-            "sector_name": "전기전자",
             "price": 82100,
             "change_rate": -0.48,
         }
     }
-    assert len(queries) == 3
+    assert len(queries) == 2
     assert all(binds == ["005930", "000660"] for _, binds in queries)
     assert all("LATEST ON timestamp PARTITION BY symbol" in sql for sql, _ in queries)
 
@@ -286,10 +311,8 @@ def test_questdb_details_use_today_base_when_today_name_is_missing(monkeypatch):
 
     monkeypatch.setattr(ranking_repository.questdb, "connect", lambda conf: nullcontext(DB()))
 
-    assert ranking_repository.questdb_ranking_details("unused", ["005930"]) == {
+    assert ranking_repository.questdb_ranking_prices("unused", ["005930"]) == {
         "005930": {
-            "stock_name": "삼성전자",
-            "sector_name": "전기전자",
             "price": 82100,
             "change_rate": -0.48,
         }
