@@ -8,6 +8,7 @@ corporations = sa.Table(
     sa.Column("stock_code", sa.Text, primary_key=True),
     sa.Column("corp_code", sa.Text, nullable=False, unique=True),
     sa.Column("name", sa.Text, nullable=False),
+    sa.Column("sector_name", sa.Text, nullable=True),
     sa.Column("market", sa.Text, nullable=False, server_default="KOSPI"),
     sa.Column("eng_name", sa.Text, nullable=True),
     sa.Column(
