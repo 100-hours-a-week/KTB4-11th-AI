@@ -28,25 +28,6 @@ def sync_corporations(
     if not joined:
         raise ValueError(f"none of {len(kospi)} KOSPI codes matched a DART stock_code")
 
-    upsert_corporations(conn, [(company, sector) for company, _, sector in joined.values()])
-    insert_aliases(
-        conn,
-        [
-            (alias, company.stock_code)
-            for company, kiwoom_name, _ in joined.values()
-            for alias in dict.fromkeys(
-                normalize(name)
-                for name in (company.corp_name, kiwoom_name, company.corp_eng_name or "")
-            )
-            if alias
-        ],
-    )
-    return len(joined)
-
-
-def upsert_corporations(
-    conn: sa.Connection, rows: Sequence[tuple[DartCorporation, str | None]]
-) -> None:
     statement = insert(corporations).values(
         [
             {
@@ -56,7 +37,7 @@ def upsert_corporations(
                 "eng_name": company.corp_eng_name,
                 "sector_name": sector,
             }
-            for company, sector in rows
+            for company, _, sector in joined.values()
         ]
     )
     conn.execute(
@@ -73,6 +54,19 @@ def upsert_corporations(
             },
         )
     )
+    insert_aliases(
+        conn,
+        [
+            (alias, company.stock_code)
+            for company, kiwoom_name, _ in joined.values()
+            for alias in dict.fromkeys(
+                normalize(name)
+                for name in (company.corp_name, kiwoom_name, company.corp_eng_name or "")
+            )
+            if alias
+        ],
+    )
+    return len(joined)
 
 
 def insert_aliases(conn: sa.Connection, aliases: Sequence[tuple[str, str]]) -> None:
