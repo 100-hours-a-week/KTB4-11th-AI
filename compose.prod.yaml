@@ -57,6 +57,7 @@ services:
     environment:
       QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
       QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
+      QDB_QUERY_TIMEOUT: 30s
       QDB_METRICS_ENABLED: "true"
       JVM_PREPEND: "-Xms256m -Xmx768m"
     mem_limit: 1500m
@@ -303,7 +304,7 @@ services:
     ports:
       - "8001:8000"
     environment:
-      MARKET_HTTP_QUESTDB_CONF: ws::addr=questdb:9000;
+      MARKET_HTTP_QUESTDB_CONF: ws::addr=questdb:9000;connect_timeout=5000;
       MARKET_HTTP_VALKEY_HOST: ${MARKET_HTTP_VALKEY_HOST:-} # 운영 EC2에서는 실행하지 않음(V2 ECS)
       MARKET_HTTP_VALKEY_PORT: ${MARKET_HTTP_VALKEY_PORT:-6379}
       MARKET_HTTP_VALKEY_MAX_CONNECTIONS:
