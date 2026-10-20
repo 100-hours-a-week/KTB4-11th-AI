@@ -7,7 +7,7 @@ HYNIX = DartCorporation("00164779", "SK하이닉스", "SK hynix Inc.", "000660")
 KOSDAQ = DartCorporation("00111111", "코스닥기업", None, "111111")
 KOSPI = [
     ("005930", "삼성전자", "전기전자"),
-    ("005935", "삼성전자우", None),
+    ("005935", "삼성전자우", ""),
     ("000660", "SK하이닉스", "전기전자"),
 ]
 
@@ -45,13 +45,21 @@ def test_joins_kospi_codes_to_dart_and_seeds_aliases(engine, query):
 
 def test_no_joined_rows_raises(engine, query):
     with pytest.raises(ValueError):
-        sync(engine, kospi=[("A005930", "삼성전자", None)])
+        sync(engine, kospi=[("A005930", "삼성전자", "")])
 
     assert query(engine, "SELECT count(*) FROM corporations") == [(0,)]
 
 
+def test_missing_sector_starts_empty(engine, query):
+    sync(engine, kospi=[("005930", "삼성전자", "")], dart=(SAMSUNG,))
+
+    assert query(engine, "SELECT sector_name FROM corporations WHERE stock_code = '005930'") == [
+        ("",)
+    ]
+
+
 def test_a_shared_alias_keeps_its_first_owner(engine, query):
-    sync(engine, kospi=[("005930", "공유이름", None), ("000660", "공유이름", None)])
+    sync(engine, kospi=[("005930", "공유이름", ""), ("000660", "공유이름", "")])
 
     assert query(engine, "SELECT stock_code FROM corporation_aliases WHERE alias = '공유이름'") == [
         ("005930",)
@@ -72,7 +80,7 @@ def test_a_second_sync_updates_names_without_duplicating(engine, query):
     assert query(engine, "SELECT sector_name FROM corporations WHERE stock_code = '005930'") == [
         ("전기전자",)
     ]
-    sync(engine, kospi=[("005930", "삼성전자", None)], dart=(SAMSUNG,))
+    sync(engine, kospi=[("005930", "삼성전자", "")], dart=(SAMSUNG,))
     assert query(engine, "SELECT sector_name FROM corporations WHERE stock_code = '005930'") == [
         ("전기전자",)
     ]

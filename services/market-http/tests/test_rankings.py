@@ -197,12 +197,13 @@ def test_corporation_metadata_reads_matching_codes_from_postgres():
         conn.execute(
             sa.text(
                 "INSERT INTO corporations VALUES ('005930', '삼성전자', '전기전자'),"
-                " ('000660', 'SK하이닉스', NULL)"
+                " ('000660', 'SK하이닉스', '')"
             )
         )
 
-    assert ranking_repository.corporation_metadata(engine, ["005930", "999999"]) == {
-        "005930": {"stock_name": "삼성전자", "sector_name": "전기전자"}
+    assert ranking_repository.corporation_metadata(engine, ["005930", "000660", "999999"]) == {
+        "005930": {"stock_name": "삼성전자", "sector_name": "전기전자"},
+        "000660": {"stock_name": "SK하이닉스", "sector_name": ""},
     }
     engine.dispose()
 

@@ -54,7 +54,7 @@ def market_data(monkeypatch):
         lambda c, **kwargs: [
             ("005930", "삼성전자", "전기전자"),
             ("000660", "SK하이닉스", "전기전자"),
-            ("069500", "ETF", None),
+            ("069500", "ETF", ""),
         ],
     )
     monkeypatch.setattr(entry, "fetch_corp_codes", fetch_corp_codes)

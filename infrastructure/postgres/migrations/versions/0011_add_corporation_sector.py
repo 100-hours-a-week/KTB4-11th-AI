@@ -8,7 +8,9 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("corporations", sa.Column("sector_name", sa.Text(), nullable=True))
+    op.add_column(
+        "corporations", sa.Column("sector_name", sa.Text(), nullable=False, server_default="")
+    )
 
 
 def downgrade() -> None:

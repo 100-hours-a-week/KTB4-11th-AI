@@ -10,7 +10,7 @@ corporations = sa.Table(
     sa.Column("name", sa.Text, nullable=False),
     sa.Column("market", sa.Text, nullable=False, server_default="KOSPI"),
     sa.Column("eng_name", sa.Text, nullable=True),
-    sa.Column("sector_name", sa.Text, nullable=True),
+    sa.Column("sector_name", sa.Text, nullable=False, server_default=""),
     sa.Column(
         "synced_at",
         sa.DateTime(timezone=True),

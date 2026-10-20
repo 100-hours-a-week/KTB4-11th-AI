@@ -104,7 +104,7 @@ def test_fetch_kospi_lists_code_name_and_sector_from_ka10099():
 
     assert fetch_kospi(client, interval=0) == [
         ("005930", "삼성전자", "전기전자"),
-        ("000660", "SK하이닉스", None),
+        ("000660", "SK하이닉스", ""),
     ]
     assert client.calls[0]["api_id"] == "ka10099"
     assert client.calls[0]["path"] == "/api/dostk/stkinfo"

@@ -75,7 +75,7 @@ def fetch_rows(
     return rows
 
 
-def fetch_kospi(client: KiwoomClient, *, interval: float) -> list[tuple[str, str, str | None]]:
+def fetch_kospi(client: KiwoomClient, *, interval: float) -> list[tuple[str, str, str]]:
     rows = fetch_rows(
         client,
         api_id="ka10099",
@@ -84,7 +84,7 @@ def fetch_kospi(client: KiwoomClient, *, interval: float) -> list[tuple[str, str
         array_field="list",
         interval=interval,
     )
-    return [(row["code"], row["name"], row.get("upName") or None) for row in rows]
+    return [(row["code"], row["name"], row.get("upName") or "") for row in rows]
 
 
 def fetch_kospi200_codes(client: KiwoomClient, *, interval: float) -> set[str]:

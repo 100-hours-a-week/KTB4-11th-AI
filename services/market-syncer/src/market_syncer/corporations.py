@@ -16,7 +16,7 @@ def has_corporations(conn: sa.Connection) -> bool:
 
 def sync_corporations(
     conn: sa.Connection,
-    kospi: Sequence[tuple[str, str, str | None]],
+    kospi: Sequence[tuple[str, str, str]],
     dart: Sequence[DartCorporation],
 ) -> int:
     by_stock_code = {company.stock_code: company for company in dart}
@@ -48,7 +48,8 @@ def sync_corporations(
                 "name": statement.excluded.name,
                 "eng_name": statement.excluded.eng_name,
                 "sector_name": sa.func.coalesce(
-                    statement.excluded.sector_name, corporations.c.sector_name
+                    sa.func.nullif(statement.excluded.sector_name, ""),
+                    corporations.c.sector_name,
                 ),
                 "synced_at": sa.func.now(),
             },
