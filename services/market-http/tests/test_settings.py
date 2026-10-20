@@ -6,6 +6,7 @@ from pydantic import ValidationError
 def _populate(monkeypatch, **extra):
     env = {
         "MARKET_HTTP_QUESTDB_CONF": "ws::addr=localhost:9000;",
+        "MARKET_HTTP_POSTGRES_DSN": "postgresql+psycopg://localhost/test",
         "MARKET_HTTP_VALKEY_HOST": "localhost",
         **extra,
     }
