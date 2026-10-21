@@ -1,13 +1,14 @@
 from datetime import date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from ktb_core.krx import KST
 from pydantic import BaseModel, ConfigDict
 
 from market_http.controllers.dependencies import QuestDBConf, Valkey
 from market_http.openapi_examples import RANKING_EXAMPLE
-from market_http.repositories.rankings import RankingType, enrich_rankings, read_rankings
+from market_http.repositories.rankings import RankingType
+from market_http.services.rankings import get_rankings
 
 router = APIRouter()
 
@@ -35,10 +36,11 @@ async def rankings(
     kind: RankingType,
     valkey: Valkey,
     conf: QuestDBConf,
+    request: Request,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> RankingResponse:
     return RankingResponse.model_validate(
-        await enrich_rankings(
-            valkey, conf, await read_rankings(valkey, kind, limit, datetime.now(KST))
+        await get_rankings(
+            valkey, conf, request.app.state.postgres_engine, kind, limit, datetime.now(KST)
         )
     )

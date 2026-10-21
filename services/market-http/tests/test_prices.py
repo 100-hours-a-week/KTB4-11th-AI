@@ -97,7 +97,7 @@ def test_cached_price_response_includes_daily_limits(monkeypatch):
     async def get_many(valkey, codes):
         return [_cached_price(STREAMED)]
 
-    monkeypatch.setattr(prices_module, "_get_many", get_many)
+    monkeypatch.setattr(prices_module, "get_cached_prices", get_many)
     prices = asyncio.run(prices_module.current_prices(None, "conf", ["005930"]))
 
     assert prices[0].upper_limit_price == 107200
@@ -118,7 +118,7 @@ def test_price_without_daily_limits_is_omitted(monkeypatch):
     async def get_many(valkey, codes):
         return [_cached_price(STREAMED)]
 
-    monkeypatch.setattr(prices_module, "_get_many", get_many)
+    monkeypatch.setattr(prices_module, "get_cached_prices", get_many)
     monkeypatch.setattr(prices_module, "current_day_price_limits", lambda conf, codes: {})
 
     assert asyncio.run(prices_module.current_prices(None, "conf", ["005930"])) == []

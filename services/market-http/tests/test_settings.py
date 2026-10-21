@@ -6,6 +6,7 @@ from pydantic import ValidationError
 def _populate(monkeypatch, **extra):
     env = {
         "MARKET_HTTP_QUESTDB_CONF": "ws::addr=localhost:9000;",
+        "MARKET_HTTP_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test",
         "MARKET_HTTP_VALKEY_HOST": "localhost",
         **extra,
     }
@@ -21,8 +22,27 @@ def test_defaults(monkeypatch):
     assert settings.host == "0.0.0.0"
     assert settings.port == 8000
     assert settings.valkey_auth_mode == "none"
+    assert settings.valkey_max_connections is None
+    assert settings.postgres_pool_size == 5
+    assert settings.postgres_timeout_seconds == 5
     assert settings.docs_enabled is True
     assert settings.docs_path_prefix == ""
+
+
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_valkey_max_connections_must_be_positive(monkeypatch, value):
+    _populate(monkeypatch, MARKET_HTTP_VALKEY_MAX_CONNECTIONS=value)
+
+    with pytest.raises(ValidationError, match="valkey_max_connections"):
+        Settings()
+
+
+@pytest.mark.parametrize("name", ["POSTGRES_POOL_SIZE", "POSTGRES_TIMEOUT_SECONDS"])
+def test_postgres_limits_must_be_positive(monkeypatch, name):
+    _populate(monkeypatch, **{f"MARKET_HTTP_{name}": "0"})
+
+    with pytest.raises(ValidationError, match=name.lower()):
+        Settings()
 
 
 def test_docs_settings_from_environment(monkeypatch):

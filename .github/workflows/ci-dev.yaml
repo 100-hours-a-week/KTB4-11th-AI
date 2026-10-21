@@ -265,15 +265,3 @@ jobs:
       image_digest: ${{ needs.build-app-image.outputs.image_digest }}
     secrets: inherit
 
-  deploy-ecs:
-    needs: [build-app-image, deploy-dev]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-    uses: ./.github/workflows/cd-ecs-v2.yaml
-    with:
-      image_tag: ${{ github.sha }}
-      image_digest: ${{ needs.build-app-image.outputs.image_digest }}
-    secrets: inherit

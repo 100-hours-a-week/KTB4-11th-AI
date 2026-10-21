@@ -6,6 +6,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from market_syncer.dart import DartCorporation
 from market_syncer.database import corporation_aliases, corporation_indices, corporations
+from market_syncer.kiwoom import KospiStock
 
 __all__ = ["has_corporations", "replace_index", "sync_corporations"]
 
@@ -15,30 +16,19 @@ def has_corporations(conn: sa.Connection) -> bool:
 
 
 def sync_corporations(
-    conn: sa.Connection, kospi: Sequence[tuple[str, str]], dart: Sequence[DartCorporation]
+    conn: sa.Connection,
+    kospi: Sequence[KospiStock],
+    dart: Sequence[DartCorporation],
 ) -> int:
     by_stock_code = {company.stock_code: company for company in dart}
-    joined = {code: (by_stock_code[code], name) for code, name in kospi if code in by_stock_code}
+    joined = {
+        stock.stock_code: (by_stock_code[stock.stock_code], stock)
+        for stock in kospi
+        if stock.stock_code in by_stock_code
+    }
     if not joined:
         raise ValueError(f"none of {len(kospi)} KOSPI codes matched a DART stock_code")
 
-    upsert_corporations(conn, [company for company, _ in joined.values()])
-    insert_aliases(
-        conn,
-        [
-            (alias, company.stock_code)
-            for company, kiwoom_name in joined.values()
-            for alias in dict.fromkeys(
-                normalize(name)
-                for name in (company.corp_name, kiwoom_name, company.corp_eng_name or "")
-            )
-            if alias
-        ],
-    )
-    return len(joined)
-
-
-def upsert_corporations(conn: sa.Connection, rows: Sequence[DartCorporation]) -> None:
     statement = insert(corporations).values(
         [
             {
@@ -46,8 +36,9 @@ def upsert_corporations(conn: sa.Connection, rows: Sequence[DartCorporation]) ->
                 "corp_code": company.corp_code,
                 "name": company.corp_name,
                 "eng_name": company.corp_eng_name,
+                "sector_name": stock.sector_name,
             }
-            for company in rows
+            for company, stock in joined.values()
         ]
     )
     conn.execute(
@@ -57,10 +48,27 @@ def upsert_corporations(conn: sa.Connection, rows: Sequence[DartCorporation]) ->
                 "corp_code": statement.excluded.corp_code,
                 "name": statement.excluded.name,
                 "eng_name": statement.excluded.eng_name,
+                "sector_name": sa.func.coalesce(
+                    sa.func.nullif(statement.excluded.sector_name, ""),
+                    corporations.c.sector_name,
+                ),
                 "synced_at": sa.func.now(),
             },
         )
     )
+    insert_aliases(
+        conn,
+        [
+            (alias, company.stock_code)
+            for company, stock in joined.values()
+            for alias in dict.fromkeys(
+                normalize(name)
+                for name in (company.corp_name, stock.stock_name, company.corp_eng_name or "")
+            )
+            if alias
+        ],
+    )
+    return len(joined)
 
 
 def insert_aliases(conn: sa.Connection, aliases: Sequence[tuple[str, str]]) -> None:
