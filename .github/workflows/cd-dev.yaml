@@ -211,8 +211,6 @@ jobs:
             "$schedule_render_dir"/ktb-*.timer \
             /etc/systemd/system/
 
-          sudo -n systemctl daemon-reload
-
           # 이전 timer가 남아 있으면 중복 실행을 방지합니다.
           for legacy_timer in \
             ktb-market-collector-start.timer \
