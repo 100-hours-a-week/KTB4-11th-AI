@@ -2,6 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
+import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict
@@ -23,6 +24,7 @@ def create_app(
     valkey: Redis,
     questdb_conf: str,
     *,
+    postgres_engine: sa.Engine | None = None,
     docs_enabled: bool = True,
     docs_path_prefix: str = "",
     cors_origins: list[str] | None = None,
@@ -40,6 +42,8 @@ def create_app(
                 publisher.cancel()
                 with suppress(asyncio.CancelledError):
                     await publisher
+            if postgres_engine is not None:
+                await asyncio.to_thread(postgres_engine.dispose)
 
     app = FastAPI(
         title="market-http",
@@ -51,6 +55,7 @@ def create_app(
     )
     app.state.valkey = valkey
     app.state.questdb_conf = questdb_conf
+    app.state.postgres_engine = postgres_engine
     app.state.sse_metrics = sse_metrics
     app.add_middleware(
         CORSMiddleware,

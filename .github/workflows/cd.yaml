@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 # 운영 배포가 동시에 실행되어 서로 덮어쓰는 것을 방지합니다.
 concurrency:
@@ -25,6 +26,9 @@ jobs:
     # SSH와 SCP 명령을 실행할 GitHub 호스팅 Linux runner입니다.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      deployed: ${{ steps.freshness.outputs.deploy }}
+      image_digest: ${{ steps.release.outputs.image_digest }}
     env:
       # Repository Variable과 CI가 방금 push한 커밋 SHA로 ECR 이미지 주소를 만듭니다.
       APP_IMAGE: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.event.workflow_run.head_sha }}
@@ -51,6 +55,24 @@ jobs:
             echo "deploy=false" >> "$GITHUB_OUTPUT"
             echo "::notice::Skipping stale deployment: target=$DEPLOY_SHA current=$current_main_sha"
           fi
+
+      - name: Verify main release image
+        if: steps.freshness.outputs.deploy == 'true'
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
+        run: |
+          set -Eeuo pipefail
+          release_dir="$(mktemp -d)"
+          trap 'rm -rf "$release_dir"' EXIT
+          gh run download "$CI_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name ecs-release --dir "$release_dir"
+          jq -e --arg sha "$DEPLOY_SHA" --arg repository "$IMAGE_REPOSITORY" \
+            '.sha == $sha and .repository == $repository and (.digest | test("^sha256:[0-9a-f]{64}$"))' \
+            "$release_dir/ecs-release.json" > /dev/null
+          echo "image_digest=$(jq -r .digest "$release_dir/ecs-release.json")" >> "$GITHUB_OUTPUT"
 
       - name: Configure SSH
         if: steps.freshness.outputs.deploy == 'true'
@@ -270,3 +292,16 @@ jobs:
           schedule_render_dir=""
           trap - ERR
           REMOTE
+
+  deploy-ecs:
+    needs: [deploy]
+    if: ${{ needs.deploy.outputs.deployed == 'true' && github.event.workflow_run.head_branch == 'main' }}
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    uses: ./.github/workflows/cd-ecs-v2.yaml
+    with:
+      image_tag: ${{ github.event.workflow_run.head_sha }}
+      image_digest: ${{ needs.deploy.outputs.image_digest }}
+    secrets: inherit

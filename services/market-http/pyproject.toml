@@ -13,6 +13,8 @@ dependencies = [
     "questdb>=5.0",
     "redis>=6.4",
     "scalar-fastapi>=1.0",
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
     "uvicorn>=0.54",
 ]
 

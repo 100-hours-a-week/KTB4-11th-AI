@@ -702,6 +702,7 @@ def test_0006_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch
             "corp_code",
             "name",
             "eng_name",
+            "sector_name",
             "market",
             "synced_at",
         }

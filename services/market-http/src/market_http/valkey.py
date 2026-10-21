@@ -17,6 +17,7 @@ def connect_valkey(settings: Settings) -> Redis:
     return Redis(
         host=settings.valkey_host,
         port=settings.valkey_port,
+        max_connections=settings.valkey_max_connections,
         ssl=settings.valkey_tls,
         credential_provider=provider,
         decode_responses=True,

@@ -1,10 +1,74 @@
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Literal
 
+import pandas as pd
+import questdb
+import sqlalchemy as sa
 from ktb_core.krx import KST, is_trading_day
 from redis.asyncio import Redis
 
+from market_http.repositories.questdb import as_utc, records
+
 RankingType = Literal["volume", "trade_value", "gainers", "losers", "popular"]
+
+
+@dataclass(frozen=True)
+class CorporationMetadata:
+    stock_name: str
+    sector_name: str
+
+
+@dataclass(frozen=True)
+class RankingPriceDetails:
+    price: int
+    change_rate: float | None
+
+
+def corporation_metadata(engine: sa.Engine, codes: list[str]) -> dict[str, CorporationMetadata]:
+    statement = sa.text(
+        "SELECT stock_code, name, sector_name FROM corporations WHERE stock_code IN :codes"
+    ).bindparams(sa.bindparam("codes", expanding=True))
+    with engine.connect() as conn:
+        rows = conn.execute(statement, {"codes": codes}).mappings()
+        return {
+            row["stock_code"]: CorporationMetadata(row["name"], row["sector_name"]) for row in rows
+        }
+
+
+def questdb_ranking_details(conf: str, codes: list[str]) -> dict[str, RankingPriceDetails]:
+    placeholders = ", ".join(f"${index}" for index in range(1, len(codes) + 1))
+    with questdb.connect(conf) as db:
+        base_prices = records(
+            db,
+            "SELECT symbol, base_price, trade_date"
+            f" FROM corporations WHERE symbol IN ({placeholders})"
+            " LATEST ON timestamp PARTITION BY symbol",
+            codes,
+        )
+        prices = records(
+            db,
+            "SELECT symbol, timestamp, close FROM bars WHERE timeframe = '1m'"
+            f" AND symbol IN ({placeholders}) LATEST ON timestamp PARTITION BY symbol",
+            codes,
+        )
+    details: dict[str, RankingPriceDetails] = {}
+    snapshots = {row["symbol"]: row for row in base_prices}
+    for row in prices:
+        code = row["symbol"]
+        price = int(row["close"])
+        snapshot = snapshots.get(code)
+        rate = None
+        if (
+            snapshot
+            and snapshot["trade_date"]
+            == as_utc(row["timestamp"]).astimezone(KST).date().isoformat()
+        ):
+            base = snapshot["base_price"]
+            if pd.notna(base) and base:
+                rate = round((price - int(base)) / int(base) * 100, 2)
+        details[code] = RankingPriceDetails(price, rate)
+    return details
 
 
 def previous_trading_day(day: date) -> date:
@@ -18,8 +82,8 @@ async def read_rankings(
     valkey: Redis, kind: RankingType, limit: int, now: datetime
 ) -> dict[str, object]:
     if kind == "popular":
-        key = "ranking:popular"
-        updated_at = await valkey.get("ranking:popular:updated_at")
+        key = "ranking:{popular}"
+        updated_at = await valkey.get("ranking:{popular}:updated_at")
         as_of = updated_at[:10] if updated_at else None
     else:
         local = now.astimezone(KST)

@@ -110,7 +110,7 @@ def test_archive_pass_reads_checkpoints_before_reconciling(monkeypatch):
         def execute(self):
             pass
 
-    assert cli.archive_ohlcv(settings, symbols, Client(), Valkey(), NOW, daily=False) == 2
+    assert cli.collect_market_data(settings, symbols, Client(), Valkey(), NOW, daily=False) == 2
     assert events[0] == ("checkpoints",)
     assert sorted(events[1:]) == [
         ("reconcile_candles", "000660", "1m", "20260928", None),
@@ -142,7 +142,7 @@ def test_archive_pass_uses_one_client_for_all_symbols(monkeypatch):
             return []
 
     client = Client()
-    cli.archive_ohlcv(settings, symbols, client, _valkey(), NOW, daily=False)
+    cli.collect_market_data(settings, symbols, client, _valkey(), NOW, daily=False)
 
     assert calls == [(client, symbol, "1m") for symbol in symbols]
 
@@ -161,7 +161,7 @@ def test_archive_pass_propagates_worker_exception(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="boom"):
-        cli.archive_ohlcv(settings, ["005930"], object(), _valkey(), NOW, daily=False)
+        cli.collect_market_data(settings, ["005930"], object(), _valkey(), NOW, daily=False)
 
 
 @pytest.mark.parametrize(("daily", "timeframes"), [(False, ["1m"]), (True, ["1m", "1d"])])
@@ -185,7 +185,7 @@ def test_daily_bars_are_collected_only_when_asked(monkeypatch, daily, timeframes
         def popular_codes(self, universe):
             return []
 
-    cli.archive_ohlcv(settings, ["005930"], Client(), _valkey(), NOW, daily=daily)
+    cli.collect_market_data(settings, ["005930"], Client(), _valkey(), NOW, daily=daily)
 
     assert seen == timeframes
 
@@ -222,7 +222,8 @@ def _run(monkeypatch, day: Day, archive=None):
     monkeypatch.setattr(cli, "build_client", lambda app, secret, mode: built.append(app) or "c")
     monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
     monkeypatch.setattr(cli, "connect_valkey", lambda settings: _valkey())
-    monkeypatch.setattr(cli, "archive_ohlcv", archive or day.archive)
+    monkeypatch.setattr(cli, "collect_market_data", archive or day.archive)
+    monkeypatch.setattr(cli, "collect_corporations", lambda *args: None)
     cli.run(settings, clock=day.clock, sleep=day.sleep)
     return loads, built
 
@@ -232,7 +233,7 @@ def _kst(hour, minute, second=0):
 
 
 def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
-    day = Day(_kst(8, 55))
+    day = Day(_kst(8, 42))
 
     loads, built = _run(monkeypatch, day)
 
@@ -246,8 +247,33 @@ def test_run_passes_every_minute_then_once_after_the_close(monkeypatch):
     assert day.daily == [False] * (6 * 60 + 31) + [True]
 
 
+@pytest.mark.parametrize("start", [_kst(8, 50), _kst(11, 0, 30), _kst(15, 40)])
+def test_snapshot_runs_at_launch_and_failure_does_not_stop_bars(monkeypatch, start):
+    day = Day(start)
+    snapshots = []
+
+    def snapshot(settings, symbols, client, now):
+        assert day.sleeps == []
+        snapshots.append(now.astimezone(KST))
+        day.now += timedelta(seconds=40)
+        raise RuntimeError("one snapshot request failed")
+
+    monkeypatch.setattr(cli, "collect_corporations", snapshot)
+    settings = _settings(monkeypatch)
+    monkeypatch.setattr(cli, "load_symbols", lambda *args: ["005930"])
+    monkeypatch.setattr(cli, "build_client", lambda *args: object())
+    monkeypatch.setattr(cli, "ChartClient", lambda client, interval: client)
+    monkeypatch.setattr(cli, "connect_valkey", lambda settings: _valkey())
+    monkeypatch.setattr(cli, "collect_market_data", day.archive)
+
+    cli.run(settings, clock=day.clock, sleep=day.sleep)
+
+    assert snapshots == [start]
+    assert day.passes
+
+
 def test_overrunning_pass_is_followed_immediately_and_warned(monkeypatch, caplog):
-    day = Day(_kst(8, 55), work={_kst(9, 0, 5): 70})
+    day = Day(_kst(8, 42), work={_kst(9, 0, 5): 70})
 
     with caplog.at_level(logging.WARNING, logger=cli.__name__):
         _run(monkeypatch, day)
@@ -281,7 +307,7 @@ def test_start_after_the_close_runs_one_close_pass(monkeypatch):
 @pytest.mark.parametrize(
     "start",
     [
-        datetime(2026, 10, 9, 8, 55, tzinfo=KST),
+        datetime(2026, 10, 9, 8, 42, tzinfo=KST),
         datetime(2026, 10, 9, 16, 0, tzinfo=KST),
     ],
 )

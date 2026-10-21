@@ -24,6 +24,9 @@ class StructuredLogger:
     def _log(self, level: int, event: str, *, exc_info: bool = False, **fields: Any) -> None:
         self.logger.log(level, event, extra={"fields": {**self.bound, **fields}}, exc_info=exc_info)
 
+    def debug(self, event: str, **fields: Any) -> None:
+        self._log(logging.DEBUG, event, **fields)
+
     def info(self, event: str, **fields: Any) -> None:
         self._log(logging.INFO, event, **fields)
 
