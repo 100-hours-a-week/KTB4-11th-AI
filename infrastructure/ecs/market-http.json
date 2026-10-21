@@ -118,7 +118,13 @@
         "retries": 3,
         "startPeriod": 30
       },
-      "systemControls": []
+      "systemControls": [],
+      "secrets": [
+        {
+          "name": "MARKET_HTTP_POSTGRES_DSN",
+          "valueFrom": "arn:aws:ssm:ap-northeast-2:250832562715:parameter/stockspoon/v2/prod/market-http/MARKET_HTTP_POSTGRES_DSN"
+        }
+      ]
     }
   ],
   "volumes": [],
