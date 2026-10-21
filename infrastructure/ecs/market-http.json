@@ -121,7 +121,7 @@
       "systemControls": [],
       "secrets": [
         {
-          "name": "MARKET_HTTP_POSTGRES_DSN",
+          "name": "MARKET_HTTP_POSTGRES_DSN_SECRET_ARN",
           "valueFrom": "arn:aws:ssm:ap-northeast-2:250832562715:parameter/stockspoon/v2/prod/market-http/MARKET_HTTP_POSTGRES_DSN"
         }
       ]
