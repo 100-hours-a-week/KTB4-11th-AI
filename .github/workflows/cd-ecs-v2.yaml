@@ -38,7 +38,7 @@ jobs:
       TASK_FAMILY: stockspoon-v2-prod-market-http
       CONTAINER_NAME: market-http
       TASK_TEMPLATE: infrastructure/ecs/market-http.json
-      POSTGRES_DSN_SECRET_ARN: ${{ vars.MARKET_HTTP_POSTGRES_DSN_SECRET_ARN }}
+      POSTGRES_DSN_SECRET_ARN: ${{ secrets.MARKET_HTTP_POSTGRES_DSN_SECRET_ARN }}
       IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
       IMAGE_TAG: ${{ inputs.image_tag }}
       IMAGE_DIGEST: ${{ inputs.image_digest }}

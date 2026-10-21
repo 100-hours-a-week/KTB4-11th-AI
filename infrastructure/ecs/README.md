@@ -22,6 +22,8 @@ AWS 최신 리비전을 복사하거나 ECR 최신 이미지를 검색하지 않
 
 앱 변경에 실행 설정 변경이 필요하면 같은 PR에서 함께 검토합니다. 비밀값은 직접 적지 않고 `secrets[].valueFrom`으로 참조합니다. 초기 템플릿은 AWS의 실행 설정을 옮긴 것이며, Secret 실제 값은 포함하지 않습니다.
 
+GitHub Actions Repository Secret `MARKET_HTTP_POSTGRES_DSN_SECRET_ARN`에는 PostgreSQL DSN이 저장된 AWS Secrets Manager Secret의 ARN을 설정합니다. DSN 자체는 AWS Secrets Manager에만 저장하고, ECS Task Execution Role에 해당 Secret의 읽기 권한을 부여합니다.
+
 Valkey 연결 풀 상한은 `MARKET_HTTP_VALKEY_MAX_CONNECTIONS`로 설정합니다. 양의 정수만 허용하며, 미설정 시 redis-py의 기본 연결 풀 동작을 유지합니다. ECS에서 부하 테스트할 때는 `market-http.json`의 `environment`에 이 값을 추가하고 테스트가 끝나면 제거합니다. 연결이 상한에 도달하면 기본 `ConnectionPool`은 `MaxConnectionsError`를 반환하므로 SSE 클라이언트는 연결을 확보하지 못합니다.
 
 ## 수동 배포
