@@ -1,11 +1,16 @@
 import pytest
 from market_syncer.corporations import has_corporations, replace_index, sync_corporations
 from market_syncer.dart import DartCorporation
+from market_syncer.kiwoom import KospiStock
 
 SAMSUNG = DartCorporation("00126380", "삼성전자", "SAMSUNG ELECTRONICS CO,.LTD", "005930")
 HYNIX = DartCorporation("00164779", "SK하이닉스", "SK hynix Inc.", "000660")
 KOSDAQ = DartCorporation("00111111", "코스닥기업", None, "111111")
-KOSPI = [("005930", "삼성전자"), ("005935", "삼성전자우"), ("000660", "SK하이닉스")]
+KOSPI = [
+    KospiStock("005930", "삼성전자", "전기전자"),
+    KospiStock("005935", "삼성전자우", ""),
+    KospiStock("000660", "SK하이닉스", "전기전자"),
+]
 
 
 def sync(engine, kospi=KOSPI, dart=(SAMSUNG, HYNIX, KOSDAQ)):
@@ -41,13 +46,24 @@ def test_joins_kospi_codes_to_dart_and_seeds_aliases(engine, query):
 
 def test_no_joined_rows_raises(engine, query):
     with pytest.raises(ValueError):
-        sync(engine, kospi=[("A005930", "삼성전자")])
+        sync(engine, kospi=[KospiStock("A005930", "삼성전자", "")])
 
     assert query(engine, "SELECT count(*) FROM corporations") == [(0,)]
 
 
+def test_missing_sector_starts_empty(engine, query):
+    sync(engine, kospi=[KospiStock("005930", "삼성전자", "")], dart=(SAMSUNG,))
+
+    assert query(engine, "SELECT sector_name FROM corporations WHERE stock_code = '005930'") == [
+        ("",)
+    ]
+
+
 def test_a_shared_alias_keeps_its_first_owner(engine, query):
-    sync(engine, kospi=[("005930", "공유이름"), ("000660", "공유이름")])
+    sync(
+        engine,
+        kospi=[KospiStock("005930", "공유이름", ""), KospiStock("000660", "공유이름", "")],
+    )
 
     assert query(engine, "SELECT stock_code FROM corporation_aliases WHERE alias = '공유이름'") == [
         ("005930",)
@@ -65,6 +81,13 @@ def test_a_second_sync_updates_names_without_duplicating(engine, query):
         engine, "SELECT name, eng_name, synced_at FROM corporations WHERE stock_code = '005930'"
     )
     assert (name, eng_name) == ("삼성전자신", None)
+    assert query(engine, "SELECT sector_name FROM corporations WHERE stock_code = '005930'") == [
+        ("전기전자",)
+    ]
+    sync(engine, kospi=[KospiStock("005930", "삼성전자", "")], dart=(SAMSUNG,))
+    assert query(engine, "SELECT sector_name FROM corporations WHERE stock_code = '005930'") == [
+        ("전기전자",)
+    ]
     assert synced_at > before
     assert query(engine, "SELECT stock_code FROM corporation_aliases WHERE alias = '삼성전자'") == [
         ("005930",)

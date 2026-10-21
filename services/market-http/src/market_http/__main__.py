@@ -1,3 +1,4 @@
+import sqlalchemy as sa
 import uvicorn
 from ktb_core.logging import setup_logging
 
@@ -13,6 +14,17 @@ def main() -> None:
     app = create_app(
         connect_valkey(settings),
         settings.questdb_conf,
+        postgres_engine=sa.create_engine(
+            settings.postgres_dsn,
+            pool_size=settings.postgres_pool_size,
+            max_overflow=0,
+            pool_timeout=settings.postgres_timeout_seconds,
+            pool_pre_ping=True,
+            connect_args={
+                "connect_timeout": settings.postgres_timeout_seconds,
+                "options": f"-c statement_timeout={settings.postgres_timeout_seconds * 1000}",
+            },
+        ),
         docs_enabled=settings.docs_enabled,
         docs_path_prefix=settings.docs_path_prefix,
         cors_origins=settings.cors_origins,

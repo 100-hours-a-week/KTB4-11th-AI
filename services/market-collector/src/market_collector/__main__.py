@@ -57,13 +57,13 @@ def collect_market_data(
     try:
         codes = client.popular_codes(set(symbols))
         with valkey.pipeline(transaction=True) as pipe:
-            pipe.delete("ranking:popular")
+            pipe.delete("ranking:{popular}")
             if codes:
                 pipe.zadd(
-                    "ranking:popular",
+                    "ranking:{popular}",
                     {code: len(codes) - index for index, code in enumerate(codes)},
                 )
-            pipe.set("ranking:popular:updated_at", datetime.now(KST).isoformat())
+            pipe.set("ranking:{popular}:updated_at", datetime.now(KST).isoformat())
             pipe.execute()
     except Exception:
         log.exception("popular_rank_failed")
