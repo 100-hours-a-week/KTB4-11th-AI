@@ -108,6 +108,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push application image
+        id: image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -117,3 +118,20 @@ jobs:
           tags: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.sha }}
           cache-from: type=gha,scope=app
           cache-to: type=gha,mode=max,scope=app
+
+      - name: Record ECS release image
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          jq -n --arg sha "$GITHUB_SHA" --arg digest "$IMAGE_DIGEST" --arg repository "$IMAGE_REPOSITORY" \
+            '{sha: $sha, digest: $digest, repository: $repository}' > ecs-release.json
+
+      - name: Upload ECS release image
+        uses: actions/upload-artifact@v4
+        with:
+          name: ecs-release
+          path: ecs-release.json
+          retention-days: 90

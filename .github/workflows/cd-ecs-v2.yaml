@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Commit SHA from a successful dev CI run (including older releases)
+        description: Commit SHA from a successful main CI run (including older releases)
         required: true
         type: string
 
@@ -22,7 +22,9 @@ concurrency:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/dev'
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -36,9 +38,11 @@ jobs:
       TASK_FAMILY: stockspoon-v2-prod-market-http
       CONTAINER_NAME: market-http
       TASK_TEMPLATE: infrastructure/ecs/market-http.json
+      POSTGRES_DSN_SECRET_ARN: ${{ vars.MARKET_HTTP_POSTGRES_DSN_SECRET_ARN }}
       IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
       IMAGE_TAG: ${{ inputs.image_tag }}
       IMAGE_DIGEST: ${{ inputs.image_digest }}
+      CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Validate deployment source
         id: source
@@ -48,11 +52,11 @@ jobs:
           set -Eeuo pipefail
           [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
           if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
-            ci_run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci-dev.yaml/runs" \
-            -f branch=dev -f event=push -f head_sha="$IMAGE_TAG" -f status=success -f per_page=1 \
+            ci_run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci-main.yaml/runs" \
+            -f branch=main -f event=push -f head_sha="$IMAGE_TAG" -f status=success -f per_page=1 \
             --jq '.workflow_runs[0] // null')"
             jq -e --arg sha "$IMAGE_TAG" \
-            '.head_sha == $sha and .head_branch == "dev" and .event == "push" and .status == "completed" and .conclusion == "success"' \
+            '.head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success"' \
             <<<"$ci_run" > /dev/null
             release_dir="$(mktemp -d)"
             trap 'rm -rf "$release_dir"' EXIT
@@ -62,10 +66,11 @@ jobs:
             '.sha == $sha and .repository == $repository' "$release_dir/ecs-release.json" > /dev/null
             IMAGE_DIGEST="$(jq -r .digest "$release_dir/ecs-release.json")"
           else
-            [[ "$IMAGE_TAG" == "$GITHUB_SHA" ]] || { echo 'Source SHA does not match caller' >&2; exit 1; }
-            current_dev_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/dev" --jq .sha)"
-            [[ "$current_dev_sha" =~ ^[0-9a-f]{40}$ ]]
-            if [[ "$IMAGE_TAG" != "$current_dev_sha" ]]; then
+            [[ "$IMAGE_TAG" == "$CI_RUN_HEAD_SHA" ]] ||
+              { echo 'Source SHA does not match the main CI release' >&2; exit 1; }
+            current_main_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+            [[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]]
+            if [[ "$IMAGE_TAG" != "$current_main_sha" ]]; then
               echo '::notice::Skipping stale automatic deployment'
               echo 'deploy=false' >> "$GITHUB_OUTPUT"
               exit 0
@@ -102,8 +107,9 @@ jobs:
         id: register
         run: |
           set -Eeuo pipefail
-          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" \
-            '.containerDefinitions |= map(if .name == $name then .image = $image else . end)' \
+          [[ -n "$POSTGRES_DSN_SECRET_ARN" ]] || { echo 'MARKET_HTTP_POSTGRES_DSN_SECRET_ARN is required' >&2; exit 1; }
+          jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" --arg secret "$POSTGRES_DSN_SECRET_ARN" \
+            '.containerDefinitions |= map(if .name == $name then .image = $image | .secrets = [{"name": "MARKET_HTTP_POSTGRES_DSN", "valueFrom": $secret}] else . end)' \
             "$TASK_TEMPLATE" > next.json
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
             --query taskDefinition.taskDefinitionArn --output text)"

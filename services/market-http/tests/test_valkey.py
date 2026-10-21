@@ -6,6 +6,9 @@ from redis.exceptions import MaxConnectionsError
 
 def test_connection_pool_limit(monkeypatch):
     monkeypatch.setenv("MARKET_HTTP_QUESTDB_CONF", "ws::addr=localhost:9000;")
+    monkeypatch.setenv(
+        "MARKET_HTTP_POSTGRES_DSN", "postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test"
+    )
     monkeypatch.setenv("MARKET_HTTP_VALKEY_HOST", "localhost")
     monkeypatch.setenv("MARKET_HTTP_VALKEY_MAX_CONNECTIONS", "1")
 

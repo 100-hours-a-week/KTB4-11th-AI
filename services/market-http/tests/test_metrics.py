@@ -175,4 +175,9 @@ def test_disabled_metrics_start_no_publisher(caplog):
 
 def test_metrics_require_dimensions():
     with pytest.raises(ValueError, match="metrics need"):
-        Settings(questdb_conf="unused", valkey_host="localhost", metrics_namespace="test")
+        Settings(
+            questdb_conf="unused",
+            postgres_dsn="postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test",
+            valkey_host="localhost",
+            metrics_namespace="test",
+        )

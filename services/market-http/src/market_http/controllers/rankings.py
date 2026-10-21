@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from ktb_core.krx import KST
 from pydantic import BaseModel, ConfigDict
 
@@ -36,8 +36,11 @@ async def rankings(
     kind: RankingType,
     valkey: Valkey,
     conf: QuestDBConf,
+    request: Request,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> RankingResponse:
     return RankingResponse.model_validate(
-        await get_rankings(valkey, conf, kind, limit, datetime.now(KST))
+        await get_rankings(
+            valkey, conf, request.app.state.postgres_engine, kind, limit, datetime.now(KST)
+        )
     )
