@@ -159,11 +159,26 @@ The script retains `set -Eeuo pipefail`; a failed market-syncer stops the script
 
 The timer keeps `Persistent=false` as in the original morning pipeline; if the host is down at 06:00, it does not catch up on boot. A manual recovery can start `ktb-morning-pipeline.service` after the problem is corrected.
 
-Production and development CD both install/enable `ktb-morning-pipeline.timer`.
-If the former `ktb-market-syncer.timer` still exists, each workflow disables and stops
-it, removes the stale unit file, and reloads systemd. On repeated deployments, the
-removal is skipped once the old timer is gone. Post-deployment checks confirm
-the old timer is absent and inactive and the weekday morning timer is scheduled.
+Production and development CD both install/enable `ktb-morning-pipeline.timer` and
+verify its enabled and active status in the same loop as other scheduled timers.
+For already deployed production and development hosts, an operator must remove the
+old hourly timer **once before enabling the new morning pipeline schedule**.
+This is an explicit manual deployment prerequisite, not a recurring CD step:
+
+```bash
+# Repeat on both production and development AI hosts.
+sudo systemctl disable --now ktb-market-syncer.timer
+sudo rm -f /etc/systemd/system/ktb-market-syncer.timer
+sudo systemctl daemon-reload
+
+# Confirm the old timer is gone; after deployment confirm the morning timer is active.
+systemctl list-timers --all --no-pager | grep -E 'ktb-(market-syncer|morning-pipeline)\.timer' || true
+systemctl is-enabled ktb-morning-pipeline.timer
+systemctl is-active ktb-morning-pipeline.timer
+```
+
+The PR must not be treated as fully migrated until both hosts have been checked.
+The CD workflows do not repeatedly remove or validate the legacy market-syncer timer.
 
 ### Operator commands
 
