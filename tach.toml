@@ -103,4 +103,4 @@ depends_on = ["ktb_aws", "ktb_core", "ktb_telemetry"]
 
 [[modules]]
 path = "market_http"
-depends_on = ["ktb_aws", "ktb_core"]
+depends_on = ["ktb_aws", "ktb_core", "ktb_telemetry"]

@@ -1,6 +1,7 @@
 import sqlalchemy as sa
 import uvicorn
 from ktb_core.logging import setup_logging
+from ktb_telemetry.tracing import tracing
 
 from market_http.app import create_app
 from market_http.metrics import SSEConnectionMetrics
@@ -39,4 +40,5 @@ def main() -> None:
             else None
         ),
     )
-    uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
+    with tracing("market-http"):
+        uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
