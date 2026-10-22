@@ -1,3 +1,5 @@
+from contextlib import nullcontext
+
 from market_http import __main__ as entry
 from market_http.settings import Settings
 
@@ -22,11 +24,13 @@ def test_main_bounds_postgres_connections_and_queries(monkeypatch):
         calls["app"] = kwargs
         return app
 
+    monkeypatch.setattr(entry, "set_global_textmap", lambda p: calls.update(propagator=p))
     monkeypatch.setattr(entry, "Settings", lambda: settings)
     monkeypatch.setattr(entry, "setup_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(entry, "connect_valkey", lambda settings: object())
     monkeypatch.setattr(entry.sa, "create_engine", create_engine)
     monkeypatch.setattr(entry, "create_app", create_app)
+    monkeypatch.setattr(entry, "tracing", lambda name: calls.update(tracing=name) or nullcontext())
     monkeypatch.setattr(entry.uvicorn, "run", lambda *args, **kwargs: None)
 
     entry.main()
@@ -42,3 +46,5 @@ def test_main_bounds_postgres_connections_and_queries(monkeypatch):
         },
     )
     assert calls["app"]["postgres_engine"] is engine
+    assert calls["tracing"] == "market-http"
+    assert calls["propagator"].fields == set()

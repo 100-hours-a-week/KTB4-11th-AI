@@ -16,6 +16,7 @@ COPY services services
 RUN uv pip install --no-deps \
     ./packages/aws \
     ./packages/core \
+    ./packages/telemetry \
     ./services/market-collector \
     ./services/market-http \
     ./services/market-streamer \
