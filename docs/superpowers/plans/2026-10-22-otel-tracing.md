@@ -23,6 +23,7 @@
 - `AGENTS.md`: do not write new code comments or docstrings; no single-caller wrappers.
 - After any dependency change: `uv lock`, then regenerate requirements with the exact `AGENTS.md` commands, for `market-streamer`, `market-http`, and `app.txt` only.
 - Verified SDK facts (1.45.1): a `service.name` passed in code wins over `OTEL_SERVICE_NAME`; `OTEL_RESOURCE_ATTRIBUTES` still merges; `OTEL_SDK_DISABLED=true` yields `NonRecordingSpan`; with the default exporter timeout an unreachable endpoint blocks `shutdown()` ~6.5 s, with `timeout=2` 1.2 s (refused) / 2.1 s (blackholed).
+- Verified misconfiguration behavior: a bogus `OTEL_TRACES_SAMPLER`, non-numeric `OTEL_TRACES_SAMPLER_ARG`, malformed `OTEL_EXPORTER_OTLP_ENDPOINT`, or garbage `OTEL_RESOURCE_ATTRIBUTES` logs a WARNING and falls back; nothing raises. `OTEL_SDK_DISABLED` disables only on `true` (`yes`/`1` leave tracing on) — say so in `.env.example` and the ops doc.
 - Verified logging facts: a filter must sit on the root **handlers** (a root-logger filter misses child loggers); a log record factory is overwritten by `extra={"fields": ...}`. A handler filter that merges into `record.fields` works for `StructuredLogger`, plain stdlib loggers, exceptions, and `start_logging` lines.
 - Run tests with `KTB_TEST_VALKEY_URL=redis://localhost:6379/0` (Valkey from `compose.local.yaml`); Valkey tests skip without it.
 
@@ -116,6 +117,23 @@ def test_unreachable_exporter_neither_raises_nor_stalls(monkeypatch):
         providers[0].get_tracer("t").start_span("s").end()
     assert time.monotonic() - started < 4
     assert logging.getLogger("opentelemetry.exporter").getEffectiveLevel() == logging.ERROR
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {"OTEL_TRACES_SAMPLER": "bogus"},
+        {"OTEL_TRACES_SAMPLER": "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG": "abc"},
+        {"OTEL_EXPORTER_OTLP_ENDPOINT": "not-a-url"},
+        {"OTEL_RESOURCE_ATTRIBUTES": "garbage"},
+    ],
+)
+def test_misconfiguration_never_raises(monkeypatch, env):
+    monkeypatch.setattr(tracing_module.trace, "set_tracer_provider", lambda provider: None)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    with tracing("svc"):
+        pass
 ```
 
 `setup_logging`/`get_logger` come from `ktb_core.logging` (test-only import; available in the workspace venv).
@@ -126,9 +144,9 @@ def test_unreachable_exporter_neither_raises_nor_stalls(monkeypatch):
   - `TraceContextFilter.filter(record) -> bool`: if `trace.get_current_span().get_span_context().is_valid`, set `record.fields` to the existing `fields` dict (or `{}` when absent or not a dict) plus `trace_id` (`trace.format_trace_id`) and `span_id` (`trace.format_span_id`). Always return `True`.
   - `tracing(service_name)` as a `@contextmanager`: `TracerProvider(resource=Resource.create({"service.name": service_name}))` with `BatchSpanProcessor(OTLPSpanExporter(timeout=2))`; `trace.set_tracer_provider(provider)`; `logging.getLogger("opentelemetry.exporter").setLevel(logging.ERROR)`; add one `TraceContextFilter` to each handler in `list(logging.getLogger().handlers)`; `yield`; in `finally`, remove the filter from those handlers, then `provider.shutdown()`. No sampler argument (the SDK reads `OTEL_TRACES_SAMPLER`). Import `OTLPSpanExporter` from `opentelemetry.exporter.otlp.proto.http.trace_exporter` at module level.
 
-- [ ] **Step 5: Run** the same command. Expected: 5 passed.
+- [ ] **Step 5: Run** the same command. Expected: 9 passed.
 
-- [ ] **Step 6: Add the `spans` fixture to root `conftest.py`.** A session-scoped fixture installs one global `TracerProvider` once per process, with `SimpleSpanProcessor(InMemorySpanExporter())` and a switch sampler (a `Sampler` subclass delegating to `ALWAYS_ON` while its `on` flag is set, else `ALWAYS_OFF`). The function-scoped `spans` fixture depends on it, clears the exporter, sets `on = True`, yields the exporter, then sets `on = False`. This works because the global provider can be set only once per process and `ProxyTracer` does not cache the no-op tracer, so module-level tracers in every member pick it up.
+- [ ] **Step 6: Add the `spans` fixture to root `conftest.py`.** A session-scoped fixture installs one global `TracerProvider` once per process, with `SimpleSpanProcessor(InMemorySpanExporter())` and a switch sampler (a `Sampler` subclass delegating to `ALWAYS_ON` while its `on` flag is set, else `ALWAYS_OFF`). The function-scoped `spans` fixture depends on it, clears the exporter, sets `on = True`, yields the exporter, then sets `on = False`. This works because the global provider can be set only once per process and `ProxyTracer` does not cache the no-op tracer, so module-level tracers in every member pick it up. Root `conftest.py` is loaded for every member's tests: keep all OpenTelemetry imports inside the fixture bodies so collection never fails in an environment without the SDK.
 
 - [ ] **Step 7: Run** `uv run pytest packages && uv run ruff check . && uv run ruff format --check . && uv run tach check && uv run deptry packages/telemetry/src --config packages/telemetry/pyproject.toml`. Expected: pass.
 
@@ -344,7 +362,7 @@ Expected: three result lines; record them.
   - T0/T1/T2 definitions and caveats: `publish_to_receive_ms` needs cross-host clock sync; T0 is before the pipeline executes, not Valkey's `PUBLISH`; T2 is `send()` returning, not network delivery; `deliver` includes waiting in FastAPI's SSE buffers
   - sampling: the streamer's ratio drives market-http event spans; REST is sampled locally; TraceQL results are samples
   - environment variables: the full table of host-side and container-side `OTEL_*` names, their defaults, and what the AWS test system must set for both services
-  - failure behavior: Tempo down → spans dropped, one ERROR log line per failed batch, exit delayed at most ~2 s
+  - failure behavior: Tempo down → spans dropped, one ERROR log line per failed export batch (repeats every few seconds while Tempo stays down; exclude logger `opentelemetry.exporter` from ERROR alerts), exit delayed at most ~2 s; misconfigured `OTEL_*` values log a WARNING and fall back; `OTEL_SDK_DISABLED` must be exactly `true`
   - log correlation: `trace_id`/`span_id` appear on log lines written inside a span; the Grafana log→trace link is configured outside this repo
   - the Step 2 benchmark results, including the ~85-byte growth of sampled price messages
   - the package note: issue #368 named `ktb_core/telemetry.py`; tracing lives in `ktb_telemetry` to keep core dependency-free
