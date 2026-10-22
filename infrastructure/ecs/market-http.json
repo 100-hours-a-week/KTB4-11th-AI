@@ -95,6 +95,54 @@
         {
           "name": "MARKET_HTTP_VALKEY_MAX_CONNECTIONS",
           "value": "100000"
+        },
+        {
+          "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
+          "value": "http://10.0.11.236:4318"
+        },
+        {
+          "name": "OTEL_EXPORTER_OTLP_PROTOCOL",
+          "value": "http/protobuf"
+        },
+        {
+          "name": "OTEL_SERVICE_NAME",
+          "value": "market-http"
+        },
+        {
+          "name": "OTEL_RESOURCE_ATTRIBUTES",
+          "value": "deployment.environment.name=prod"
+        },
+        {
+          "name": "OTEL_TRACES_EXPORTER",
+          "value": "otlp"
+        },
+        {
+          "name": "OTEL_TRACES_SAMPLER",
+          "value": "parentbased_traceidratio"
+        },
+        {
+          "name": "OTEL_TRACES_SAMPLER_ARG",
+          "value": "0.1"
+        },
+        {
+          "name": "OTEL_METRICS_EXPORTER",
+          "value": "none"
+        },
+        {
+          "name": "OTEL_LOGS_EXPORTER",
+          "value": "none"
+        },
+        {
+          "name": "OTEL_PYTHON_LOG_CORRELATION",
+          "value": "true"
+        },
+        {
+          "name": "OTEL_PYTHON_LOG_AUTO_INSTRUMENTATION",
+          "value": "false"
+        },
+        {
+          "name": "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS",
+          "value": "/health$"
         }
       ],
       "mountPoints": [],
