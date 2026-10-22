@@ -149,9 +149,10 @@ third-party dependencies.
   quote time with the KST trading date and represents snapshot freshness.
 - Market HTTP is public without authentication. Its only Valkey write is `SET NX` to
   fill a missing price. Preserve this boundary when changing reads or streams.
-- Popular rankings are fetched by market-collector through Kiwoom and filtered to its
-  configured symbols. Preserve atomic replacement of the ranking and timestamp and
-  retain the previous ranking when fetching fails.
+- Popular rankings use market-collector's configured KOSPI 200 symbols. After each bar
+  pass, it compares the last 30 minutes of volume with the same clock window in up to
+  five previous trading sessions, publishes ordinal scores, and atomically replaces the
+  ranking and timestamp. An empty or failed calculation retains the previous ranking.
 - Daily rankings use the previous trading day before 09:10 KST or when today's ranking
   is absent.
 - Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing

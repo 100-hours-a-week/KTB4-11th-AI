@@ -10,6 +10,7 @@ from redis import Redis
 
 from market_collector.corporations import collect_corporations
 from market_collector.kiwoom.official import ChartClient, build_client
+from market_collector.popularity import SessionCache, popular_codes
 from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
 from market_collector.store import Store
@@ -29,6 +30,7 @@ def collect_market_data(
     valkey: Redis,
     now: datetime,
     daily: bool,
+    session_cache: SessionCache | None = None,
 ) -> int:
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     timeframes = ("1m", "1d") if daily else ("1m",)
@@ -54,19 +56,19 @@ def collect_market_data(
                     except Exception:
                         log.exception("index_update_failed", name=name)
 
-    try:
-        codes = client.popular_codes(set(symbols))
-        with valkey.pipeline(transaction=True) as pipe:
-            pipe.delete("ranking:{popular}")
+        try:
+            codes = popular_codes(db, symbols, now, session_cache)
             if codes:
-                pipe.zadd(
-                    "ranking:{popular}",
-                    {code: len(codes) - index for index, code in enumerate(codes)},
-                )
-            pipe.set("ranking:{popular}:updated_at", datetime.now(KST).isoformat())
-            pipe.execute()
-    except Exception:
-        log.exception("popular_rank_failed")
+                with valkey.pipeline(transaction=True) as pipe:
+                    pipe.delete("ranking:{popular}")
+                    pipe.zadd(
+                        "ranking:{popular}",
+                        {code: len(codes) - index for index, code in enumerate(codes)},
+                    )
+                    pipe.set("ranking:{popular}:updated_at", datetime.now(KST).isoformat())
+                    pipe.execute()
+        except Exception:
+            log.exception("popular_rank_failed")
 
     log.info("archive_complete", candles=written, symbols=len(symbols), timeframes=timeframes)
     return written
@@ -106,13 +108,20 @@ def run(
         except Exception:
             log.exception("corporation_snapshot_pass_failed")
 
+        session_cache: SessionCache = {}
         close_failed = False
         for at in pending:
             sleep(max(0.0, (at - clock()).total_seconds()))
             started = clock()
             try:
                 collect_market_data(
-                    settings, symbols, client, valkey, started, daily=at == pending[-1]
+                    settings,
+                    symbols,
+                    client,
+                    valkey,
+                    started,
+                    daily=at == pending[-1],
+                    session_cache=session_cache,
                 )
             except Exception:
                 log.exception("archive_pass_failed", scheduled=at.isoformat())
