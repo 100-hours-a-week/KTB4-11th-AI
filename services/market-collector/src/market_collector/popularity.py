@@ -20,14 +20,25 @@ def popular_codes(db: Any, symbols: list[str], now: datetime) -> list[str]:
     placeholders = ", ".join(f"${i}" for i in range(1, len(symbols) + 1))
     predicate = f"timeframe = '1m' AND session = 'regular' AND symbol IN ({placeholders})"
     midnight = opening.replace(hour=0)
-    binds = [*symbols, midnight.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")]
-    with db.query(
-        "SELECT DISTINCT date_trunc('day', dateadd('h', 9, timestamp)) AS session_day"
-        f" FROM bars WHERE {predicate} AND timestamp < cast(${len(binds)} AS TIMESTAMP)"
-        " ORDER BY session_day DESC LIMIT 5",
-        binds,
-    ) as result:
-        days = [row["session_day"].date() for row in result.to_pandas().to_dict("records")]
+    days = []
+    for lookback in (14, 28, 56, 112, None):
+        binds = list(symbols)
+        lower_predicate = ""
+        if lookback is not None:
+            lower = midnight - timedelta(days=lookback)
+            binds.append(lower.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+            lower_predicate = f" AND timestamp >= cast(${len(binds)} AS TIMESTAMP)"
+        binds.append(midnight.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+        with db.query(
+            "SELECT DISTINCT date_trunc('day', dateadd('h', 9, timestamp)) AS session_day"
+            f" FROM bars WHERE {predicate}{lower_predicate}"
+            f" AND timestamp < cast(${len(binds)} AS TIMESTAMP)"
+            " ORDER BY session_day DESC LIMIT 5",
+            binds,
+        ) as result:
+            days = [row["session_day"].date() for row in result.to_pandas().to_dict("records")]
+        if len(days) == 5:
+            break
     binds = [
         *symbols,
         opening.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),

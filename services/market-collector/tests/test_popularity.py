@@ -1,5 +1,5 @@
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -19,8 +19,15 @@ class FakeDatabase:
             list(volumes),
         ]
         self.queries = []
+        self.expected_end = NOW.replace(second=0) - timedelta(minutes=1)
 
     def query(self, sql, binds):
+        if "SELECT DISTINCT symbol" in sql:
+            assert f"timestamp <= cast(${len(binds)} AS TIMESTAMP)" in sql
+            assert datetime.fromisoformat(binds[-1]).astimezone(KST) == min(
+                datetime.fromisoformat(binds[-2]).astimezone(KST).replace(hour=15, minute=30),
+                self.expected_end,
+            )
         self.queries.append((sql, binds.copy()))
         frame = pd.DataFrame(self.answers.pop(0))
         return nullcontext(type("Result", (), {"to_pandas": lambda _: frame})())
@@ -34,10 +41,11 @@ def test_windows_use_completed_minutes_and_clip_to_regular_hours(
     hour, minute, expected_start, expected_end
 ):
     db = FakeDatabase()
+    db.expected_end = NOW.replace(hour=hour, minute=minute, second=0) - timedelta(minutes=1)
     popular_codes(db, ["a", "b"], NOW.replace(hour=hour, minute=minute))
     dates_sql, dates_binds = db.queries[0]
     assert "ORDER BY session_day DESC LIMIT 5" in dates_sql
-    assert dates_binds == ["a", "b", "2026-10-14T15:00:00.000000Z"]
+    assert dates_binds == ["a", "b", "2026-09-30T15:00:00.000000Z", "2026-10-14T15:00:00.000000Z"]
     for sql, binds in db.queries:
         assert "timeframe = '1m'" in sql
         assert "session = 'regular'" in sql
@@ -122,6 +130,7 @@ def test_no_completed_current_session_bars_returns_no_ranking():
 def test_completed_current_bar_outside_window_is_eligible_with_zero_volume():
     rows = [{"symbol": "b", "session_day": NOW, "volume": 10}]
     db = FakeDatabase(rows, current=("a", "b"))
+    db.expected_end = NOW.replace(hour=12, second=0) - timedelta(minutes=1)
     assert popular_codes(db, ["a", "b"], NOW.replace(hour=12)) == ["b", "a"]
 
 
@@ -138,3 +147,46 @@ def test_questdb_errors_propagate():
 
     with pytest.raises(RuntimeError, match="QuestDB unavailable"):
         popular_codes(FailedDatabase(), ["a"], NOW)
+
+
+@pytest.mark.parametrize(("gap", "query_count"), [(0, 1), (20, 2), (90, 4), (400, 5)])
+def test_session_discovery_bounds_recent_lookup_and_preserves_five_after_gap(gap, query_count):
+    days = [day - timedelta(days=gap) for day in DAYS]
+
+    class SessionDatabase(FakeDatabase):
+        def query(self, sql, binds):
+            if "AS session_day FROM bars" in sql:
+                if len(binds) == 3:
+                    assert "timestamp >= cast($2 AS TIMESTAMP)" in sql
+                    assert "timestamp < cast($3 AS TIMESTAMP)" in sql
+                    lower, upper = [
+                        datetime.fromisoformat(value).astimezone(KST).date() for value in binds[1:]
+                    ]
+                else:
+                    assert "timestamp < cast($2 AS TIMESTAMP)" in sql
+                    lower = datetime.min.date()
+                    upper = datetime.fromisoformat(binds[1]).astimezone(KST).date()
+                selected = [day for day in days if lower <= day.date() < upper]
+                self.queries.append((sql, binds.copy()))
+                frame = pd.DataFrame([{"session_day": day} for day in selected])
+                return nullcontext(type("Result", (), {"to_pandas": lambda _: frame})())
+            return super().query(sql, binds)
+
+    db = SessionDatabase()
+    db.answers.pop(0)
+    popular_codes(db, ["a"], NOW)
+    discovery = [(sql, binds) for sql, binds in db.queries if "AS session_day FROM bars" in sql]
+    assert len(discovery) == query_count
+    assert discovery[0][1][1] == "2026-09-30T15:00:00.000000Z"
+    for (_, binds), lookback in zip(discovery, (14, 28, 56, 112), strict=False):
+        assert (
+            datetime.fromisoformat(binds[1]).astimezone(KST).date()
+            == (NOW - timedelta(days=lookback)).date()
+        )
+    assert all(len(binds) == 3 for _, binds in discovery[:4])
+    if gap == 400:
+        assert len(discovery[-1][1]) == 2
+    windows = [
+        datetime.fromisoformat(value).astimezone(KST).date() for value in db.queries[-1][1][1:]
+    ]
+    assert windows[2::2] == [day.date() for day in days]

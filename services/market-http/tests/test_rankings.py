@@ -187,9 +187,8 @@ def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
     ]
 
 
-def test_http_returns_100_ordered_kospi200_popular_members(monkeypatch):
-    kospi200_codes = [f"{index:06d}" for index in range(1, 201)]
-    popular_codes = kospi200_codes[:100]
+def test_http_returns_100_ordered_popular_items(monkeypatch):
+    popular_codes = [f"{index:06d}" for index in range(1, 101)]
     updated_at = "2026-10-22T10:01:00+09:00"
     valkey = Valkey(
         {
@@ -209,7 +208,6 @@ def test_http_returns_100_ordered_kospi200_popular_members(monkeypatch):
     assert payload["updated_at"] == updated_at
     assert len(payload["items"]) == 100
     assert [item["code"] for item in payload["items"]] == popular_codes
-    assert all(item["code"] in kospi200_codes for item in payload["items"])
     assert [item["rank"] for item in payload["items"]] == list(range(1, 101))
     assert [item["score"] for item in payload["items"]] == list(range(100, 0, -1))
 
