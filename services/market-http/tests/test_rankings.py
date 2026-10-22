@@ -187,6 +187,33 @@ def test_http_keeps_missing_details_null_and_ranking_order(monkeypatch):
     ]
 
 
+def test_http_returns_100_ordered_kospi200_popular_members(monkeypatch):
+    kospi200_codes = [f"{index:06d}" for index in range(1, 201)]
+    popular_codes = kospi200_codes[:100]
+    updated_at = "2026-10-22T10:01:00+09:00"
+    valkey = Valkey(
+        {
+            "ranking:{popular}": {code: 100 - index for index, code in enumerate(popular_codes)},
+            "ranking:{popular}:updated_at": updated_at,
+        }
+    )
+    monkeypatch.setattr(ranking_service, "questdb_ranking_details", lambda conf, codes: {})
+    monkeypatch.setattr(ranking_service, "corporation_metadata", lambda engine, codes: {})
+
+    with TestClient(create_app(valkey, "unused")) as client:
+        response = client.get("/rankings/popular?limit=100")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["as_of"] == "2026-10-22"
+    assert payload["updated_at"] == updated_at
+    assert len(payload["items"]) == 100
+    assert [item["code"] for item in payload["items"]] == popular_codes
+    assert all(item["code"] in kospi200_codes for item in payload["items"])
+    assert [item["rank"] for item in payload["items"]] == list(range(1, 101))
+    assert [item["score"] for item in payload["items"]] == list(range(100, 0, -1))
+
+
 def test_corporation_metadata_reads_matching_codes_from_postgres():
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
