@@ -22,8 +22,10 @@ RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
+COPY --chmod=0555 docker/app-entrypoint.sh /usr/local/bin/ktb-entrypoint
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER app
 EXPOSE 8000
+ENTRYPOINT ["ktb-entrypoint"]
 CMD ["market-http"]
