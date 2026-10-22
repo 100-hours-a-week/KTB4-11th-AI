@@ -294,7 +294,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${MARKET_STREAMER_OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4318}
       OTEL_TRACES_SAMPLER: parentbased_traceidratio
       OTEL_TRACES_SAMPLER_ARG: ${MARKET_STREAMER_OTEL_TRACES_SAMPLER_ARG:-0.1}
-      OTEL_RESOURCE_ATTRIBUTES: ${MARKET_STREAMER_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local}
+      OTEL_RESOURCE_ATTRIBUTES: ${MARKET_STREAMER_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=dev}
     depends_on:
       postgres:
         condition: service_healthy
@@ -328,7 +328,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${MARKET_HTTP_OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4318}
       OTEL_TRACES_SAMPLER: parentbased_traceidratio
       OTEL_TRACES_SAMPLER_ARG: ${MARKET_HTTP_OTEL_TRACES_SAMPLER_ARG:-0.01}
-      OTEL_RESOURCE_ATTRIBUTES: ${MARKET_HTTP_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=local}
+      OTEL_RESOURCE_ATTRIBUTES: ${MARKET_HTTP_OTEL_RESOURCE_ATTRIBUTES:-deployment.environment=dev}
       OTEL_PROPAGATORS: none
     depends_on:
       postgres:
