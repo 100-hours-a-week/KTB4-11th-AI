@@ -128,7 +128,7 @@ Where it runs: `market-streamer` does not run in production (`.github/workflows/
 - `.env.example`: document the variables with tracing disabled by default.
 - A short runbook in `docs/operations/` lists the variables the AWS test system must set.
 
-Inbound trace context on `market-http`: the API is public with CORS `*`, so client-supplied `traceparent` headers must not force sampling or join foreign traces. `market-http` sets `OTEL_PROPAGATORS=none` so the FastAPI instrumentation ignores incoming headers, and REST requests are sampled locally by their own ratio. The SSE code extracts the Valkey message's context with `TraceContextTextMapPropagator` directly, independent of the global propagator. (Builder's call.)
+Inbound trace context on `market-http`: the API is public with CORS `*`, so client-supplied `traceparent` headers must not force sampling or join foreign traces. `market-http` `main()` sets an empty global propagator in code (`OTEL_PROPAGATORS=none` is kept as belt-and-braces) so the FastAPI instrumentation ignores incoming headers, and REST requests are sampled locally by their own ratio. The SSE code extracts the Valkey message's context with `TraceContextTextMapPropagator` directly, independent of the global propagator. (Builder's call.)
 - Dependencies: `ktb-telemetry` depends on `opentelemetry-api`, `opentelemetry-sdk`, and `opentelemetry-exporter-otlp-proto-http`. `market-streamer` and `market-http` add the `ktb-telemetry` workspace dependency (plus `opentelemetry-api` for their own direct imports, and `opentelemetry-instrumentation-fastapi` for `market-http`), with matching `COPY`/install entries in their Dockerfiles and `docker/app.Dockerfile`, `tach.toml` modules, and regenerated `docker/requirements/market-streamer.txt`, `market-http.txt`, and `app.txt`.
 
 ## Testing
@@ -160,7 +160,7 @@ Builder's calls (made during design, open to review):
 - `traceparent` and `published_at` only on sampled payloads.
 - No run-level span in `market-streamer`; no span for the SSE snapshot.
 - Deprecation by comment and docs, not a runtime warning.
-- `market-http` ignores inbound trace headers (`OTEL_PROPAGATORS=none`); REST sampled locally.
+- `market-http` ignores inbound trace headers (empty global propagator set in `main()`); REST sampled locally.
 - Production `market-http` gets the variables with tracing disabled.
 - `trace_id`/`span_id` are written to logs; wiring Grafana's log→trace jump (CloudWatch or Loki datasource) is outside this repo.
 - Field names `traceparent` and `published_at`; context-manager name and exact span names.

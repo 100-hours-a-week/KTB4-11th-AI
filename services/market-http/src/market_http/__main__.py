@@ -2,6 +2,8 @@ import sqlalchemy as sa
 import uvicorn
 from ktb_core.logging import setup_logging
 from ktb_telemetry.tracing import tracing
+from opentelemetry.propagate import set_global_textmap
+from opentelemetry.propagators.composite import CompositePropagator
 
 from market_http.app import create_app
 from market_http.metrics import SSEConnectionMetrics
@@ -10,6 +12,7 @@ from market_http.valkey import connect_valkey
 
 
 def main() -> None:
+    set_global_textmap(CompositePropagator([]))
     settings = Settings()
     setup_logging(settings.log_level, service_name="market-http")
     app = create_app(

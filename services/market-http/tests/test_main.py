@@ -24,6 +24,7 @@ def test_main_bounds_postgres_connections_and_queries(monkeypatch):
         calls["app"] = kwargs
         return app
 
+    monkeypatch.setattr(entry, "set_global_textmap", lambda p: calls.update(propagator=p))
     monkeypatch.setattr(entry, "Settings", lambda: settings)
     monkeypatch.setattr(entry, "setup_logging", lambda *args, **kwargs: None)
     monkeypatch.setattr(entry, "connect_valkey", lambda settings: object())
@@ -46,3 +47,4 @@ def test_main_bounds_postgres_connections_and_queries(monkeypatch):
     )
     assert calls["app"]["postgres_engine"] is engine
     assert calls["tracing"] == "market-http"
+    assert calls["propagator"].fields == set()
