@@ -8,14 +8,14 @@
 
 `ktb_core.logging.start_logging` records `run_start`/`run_end` with `elapsed_ms`, but logs cannot show nested timing or connect work across processes. We need to see where time goes between a price leaving `market-streamer` and the same event being handed to a client by `market-http`, and to keep watching it in production through Grafana and Tempo in our VPC.
 
-This work adds a shared, service-independent tracing setup in `ktb_core`, separates timing (spans) from operational events (logs), and connects `market-streamer`'s publish to `market-http`'s SSE fan-out in one trace.
+This work adds a shared, service-independent tracing setup in a new workspace package, `ktb_telemetry`, separates timing (spans) from operational events (logs), and connects `market-streamer`'s publish to `market-http`'s SSE fan-out in one trace.
 
 ## Scope
 
 In scope:
 
-- `ktb_core.telemetry`: tracer provider setup and flush for any service.
-- `ktb_core.logging`: `trace_id`/`span_id` on log lines written inside a span; `start_logging`'s `elapsed_ms` marked deprecated.
+- `ktb_telemetry` (new package `packages/telemetry`, following the `ktb_aws` pattern): tracer provider setup and flush for any service, plus `trace_id`/`span_id` on log lines written inside a span.
+- `start_logging`'s `elapsed_ms` marked deprecated in docs. `ktb_core` itself is not changed.
 - `market-streamer`: one span per price publish, with trace context and the publish time (T0) carried in sampled price messages.
 - `market-http`: standard FastAPI instrumentation for REST routes; per-event spans on `/prices/stream` that are children of the streamer's publish span, ending when ASGI `send()` returns (T2).
 - Deployment wiring through standard `OTEL_*` environment variables only; first enabled on the separate AWS test system (see Deployment).
@@ -38,7 +38,9 @@ Anti-goals — the work fails even if spans appear when:
 - Span count in `market-http` scales with messages × clients without a sampling bound.
 - Logging and tracing become coupled again (e.g. `start_logging` opening spans).
 
-## Shared tracing setup: `ktb_core.telemetry`
+## Shared tracing setup: `ktb_telemetry`
+
+Issue #368 names `packages/core/src/ktb_core/telemetry.py`. `AGENTS.md` requires `ktb_core` to stay free of third-party dependencies, and `ktb_aws` already exists to keep AWS libraries out of core, so tracing lives in `packages/telemetry` (`ktb_telemetry`) instead (user decision, 2026-10-22). Only `market-streamer` and `market-http` depend on it; other services and their image requirements are untouched.
 
 One public entry point: a context manager (proposed name `tracing(service_name)`) that a service wraps around its main work.
 
@@ -48,7 +50,7 @@ One public entry point: a context manager (proposed name `tracing(service_name)`
 
 Configuration comes only from standard OpenTelemetry environment variables, so changing it never needs code changes: `OTEL_SDK_DISABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`, `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` (for `deployment.environment`). No new pydantic settings.
 
-Services use the OpenTelemetry API directly — `trace.get_tracer(__name__)`, `opentelemetry.propagate.inject/extract` — with no wrappers in `ktb_core`. Domain spans (Valkey publish, SSE events) live in the services. `ktb_core.telemetry` must not grow helpers such as `publish_span()` or `sse_span()` (user decision):
+Services use the OpenTelemetry API directly — `trace.get_tracer(__name__)`, `opentelemetry.propagate.inject/extract` — with no wrappers in `ktb_telemetry`. Domain spans (Valkey publish, SSE events) live in the services. `ktb_telemetry` must not grow helpers such as `publish_span()` or `sse_span()` (user decision):
 
 ```python
 # market_streamer/__main__.py
@@ -63,16 +65,16 @@ async def publish(valkey, prices):
         ...
 ```
 
-Failure behavior: export happens on the batch processor's background thread; when the endpoint is unreachable spans are dropped and the app continues. Exporter error logs must not flood the JSON log stream (set the exporter's logger level if needed). With `OTEL_SDK_DISABLED=true` or no setup call, all spans are no-ops.
+Failure behavior: export happens on the batch processor's background thread; when the endpoint is unreachable spans are dropped and the app continues. Exporter loggers are raised to `ERROR` so retries do not flood the JSON log stream. The exporter timeout is fixed at 2 seconds in code, because the SDK default makes shutdown block for 6–10 s or more when Tempo is unreachable (measured: about 6.5 s against a refused port; with a 2 s timeout, 1.2 s refused and 2.1 s blackholed). With `OTEL_SDK_DISABLED=true` or no setup call, all spans are no-ops.
 
 ## Logging and tracing split
 
 Rule: **logs record operational events** (run history, failures, state changes); **spans record durations**. New timing code uses spans, not `*_ms` log fields.
 
 - `start_logging` stays pure logging: `run_start`, then `run_end` with outcome, exit code, and exception. It does not create spans.
-- `run_end.elapsed_ms` stays for now and is marked deprecated (comment on `start_logging` and in docs). Eight services use `start_logging`, none of them traced yet, so it is still their only run timing. Remove it once every `start_logging` service has an equivalent span.
-- `JsonFormatter` adds `trace_id` and `span_id` (hex) when a valid span is current. Lines written outside a span are unchanged. This lets Grafana jump from a Loki line to its Tempo trace.
-- `ktb-core` therefore depends on `opentelemetry-api` (cheap; no-op without an SDK).
+- `run_end.elapsed_ms` stays for now and is marked deprecated in docs (`AGENTS.md` forbids new code comments). Eight services use `start_logging`, none of them traced yet, so it is still their only run timing. Remove it once every `start_logging` service has an equivalent span.
+- `ktb_core.logging` is not modified. `tracing()` attaches a `logging.Filter` to every root handler present when it is entered (so services call `setup_logging()` first, as they already do) and removes it on exit. Inside a valid span the filter merges `trace_id` (32 hex) and `span_id` (16 hex) into the record's structured `fields`, which `JsonFormatter` already writes out. It works for `StructuredLogger` records, plain stdlib records (e.g. uvicorn), exceptions, and `start_logging` lines; lines outside a span are unchanged (verified in a spike against the real `ktb_core.logging`). This lets Grafana jump from a log line to its Tempo trace.
+- A filter on the root logger would miss records from child loggers, and a log record factory would be overwritten by `extra={"fields": ...}`, so the filter goes on handlers.
 
 ## market-streamer: publish span and context in the payload
 
@@ -127,11 +129,11 @@ Where it runs: `market-streamer` does not run in production (`.github/workflows/
 - A short runbook in `docs/operations/` lists the variables the AWS test system must set.
 
 Inbound trace context on `market-http`: the API is public with CORS `*`, so client-supplied `traceparent` headers must not force sampling or join foreign traces. `market-http` sets `OTEL_PROPAGATORS=none` so the FastAPI instrumentation ignores incoming headers, and REST requests are sampled locally by their own ratio. The SSE code extracts the Valkey message's context with `TraceContextTextMapPropagator` directly, independent of the global propagator. (Builder's call.)
-- Dependencies: `opentelemetry-api` for `ktb-core`; `opentelemetry-sdk` and the OTLP exporter where `ktb_core.telemetry` is used; `opentelemetry-instrumentation-fastapi` for `market-http`. Regenerate `docker/requirements/<svc>.txt` for every service whose image includes `ktb-core` (an undeclared import only fails at image build).
+- Dependencies: `ktb-telemetry` depends on `opentelemetry-api`, `opentelemetry-sdk`, and `opentelemetry-exporter-otlp-proto-http`. `market-streamer` and `market-http` add the `ktb-telemetry` workspace dependency (plus `opentelemetry-api` for their own direct imports, and `opentelemetry-instrumentation-fastapi` for `market-http`), with matching `COPY`/install entries in their Dockerfiles and `docker/app.Dockerfile`, `tach.toml` modules, and regenerated `docker/requirements/market-streamer.txt`, `market-http.txt`, and `app.txt`.
 
 ## Testing
 
-- `ktb_core`: setup with an in-memory exporter; disabled mode yields no-op spans; an unreachable endpoint does not raise; formatter adds `trace_id`/`span_id` only inside a valid span.
+- `ktb_telemetry`: setup with an in-memory exporter; disabled mode yields no-op spans; an unreachable endpoint neither raises nor delays exit beyond the bounded timeout; the filter adds `trace_id`/`span_id` through the real `setup_logging` pipeline only inside a valid span, keeps existing structured fields, and is removed on exit.
 - `market-streamer`: sampled publish adds `traceparent` and `published_at`; unsampled publish payload is byte-identical to today's; publish span attributes.
 - `market-http`: stream events with `traceparent` produce a child span of the given context ending after send; events without it produce none; keepalives do not consume queue entries; disconnect ends queued spans; public SSE and REST payloads are unchanged with the extra fields present.
 - No test needs a running Tempo.
@@ -139,7 +141,7 @@ Inbound trace context on `market-http`: the API is public with CORS `*`, so clie
 ## Documentation
 
 - `docs/operations/`: how to read the price-stream trace in Grafana/Tempo, what T0/T1/T2 mean and their caveats (cross-host clock sync for T1−T0; T0 is before the pipeline executes, not when Valkey runs `PUBLISH`; T2 is `send()` returning, not network delivery), sampling guidance, and the overhead results.
-- `ktb_core` docs: the logging/tracing rule, the `elapsed_ms` deprecation, and steps to add tracing to another service (sync and async).
+- `AGENTS.md`: the logging/tracing rule, the `elapsed_ms` deprecation, and steps to add tracing to another service (sync and async).
 
 ## Decisions
 
@@ -149,7 +151,8 @@ Decided by the user:
 - Use the standard FastAPI instrumentation; a small custom middleware is acceptable for the true send boundary (option B), but simplicity wins over T2 precision.
 - Tracing runs as ongoing monitoring, exporting to Tempo in the VPC. The cross-service price trace targets a separate AWS test system with its own Valkey, ECS, ALB, `market-http`, and `market-streamer`.
 - Logging and tracing are separate; `elapsed_ms` is deprecated, not removed, because it is used beyond `market-http`.
-- `ktb_core.telemetry` contains only OpenTelemetry SDK setup (`tracing(service_name)`); no span helpers.
+- `ktb_telemetry` contains only OpenTelemetry SDK setup (`tracing(service_name)`) and the log filter it installs; no span helpers.
+- Tracing lives in a new `ktb_telemetry` package, not `ktb_core`, to keep core free of third-party dependencies; `ktb_core.logging` is unchanged.
 
 Builder's calls (made during design, open to review):
 
@@ -165,6 +168,6 @@ Builder's calls (made during design, open to review):
 ## Left to the builder
 
 - Exact span names and attribute keys (follow OTel messaging conventions where they fit).
-- OTLP over HTTP or gRPC, and whether the SDK/exporter is a `ktb-core` extra or a plain dependency.
+- OTLP over HTTP or gRPC (the plan uses HTTP/protobuf).
 - How the connection id is generated.
-- Whether `OTEL_SERVICE_NAME` or the code default wins when both are set (verify SDK behavior and document it).
+- Verified: a `service.name` passed in code wins over `OTEL_SERVICE_NAME`; `deployment.environment` from `OTEL_RESOURCE_ATTRIBUTES` still applies. Document this.
