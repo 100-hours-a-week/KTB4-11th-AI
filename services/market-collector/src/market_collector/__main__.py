@@ -10,6 +10,7 @@ from redis import Redis
 
 from market_collector.corporations import collect_corporations
 from market_collector.kiwoom.official import ChartClient, build_client
+from market_collector.popularity import popular_codes
 from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
 from market_collector.store import Store
@@ -54,19 +55,19 @@ def collect_market_data(
                     except Exception:
                         log.exception("index_update_failed", name=name)
 
-    try:
-        codes = client.popular_codes(set(symbols))
-        with valkey.pipeline(transaction=True) as pipe:
-            pipe.delete("ranking:{popular}")
+        try:
+            codes = popular_codes(db, symbols, now)
             if codes:
-                pipe.zadd(
-                    "ranking:{popular}",
-                    {code: len(codes) - index for index, code in enumerate(codes)},
-                )
-            pipe.set("ranking:{popular}:updated_at", datetime.now(KST).isoformat())
-            pipe.execute()
-    except Exception:
-        log.exception("popular_rank_failed")
+                with valkey.pipeline(transaction=True) as pipe:
+                    pipe.delete("ranking:{popular}")
+                    pipe.zadd(
+                        "ranking:{popular}",
+                        {code: len(codes) - index for index, code in enumerate(codes)},
+                    )
+                    pipe.set("ranking:{popular}:updated_at", datetime.now(KST).isoformat())
+                    pipe.execute()
+        except Exception:
+            log.exception("popular_rank_failed")
 
     log.info("archive_complete", candles=written, symbols=len(symbols), timeframes=timeframes)
     return written

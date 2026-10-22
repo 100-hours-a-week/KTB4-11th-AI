@@ -76,6 +76,7 @@ def test_archive_pass_reads_checkpoints_before_reconciling(monkeypatch):
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -87,9 +88,6 @@ def test_archive_pass_reads_checkpoints_before_reconciling(monkeypatch):
     class Client:
         def index_quote(self, name):
             return {}
-
-        def popular_codes(self, universe):
-            return []
 
     class Valkey:
         def pipeline(self, **kwargs):
@@ -129,6 +127,7 @@ def test_archive_pass_uses_one_client_for_all_symbols(monkeypatch):
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -138,8 +137,7 @@ def test_archive_pass_uses_one_client_for_all_symbols(monkeypatch):
     )
 
     class Client:
-        def popular_codes(self, universe):
-            return []
+        pass
 
     client = Client()
     cli.collect_market_data(settings, symbols, client, _valkey(), NOW, daily=False)
@@ -156,6 +154,7 @@ def test_archive_pass_propagates_worker_exception(monkeypatch):
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(object()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli, "reconcile_candles", lambda *args: (_ for _ in ()).throw(RuntimeError("boom"))
     )
@@ -175,6 +174,7 @@ def test_daily_bars_are_collected_only_when_asked(monkeypatch, daily, timeframes
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(object()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -182,8 +182,7 @@ def test_daily_bars_are_collected_only_when_asked(monkeypatch, daily, timeframes
     )
 
     class Client:
-        def popular_codes(self, universe):
-            return []
+        pass
 
     cli.collect_market_data(settings, ["005930"], Client(), _valkey(), NOW, daily=daily)
 
