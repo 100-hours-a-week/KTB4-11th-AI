@@ -12,6 +12,7 @@ from market_streamer.stream import (
     publish,
     publish_orderbooks,
 )
+from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
 
 TODAY = date(2026, 10, 13)
@@ -346,3 +347,39 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
         when == datetime(2026, 10, 27, 23, 59, 59, tzinfo=KST)
         for when, _ in valkey.expirations.values()
     )
+
+
+async def _publish_and_capture(valkey_url, prices):
+    valkey = Redis.from_url(valkey_url, decode_responses=True)
+    pubsub = valkey.pubsub()
+    await pubsub.subscribe("price:005930")
+    await pubsub.get_message(timeout=1)
+    await publish(valkey, prices)
+    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+    stored = await valkey.get("price:005930")
+    await pubsub.aclose()
+    await valkey.aclose()
+    return message, stored
+
+
+def test_sampled_publish_adds_trace_fields_from_the_publish_span(valkey_url, spans):
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [PRICE]))
+    (span,) = spans.get_finished_spans()
+    context = span.get_span_context()
+    payload = json.loads(message["data"])
+    assert span.name == "publish" and span.kind == SpanKind.PRODUCER
+    assert span.attributes["prices.received"] == 1
+    assert span.attributes["prices.accepted"] == 1
+    assert (
+        payload["traceparent"]
+        == f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"
+    )
+    assert datetime.fromisoformat(payload["published_at"]).tzinfo is not None
+    assert json.loads(stored) == payload
+
+
+def test_unsampled_publish_payload_is_unchanged(valkey_url):
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [PRICE]))
+    expected = {k: v for k, v in PRICE.items() if k != "trade_value"}
+    assert json.loads(message["data"]) == expected
+    assert json.loads(stored) == expected
