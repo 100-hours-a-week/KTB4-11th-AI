@@ -244,9 +244,10 @@ jobs:
             "$schedule_render_dir"/ktb-*.service \
             "$schedule_render_dir"/ktb-*.timer \
             /etc/systemd/system/
+
           sudo -n systemctl daemon-reload
 
-          # 예전 상시 실행 방식의 timer가 남아 있어도 새 단발 스케줄과 중복되지 않게 합니다.
+          # 이전 timer가 남아 있으면 중복 실행을 방지합니다.
           for legacy_timer in \
             ktb-market-collector-start.timer \
             ktb-market-collector-stop.timer; do
@@ -267,14 +268,12 @@ jobs:
           # 모든 운영 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
-            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer
 
           for timer in \
             ktb-market-collector.timer \
-            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer; do
