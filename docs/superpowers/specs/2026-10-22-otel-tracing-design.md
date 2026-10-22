@@ -88,7 +88,7 @@ Compatibility: `TickPrice`/`Price` use Pydantic's default `extra="ignore"`, so R
 
 ## market-http: REST instrumentation and SSE event spans
 
-**REST.** Call `FastAPIInstrumentor.instrument_app(app)` in `create_app`. Exclude the stream routes with `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` (e.g. `prices/stream,orderbooks/stream`). Reason, verified in `opentelemetry-instrumentation-asgi` 0.66b1 source: on a streaming route every event span and `http send` span becomes a child of a server span that stays open for the life of the connection, and its `http send` span closes *before* `send()` runs, so it does not measure the send anyway. `exclude_spans` is app-wide, so URL exclusion is the only per-route switch.
+**REST.** Call `FastAPIInstrumentor.instrument_app(app)` in `create_app`. Exclude the stream routes in code with `excluded_urls="prices/stream,orderbooks/stream"` so a missing env var cannot reintroduce connection-long traces. Reason, verified in `opentelemetry-instrumentation-asgi` 0.66b1 source: on a streaming route every event span and `http send` span becomes a child of a server span that stays open for the life of the connection, and its `http send` span closes *before* `send()` runs, so it does not measure the send anyway. `exclude_spans` is app-wide, so URL exclusion is the only per-route switch.
 
 **Per-event spans on `/prices/stream`.** For each Pub/Sub message:
 
@@ -120,7 +120,7 @@ A test or small script times `publish()` on a synthetic batch of about 26 prices
 
 Where it runs: `market-streamer` does not run in production (`.github/workflows/cd.yaml`). The first target is a separate AWS test system with its own Valkey, ECS cluster, ALB, `market-http`, and `market-streamer`; its definitions are not in this repo. The code therefore stays environment-agnostic: tracing is enabled per environment purely through environment variables set by whoever deploys that environment, and `deployment.environment` (via `OTEL_RESOURCE_ATTRIBUTES`) tells environments apart in Tempo.
 
-- Every environment that enables tracing sets, for both services: `OTEL_EXPORTER_OTLP_ENDPOINT` (Tempo in that VPC), `OTEL_TRACES_SAMPLER`/`OTEL_TRACES_SAMPLER_ARG`, `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<env>`; and for `market-http`, `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` and `OTEL_PROPAGATORS=none` (see below).
+- Every environment that enables tracing sets, for both services: `OTEL_EXPORTER_OTLP_ENDPOINT` (Tempo in that VPC), `OTEL_TRACES_SAMPLER`/`OTEL_TRACES_SAMPLER_ARG`, `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<env>`; and for `market-http`, `OTEL_PROPAGATORS=none` (see below).
 - `infrastructure/ecs/market-http.json` (production): add the variables with `OTEL_SDK_DISABLED=true` so production behavior is unchanged until it is turned on deliberately.
 - `compose.local.yaml`/`compose.prod.yaml`: pass the `OTEL_*` variables through for `market-streamer` and `market-http`, defaulting to disabled.
 - `.env.example`: document the variables with tracing disabled by default.
