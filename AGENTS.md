@@ -215,6 +215,9 @@ that combined image. Keep CI service/export lists in sync when adding a service.
   `ktb_telemetry.tracing.tracing(name)` after `setup_logging()` (sync: around the work;
   async: around `asyncio.run`). Use `trace.get_tracer(__name__)` directly. Never keep one
   span open for a whole long-running process or connection.
+- Keep span, propagation, and sampling code in the service's own `tracing` module. Business
+  code calls at most a hook from it (a decorator or one call per event) and never imports
+  OpenTelemetry itself.
 - `start_logging`'s `elapsed_ms` is deprecated and gets removed once every `start_logging`
   service has an equivalent span. Other ad-hoc timers (`market-collector/store.py`,
   portfolio-builder `Stopwatch`, `infrastructure/questdb/inspect_checkpoint.py`) are

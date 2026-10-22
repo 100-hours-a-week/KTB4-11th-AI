@@ -50,7 +50,9 @@ Caveats:
 
 A traced message with a malformed or missing `published_at` is still delivered; its span
 lacks `published_at` and `publish_to_receive_ms`. A message whose `traceparent` is not a
-string is delivered with no `deliver` span.
+valid W3C trace context is delivered with no `deliver` span. A span still queued when the
+client disconnects ends at the disconnect with `sse.disconnected=true`; exclude those from
+latency queries.
 
 ## Sampling
 
@@ -85,6 +87,39 @@ places:
   down, so memory stays bounded. This bounds memory only; spans are still created up to
   the rate limit.
 
+## Sampling statistics
+
+The `active_sse_connections` EMF log line that `market-http` writes every 60 s (only when
+`MARKET_HTTP_METRICS_NAMESPACE` is set) also carries two per-interval counts, published to
+CloudWatch with `ActiveSSEConnections`:
+
+| Metric | Meaning |
+| --- | --- |
+| `DeliverSpansRecorded` | `deliver` spans created in the interval |
+| `DeliverSpansSkipped` | traced deliveries streamed without a span because the rate limit was reached |
+
+`DeliverSpansSkipped / (DeliverSpansRecorded + DeliverSpansSkipped)` is the share of traced
+deliveries the limiter dropped. Read it next to any Tempo latency query: a rising skipped
+share means Tempo shows a thinner sample, not that latency changed. Not counted: messages
+the streamer did not sample, messages with a malformed `traceparent`, and spans the export
+queue drops when Tempo is slow. When `market-http` itself has no OTLP endpoint, it creates
+no `deliver` spans and both counts stay 0.
+
+## Comparing before and after #249
+
+A comparison is valid only when both sides use the same sampling policy:
+
+- Benchmark: run `scripts/bench-sse-tracing.py` (see [SSE overhead](#sse-overhead)) with
+  identical `--clients`, `--rate`, `--messages`, `--ratio`, `--spans-per-second`, and
+  `--seed` on the same machine. The script picks traced messages itself from a seeded
+  random generator, so the same messages are traced on both sides regardless of the
+  streamer's sampler, and every result line starts with that policy. Compare only lines
+  whose policy fields match.
+- Production or the AWS test system: keep the streamer's `OTEL_TRACES_SAMPLER_ARG` and
+  `MARKET_HTTP_TRACE_SPANS_PER_SECOND` unchanged across the deploy, compare equal time
+  windows with similar `ActiveSSEConnections`, and check that the skipped share above is
+  similar on both sides.
+
 ## Environment variables
 
 Both services use standard `OTEL_*` names. Compose maps host-side variables to them.
@@ -113,6 +148,12 @@ Notes:
 - `market-http` ignores inbound trace headers because `main()` sets an empty global
   propagator in code; `OTEL_PROPAGATORS=none` is kept as belt-and-braces. Both services use
   the W3C propagator directly rather than the global one.
+- FastAPI 0.142 configures OTLP export by itself when `OTEL_EXPORTER_OTLP_ENDPOINT` is set:
+  it adds a second span exporter to the provider (every span reaches Tempo twice) and
+  OTLP metric and log exporters aimed at the same endpoint. `market-http` passes
+  `telemetry={"auto_configure": False}` to `FastAPI()` so `ktb_telemetry` stays the only
+  exporter. FastAPI's own request spans, metrics, and logs are already off because
+  `FastAPIInstrumentor` is installed.
 - Production `market-http` (ECS) takes its environment from the `MARKET_HTTP_ENV_JSON`
   GitHub Actions variable. It sets no OTLP endpoint, so tracing stays off there. To enable
   it, add `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`,
@@ -169,3 +210,44 @@ Sampling in adds about 3 MB of peak RSS, most likely the in-memory exporter reta
 
 Payload growth: a sampled price message gains `traceparent` and `published_at`, which
 measured 126 bytes (121 to 247 bytes of `json.dumps` output for a representative message).
+
+## SSE overhead
+
+`scripts/bench-sse-tracing.py MODE` runs `market-http` under uvicorn in a child process
+(QuestDB stubbed, Valkey from `KTB_TEST_VALKEY_URL`), opens `--clients` SSE connections
+that each subscribe to 26 codes, and publishes `--messages` prices at `--rate` per second
+straight to Valkey. Latency is publish to client receipt, matched by a sequence number in
+`volume`. `server_cpu_s` and `server_max_rss_mb` are the child's own usage, startup
+included. Spans go through the real OTLP/HTTP exporter to a stub endpoint in the parent,
+which counts `deliver` spans; `spans_not_exported` is traced deliveries minus that count, so
+it includes rate-limit skips and any spans lost on export.
+
+- `off`: no OTLP endpoint, so tracing does nothing.
+- `sampled-out`: tracing on, no message carries `traceparent`.
+- `sampled-in`: tracing on, each message is traced with probability `--ratio`, chosen by
+  a generator seeded with `--seed`.
+
+The clients run in the parent process, so their parsing cost is part of the latency; keep
+the machine otherwise idle and compare runs from the same machine only. The script flushes
+the selected Valkey database; use a disposable one.
+
+```bash
+KTB_TEST_VALKEY_URL=redis://localhost:6379/15 uv run python scripts/bench-sse-tracing.py sampled-in
+```
+
+Defaults (100 clients, 20 messages/s for 30 s = 2,000 SSE events/s, ratio 0.01, limit
+100/s, seed 368), two runs per mode:
+
+| Mode | p50 / p95 / p99 ms | Server CPU s | Max RSS MB | Spans exported / not exported |
+| --- | --- | --- | --- | --- |
+| `off` | 18.8 / 27.7 / 34.5; 18.4 / 27.4 / 33.4 | 15.20; 15.16 | 178.2; 178.7 | 0 / 0 |
+| `sampled-out` | 18.8 / 29.3 / 40.7; 19.2 / 29.7 / 38.6 | 15.36; 15.62 | 179.9; 178.5 | 0 / 0 |
+| `sampled-in` | 18.7 / 27.2 / 32.4; 18.6 / 27.7 / 33.5 | 15.30; 15.27 | 179.4; 180.6 | 305 / 295; 300 / 300 |
+
+Differences between modes are within run-to-run variation. At this load, tracing has no
+measurable effect on SSE latency, CPU, or memory.
+
+The skipped half shows how fan-out interacts with the limit: each traced message reaches
+all 100 clients within milliseconds, so one message can use a whole second's budget, and a
+second traced message within the same window is skipped entirely. The limit caps
+bursts, not just the average rate.

@@ -1,7 +1,7 @@
 import asyncio
 import json
 from collections.abc import Iterable
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from itertools import groupby
 from typing import Any
 
@@ -12,19 +12,15 @@ from kiwoom.core.token_store import MemoryTokenStore
 from kiwoom.realtime import build_reg_packet
 from ktb_core.krx import KST, MARKET_CLOSE, MARKET_OPEN
 from ktb_core.logging import get_logger
-from opentelemetry import trace
-from opentelemetry.trace import SpanKind
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
 from market_streamer.settings import Settings
 from market_streamer.symbols import load_codes
+from market_streamer.tracing import trace_accepted, traced_publish
 from market_streamer.valkey import connect_valkey
 
 log = get_logger(__name__)
-tracer = trace.get_tracer(__name__)
-propagator = TraceContextTextMapPropagator()
 
 WEBSOCKET_PATH = "/api/dostk/websocket"
 MAX_BACKOFF = 30.0
@@ -99,64 +95,58 @@ def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, obj
     return orderbooks
 
 
+@traced_publish
 async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
-    with tracer.start_as_current_span("publish", kind=SpanKind.PRODUCER) as span:
-        prices = list(prices)
-        span.set_attribute("prices.received", len(prices))
-        async with valkey.pipeline(transaction=False) as pipe:
-            for price in prices:
-                pipe.get(f"price:{price['code']}")
-            stored = await pipe.execute()
+    prices = list(prices)
+    async with valkey.pipeline(transaction=False) as pipe:
+        for price in prices:
+            pipe.get(f"price:{price['code']}")
+        stored = await pipe.execute()
 
-        accepted = []
-        latest = {}
-        for price, raw in zip(prices, stored, strict=True):
+    accepted = []
+    latest = {}
+    for price, raw in zip(prices, stored, strict=True):
+        code = str(price["code"])
+        previous = latest.get(code) or (json.loads(raw) if raw else None)
+        if previous:
+            previous_timestamp = datetime.fromisoformat(previous["timestamp"])
+            current_timestamp = datetime.fromisoformat(str(price["timestamp"]))
+            if current_timestamp < previous_timestamp or (
+                current_timestamp.date() == previous_timestamp.date()
+                and int(price["volume"]) < int(previous["volume"])
+            ):
+                continue
+            if current_timestamp == previous_timestamp and int(price["volume"]) == int(
+                previous["volume"]
+            ):
+                continue
+        latest[code] = price
+        accepted.append(price)
+
+    trace_fields = trace_accepted(len(accepted))
+    async with valkey.pipeline(transaction=False) as pipe:
+        for price in accepted:
+            key = f"price:{price['code']}"
+            payload = json.dumps(
+                {field: value for field, value in price.items() if field != "trade_value"}
+                | trace_fields
+            )
+            pipe.set(key, payload)
+            pipe.publish(key, payload)
             code = str(price["code"])
-            previous = latest.get(code) or (json.loads(raw) if raw else None)
-            if previous:
-                previous_timestamp = datetime.fromisoformat(previous["timestamp"])
-                current_timestamp = datetime.fromisoformat(str(price["timestamp"]))
-                if current_timestamp < previous_timestamp or (
-                    current_timestamp.date() == previous_timestamp.date()
-                    and int(price["volume"]) < int(previous["volume"])
+            timestamp = datetime.fromisoformat(str(price["timestamp"]))
+            if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
+                day = timestamp.astimezone(KST).date()
+                expiry = datetime.combine(day + timedelta(days=14), time(23, 59, 59), KST)
+                for kind, score in (
+                    ("volume", int(price["volume"])),
+                    ("trade_value", int(price["trade_value"])),
+                    ("change_rate", float(price["rate"])),
                 ):
-                    continue
-                if current_timestamp == previous_timestamp and int(price["volume"]) == int(
-                    previous["volume"]
-                ):
-                    continue
-            latest[code] = price
-            accepted.append(price)
-
-        span.set_attribute("prices.accepted", len(accepted))
-        trace_fields: dict[str, str] = {}
-        if span.is_recording():
-            trace_fields["published_at"] = datetime.now(UTC).isoformat()
-            propagator.inject(trace_fields)
-
-        async with valkey.pipeline(transaction=False) as pipe:
-            for price in accepted:
-                key = f"price:{price['code']}"
-                payload = json.dumps(
-                    {field: value for field, value in price.items() if field != "trade_value"}
-                    | trace_fields
-                )
-                pipe.set(key, payload)
-                pipe.publish(key, payload)
-                code = str(price["code"])
-                timestamp = datetime.fromisoformat(str(price["timestamp"]))
-                if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
-                    day = timestamp.astimezone(KST).date()
-                    expiry = datetime.combine(day + timedelta(days=14), time(23, 59, 59), KST)
-                    for kind, score in (
-                        ("volume", int(price["volume"])),
-                        ("trade_value", int(price["trade_value"])),
-                        ("change_rate", float(price["rate"])),
-                    ):
-                        rank_key = f"ranking:{kind}:{day:%Y%m%d}"
-                        pipe.zadd(rank_key, {code: score})
-                        pipe.expireat(rank_key, expiry, nx=True)
-            await pipe.execute()
+                    rank_key = f"ranking:{kind}:{day:%Y%m%d}"
+                    pipe.zadd(rank_key, {code: score})
+                    pipe.expireat(rank_key, expiry, nx=True)
+        await pipe.execute()
 
 
 async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, object]]) -> None:

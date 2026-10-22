@@ -13,7 +13,7 @@ from scalar_fastapi import get_scalar_api_reference
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
 from market_http.metrics import SSEConnectionMetrics
 from market_http.openapi_examples import HEALTH_EXAMPLE
-from market_http.tracing import SlidingWindowLimiter, SSESendSpans
+from market_http.tracing import DeliverSpans, SSESendSpans
 
 
 class HealthResponse(BaseModel):
@@ -34,10 +34,16 @@ def create_app(
     sse_metrics: SSEConnectionMetrics | None = None,
     trace_spans_per_second: int = 100,
 ) -> FastAPI:
+    deliver_spans = DeliverSpans(trace_spans_per_second)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         metrics: SSEConnectionMetrics | None = app.state.sse_metrics
-        publisher = asyncio.create_task(metrics.publish()) if metrics is not None else None
+        publisher = (
+            asyncio.create_task(metrics.publish(deliver_spans.take_counts))
+            if metrics is not None
+            else None
+        )
         try:
             yield
         finally:
@@ -51,6 +57,7 @@ def create_app(
     app = FastAPI(
         title="market-http",
         lifespan=lifespan,
+        telemetry={"auto_configure": False},
         root_path=docs_path_prefix,
         openapi_url="/openapi.json" if docs_enabled else None,
         docs_url=None,
@@ -60,14 +67,13 @@ def create_app(
     app.state.questdb_conf = questdb_conf
     app.state.postgres_engine = postgres_engine
     app.state.sse_metrics = sse_metrics
-    app.state.span_limiter = SlidingWindowLimiter(trace_spans_per_second)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins if cors_origins is not None else [],
         allow_methods=["GET"],
         allow_headers=cors_headers if cors_headers is not None else [],
     )
-    app.add_middleware(SSESendSpans)
+    app.add_middleware(SSESendSpans, deliver_spans=deliver_spans)
     app.include_router(prices.router)
     app.include_router(orderbooks.router)
     app.include_router(bars.router)

@@ -90,7 +90,7 @@ Compatibility: `TickPrice`/`Price` use Pydantic's default `extra="ignore"`, so R
 
 ## market-http: REST instrumentation and SSE event spans
 
-**REST.** Call `FastAPIInstrumentor.instrument_app(app)` in `create_app`. Exclude the stream routes in code with `excluded_urls="prices/stream,orderbooks/stream"` so a missing env var cannot reintroduce connection-long traces. Reason, verified in `opentelemetry-instrumentation-asgi` 0.66b1 source: on a streaming route every event span and `http send` span becomes a child of a server span that stays open for the life of the connection, and its `http send` span closes *before* `send()` runs, so it does not measure the send anyway. `exclude_spans` is app-wide, so URL exclusion is the only per-route switch.
+**REST.** Call `FastAPIInstrumentor.instrument_app(app)` in `create_app`. Exclude the stream routes in code with `excluded_urls="prices/stream,orderbooks/stream"` so a missing env var cannot reintroduce connection-long traces. Pass `telemetry={"auto_configure": False}` to `FastAPI()`: FastAPI 0.142 otherwise adds its own OTLP span, metric, and log exporters from `OTEL_EXPORTER_OTLP_ENDPOINT`, exporting every span twice. Reason, verified in `opentelemetry-instrumentation-asgi` 0.66b1 source: on a streaming route every event span and `http send` span becomes a child of a server span that stays open for the life of the connection, and its `http send` span closes *before* `send()` runs, so it does not measure the send anyway. `exclude_spans` is app-wide, so URL exclusion is the only per-route switch.
 
 **Per-event spans on `/prices/stream`.** For each Pub/Sub message:
 
@@ -101,8 +101,7 @@ Compatibility: `TickPrice`/`Price` use Pydantic's default `extra="ignore"`, so R
 
 **Ending at `send()` — the one piece of custom code.** FastAPI's SSE route runs the generator in a producer task connected to the response through two one-item buffers (FastAPI 0.142 `routing.py:579–665`), so resuming after `yield` is not the send. A small pure-ASGI middleware handles only stream paths:
 
-- It puts a per-request FIFO in `scope["state"]` (reachable as `request.state` in the handler).
-- The handler appends one entry per yielded event: the event's span, or `None` for events without one (initial snapshot, untraced messages), so order always lines up.
+- It keeps a per-request FIFO and exposes it through a context variable. The handler calls one hook, `track_event(raw)` for a live message or `track_event()` for a snapshot event, which appends the event's span or `None` (initial snapshot, untraced or rate-limited messages), so order always lines up. Span creation, propagation, and the rate limiter live in `market_http/tracing.py`; the route handler only calls the hook. Likewise `market_streamer/tracing.py` holds the publish span (a decorator on `publish()`) and the trace fields `publish()` merges into each message.
 - The middleware wraps `send`; after `await send(message)` for an `http.response.body` chunk that is not a keepalive comment (starts with `:`), it pops one entry and ends it if not `None`.
 - When the request finishes or the client disconnects, it ends any spans still queued.
 

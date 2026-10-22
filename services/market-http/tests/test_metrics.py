@@ -138,6 +138,8 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
         assert {payload["ActiveSSEConnections"] for payload in payloads} == {0, 2}
         assert events[0].name == "market_http.metrics"
         assert all(payload["ClusterName"] == "c" for payload in payloads)
+        assert all(payload["DeliverSpansRecorded"] == 0 for payload in payloads)
+        assert all(payload["DeliverSpansSkipped"] == 0 for payload in payloads)
         assert all(payload["ServiceName"] == "s" for payload in payloads)
         assert all(isinstance(payload["_aws"]["Timestamp"], int) for payload in payloads)
         assert all(
@@ -146,7 +148,11 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
                 {
                     "Namespace": "test",
                     "Dimensions": [["ClusterName", "ServiceName"]],
-                    "Metrics": [{"Name": "ActiveSSEConnections", "Unit": "Count"}],
+                    "Metrics": [
+                        {"Name": "ActiveSSEConnections", "Unit": "Count"},
+                        {"Name": "DeliverSpansRecorded", "Unit": "Count"},
+                        {"Name": "DeliverSpansSkipped", "Unit": "Count"},
+                    ],
                 }
             ]
             for payload in payloads

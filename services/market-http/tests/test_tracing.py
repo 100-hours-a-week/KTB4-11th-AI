@@ -7,8 +7,9 @@ import redis
 from fastapi.testclient import TestClient
 from market_http.app import create_app
 from market_http.repositories import prices as prices_module
-from market_http.tracing import PENDING_SPANS, SlidingWindowLimiter, SSESendSpans
-from opentelemetry import trace
+from market_http.tracing import DeliverSpans, SlidingWindowLimiter, SSESendSpans, track_event
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
 
@@ -151,6 +152,29 @@ def test_traced_message_over_the_span_limit_streams_without_a_span(valkey_url, s
     assert not _deliver_spans(spans)
 
 
+def test_deliver_spans_count_recorded_and_skipped(spans):
+    deliver_spans = DeliverSpans(1)
+
+    assert deliver_spans.start(_payload(), "c") is None
+    deliver_spans.start(_traced(), "c").end()
+    assert deliver_spans.start(_traced(), "c") is None
+
+    assert deliver_spans.take_counts() == (1, 1)
+    assert deliver_spans.take_counts() == (0, 0)
+
+
+def test_deliver_spans_are_not_created_or_counted_while_tracing_is_off(monkeypatch):
+    monkeypatch.setattr(trace, "get_tracer_provider", trace.ProxyTracerProvider)
+    deliver_spans = DeliverSpans(1)
+
+    assert deliver_spans.start(_traced(), "c") is None
+    assert deliver_spans.take_counts() == (0, 0)
+
+
+def test_track_event_outside_a_stream_does_nothing():
+    track_event("anything")
+
+
 def test_sliding_window_limiter_weights_the_previous_second():
     limiter = SlidingWindowLimiter(4)
 
@@ -160,7 +184,7 @@ def test_sliding_window_limiter_weights_the_previous_second():
     assert [limiter.allow(20.0) for _ in range(5)] == [True, True, True, True, False]
 
 
-def test_malformed_traceparent_still_streams(valkey_url, spans):
+def test_malformed_traceparent_still_streams_without_a_span(valkey_url, spans):
     _seed(valkey_url)
 
     bodies = _stream_events(
@@ -168,8 +192,7 @@ def test_malformed_traceparent_still_streams(valkey_url, spans):
     )
 
     assert _event_data(bodies[1])["price"] == 82000
-    (deliver,) = _deliver_spans(spans)
-    assert deliver.parent is None
+    assert not _deliver_spans(spans)
 
 
 @pytest.mark.parametrize("published_at", ["not-a-date", 12345, None, "2026-10-13T09:01:00"])
@@ -197,14 +220,19 @@ def test_non_string_traceparent_still_streams_without_a_span(valkey_url, spans, 
     assert not _deliver_spans(spans)
 
 
+class _NamedSpans:
+    def start(self, raw, connection_id):
+        return trace.get_tracer("test").start_span(raw)
+
+
 def _span_app(sends):
     async def app(scope, receive, send):
-        tracer = trace.get_tracer("test")
-        PENDING_SPANS.get().extend([tracer.start_span("a"), tracer.start_span("b")])
+        track_event("a")
+        track_event("b")
         for body in sends:
             await send({"type": "http.response.body", "body": body})
 
-    return SSESendSpans(app)
+    return SSESendSpans(app, _NamedSpans())
 
 
 async def _run(app, send):
@@ -230,6 +258,7 @@ def test_disconnect_ends_queued_spans(spans):
     asyncio.run(_run(_span_app([]), send))
 
     assert [s.name for s in spans.get_finished_spans()] == ["a", "b"]
+    assert all(s.attributes["sse.disconnected"] for s in spans.get_finished_spans())
 
 
 def test_rest_requests_get_server_spans_and_stream_routes_do_not(valkey_url, spans):
@@ -247,6 +276,18 @@ def test_rest_requests_get_server_spans_and_stream_routes_do_not(valkey_url, spa
     servers = [s for s in spans.get_finished_spans() if s.kind == SpanKind.SERVER]
     assert any("/health" in s.name for s in servers)
     assert not any("stream" in s.name for s in servers)
+
+
+def test_fastapi_does_not_add_its_own_exporters(monkeypatch, spans):
+    added = []
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+    monkeypatch.setattr(TracerProvider, "add_span_processor", added.append)
+    monkeypatch.setattr(metrics, "set_meter_provider", added.append)
+
+    with TestClient(create_app(Redis(host="127.0.0.1", port=1), "unused")):
+        pass
+
+    assert added == []
 
 
 def test_rest_prices_ignore_trace_fields(valkey_url):

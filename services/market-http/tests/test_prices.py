@@ -12,7 +12,6 @@ from market_http.controllers import prices as price_controller
 from market_http.controllers.prices import stream_prices
 from market_http.repositories import prices as prices_module
 from market_http.repositories.prices import Price, TickPrice, questdb_price
-from market_http.tracing import SlidingWindowLimiter
 from redis.asyncio import Redis
 
 from .example_entities import PRICE
@@ -146,7 +145,7 @@ def test_live_stream_keeps_raw_tick_without_limits(monkeypatch):
     monkeypatch.setattr(price_controller, "current_prices", no_snapshot)
 
     async def scenario():
-        events = stream_prices(Valkey(), "conf", ["005930"], SlidingWindowLimiter(100))
+        events = stream_prices(Valkey(), "conf", ["005930"])
         event = await anext(events)
         await events.aclose()
         return event
@@ -266,7 +265,7 @@ def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, val
 
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
-        events = stream_prices(valkey, "conf", ["005930"], SlidingWindowLimiter(100))
+        events = stream_prices(valkey, "conf", ["005930"])
         snapshot = await anext(events)
         await valkey.publish("price:005930", _cached_price(live))
         published = await asyncio.wait_for(anext(events), 5)

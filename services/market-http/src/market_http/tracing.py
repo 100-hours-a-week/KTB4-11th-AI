@@ -1,9 +1,27 @@
+import json
+import time
+import uuid
 from collections import deque
+from collections.abc import Callable
 from contextvars import ContextVar
+from datetime import UTC, datetime
 
-from opentelemetry.trace import Span
+from opentelemetry import trace
+from opentelemetry.trace import Span, SpanKind
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-PENDING_SPANS: ContextVar[deque[Span | None] | None] = ContextVar("pending_spans", default=None)
+tracer = trace.get_tracer(__name__)
+propagator = TraceContextTextMapPropagator()
+
+TRACK_EVENT: ContextVar[Callable[[str | None], None] | None] = ContextVar(
+    "track_event", default=None
+)
+
+
+def track_event(raw: str | None = None) -> None:
+    track = TRACK_EVENT.get()
+    if track is not None:
+        track(raw)
 
 
 class SlidingWindowLimiter:
@@ -25,15 +43,64 @@ class SlidingWindowLimiter:
         return True
 
 
+class DeliverSpans:
+    def __init__(self, per_second: int):
+        self.limiter = SlidingWindowLimiter(per_second)
+        self.recorded = 0
+        self.skipped = 0
+
+    def take_counts(self) -> tuple[int, int]:
+        counts = self.recorded, self.skipped
+        self.recorded = self.skipped = 0
+        return counts
+
+    def start(self, raw: str, connection_id: str) -> Span | None:
+        if '"traceparent"' not in raw or isinstance(
+            trace.get_tracer_provider(), trace.ProxyTracerProvider
+        ):
+            return None
+        received = datetime.now(UTC)
+        fields = json.loads(raw)
+        if not isinstance(fields.get("traceparent"), str):
+            return None
+        context = propagator.extract(fields)
+        if not trace.get_current_span(context).get_span_context().is_valid:
+            return None
+        if not self.limiter.allow(time.monotonic()):
+            self.skipped += 1
+            return None
+        span = tracer.start_span(
+            "deliver",
+            context=context,
+            kind=SpanKind.CONSUMER,
+            attributes={"code": fields.get("code", ""), "sse.connection_id": connection_id},
+        )
+        if not span.is_recording():
+            return None
+        self.recorded += 1
+        try:
+            published = datetime.fromisoformat(fields["published_at"])
+            elapsed_ms = (received - published).total_seconds() * 1000
+        except (KeyError, TypeError, ValueError):
+            return span
+        span.set_attribute("published_at", fields["published_at"])
+        span.set_attribute("publish_to_receive_ms", elapsed_ms)
+        return span
+
+
 class SSESendSpans:
-    def __init__(self, app):
+    def __init__(self, app, deliver_spans: DeliverSpans):
         self.app = app
+        self.deliver_spans = deliver_spans
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or not scope["path"].endswith("/stream"):
             return await self.app(scope, receive, send)
-        pending = deque()
-        token = PENDING_SPANS.set(pending)
+        pending: deque[Span | None] = deque()
+        connection_id = uuid.uuid4().hex
+
+        def track(raw: str | None) -> None:
+            pending.append(None if raw is None else self.deliver_spans.start(raw, connection_id))
 
         async def send_then_end(message):
             await send(message)
@@ -48,10 +115,12 @@ class SSESendSpans:
                 if span is not None:
                     span.end()
 
+        token = TRACK_EVENT.set(track)
         try:
             await self.app(scope, receive, send_then_end)
         finally:
-            PENDING_SPANS.reset(token)
+            TRACK_EVENT.reset(token)
             for span in pending:
                 if span is not None:
+                    span.set_attribute("sse.disconnected", True)
                     span.end()
