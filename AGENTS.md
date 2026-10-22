@@ -106,6 +106,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | --- | --- |
 | `packages/core` (`ktb_core`) | Shared domain/infrastructure code with no third-party dependencies |
 | `packages/aws` (`ktb_aws`) | Shared AWS integrations; keeps AWS dependencies outside core |
+| `packages/telemetry` (`ktb_telemetry`) | OpenTelemetry tracing setup and log trace ids; keeps OpenTelemetry dependencies outside core |
 | `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
@@ -210,6 +211,14 @@ that combined image. Keep CI service/export lists in sync when adding a service.
   relevant service's `KIWOOM_MODE=demo`, and register the outbound IP with Kiwoom.
 - Call `ktb_core.logging.setup_logging()` first in service `main()` functions for JSON
   logs on stdout.
+- Logs record operational events; spans record durations. Wrap a service's main work in
+  `ktb_telemetry.tracing.tracing(name)` after `setup_logging()` (sync: around the work;
+  async: around `asyncio.run`). Use `trace.get_tracer(__name__)` directly. Never keep one
+  span open for a whole long-running process or connection.
+- `start_logging`'s `elapsed_ms` is deprecated and gets removed once every `start_logging`
+  service has an equivalent span. Other ad-hoc timers (`market-collector/store.py`,
+  portfolio-builder `Stopwatch`, `infrastructure/questdb/inspect_checkpoint.py`) are
+  candidates to move to spans.
 - Keep functions plain and entry points small. Avoid single-caller wrappers and speculative
   abstractions. Use BeautifulSoup for HTML/XML parsing.
 - Do not add comments or docstrings that restate names. Do not write new code comments.
