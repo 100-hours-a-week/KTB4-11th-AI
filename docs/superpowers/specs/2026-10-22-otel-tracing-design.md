@@ -90,7 +90,7 @@ Compatibility: `TickPrice`/`Price` use Pydantic's default `extra="ignore"`, so R
 
 ## market-http: REST instrumentation and SSE event spans
 
-**REST.** Call `FastAPIInstrumentor.instrument_app(app)` in `create_app`. Exclude the stream routes in code with `excluded_urls="prices/stream,orderbooks/stream"` so a missing env var cannot reintroduce connection-long traces. Pass `telemetry={"auto_configure": False}` to `FastAPI()`: FastAPI 0.142 otherwise adds its own OTLP span, metric, and log exporters from `OTEL_EXPORTER_OTLP_ENDPOINT`, exporting every span twice. Reason, verified in `opentelemetry-instrumentation-asgi` 0.66b1 source: on a streaming route every event span and `http send` span becomes a child of a server span that stays open for the life of the connection, and its `http send` span closes *before* `send()` runs, so it does not measure the send anyway. `exclude_spans` is app-wide, so URL exclusion is the only per-route switch.
+**REST.** Use FastAPI's built-in telemetry (FastAPI 0.142+) for REST server and operation spans instead of `opentelemetry-instrumentation-fastapi`. Pass `telemetry={"auto_configure": False, "exclude": is_stream}` to `FastAPI()`. `exclude` skips the `/stream` routes so a server span never lasts as long as a connection. `auto_configure=False` keeps `ktb_telemetry` the only exporter: on 0.142 FastAPI otherwise adds its own OTLP span, metric, and log exporters from `OTEL_EXPORTER_OTLP_ENDPOINT`, exporting every span twice (0.143 makes it opt-in). FastAPI's telemetry reads the global propagator, so the empty propagator set in `main()` also covers it.
 
 **Per-event spans on `/prices/stream`.** For each Pub/Sub message:
 
@@ -128,7 +128,7 @@ Where it runs: `market-streamer` does not run in production (`.github/workflows/
 - A short runbook in `docs/operations/` lists the variables the AWS test system must set.
 
 Inbound trace context on `market-http`: the API is public with CORS `*`, so client-supplied `traceparent` headers must not force sampling or join foreign traces. `market-http` `main()` sets an empty global propagator in code (`OTEL_PROPAGATORS=none` is kept as belt-and-braces) so the FastAPI instrumentation ignores incoming headers, and REST requests are sampled locally by their own ratio. The SSE code extracts the Valkey message's context with `TraceContextTextMapPropagator` directly, independent of the global propagator. (Builder's call.)
-- Dependencies: `ktb-telemetry` depends on `opentelemetry-api`, `opentelemetry-sdk`, and `opentelemetry-exporter-otlp-proto-http`. `market-streamer` and `market-http` add the `ktb-telemetry` workspace dependency (plus `opentelemetry-api` for their own direct imports, and `opentelemetry-instrumentation-fastapi` for `market-http`), with matching `COPY`/install entries in their Dockerfiles and `docker/app.Dockerfile`, `tach.toml` modules, and regenerated `docker/requirements/market-streamer.txt`, `market-http.txt`, and `app.txt`.
+- Dependencies: `ktb-telemetry` depends on `opentelemetry-api`, `opentelemetry-sdk`, and `opentelemetry-exporter-otlp-proto-http`. `market-streamer` and `market-http` add the `ktb-telemetry` workspace dependency (plus `opentelemetry-api` for their own direct imports), with matching `COPY`/install entries in their Dockerfiles and `docker/app.Dockerfile`, `tach.toml` modules, and regenerated `docker/requirements/market-streamer.txt`, `market-http.txt`, and `app.txt`.
 
 ## Testing
 

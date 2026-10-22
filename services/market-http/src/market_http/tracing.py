@@ -24,6 +24,10 @@ def track_event(raw: str | None = None) -> None:
         track(raw)
 
 
+def is_stream(scope) -> bool:
+    return scope["path"].endswith("/stream")
+
+
 class SlidingWindowLimiter:
     def __init__(self, per_second: int):
         self.per_second = per_second
@@ -94,7 +98,7 @@ class SSESendSpans:
         self.deliver_spans = deliver_spans
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not scope["path"].endswith("/stream"):
+        if scope["type"] != "http" or not is_stream(scope):
             return await self.app(scope, receive, send)
         pending: deque[Span | None] = deque()
         connection_id = uuid.uuid4().hex

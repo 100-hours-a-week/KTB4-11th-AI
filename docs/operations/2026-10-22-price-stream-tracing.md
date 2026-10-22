@@ -25,8 +25,10 @@ publish            market-streamer, PRODUCER   one per publish() batch
   bit); any valid flags are accepted by market-http.
 - `deliver` is a child of `publish`. Attributes: `code`, `sse.connection_id` (filter one
   client's stream), `published_at`, `publish_to_receive_ms`.
-- The SSE snapshot sent when a client connects has no span. REST routes get the standard
-  FastAPI server span; the `/stream` routes are excluded from that instrumentation.
+- The SSE snapshot sent when a client connects has no span. REST routes get FastAPI's
+  built-in telemetry: a server span plus spans for dependency resolution, the endpoint, and
+  serialization. The `/stream` routes are excluded from it (`telemetry={"exclude": ...}`) so
+  no span lasts as long as a connection.
 
 ## T0, T1, T2
 
@@ -107,18 +109,10 @@ no `deliver` spans and both counts stay 0.
 
 ## Comparing before and after #249
 
-A comparison is valid only when both sides use the same sampling policy:
-
-- Benchmark: run `scripts/bench-sse-tracing.py` (see [SSE overhead](#sse-overhead)) with
-  identical `--clients`, `--rate`, `--messages`, `--ratio`, `--spans-per-second`, and
-  `--seed` on the same machine. The script picks traced messages itself from a seeded
-  random generator, so the same messages are traced on both sides regardless of the
-  streamer's sampler, and every result line starts with that policy. Compare only lines
-  whose policy fields match.
-- Production or the AWS test system: keep the streamer's `OTEL_TRACES_SAMPLER_ARG` and
-  `MARKET_HTTP_TRACE_SPANS_PER_SECOND` unchanged across the deploy, compare equal time
-  windows with similar `ActiveSSEConnections`, and check that the skipped share above is
-  similar on both sides.
+A comparison is valid only when both sides use the same sampling policy: keep the
+streamer's `OTEL_TRACES_SAMPLER_ARG` and `MARKET_HTTP_TRACE_SPANS_PER_SECOND` unchanged
+across the deploy, compare equal time windows with similar `ActiveSSEConnections`, and
+check that the skipped share above is similar on both sides.
 
 ## Environment variables
 
@@ -152,8 +146,9 @@ Notes:
   it adds a second span exporter to the provider (every span reaches Tempo twice) and
   OTLP metric and log exporters aimed at the same endpoint. `market-http` passes
   `telemetry={"auto_configure": False}` to `FastAPI()` so `ktb_telemetry` stays the only
-  exporter. FastAPI's own request spans, metrics, and logs are already off because
-  `FastAPIInstrumentor` is installed.
+  exporter. FastAPI 0.143 makes automatic setup opt-in, so the setting stays correct after
+  an upgrade. FastAPI's request metrics and logs record nothing because no meter or logger
+  provider is configured.
 - Production `market-http` (ECS) takes its environment from the `MARKET_HTTP_ENV_JSON`
   GitHub Actions variable. It sets no OTLP endpoint, so tracing stays off there. To enable
   it, add `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`,
@@ -211,43 +206,3 @@ Sampling in adds about 3 MB of peak RSS, most likely the in-memory exporter reta
 Payload growth: a sampled price message gains `traceparent` and `published_at`, which
 measured 126 bytes (121 to 247 bytes of `json.dumps` output for a representative message).
 
-## SSE overhead
-
-`scripts/bench-sse-tracing.py MODE` runs `market-http` under uvicorn in a child process
-(QuestDB stubbed, Valkey from `KTB_TEST_VALKEY_URL`), opens `--clients` SSE connections
-that each subscribe to 26 codes, and publishes `--messages` prices at `--rate` per second
-straight to Valkey. Latency is publish to client receipt, matched by a sequence number in
-`volume`. `server_cpu_s` and `server_max_rss_mb` are the child's own usage, startup
-included. Spans go through the real OTLP/HTTP exporter to a stub endpoint in the parent,
-which counts `deliver` spans; `spans_not_exported` is traced deliveries minus that count, so
-it includes rate-limit skips and any spans lost on export.
-
-- `off`: no OTLP endpoint, so tracing does nothing.
-- `sampled-out`: tracing on, no message carries `traceparent`.
-- `sampled-in`: tracing on, each message is traced with probability `--ratio`, chosen by
-  a generator seeded with `--seed`.
-
-The clients run in the parent process, so their parsing cost is part of the latency; keep
-the machine otherwise idle and compare runs from the same machine only. The script flushes
-the selected Valkey database; use a disposable one.
-
-```bash
-KTB_TEST_VALKEY_URL=redis://localhost:6379/15 uv run python scripts/bench-sse-tracing.py sampled-in
-```
-
-Defaults (100 clients, 20 messages/s for 30 s = 2,000 SSE events/s, ratio 0.01, limit
-100/s, seed 368), two runs per mode:
-
-| Mode | p50 / p95 / p99 ms | Server CPU s | Max RSS MB | Spans exported / not exported |
-| --- | --- | --- | --- | --- |
-| `off` | 18.8 / 27.7 / 34.5; 18.4 / 27.4 / 33.4 | 15.20; 15.16 | 178.2; 178.7 | 0 / 0 |
-| `sampled-out` | 18.8 / 29.3 / 40.7; 19.2 / 29.7 / 38.6 | 15.36; 15.62 | 179.9; 178.5 | 0 / 0 |
-| `sampled-in` | 18.7 / 27.2 / 32.4; 18.6 / 27.7 / 33.5 | 15.30; 15.27 | 179.4; 180.6 | 305 / 295; 300 / 300 |
-
-Differences between modes are within run-to-run variation. At this load, tracing has no
-measurable effect on SSE latency, CPU, or memory.
-
-The skipped half shows how fan-out interacts with the limit: each traced message reaches
-all 100 clients within milliseconds, so one message can use a whole second's budget, and a
-second traced message within the same window is skipped entirely. The limit caps
-bursts, not just the average rate.

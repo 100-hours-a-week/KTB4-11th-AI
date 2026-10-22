@@ -5,7 +5,6 @@ from typing import Literal
 import sqlalchemy as sa
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 from scalar_fastapi import get_scalar_api_reference
@@ -13,7 +12,7 @@ from scalar_fastapi import get_scalar_api_reference
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
 from market_http.metrics import SSEConnectionMetrics
 from market_http.openapi_examples import HEALTH_EXAMPLE
-from market_http.tracing import DeliverSpans, SSESendSpans
+from market_http.tracing import DeliverSpans, SSESendSpans, is_stream
 
 
 class HealthResponse(BaseModel):
@@ -57,7 +56,7 @@ def create_app(
     app = FastAPI(
         title="market-http",
         lifespan=lifespan,
-        telemetry={"auto_configure": False},
+        telemetry={"auto_configure": False, "exclude": is_stream},
         root_path=docs_path_prefix,
         openapi_url="/openapi.json" if docs_enabled else None,
         docs_url=None,
@@ -90,5 +89,4 @@ def create_app(
     def health() -> HealthResponse:
         return HealthResponse(status="ok")
 
-    FastAPIInstrumentor.instrument_app(app, excluded_urls="prices/stream,orderbooks/stream")
     return app
