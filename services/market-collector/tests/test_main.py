@@ -204,7 +204,7 @@ class Day:
         self.sleeps.append(seconds)
         self.now += timedelta(seconds=seconds)
 
-    def archive(self, settings, symbols, client, valkey, now, daily):
+    def archive(self, settings, symbols, client, valkey, now, daily, session_cache=None):
         self.passes.append(now.astimezone(KST))
         self.daily.append(daily)
         self.now += timedelta(seconds=self.work.get(now.astimezone(KST), 50))
@@ -321,7 +321,7 @@ def test_holiday_does_nothing(monkeypatch, start):
 def test_failed_minute_pass_does_not_stop_the_day(monkeypatch):
     day = Day(_kst(15, 29))
 
-    def archive(settings, symbols, client, valkey, now, daily):
+    def archive(settings, symbols, client, valkey, now, daily, session_cache=None):
         if now.astimezone(KST) == _kst(15, 29, 5):
             day.now += timedelta(seconds=1)
             raise RuntimeError("kiwoom timeout")
@@ -335,7 +335,7 @@ def test_failed_minute_pass_does_not_stop_the_day(monkeypatch):
 def test_failed_close_pass_fails_the_run(monkeypatch):
     day = Day(_kst(15, 34))
 
-    def archive(settings, symbols, client, valkey, now, daily):
+    def archive(settings, symbols, client, valkey, now, daily, session_cache=None):
         day.passes.append(now.astimezone(KST))
         raise RuntimeError("questdb down")
 
@@ -343,3 +343,17 @@ def test_failed_close_pass_fails_the_run(monkeypatch):
         _run(monkeypatch, day, archive)
 
     assert day.passes == [_kst(15, 35, 5)]
+
+
+def test_run_shares_one_session_cache_between_passes(monkeypatch):
+    day = Day(_kst(15, 29))
+    caches = []
+
+    def archive(settings, symbols, client, valkey, now, daily, session_cache=None):
+        assert session_cache is not None
+        caches.append(session_cache)
+        return day.archive(settings, symbols, client, valkey, now, daily)
+
+    _run(monkeypatch, day, archive)
+    assert len(caches) == 3
+    assert all(cache is caches[0] for cache in caches)

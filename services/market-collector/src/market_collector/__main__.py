@@ -10,7 +10,7 @@ from redis import Redis
 
 from market_collector.corporations import collect_corporations
 from market_collector.kiwoom.official import ChartClient, build_client
-from market_collector.popularity import popular_codes
+from market_collector.popularity import SessionCache, popular_codes
 from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
 from market_collector.store import Store
@@ -30,6 +30,7 @@ def collect_market_data(
     valkey: Redis,
     now: datetime,
     daily: bool,
+    session_cache: SessionCache | None = None,
 ) -> int:
     base_dt = now.astimezone(KST).strftime("%Y%m%d")
     timeframes = ("1m", "1d") if daily else ("1m",)
@@ -56,7 +57,7 @@ def collect_market_data(
                         log.exception("index_update_failed", name=name)
 
         try:
-            codes = popular_codes(db, symbols, now)
+            codes = popular_codes(db, symbols, now, session_cache)
             if codes:
                 with valkey.pipeline(transaction=True) as pipe:
                     pipe.delete("ranking:{popular}")
@@ -107,13 +108,20 @@ def run(
         except Exception:
             log.exception("corporation_snapshot_pass_failed")
 
+        session_cache: SessionCache = {}
         close_failed = False
         for at in pending:
             sleep(max(0.0, (at - clock()).total_seconds()))
             started = clock()
             try:
                 collect_market_data(
-                    settings, symbols, client, valkey, started, daily=at == pending[-1]
+                    settings,
+                    symbols,
+                    client,
+                    valkey,
+                    started,
+                    daily=at == pending[-1],
+                    session_cache=session_cache,
                 )
             except Exception:
                 log.exception("archive_pass_failed", scheduled=at.isoformat())

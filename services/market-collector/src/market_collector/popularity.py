@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from fractions import Fraction
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -7,7 +7,12 @@ from zoneinfo import ZoneInfo
 KST = ZoneInfo("Asia/Seoul")
 
 
-def popular_codes(db: Any, symbols: list[str], now: datetime) -> list[str]:
+type SessionCache = dict[tuple[date, tuple[str, ...]], list[date]]
+
+
+def popular_codes(
+    db: Any, symbols: list[str], now: datetime, session_cache: SessionCache | None = None
+) -> list[str]:
     now = now.astimezone(KST)
     opening = now.replace(hour=9, minute=0, second=0, microsecond=0)
     end = min(
@@ -20,25 +25,31 @@ def popular_codes(db: Any, symbols: list[str], now: datetime) -> list[str]:
     placeholders = ", ".join(f"${i}" for i in range(1, len(symbols) + 1))
     predicate = f"timeframe = '1m' AND session = 'regular' AND symbol IN ({placeholders})"
     midnight = opening.replace(hour=0)
-    days = []
-    for lookback in (14, 28, 56, 112, None):
-        binds = list(symbols)
-        lower_predicate = ""
-        if lookback is not None:
-            lower = midnight - timedelta(days=lookback)
-            binds.append(lower.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-            lower_predicate = f" AND timestamp >= cast(${len(binds)} AS TIMESTAMP)"
-        binds.append(midnight.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
-        with db.query(
-            "SELECT DISTINCT date_trunc('day', dateadd('h', 9, timestamp)) AS session_day"
-            f" FROM bars WHERE {predicate}{lower_predicate}"
-            f" AND timestamp < cast(${len(binds)} AS TIMESTAMP)"
-            " ORDER BY session_day DESC LIMIT 5",
-            binds,
-        ) as result:
-            days = [row["session_day"].date() for row in result.to_pandas().to_dict("records")]
-        if len(days) == 5:
-            break
+    cache_key = (now.date(), tuple(symbols))
+    days = session_cache.get(cache_key) if session_cache is not None else None
+    if days is None:
+        days = []
+        for lookback in (14, 28, 56, 112, None):
+            binds = list(symbols)
+            lower_predicate = ""
+            if lookback is not None:
+                lower = midnight - timedelta(days=lookback)
+                binds.append(lower.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+                lower_predicate = f" AND timestamp >= cast(${len(binds)} AS TIMESTAMP)"
+            binds.append(midnight.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+            with db.query(
+                "SELECT DISTINCT date_trunc('day', dateadd('h', 9, timestamp)) AS session_day"
+                f" FROM bars WHERE {predicate}{lower_predicate}"
+                f" AND timestamp < cast(${len(binds)} AS TIMESTAMP)"
+                " ORDER BY session_day DESC LIMIT 5",
+                binds,
+            ) as result:
+                days = [row["session_day"].date() for row in result.to_pandas().to_dict("records")]
+            if len(days) == 5:
+                break
+        if session_cache is not None:
+            session_cache.clear()
+            session_cache[cache_key] = days
     binds = [
         *symbols,
         opening.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),

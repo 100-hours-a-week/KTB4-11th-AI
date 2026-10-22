@@ -113,7 +113,10 @@ def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monke
     monkeypatch.setenv("MARKET_COLLECTOR_VALKEY_HOST", "localhost")
     symbols = [f"{index:06d}" for index in range(100)]
 
-    def popularity(connection, loaded_symbols, at):
+    cache = {}
+
+    def popularity(connection, loaded_symbols, at, session_cache):
+        assert session_cache is cache
         assert connection is db
         assert db.active
         assert loaded_symbols is symbols
@@ -124,7 +127,9 @@ def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monke
     monkeypatch.setattr(cli, "popular_codes", popularity, raising=False)
     valkey = Valkey()
 
-    written = cli.collect_market_data(Settings(), symbols, MarketClient(), valkey, now, False)
+    written = cli.collect_market_data(
+        Settings(), symbols, MarketClient(), valkey, now, False, cache
+    )
 
     assert written == 100
     expected = []

@@ -145,8 +145,10 @@ def test_questdb_errors_propagate():
         def query(self, sql, binds):
             raise RuntimeError("QuestDB unavailable")
 
+    cache = {}
     with pytest.raises(RuntimeError, match="QuestDB unavailable"):
-        popular_codes(FailedDatabase(), ["a"], NOW)
+        popular_codes(FailedDatabase(), ["a"], NOW, cache)
+    assert cache == {}
 
 
 @pytest.mark.parametrize(("gap", "query_count"), [(0, 1), (20, 2), (90, 4), (400, 5)])
@@ -190,3 +192,35 @@ def test_session_discovery_bounds_recent_lookup_and_preserves_five_after_gap(gap
         datetime.fromisoformat(value).astimezone(KST).date() for value in db.queries[-1][1][1:]
     ]
     assert windows[2::2] == [day.date() for day in days]
+
+
+@pytest.mark.parametrize("session_count", [0, 3, 5])
+def test_session_cache_reuses_long_gap_history_but_refreshes_visibility_and_day(session_count):
+    cache = {}
+    days = [day - timedelta(days=400) for day in DAYS[:session_count]]
+
+    class CachedDatabase(FakeDatabase):
+        def query(self, sql, binds):
+            if "AS session_day FROM bars" in sql:
+                self.queries.append((sql, binds.copy()))
+                rows = [] if len(binds) == 3 else [{"session_day": day} for day in days]
+                frame = pd.DataFrame(rows)
+                return nullcontext(type("Result", (), {"to_pandas": lambda _: frame})())
+            return super().query(sql, binds)
+
+    for index, (at, symbols, discovery_count) in enumerate(
+        [
+            (NOW, ["a"], 5),
+            (NOW + timedelta(minutes=1), ["a"], 0),
+            (NOW + timedelta(days=1), ["a"], 5),
+            (NOW + timedelta(days=1), ["b"], 5),
+        ]
+    ):
+        db = CachedDatabase(current=symbols if index != 1 else ())
+        db.answers.pop(0)
+        db.expected_end = at.replace(second=0) - timedelta(minutes=1)
+        result = popular_codes(db, symbols, at, cache)
+        assert result == (symbols if index != 1 else [])
+        assert sum("AS session_day FROM bars" in sql for sql, _ in db.queries) == discovery_count
+        assert sum("SELECT DISTINCT symbol" in sql for sql, _ in db.queries) == 1
+        assert len(cache) == 1
