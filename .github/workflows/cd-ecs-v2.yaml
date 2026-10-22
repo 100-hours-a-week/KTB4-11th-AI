@@ -104,11 +104,31 @@ jobs:
       - name: Register task definition revision
         if: steps.source.outputs.deploy == 'true'
         id: register
+        env:
+          MARKET_HTTP_ENV_JSON: ${{ vars.MARKET_HTTP_ENV_JSON }}
         run: |
           set -Eeuo pipefail
           [[ -n "$POSTGRES_DSN_SECRET_ARN" ]] || { echo 'MARKET_HTTP_POSTGRES_DSN_SECRET_ARN is required' >&2; exit 1; }
+          umask 077
+          trap 'rm -f next.json' EXIT
           jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" --arg secret "$POSTGRES_DSN_SECRET_ARN" \
-            '.containerDefinitions |= map(if .name == $name then .image = $image | .secrets = [{"name": "MARKET_HTTP_POSTGRES_DSN", "valueFrom": $secret}] else . end)' \
+            '(env.MARKET_HTTP_ENV_JSON | try fromjson catch error("MARKET_HTTP_ENV_JSON must be valid JSON")) as $environment |
+            if ($environment | type) != "object" then
+              error("MARKET_HTTP_ENV_JSON must be a JSON object")
+            elif ($environment | length) == 0 then
+              error("MARKET_HTTP_ENV_JSON must not be empty")
+            elif all($environment | to_entries[];
+              (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string")) | not then
+              error("MARKET_HTTP_ENV_JSON must contain environment names and string values")
+            elif $environment | has("MARKET_HTTP_POSTGRES_DSN") then
+              error("MARKET_HTTP_POSTGRES_DSN is injected from AWS; remove it from MARKET_HTTP_ENV_JSON")
+            else
+              .containerDefinitions |= map(if .name == $name then
+                .image = $image |
+                .environment = ($environment | to_entries | map({name: .key, value: .value})) |
+                .secrets = [{name: "MARKET_HTTP_POSTGRES_DSN", valueFrom: $secret}]
+              else . end)
+            end' \
             "$TASK_TEMPLATE" > next.json
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
             --query taskDefinition.taskDefinitionArn --output text)"
