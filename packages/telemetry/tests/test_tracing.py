@@ -10,6 +10,29 @@ from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 
+@pytest.fixture(autouse=True)
+def _endpoint(monkeypatch):
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", raising=False)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1")
+
+
+@pytest.mark.parametrize("variable", [None, "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"])
+def test_tracing_without_an_endpoint_does_nothing(capsys, monkeypatch, variable):
+    providers = []
+    monkeypatch.setattr(tracing_module.trace, "set_tracer_provider", providers.append)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    setup_logging("INFO", service_name="svc")
+    with tracing("svc"):
+        assert not logging.getLogger().handlers[0].filters
+    assert providers == []
+
+    if variable:
+        monkeypatch.setenv(variable, "http://127.0.0.1:1")
+        with tracing("svc"):
+            pass
+        assert len(providers) == 1
+
+
 def test_tracing_names_the_service_and_flushes_on_exit(monkeypatch):
     exporter = InMemorySpanExporter()
     providers = []

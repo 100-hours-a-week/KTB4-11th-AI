@@ -123,7 +123,7 @@ A test or small script times `publish()` on a synthetic batch of about 26 prices
 Where it runs: `market-streamer` does not run in production (`.github/workflows/cd.yaml`). The first target is a separate AWS test system with its own Valkey, ECS cluster, ALB, `market-http`, and `market-streamer`; its definitions are not in this repo. The code therefore stays environment-agnostic: tracing is enabled per environment purely through environment variables set by whoever deploys that environment, and `deployment.environment` (via `OTEL_RESOURCE_ATTRIBUTES`) tells environments apart in Tempo.
 
 - Every environment that enables tracing sets, for both services: `OTEL_EXPORTER_OTLP_ENDPOINT` (Tempo in that VPC), `OTEL_TRACES_SAMPLER`/`OTEL_TRACES_SAMPLER_ARG`, `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=<env>`; and for `market-http`, `OTEL_PROPAGATORS=none` (see below).
-- `infrastructure/ecs/market-http.json` (production): add the variables with `OTEL_SDK_DISABLED=true` so production behavior is unchanged until it is turned on deliberately.
+- Production `market-http` (ECS) takes its environment from the `MARKET_HTTP_ENV_JSON` GitHub Actions variable (since `233ad78`). `tracing()` does nothing unless an OTLP endpoint is set, so production stays untraced until that variable gains the `OTEL_*` entries (user decision, 2026-10-22).
 - `compose.local.yaml`/`compose.prod.yaml`: pass the `OTEL_*` variables through for `market-streamer` and `market-http`, defaulting to disabled.
 - `.env.example`: document the variables with tracing disabled by default.
 - A short runbook in `docs/operations/` lists the variables the AWS test system must set.

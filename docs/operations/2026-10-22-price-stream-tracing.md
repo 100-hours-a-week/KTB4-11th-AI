@@ -2,7 +2,9 @@
 
 `market-streamer` and `market-http` export OpenTelemetry traces to Tempo in the VPC
 (PLG stack) so one price update can be followed from the Kiwoom frame to each SSE client.
-Tracing is off by default (`OTEL_SDK_DISABLED=true` in every Compose file and the ECS task).
+Tracing is off by default: `tracing()` does nothing unless `OTEL_EXPORTER_OTLP_ENDPOINT`
+(or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`) is set, and every Compose file also sets
+`OTEL_SDK_DISABLED=true`.
 
 Issue #368 named `ktb_core/telemetry.py`. Tracing lives in the `ktb_telemetry` package
 (`packages/telemetry`) instead, so `ktb_core` stays free of third-party dependencies.
@@ -69,7 +71,7 @@ Both services use standard `OTEL_*` names. Compose maps host-side variables to t
 | `OTEL_SDK_DISABLED` | `MARKET_STREAMER_OTEL_SDK_DISABLED` / `MARKET_HTTP_OTEL_SDK_DISABLED` | `true` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `MARKET_STREAMER_OTEL_EXPORTER_OTLP_ENDPOINT` / `MARKET_HTTP_OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` |
 | `OTEL_TRACES_SAMPLER_ARG` | `MARKET_STREAMER_OTEL_TRACES_SAMPLER_ARG` / `MARKET_HTTP_OTEL_TRACES_SAMPLER_ARG` | `0.1` / `0.01` |
-| `OTEL_RESOURCE_ATTRIBUTES` | `MARKET_STREAMER_OTEL_RESOURCE_ATTRIBUTES` / `MARKET_HTTP_OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment=local` (`compose.local.yaml`), `dev` (`compose.prod.yaml`), `prod` (ECS task) |
+| `OTEL_RESOURCE_ATTRIBUTES` | `MARKET_STREAMER_OTEL_RESOURCE_ATTRIBUTES` / `MARKET_HTTP_OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment=local` (`compose.local.yaml`), `dev` (`compose.prod.yaml`) |
 | `OTEL_TRACES_SAMPLER` | none (fixed) | `parentbased_traceidratio` |
 | `OTEL_PROPAGATORS` | none (fixed, `market-http` only) | `none` |
 
@@ -84,10 +86,11 @@ Notes:
 - `market-http` ignores inbound trace headers because `main()` sets an empty global
   propagator in code; `OTEL_PROPAGATORS=none` is kept as belt-and-braces. Both services use
   the W3C propagator directly rather than the global one.
-- The ECS task `infrastructure/ecs/market-http.json` sets the container variables with
-  `OTEL_SDK_DISABLED=true`, so production behavior is unchanged until it is enabled
-  deliberately. `market-streamer` does not run in production. The task has no
-  `OTEL_EXPORTER_OTLP_ENDPOINT`, so enabling tracing there also requires adding it.
+- Production `market-http` (ECS) takes its environment from the `MARKET_HTTP_ENV_JSON`
+  GitHub Actions variable. It sets no OTLP endpoint, so tracing stays off there. To enable
+  it, add `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_TRACES_SAMPLER`, `OTEL_TRACES_SAMPLER_ARG`,
+  `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod`, and `OTEL_PROPAGATORS=none` to
+  that variable. `market-streamer` does not run in production.
 
 For the AWS test system, set on both `market-streamer` and `market-http`:
 `OTEL_SDK_DISABLED=false`, `OTEL_EXPORTER_OTLP_ENDPOINT=<collector in that VPC>`,

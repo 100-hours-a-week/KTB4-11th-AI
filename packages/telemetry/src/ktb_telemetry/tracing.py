@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -24,6 +25,12 @@ class TraceContextFilter(logging.Filter):
 
 @contextmanager
 def tracing(service_name: str) -> Iterator[None]:
+    if not (
+        os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
+        or os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
+    ):
+        yield
+        return
     provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(timeout=2)))
     trace.set_tracer_provider(provider)
