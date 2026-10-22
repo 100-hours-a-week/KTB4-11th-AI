@@ -59,6 +59,8 @@ def _deliver_span(raw: str, connection_id: str) -> trace.Span | None:
     if '"traceparent"' not in raw:
         return None
     fields = json.loads(raw)
+    if not isinstance(fields.get("traceparent"), str):
+        return None
     received = datetime.now(UTC)
     span = tracer.start_span(
         "deliver",
