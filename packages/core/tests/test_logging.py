@@ -2,7 +2,7 @@ import json
 import logging
 
 import pytest
-from ktb_core.logging import bind_logger, get_logger, setup_logging, start_logging
+from ktb_core.logging import JsonFormatter, bind_logger, get_logger, setup_logging, start_logging
 
 
 def test_emits_one_json_object_per_record(capsys):
@@ -193,3 +193,46 @@ def test_query_params_are_left_alone_by_default(capsys):
     logging.getLogger("svc").info("crtfc_key=abc")
 
     assert json.loads(capsys.readouterr().out)["message"] == "crtfc_key=abc"
+
+
+@pytest.mark.parametrize("sampled", [True, False])
+def test_json_includes_valid_otel_trace_context(sampled):
+    record = logging.makeLogRecord(
+        {
+            "msg": "request_complete",
+            "levelname": "INFO",
+            "otelTraceID": "1" * 32,
+            "otelSpanID": "2" * 16,
+            "otelTraceSampled": sampled,
+        }
+    )
+    payload = json.loads(JsonFormatter("market-http").format(record))
+    assert payload["trace_id"] == "1" * 32
+    assert payload["span_id"] == "2" * 16
+    assert payload["trace_sampled"] is sampled
+
+
+@pytest.mark.parametrize(
+    "trace_id,span_id",
+    [
+        (None, None),
+        ("0", "0"),
+        ("0" * 32, "0" * 16),
+        ("invalid", "2" * 16),
+        ("1" * 32, "invalid"),
+        (1, 2),
+    ],
+)
+def test_json_omits_missing_or_invalid_otel_context(trace_id, span_id):
+    record = logging.makeLogRecord(
+        {
+            "msg": "background_job",
+            "levelname": "INFO",
+            "otelTraceID": trace_id,
+            "otelSpanID": span_id,
+        }
+    )
+    payload = json.loads(JsonFormatter("svc").format(record))
+    assert "trace_id" not in payload
+    assert "span_id" not in payload
+    assert "trace_sampled" not in payload

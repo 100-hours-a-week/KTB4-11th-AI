@@ -105,6 +105,19 @@ class JsonFormatter(logging.Formatter):
         fields = getattr(record, "fields", None)
         if isinstance(fields, dict):
             payload.update(fields)
+        trace_id = getattr(record, "otelTraceID", None)
+        span_id = getattr(record, "otelSpanID", None)
+        if (
+            isinstance(trace_id, str)
+            and re.fullmatch(r"[0-9a-f]{32}", trace_id)
+            and trace_id.strip("0")
+            and isinstance(span_id, str)
+            and re.fullmatch(r"[0-9a-f]{16}", span_id)
+            and span_id.strip("0")
+        ):
+            payload["trace_id"] = trace_id
+            payload["span_id"] = span_id
+            payload["trace_sampled"] = bool(getattr(record, "otelTraceSampled", False))
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         line = json.dumps(payload, ensure_ascii=False, default=str)
