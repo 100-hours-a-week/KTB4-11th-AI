@@ -19,84 +19,7 @@
       "command": [
         "market-http"
       ],
-      "environment": [
-        {
-          "name": "MARKET_HTTP_HOST",
-          "value": "0.0.0.0"
-        },
-        {
-          "name": "MARKET_HTTP_QUESTDB_CONF",
-          "value": "ws::addr=10.0.1.75:9000;connect_timeout=5000;"
-        },
-        {
-          "name": "MARKET_HTTP_VALKEY_HOST",
-          "value": "stockspoon-v2-prod-valkey-kmikux.serverless.apn2.cache.amazonaws.com"
-        },
-        {
-          "name": "MARKET_HTTP_LOG_LEVEL",
-          "value": "INFO"
-        },
-        {
-          "name": "MARKET_HTTP_VALKEY_TLS",
-          "value": "true"
-        },
-        {
-          "name": "MARKET_HTTP_CORS_ORIGINS",
-          "value": "[\"*\"]"
-        },
-        {
-          "name": "MARKET_HTTP_DOCS_PATH_PREFIX",
-          "value": "/market"
-        },
-        {
-          "name": "MARKET_HTTP_VALKEY_CACHE_NAME",
-          "value": "stockspoon-v2-prod-valkey"
-        },
-        {
-          "name": "MARKET_HTTP_CORS_HEADERS",
-          "value": "[\"*\"]"
-        },
-        {
-          "name": "MARKET_HTTP_PORT",
-          "value": "8000"
-        },
-        {
-          "name": "MARKET_HTTP_DOCS_ENABLED",
-          "value": "true"
-        },
-        {
-          "name": "MARKET_HTTP_VALKEY_PORT",
-          "value": "6379"
-        },
-        {
-          "name": "MARKET_HTTP_VALKEY_USERNAME",
-          "value": "stockspoon-v2-prod-valkey-socket"
-        },
-        {
-          "name": "MARKET_HTTP_AWS_REGION",
-          "value": "ap-northeast-2"
-        },
-        {
-          "name": "MARKET_HTTP_VALKEY_AUTH_MODE",
-          "value": "iam"
-        },
-        {
-          "name": "MARKET_HTTP_METRICS_NAMESPACE",
-          "value": "StockSpoon/ECS"
-        },
-        {
-          "name": "MARKET_HTTP_METRICS_CLUSTER_NAME",
-          "value": "stockspoon-v2-prod-cluster"
-        },
-        {
-          "name": "MARKET_HTTP_METRICS_SERVICE_NAME",
-          "value": "stockspoon-v2-prod-market-http"
-        },
-        {
-          "name": "MARKET_HTTP_VALKEY_MAX_CONNECTIONS",
-          "value": "1000"
-        }
-      ],
+      "environment": [],
       "mountPoints": [],
       "volumesFrom": [],
       "stopTimeout": 30,
@@ -118,7 +41,8 @@
         "retries": 3,
         "startPeriod": 30
       },
-      "systemControls": []
+      "systemControls": [],
+      "secrets": []
     }
   ],
   "volumes": [],

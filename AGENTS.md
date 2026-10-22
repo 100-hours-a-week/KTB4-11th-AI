@@ -1,44 +1,188 @@
-# AGENTS.md
+# Working in this repository
 
-This file provides guidance when working with code in this repository.
+This is the AI services monorepo for 척척개미단. Run commands from the repository root.
+Python 3.13 is the primary runtime; workspace packages support Python 3.13–3.14.
+The Python 3.14 compatibility job in CI is advisory.
 
-## Commands
+## Start here
 
-This is a uv workspace (Python 3.13, also CI-tested against 3.14). Run everything from the repo root.
+- Read the affected service's source, tests, and `pyproject.toml` before editing.
+- Use `.env.example` for configuration names, each service's `settings.py` for validation
+  and defaults, and the relevant Compose file for deployment overrides.
+- Read `docs/superpowers/specs/2026-09-20-monorepo-init-design.md` before structural changes.
+  Feature designs live in `docs/superpowers/specs/`; check implementation and tests for
+  changes made since a design was written.
+- Keep changes scoped to the request and update affected callers, tests, configuration,
+  and image packaging together.
+
+## Commands and checks
 
 ```bash
-uv sync --all-packages --group migrations   # install every member + alembic/psycopg into one .venv
-uv run ruff check .                         # lint (E, F, I, UP, B; line length 100)
-uv run ruff format --check .                # CI fails on unformatted code
+uv sync --all-packages --locked --group migrations
+uv run ruff check .
+uv run ruff format --check .
+uv run tach check
+uv run tach check-external -e services
+uv run pytest
+uv run pytest services/news-clusterer
+```
+
+Ruff checks `E`, `F`, `I`, `UP`, and `B`, with a line length of 100. Pytest uses
+`--import-mode=importlib`; test directories do not need `__init__.py` to allow repeated
+filenames across services. Run focused tests while editing and relevant repository checks
+before handing off. Report integration tests skipped because their datastores were unavailable.
+
+For market HTTP example changes, also run:
+
+```bash
 uv run python services/market-http/tests/example_entities.py services/market-http/src/market_http/openapi_examples.py
-KTB_TEST_VALKEY_URL=redis://localhost:6379/0 uv run pytest   # all tests (packages/, services/, infrastructure/)
-uv run pytest services/news-clusterer       # one member
-uv run news-clusterer                       # run a service by its console script
-KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb uv run alembic upgrade head
-KTB_QUESTDB_CONF='ws::addr=localhost:9000;' uv run python infrastructure/questdb/migrate.py
+```
 
-docker compose -f compose.local.yaml up -d    # local postgres/questdb and news-http; also starts valkey and market-http (the -f flag is required)
-# once, on a volume created before the rename:
-docker compose -f compose.local.yaml exec postgres psql -U ktb -d postgres -c "ALTER DATABASE news RENAME TO ktb"
-KTB_EMBEDDING_BASE_URI=http://100.bbb.ccc.ddd:8000/v1 docker compose -f compose.local.yaml up -d news-preprocessor
-docker compose -f compose.local.yaml up news-clusterer
-docker compose -f compose.local.yaml up market-syncer   # needs the Kiwoom and DART keys below; run before news-graph-builder
-docker compose -f compose.local.yaml up -d valkey market-http   # http://127.0.0.1:8001
-docker compose -f compose.local.yaml up market-streamer          # needs MARKET_STREAMER_KIWOOM_* keys
-docker compose -f compose.local.yaml up news-graph-builder   # needs the env below
-PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.local.yaml up portfolio-builder   # key from PORTFOLIO_BUILDER_LLM_API_KEY in .env
-docker compose -f compose.local.yaml --profile jobs run --rm portfolio-rebalancer   # one tick, then exits
-docker compose -f compose.local.yaml up report-builder
+CI definitions are in `.github/workflows/ci-dev.yaml` and
+`.github/workflows/ci-main.yaml`. Dev CI also verifies exported requirements, builds
+service images, and checks the isolated report-builder import. The dependency audit is
+advisory. Markdown-only changes are excluded from these CI workflows.
 
-# tests TRUNCATE tables: point them at a separate database, never at `ktb`
+### Integration test safety
+
+PostgreSQL tests truncate tables. Valkey tests call `FLUSHDB`. Use disposable test
+resources, never a development or production database holding useful data.
+
+- `KTB_TEST_POSTGRES_DSN`: a separate PostgreSQL database such as `ktb_test`.
+- `KTB_TEST_VALKEY_URL`: a dedicated Valkey test instance/database.
+- `KTB_TEST_QUESTDB_CONF`: a dedicated QuestDB test instance.
+
+Database tests may skip when their test configuration is unset. The CI database named
+`ktb` is disposable; do not copy that target into a local test command.
+
+With local PostgreSQL configured for user `ktb`, create and migrate the test database:
+
+```bash
 docker compose -f compose.local.yaml exec postgres createdb -U ktb ktb_test
 KTB_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run alembic upgrade head
 KTB_TEST_POSTGRES_DSN=postgresql+psycopg://ktb:ktb@localhost:5432/ktb_test uv run pytest
 ```
 
-pytest runs with `--import-mode=importlib`, so test files with the same name (e.g. `test_settings.py`) can exist in several members without `__init__.py`.
+The example credentials above are for local development only; use the credentials of
+your disposable instance.
 
-**After changing any member's dependencies**, run `uv lock`, then regenerate that service's image requirements and the production image's. The Dockerfiles install from these hash-pinned files, not from `uv.lock`:
+## Local services and migrations
+
+Configure `.env` from `.env.example` before using Compose. Always specify the Compose
+file; this repository uses `compose.local.yaml` and `compose.prod.yaml`.
+
+```bash
+docker compose -f compose.local.yaml up -d postgres questdb valkey
+uv run alembic upgrade head
+uv run python infrastructure/questdb/migrate.py
+docker compose -f compose.local.yaml up -d news-http market-http
+```
+
+Set `KTB_POSTGRES_DSN` and `KTB_QUESTDB_CONF` to the intended local migration targets
+before running those migration commands. PostgreSQL migrations live in
+`infrastructure/postgres/migrations/`, configured by `alembic.ini`; QuestDB SQL lives in
+`infrastructure/questdb/migrations/`. Never commit `sqlalchemy.url`. Services must not
+run migrations or alter schemas at startup.
+
+Local news-http binds to `127.0.0.1:8000`; market-http binds to `127.0.0.1:8001`.
+Run a configured service directly with its console script, such as `uv run news-clusterer`,
+or run a one-shot Compose job with:
+
+```bash
+docker compose -f compose.local.yaml --profile jobs run --rm news-clusterer
+```
+
+Run market-syncer before jobs that need corporation reference data. The morning pipeline
+runs news-clusterer, news-graph-builder, then portfolio-builder; see
+`scripts/run-morning-pipeline.sh`. Production schedules live in `infrastructure/systemd/`.
+Report-builder is a long-running worker and its local Compose configuration loads `ai.env`.
+
+## Repository map
+
+Service source is under `services/<name>/src/<module>/`, with tests alongside it under
+`services/<name>/tests/`. Each service has its own settings and console entry point.
+
+| Member | Responsibility |
+| --- | --- |
+| `packages/core` (`ktb_core`) | Shared domain/infrastructure code with no third-party dependencies |
+| `packages/aws` (`ktb_aws`) | Shared AWS integrations; keeps AWS dependencies outside core |
+| `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
+| `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
+| `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
+| `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
+| `services/news-http` | Serve private, read-only news and graph HTTP queries |
+| `services/market-collector` | Collect market bars and index quotes into QuestDB and publish popularity rankings to Valkey |
+| `services/market-streamer` | Stream Kiwoom prices, orderbooks, and daily ranking values to Valkey |
+| `services/market-http` | Serve public market snapshots, bars, indices, rankings, and SSE streams |
+| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent |
+| `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
+| `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
+
+Services communicate through datastores and explicit HTTP/queue contracts. Do not import
+another service's implementation. Keep module boundaries aligned with `tach.toml`.
+Move code into shared packages only when actual callers need it; keep core free of
+third-party dependencies.
+
+## Contracts to preserve
+
+### News and portfolios
+
+- Embedding dimensions must match the PostgreSQL `vector(2000)` column. Recalibrate
+  clustering parameters when changing the embedding model. Preserve the clusterer's
+  `clustering cost:` timing and peak RSS log for capacity decisions.
+- News HTTP is read-only and private, with no authentication. Portfolio-builder reads
+  news/graph data through news-http and bars through market-http. It accesses PostgreSQL
+  for company references and portfolio persistence and computes technical evidence with TA-Lib.
+- Portfolio-builder stores the agent trace and moves portfolio status from
+  `explanation_pending` to `ready` or `explanation_failed`. If the latest portfolio is
+  not ready and has a trace, retry explanations before building another portfolio.
+- Rebalancing uses only the latest portfolio, and only when it is `ready`; never fall
+  back to an older ready portfolio. Carry stock explanations as `reason` and `thoughts`.
+
+### Market data
+
+- Use the official QuestDB Python client. Market-collector shares one Kiwoom client and
+  request limiter across bar and index requests.
+- Market-streamer uses one socket for `0B` prices and `0D` orderbooks, writing snapshots
+  with `SET` and `PUBLISH` to `price:{code}` and `orderbook:{code}`.
+- Orderbooks contain exactly ten ask and bid levels. Their timestamp combines exchange
+  quote time with the KST trading date and represents snapshot freshness.
+- Market HTTP is public without authentication. Its only Valkey write is `SET NX` to
+  fill a missing price. Preserve this boundary when changing reads or streams.
+- Popular rankings use market-collector's configured KOSPI 200 symbols. After each bar
+  pass, it compares the last 30 minutes of volume with the same clock window in up to
+  five previous trading sessions, publishes ordinal scores, and atomically replaces the
+  ranking and timestamp. An empty or failed calculation retains the previous ranking.
+- Daily rankings use the previous trading day before 09:10 KST or when today's ranking
+  is absent.
+- Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing
+  orderbook contracts.
+
+### Order queue
+
+- Fetch the Backend account snapshot once per rebalancer run through HTTP. Lookup
+  failures must exit before placing orders; do not add an account snapshot consumer.
+- Publish cancellations and replacements to the same Order FIFO queue, grouped by
+  account ID and deduplicated by `eventId`.
+- Successful cancellation publication means requested, not completed. Preserve
+  `order_cancel_requested` / `cancel_requested` terminology.
+- After successful cancellation sends, publish recalculated replacements immediately
+  in the same FIFO group. Do not refresh the snapshot or wait for pending orders to clear.
+  The Backend consumer must finish cancellation before processing the next command.
+- Failed or partial cancellation publication skips that account. Exit stocks produce
+  sells only; unconfirmed sell proceeds must not fund buys.
+- Preserve MessageId/eventId/correlationId/result logging and existing Backend JWT auth.
+  Use the AWS credential chain/IAM roles. Do not add an application failure queue or
+  directly publish to or normally consume DLQs.
+- Contract details: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
+
+## Dependencies and images
+
+The shared development environment can hide undeclared imports. Declare dependencies in
+the member that imports them and check affected images or isolated imports.
+
+After dependency changes, run `uv lock`, then regenerate requirements for every affected
+service and the combined application image:
 
 ```bash
 uv export --package <svc> --no-dev --no-emit-workspace --format requirements-txt -o docker/requirements/<svc>.txt

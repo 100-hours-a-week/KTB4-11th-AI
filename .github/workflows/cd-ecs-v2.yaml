@@ -1,19 +1,15 @@
 name: AI V2 ECS CD
 
 on:
-  workflow_call:
-    inputs:
-      image_tag:
-        required: true
-        type: string
-      image_digest:
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Commit SHA from a successful main CI run (including older releases)
-        required: true
+        description: Successful main CI commit SHA (leave empty for current main)
+        required: false
+        type: string
+      ci_run_id:
+        description: Source CI run ID (automatic deployment only; leave empty for manual runs)
+        required: false
         type: string
 
 concurrency:
@@ -22,9 +18,7 @@ concurrency:
 
 jobs:
   deploy:
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success')
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -41,8 +35,7 @@ jobs:
       POSTGRES_DSN_SECRET_ARN: ${{ vars.MARKET_HTTP_POSTGRES_DSN_SECRET_ARN }}
       IMAGE_REPOSITORY: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}
       IMAGE_TAG: ${{ inputs.image_tag }}
-      IMAGE_DIGEST: ${{ inputs.image_digest }}
-      CI_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      CI_RUN_ID: ${{ inputs.ci_run_id }}
     steps:
       - name: Validate deployment source
         id: source
@@ -50,24 +43,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
-          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+          release_dir="$(mktemp -d)"
+          trap 'rm -rf "$release_dir"' EXIT
+          if [[ -z "$CI_RUN_ID" ]]; then
+            if [[ -z "$IMAGE_TAG" ]]; then
+              IMAGE_TAG="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
+            fi
+            [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ ]] || { echo 'Invalid commit SHA' >&2; exit 1; }
             ci_run="$(gh api --method GET "repos/$GITHUB_REPOSITORY/actions/workflows/ci-main.yaml/runs" \
             -f branch=main -f event=push -f head_sha="$IMAGE_TAG" -f status=success -f per_page=1 \
             --jq '.workflow_runs[0] // null')"
-            jq -e --arg sha "$IMAGE_TAG" \
-            '.head_sha == $sha and .head_branch == "main" and .event == "push" and .status == "completed" and .conclusion == "success"' \
-            <<<"$ci_run" > /dev/null
-            release_dir="$(mktemp -d)"
-            trap 'rm -rf "$release_dir"' EXIT
-            gh run download "$(jq -r .id <<<"$ci_run")" --repo "$GITHUB_REPOSITORY" \
-            --name ecs-release --dir "$release_dir"
-            jq -e --arg sha "$IMAGE_TAG" --arg repository "$IMAGE_REPOSITORY" \
-            '.sha == $sha and .repository == $repository' "$release_dir/ecs-release.json" > /dev/null
-            IMAGE_DIGEST="$(jq -r .digest "$release_dir/ecs-release.json")"
           else
-            [[ "$IMAGE_TAG" == "$CI_RUN_HEAD_SHA" ]] ||
-              { echo 'Source SHA does not match the main CI release' >&2; exit 1; }
+            [[ "$IMAGE_TAG" =~ ^[0-9a-f]{40}$ && "$CI_RUN_ID" =~ ^[0-9]+$ ]] ||
+              { echo 'Invalid automatic deployment source' >&2; exit 1; }
+            ci_run="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CI_RUN_ID")"
             current_main_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)"
             [[ "$current_main_sha" =~ ^[0-9a-f]{40}$ ]]
             if [[ "$IMAGE_TAG" != "$current_main_sha" ]]; then
@@ -76,14 +65,24 @@ jobs:
               exit 0
             fi
           fi
+          jq -e --arg sha "$IMAGE_TAG" --arg repository "$GITHUB_REPOSITORY" \
+            '.head_sha == $sha and .head_branch == "main" and .event == "push" and
+            .path == ".github/workflows/ci-main.yaml" and .head_repository.full_name == $repository and
+            .status == "completed" and .conclusion == "success"' <<<"$ci_run" > /dev/null
+          gh run download "$(jq -r .id <<<"$ci_run")" --repo "$GITHUB_REPOSITORY" \
+            --name ecs-release --dir "$release_dir"
+          jq -e --arg sha "$IMAGE_TAG" --arg repository "$IMAGE_REPOSITORY" \
+            '.sha == $sha and .repository == $repository' "$release_dir/ecs-release.json" > /dev/null
+          IMAGE_DIGEST="$(jq -r .digest "$release_dir/ecs-release.json")"
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Invalid image digest' >&2; exit 1; }
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
           echo "IMAGE=${IMAGE_REPOSITORY}@${IMAGE_DIGEST}" >> "$GITHUB_ENV"
           echo 'deploy=true' >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v7
         if: steps.source.outputs.deploy == 'true'
         with:
-          ref: ${{ inputs.image_tag }}
+          ref: ${{ env.IMAGE_TAG }}
           persist-credentials: false
 
       - name: Verify task definition source
@@ -105,11 +104,31 @@ jobs:
       - name: Register task definition revision
         if: steps.source.outputs.deploy == 'true'
         id: register
+        env:
+          MARKET_HTTP_ENV_JSON: ${{ vars.MARKET_HTTP_ENV_JSON }}
         run: |
           set -Eeuo pipefail
           [[ -n "$POSTGRES_DSN_SECRET_ARN" ]] || { echo 'MARKET_HTTP_POSTGRES_DSN_SECRET_ARN is required' >&2; exit 1; }
+          umask 077
+          trap 'rm -f next.json' EXIT
           jq --arg name "$CONTAINER_NAME" --arg image "$IMAGE" --arg secret "$POSTGRES_DSN_SECRET_ARN" \
-            '.containerDefinitions |= map(if .name == $name then .image = $image | .secrets = [{"name": "MARKET_HTTP_POSTGRES_DSN", "valueFrom": $secret}] else . end)' \
+            '(env.MARKET_HTTP_ENV_JSON | try fromjson catch error("MARKET_HTTP_ENV_JSON must be valid JSON")) as $environment |
+            if ($environment | type) != "object" then
+              error("MARKET_HTTP_ENV_JSON must be a JSON object")
+            elif ($environment | length) == 0 then
+              error("MARKET_HTTP_ENV_JSON must not be empty")
+            elif all($environment | to_entries[];
+              (.key | test("^[A-Za-z_][A-Za-z0-9_]*$")) and (.value | type == "string")) | not then
+              error("MARKET_HTTP_ENV_JSON must contain environment names and string values")
+            elif $environment | has("MARKET_HTTP_POSTGRES_DSN") then
+              error("MARKET_HTTP_POSTGRES_DSN is injected from AWS; remove it from MARKET_HTTP_ENV_JSON")
+            else
+              .containerDefinitions |= map(if .name == $name then
+                .image = $image |
+                .environment = ($environment | to_entries | map({name: .key, value: .value})) |
+                .secrets = [{name: "MARKET_HTTP_POSTGRES_DSN", valueFrom: $secret}]
+              else . end)
+            end' \
             "$TASK_TEMPLATE" > next.json
           arn="$(aws ecs register-task-definition --cli-input-json file://next.json \
             --query taskDefinition.taskDefinitionArn --output text)"
