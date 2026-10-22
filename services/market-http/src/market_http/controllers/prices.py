@@ -64,13 +64,13 @@ def _deliver_span(raw: str, connection_id: str) -> trace.Span | None:
         "deliver",
         context=propagator.extract(fields),
         kind=SpanKind.CONSUMER,
-        attributes={
-            "code": fields.get("code", ""),
-            "sse.connection_id": connection_id,
-            "published_at": fields.get("published_at", ""),
-        },
+        attributes={"code": fields.get("code", ""), "sse.connection_id": connection_id},
     )
-    if span.is_recording() and "published_at" in fields:
+    try:
         published = datetime.fromisoformat(fields["published_at"])
-        span.set_attribute("publish_to_receive_ms", (received - published).total_seconds() * 1000)
+        elapsed_ms = (received - published).total_seconds() * 1000
+    except (KeyError, TypeError, ValueError):
+        return span
+    span.set_attribute("published_at", fields["published_at"])
+    span.set_attribute("publish_to_receive_ms", elapsed_ms)
     return span

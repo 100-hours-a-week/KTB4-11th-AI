@@ -154,6 +154,21 @@ def test_malformed_traceparent_still_streams(valkey_url, spans):
     assert deliver.parent is None
 
 
+@pytest.mark.parametrize("published_at", ["not-a-date", 12345, None, "2026-10-13T09:01:00"])
+def test_malformed_published_at_still_streams(valkey_url, spans, published_at):
+    _seed(valkey_url)
+
+    bodies = _stream_events(
+        valkey_url,
+        _payload(traceparent=f"00-{TRACE_ID}-{PARENT_ID}-01", published_at=published_at),
+    )
+
+    assert _event_data(bodies[1])["price"] == 82000
+    (deliver,) = _deliver_spans(spans)
+    assert "publish_to_receive_ms" not in deliver.attributes
+    assert "published_at" not in deliver.attributes
+
+
 def _span_app(sends):
     async def app(scope, receive, send):
         tracer = trace.get_tracer("test")
