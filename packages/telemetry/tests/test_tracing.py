@@ -35,6 +35,7 @@ def test_tracing_disabled_creates_no_recording_spans(monkeypatch):
 
 def test_logs_inside_a_span_carry_trace_ids_and_keep_fields(capsys, monkeypatch):
     providers = []
+    monkeypatch.setattr(tracing_module, "OTLPSpanExporter", lambda **kwargs: InMemorySpanExporter())
     monkeypatch.setattr(tracing_module.trace, "set_tracer_provider", providers.append)
     setup_logging("INFO", service_name="svc")
     with tracing("svc"):
@@ -52,6 +53,7 @@ def test_logs_inside_a_span_carry_trace_ids_and_keep_fields(capsys, monkeypatch)
 
 def test_logs_outside_spans_and_after_exit_have_no_trace_ids(capsys, monkeypatch):
     providers = []
+    monkeypatch.setattr(tracing_module, "OTLPSpanExporter", lambda **kwargs: InMemorySpanExporter())
     monkeypatch.setattr(tracing_module.trace, "set_tracer_provider", providers.append)
     setup_logging("INFO", service_name="svc")
     with tracing("svc"):
