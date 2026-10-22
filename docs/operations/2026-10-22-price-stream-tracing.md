@@ -62,6 +62,29 @@ string is delivered with no `deliver` span.
 - TraceQL results are samples, not totals. Do not read span counts as request or event
   counts.
 
+## Load limits
+
+One sampled publish creates a `deliver` span for every SSE client subscribed to that code,
+so `deliver` spans per second are about the sampling ratio times the total SSE events
+per second. Producer sampling alone cannot bound that, so `market-http` bounds it in three
+places:
+
+- **Creation rate.** A sliding-window limiter (current second plus the previous second,
+  weighted by overlap) allows at most `MARKET_HTTP_TRACE_SPANS_PER_SECOND` `deliver` spans
+  per second per process (default 100; 0 disables them). Over the limit, the message is
+  streamed exactly as an untraced one, so the trace keeps its `publish` span but may miss
+  some `deliver` children. At 0.01 sampling the default only engages above about 10,000
+  SSE events per second. 100 spans per second is enough for per-minute latency
+  percentiles; check Tempo's ingest volume before raising it.
+- **Unfinished spans.** FastAPI streams SSE through two one-item buffers. A slow client
+  blocks `send()`, which stops its generator, so new messages wait in the Valkey pub/sub
+  buffer instead of becoming spans. Each connection holds about four unfinished spans at
+  most, and they all end when it disconnects. There is no global cap.
+- **Export queue.** `BatchSpanProcessor` keeps finished spans in a queue bounded by
+  `OTEL_BSP_MAX_QUEUE_SIZE` (SDK default 2048) and drops the oldest when Tempo is slow or
+  down, so memory stays bounded. This bounds memory only; spans are still created up to
+  the rate limit.
+
 ## Environment variables
 
 Both services use standard `OTEL_*` names. Compose maps host-side variables to them.
@@ -74,6 +97,10 @@ Both services use standard `OTEL_*` names. Compose maps host-side variables to t
 | `OTEL_RESOURCE_ATTRIBUTES` | `MARKET_STREAMER_OTEL_RESOURCE_ATTRIBUTES` / `MARKET_HTTP_OTEL_RESOURCE_ATTRIBUTES` | `deployment.environment=local` (`compose.local.yaml`), `dev` (`compose.prod.yaml`) |
 | `OTEL_TRACES_SAMPLER` | none (fixed) | `parentbased_traceidratio` |
 | `OTEL_PROPAGATORS` | none (fixed, `market-http` only) | `none` |
+| `OTEL_BSP_MAX_QUEUE_SIZE` | none (not wired; set on the container if needed) | `2048` (SDK) |
+
+`market-http` also reads `MARKET_HTTP_TRACE_SPANS_PER_SECOND` (default `100`), wired in
+both Compose files; see [Load limits](#load-limits).
 
 Notes:
 
@@ -102,7 +129,10 @@ For the AWS test system, set on both `market-streamer` and `market-http`:
 
 - Tempo down: spans are dropped. Publishing, streaming, and logging are unaffected. The
   exporter logs one ERROR line per failed export batch, repeating every few seconds while
-  Tempo stays down. Exclude logger `opentelemetry.exporter` from ERROR alerts.
+  Tempo stays down. Exclude loggers under `opentelemetry` from ERROR alerts.
+- Once tracing starts, every `opentelemetry` logger is raised to ERROR. Without that, a full
+  export queue logs a WARNING for each dropped span, which floods Loki under SSE load.
+  Configuration warnings are still logged, because the SDK emits them before that point.
 - Shutdown flushes with a 2 s exporter timeout, so exit is delayed by at most about 2 s.
 - Misconfigured `OTEL_*` values (bogus sampler, non-numeric sampler argument, malformed
   endpoint, garbage resource attributes) log a WARNING and fall back to defaults; nothing

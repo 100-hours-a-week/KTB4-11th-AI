@@ -65,7 +65,7 @@ async def publish(valkey, prices):
         ...
 ```
 
-Failure behavior: export happens on the batch processor's background thread; when the endpoint is unreachable spans are dropped and the app continues. Exporter loggers are raised to `ERROR` so retries do not flood the JSON log stream. The exporter timeout is fixed at 2 seconds in code, because the SDK default makes shutdown block for 6–10 s or more when Tempo is unreachable (measured: about 6.5 s against a refused port; with a 2 s timeout, 1.2 s refused and 2.1 s blackholed). With `OTEL_SDK_DISABLED=true` or no setup call, all spans are no-ops.
+Failure behavior: export happens on the batch processor's background thread; when the endpoint is unreachable spans are dropped and the app continues. All `opentelemetry` loggers are raised to `ERROR` after setup so export retries and per-span "queue full" drops do not flood the JSON log stream. The export queue is the SDK's bounded `BatchSpanProcessor` queue (`OTEL_BSP_MAX_QUEUE_SIZE`, default 2048). The exporter timeout is fixed at 2 seconds in code, because the SDK default makes shutdown block for 6–10 s or more when Tempo is unreachable (measured: about 6.5 s against a refused port; with a 2 s timeout, 1.2 s refused and 2.1 s blackholed). With `OTEL_SDK_DISABLED=true` or no setup call, all spans are no-ops.
 
 ## Logging and tracing split
 
@@ -95,7 +95,7 @@ Compatibility: `TickPrice`/`Price` use Pydantic's default `extra="ignore"`, so R
 **Per-event spans on `/prices/stream`.** For each Pub/Sub message:
 
 - If it has no `traceparent`, no span is created (the streamer did not sample it).
-- Otherwise start a span (kind `CONSUMER`) whose **parent is the streamer's publish context** extracted from `traceparent`. One trace is then "one publish → its fan-out to every connected client", and the streamer's sampling ratio bounds `market-http`'s span volume.
+- Otherwise start a span (kind `CONSUMER`) whose **parent is the streamer's publish context** extracted from `traceparent`. One trace is then "one publish → its fan-out to every connected client".
 - T1 is the span start, right after `pubsub.listen()` yields the message. Attributes: `code`, T1−T0 from `published_at` (cross-host; depends on clock sync), and a per-connection id so one client's stream can be filtered.
 - The span stays open through validation and serialization and ends when the event's ASGI `send()` returns (T2), so its duration is T2−T1 and includes time waiting in FastAPI's SSE buffers behind a slow client. If `published_at` and the end time are both on the span, T2−T0 is derivable.
 
@@ -112,7 +112,7 @@ The initial subscribe and snapshot are not given a span in this work.
 
 ## Sampling
 
-Producer-driven. `market-streamer` uses `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with a ratio chosen per environment; it produces roughly 16–30 publish spans per second at today's KOSPI 200 rates, so a high ratio is affordable there. `market-http` event spans follow the producer's decision because they are children of it; their volume is (sampled publishes × prices per batch × clients). Raising or lowering the streamer's ratio is the main knob and needs no code change. Tempo/TraceQL results are samples, not exact percentiles or loss rates.
+Producer-driven. `market-streamer` uses `OTEL_TRACES_SAMPLER=parentbased_traceidratio` with a ratio chosen per environment; it produces roughly 16–30 publish spans per second at today's KOSPI 200 rates, so a high ratio is affordable there. `market-http` event spans follow the producer's decision because they are children of it; their volume is (sampled publishes × prices per batch × clients). Raising or lowering the streamer's ratio is the main knob and needs no code change. Because fan-out multiplies that volume by the number of clients, `market-http` also caps `deliver` spans with a per-process sliding-window limiter (`MARKET_HTTP_TRACE_SPANS_PER_SECOND`, default 100); a message over the limit streams as if untraced. Unfinished spans need no separate cap: SSE backpressure holds a slow client's generator, so each connection holds only a few. Tempo/TraceQL results are samples, not exact percentiles or loss rates.
 
 ## Overhead check
 

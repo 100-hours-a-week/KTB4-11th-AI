@@ -7,7 +7,7 @@ import redis
 from fastapi.testclient import TestClient
 from market_http.app import create_app
 from market_http.repositories import prices as prices_module
-from market_http.tracing import PENDING_SPANS, SSESendSpans
+from market_http.tracing import PENDING_SPANS, SlidingWindowLimiter, SSESendSpans
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
@@ -83,10 +83,10 @@ async def _drive_stream(app, query, on_body):
     return messages
 
 
-def _stream_events(valkey_url, publish):
+def _stream_events(valkey_url, publish, **app_options):
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
-        app = create_app(valkey, "conf")
+        app = create_app(valkey, "conf", **app_options)
         bodies = []
 
         async def on_body(body, disconnect):
@@ -140,6 +140,24 @@ def test_untraced_message_gets_no_span(valkey_url, spans):
     _stream_events(valkey_url, _payload())
 
     assert not _deliver_spans(spans)
+
+
+def test_traced_message_over_the_span_limit_streams_without_a_span(valkey_url, spans):
+    _seed(valkey_url)
+
+    bodies = _stream_events(valkey_url, _traced(), trace_spans_per_second=0)
+
+    assert _event_data(bodies[1])["price"] == 82000
+    assert not _deliver_spans(spans)
+
+
+def test_sliding_window_limiter_weights_the_previous_second():
+    limiter = SlidingWindowLimiter(4)
+
+    assert [limiter.allow(10.0) for _ in range(5)] == [True, True, True, True, False]
+    assert [limiter.allow(11.5) for _ in range(3)] == [True, True, False]
+    assert [limiter.allow(12.25) for _ in range(5)] == [True, True, True, False, False]
+    assert [limiter.allow(20.0) for _ in range(5)] == [True, True, True, True, False]
 
 
 def test_malformed_traceparent_still_streams(valkey_url, spans):

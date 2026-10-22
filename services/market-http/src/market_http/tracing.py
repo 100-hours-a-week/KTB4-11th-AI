@@ -6,6 +6,25 @@ from opentelemetry.trace import Span
 PENDING_SPANS: ContextVar[deque[Span | None] | None] = ContextVar("pending_spans", default=None)
 
 
+class SlidingWindowLimiter:
+    def __init__(self, per_second: int):
+        self.per_second = per_second
+        self.second = 0
+        self.current = 0
+        self.previous = 0
+
+    def allow(self, now: float) -> bool:
+        second = int(now)
+        if second != self.second:
+            self.previous = self.current if second == self.second + 1 else 0
+            self.current = 0
+            self.second = second
+        if self.previous * (1 - (now - second)) + self.current >= self.per_second:
+            return False
+        self.current += 1
+        return True
+
+
 class SSESendSpans:
     def __init__(self, app):
         self.app = app

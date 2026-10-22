@@ -96,7 +96,8 @@ def test_unreachable_exporter_neither_raises_nor_stalls(monkeypatch):
     with tracing("svc"):
         providers[0].get_tracer("t").start_span("s").end()
     assert time.monotonic() - started < 4
-    assert logging.getLogger("opentelemetry.exporter").getEffectiveLevel() == logging.ERROR
+    for name in ("opentelemetry.exporter", "opentelemetry.sdk._shared_internal"):
+        assert logging.getLogger(name).getEffectiveLevel() == logging.ERROR
 
 
 @pytest.mark.parametrize(

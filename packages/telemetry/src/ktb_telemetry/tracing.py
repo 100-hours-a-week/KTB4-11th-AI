@@ -34,7 +34,7 @@ def tracing(service_name: str) -> Iterator[None]:
     provider = TracerProvider(resource=Resource.create({"service.name": service_name}))
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(timeout=2)))
     trace.set_tracer_provider(provider)
-    logging.getLogger("opentelemetry.exporter").setLevel(logging.ERROR)
+    logging.getLogger("opentelemetry").setLevel(logging.ERROR)
     handlers = list(logging.getLogger().handlers)
     trace_filter = TraceContextFilter()
     for handler in handlers:

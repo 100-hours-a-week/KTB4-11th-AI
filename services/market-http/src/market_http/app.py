@@ -13,7 +13,7 @@ from scalar_fastapi import get_scalar_api_reference
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
 from market_http.metrics import SSEConnectionMetrics
 from market_http.openapi_examples import HEALTH_EXAMPLE
-from market_http.tracing import SSESendSpans
+from market_http.tracing import SlidingWindowLimiter, SSESendSpans
 
 
 class HealthResponse(BaseModel):
@@ -32,6 +32,7 @@ def create_app(
     cors_origins: list[str] | None = None,
     cors_headers: list[str] | None = None,
     sse_metrics: SSEConnectionMetrics | None = None,
+    trace_spans_per_second: int = 100,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -59,6 +60,7 @@ def create_app(
     app.state.questdb_conf = questdb_conf
     app.state.postgres_engine = postgres_engine
     app.state.sse_metrics = sse_metrics
+    app.state.span_limiter = SlidingWindowLimiter(trace_spans_per_second)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins if cors_origins is not None else [],

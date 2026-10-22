@@ -42,6 +42,7 @@ def main() -> None:
             if settings.metrics_namespace
             else None
         ),
+        trace_spans_per_second=settings.trace_spans_per_second,
     )
     with tracing("market-http"):
         uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)

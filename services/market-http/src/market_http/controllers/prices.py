@@ -1,4 +1,5 @@
 import json
+import time
 import uuid
 from collections.abc import AsyncIterable
 from datetime import UTC, datetime
@@ -9,12 +10,12 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-from market_http.controllers.dependencies import Codes, QuestDBConf, Valkey
+from market_http.controllers.dependencies import Codes, QuestDBConf, SpanLimiter, Valkey
 from market_http.metrics import track_sse_connection
 from market_http.openapi_examples import PRICE_EXAMPLE
 from market_http.repositories.prices import Price, TickPrice, current_prices, price_key
 from market_http.sse_openapi import sse_openapi
-from market_http.tracing import PENDING_SPANS
+from market_http.tracing import PENDING_SPANS, SlidingWindowLimiter
 
 router = APIRouter()
 tracer = trace.get_tracer(__name__)
@@ -33,7 +34,7 @@ async def get_prices(valkey: Valkey, conf: QuestDBConf, codes: Codes) -> list[Pr
     openapi_extra=sse_openapi("price", Price, PRICE_EXAMPLE, live_model=TickPrice),
 )
 async def stream_prices(
-    valkey: Valkey, conf: QuestDBConf, codes: Codes
+    valkey: Valkey, conf: QuestDBConf, codes: Codes, limiter: SpanLimiter
 ) -> AsyncIterable[ServerSentEvent]:
     pending = PENDING_SPANS.get()
     connection_id = uuid.uuid4().hex
@@ -47,7 +48,7 @@ async def stream_prices(
         async for message in pubsub.listen():
             if message["type"] == "message":
                 if pending is not None:
-                    pending.append(_deliver_span(message["data"], connection_id))
+                    pending.append(_deliver_span(message["data"], connection_id, limiter))
                 yield ServerSentEvent(
                     data=TickPrice.model_validate_json(message["data"]), event="price"
                 )
@@ -55,8 +56,8 @@ async def stream_prices(
         await pubsub.aclose()
 
 
-def _deliver_span(raw: str, connection_id: str) -> trace.Span | None:
-    if '"traceparent"' not in raw:
+def _deliver_span(raw: str, connection_id: str, limiter: SlidingWindowLimiter) -> trace.Span | None:
+    if '"traceparent"' not in raw or not limiter.allow(time.monotonic()):
         return None
     received = datetime.now(UTC)
     fields = json.loads(raw)
