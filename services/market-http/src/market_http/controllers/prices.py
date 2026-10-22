@@ -4,11 +4,11 @@ from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from market_http.controllers.dependencies import Codes, QuestDBConf, Valkey
-from market_http.metrics import track_sse_connection
+from market_http.observability.metrics import track_sse_connection
+from market_http.observability.tracing import track_event
 from market_http.openapi_examples import PRICE_EXAMPLE
 from market_http.repositories.prices import Price, TickPrice, current_prices, price_key
 from market_http.sse_openapi import sse_openapi
-from market_http.tracing import track_event
 
 router = APIRouter()
 

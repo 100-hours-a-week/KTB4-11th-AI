@@ -10,9 +10,9 @@ from redis.asyncio import Redis
 from scalar_fastapi import get_scalar_api_reference
 
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
-from market_http.metrics import SSEConnectionMetrics
+from market_http.observability.metrics import SSEConnectionMetrics
+from market_http.observability.tracing import DeliverSpans, SSESendSpans, is_stream
 from market_http.openapi_examples import HEALTH_EXAMPLE
-from market_http.tracing import DeliverSpans, SSESendSpans, is_stream
 
 
 class HealthResponse(BaseModel):

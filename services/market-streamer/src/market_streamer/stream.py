@@ -15,9 +15,9 @@ from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
+from market_streamer.observability.tracing import trace_accepted, traced_publish
 from market_streamer.settings import Settings
 from market_streamer.symbols import load_codes
-from market_streamer.tracing import trace_accepted, traced_publish
 from market_streamer.valkey import connect_valkey
 
 log = get_logger(__name__)

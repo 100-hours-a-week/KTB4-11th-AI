@@ -6,8 +6,13 @@ import pytest
 import redis
 from fastapi.testclient import TestClient
 from market_http.app import create_app
+from market_http.observability.tracing import (
+    DeliverSpans,
+    SlidingWindowLimiter,
+    SSESendSpans,
+    track_event,
+)
 from market_http.repositories import prices as prices_module
-from market_http.tracing import DeliverSpans, SlidingWindowLimiter, SSESendSpans, track_event
 from opentelemetry import metrics, trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import SpanKind

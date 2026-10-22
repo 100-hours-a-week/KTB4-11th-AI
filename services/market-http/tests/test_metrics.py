@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from ktb_core.logging import JsonFormatter
 from market_http.app import create_app
 from market_http.controllers import orderbooks, prices
-from market_http.metrics import SSEConnectionMetrics, track_sse_connection
+from market_http.observability.metrics import SSEConnectionMetrics, track_sse_connection
 from market_http.settings import Settings
 from redis.asyncio import Redis
 
@@ -136,7 +136,7 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
         events = [record for record in caplog.records if record.message == "active_sse_connections"]
         payloads = [json.loads(JsonFormatter("market-http").format(event)) for event in events]
         assert {payload["ActiveSSEConnections"] for payload in payloads} == {0, 2}
-        assert events[0].name == "market_http.metrics"
+        assert events[0].name == "market_http.observability.metrics"
         assert all(payload["ClusterName"] == "c" for payload in payloads)
         assert all(payload["DeliverSpansRecorded"] == 0 for payload in payloads)
         assert all(payload["DeliverSpansSkipped"] == 0 for payload in payloads)

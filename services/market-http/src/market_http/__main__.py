@@ -6,7 +6,7 @@ from opentelemetry.propagate import set_global_textmap
 from opentelemetry.propagators.composite import CompositePropagator
 
 from market_http.app import create_app
-from market_http.metrics import SSEConnectionMetrics
+from market_http.observability.metrics import SSEConnectionMetrics
 from market_http.settings import Settings
 from market_http.valkey import connect_valkey
 
