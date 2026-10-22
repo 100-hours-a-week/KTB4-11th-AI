@@ -69,8 +69,11 @@ jobs:
       # Compose, 이미지 SHA, 배치 스케줄 파일을 EC2에 전송합니다.
       - name: Upload deployment files
         if: steps.freshness.outputs.deploy == 'true'
+        env:
+          AI_ENV: ${{ vars.DEV_AI_ENV }}
         run: |
           set -euo pipefail
+          test -n "$AI_ENV" || { echo "::error::Application env variable must be set" >&2; exit 1; }
 
           # systemd 설치에 필요한 비대화형 sudo 권한을 배포 파일 변경 전에 확인합니다.
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -79,12 +82,17 @@ jobs:
           # 시크릿 .env와 분리해 CD가 APP_IMAGE만 안전하게 갱신합니다.
           umask 077
           image_env="$(mktemp)"
-          trap 'rm -f "$image_env"' EXIT
+          base_env="$(mktemp)"
+          trap 'rm -f "$image_env" "$base_env"' EXIT
+          printf '%s\n' "$AI_ENV" > "$base_env"
           printf "APP_IMAGE='%s'\nAWS_LOG_GROUP_PREFIX='/stockspoon/v2/dev/ai'\n" "$APP_IMAGE" > "$image_env"
 
           # 임시 이름으로 전송해 불완전한 파일을 배포 과정에서 읽지 않게 합니다.
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"
           scp "$image_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.image.env.next"
+          scp "$base_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/base.env"
+          scp scripts/ssm_env.py \
+            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/ssm_env.py"
           scp scripts/run-morning-pipeline.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/run-morning-pipeline.sh"
           scp scripts/publish-scheduled-job-metric.sh \
@@ -100,7 +108,6 @@ jobs:
         run: |
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
           cd ~/ai
-          test -f .env || { echo "~/ai/.env must exist" >&2; exit 1; }
 
           schedule_stage="$PWD/.schedule.next"
           schedule_render_dir=""
@@ -117,9 +124,12 @@ jobs:
             elif [[ -f compose.prod.yaml.rollback && -f .image.env.rollback ]]; then
               cp -p compose.prod.yaml.rollback compose.prod.yaml
               cp -p .image.env.rollback .image.env
+              if [[ -f .env.rollback ]]; then
+                cp -p .env.rollback .env
+              fi
 
               docker compose --env-file .env --env-file .image.env \
-                -f compose.prod.yaml up -d --wait postgres questdb
+                -f compose.prod.yaml --profile market up -d --wait postgres questdb market-http
               rollback_status=$?
 
               if [[ "$rollback_status" -eq 0 ]]; then
@@ -131,7 +141,7 @@ jobs:
               echo "::error::No previous successful deployment is available for rollback"
             fi
 
-            rm -f compose.prod.yaml.next .image.env.next
+            rm -f compose.prod.yaml.next .image.env.next .env.next
             rm -rf "$schedule_stage"
             if [[ -n "$schedule_render_dir" ]]; then
               rm -rf "$schedule_render_dir"
@@ -143,8 +153,13 @@ jobs:
           set -Eeuo pipefail
           trap rollback ERR
 
+          /usr/bin/python3 "$schedule_stage/ssm_env.py" \
+            --environment dev --aws-cli /usr/local/bin/aws fetch \
+            --base-env "$schedule_stage/base.env" \
+            --compose-file compose.prod.yaml.next --output .env.next
+
           # 배포 파일을 건드리기 전에 새 Compose와 환경 변수 조합부터 검증합니다.
-          docker compose --env-file .env --env-file .image.env.next \
+          docker compose --env-file .env.next --env-file .image.env.next \
             -f compose.prod.yaml.next config --quiet
 
           # systemd 파일도 설치하기 전에 렌더링하고 구문을 확인합니다.
@@ -177,10 +192,14 @@ jobs:
           if [[ -f compose.prod.yaml && -f .image.env ]]; then
             cp -p compose.prod.yaml compose.prod.yaml.rollback
             cp -p .image.env .image.env.rollback
+            if [[ -f .env ]]; then
+              cp -p .env .env.rollback
+            fi
           fi
 
           deployment_started=true
           mv compose.prod.yaml.next compose.prod.yaml
+          mv .env.next .env
 
           compose() {
             docker compose --env-file .env --env-file .image.env.next -f compose.prod.yaml "$@"

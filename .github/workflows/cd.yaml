@@ -88,11 +88,10 @@ jobs:
       - name: Upload deployment files
         if: steps.freshness.outputs.deploy == 'true'
         env:
-          # 운영 ~/ai/.env 파일 전체를 담은 Repository Secret입니다. (README "배포 Secret · Variable 목록")
-          PROD_AI_ENV: ${{ secrets.PROD_AI_ENV }}
+          AI_ENV: ${{ vars.PROD_AI_ENV }}
         run: |
           set -euo pipefail
-          test -n "$PROD_AI_ENV" || { echo "::error::PROD_AI_ENV secret must be set" >&2; exit 1; }
+          test -n "$AI_ENV" || { echo "::error::Application env variable must be set" >&2; exit 1; }
 
           # systemd 설치에 필요한 비대화형 sudo 권한을 운영 파일 변경 전에 확인합니다.
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -101,15 +100,17 @@ jobs:
           # 시크릿 .env와 분리해 CD가 APP_IMAGE만 안전하게 갱신합니다.
           umask 077
           image_env="$(mktemp)"
-          app_env="$(mktemp)"
-          trap 'rm -f "$image_env" "$app_env"' EXIT
+          base_env="$(mktemp)"
+          trap 'rm -f "$image_env" "$base_env"' EXIT
+          printf '%s\n' "$AI_ENV" > "$base_env"
           printf "APP_IMAGE='%s'\n" "$APP_IMAGE" > "$image_env"
-          printf '%s\n' "$PROD_AI_ENV" > "$app_env"
 
           # 임시 이름으로 전송해 불완전한 파일을 배포 과정에서 읽지 않게 합니다.
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"
           scp "$image_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.image.env.next"
-          scp "$app_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.env.next"
+          scp "$base_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/base.env"
+          scp scripts/ssm_env.py \
+            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/ssm_env.py"
           scp scripts/run-morning-pipeline.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/run-morning-pipeline.sh"
           scp scripts/publish-scheduled-job-metric.sh \
@@ -117,7 +118,7 @@ jobs:
           scp infrastructure/systemd/ktb-*.service.in \
             infrastructure/systemd/ktb-*.timer \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 ~/ai/.image.env.next ~/ai/.env.next'
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 ~/ai/.image.env.next'
 
       # EC2에서 이미지 갱신, DB 마이그레이션, 상시 서비스 교체를 수행합니다.
       - name: Deploy
@@ -126,7 +127,6 @@ jobs:
         run: |
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
           cd ~/ai
-          test -f .env.next || { echo "~/ai/.env.next must exist" >&2; exit 1; }
 
           schedule_stage="$PWD/.schedule.next"
           schedule_render_dir=""
@@ -172,6 +172,11 @@ jobs:
           set -Eeuo pipefail
           trap rollback ERR
 
+          /usr/bin/python3 "$schedule_stage/ssm_env.py" \
+            --environment prod --aws-cli /usr/local/bin/aws fetch \
+            --base-env "$schedule_stage/base.env" \
+            --compose-file compose.prod.yaml.next --output .env.next
+
           # 운영 파일을 건드리기 전에 새 Compose와 환경 변수 조합부터 검증합니다.
           docker compose --env-file .env.next --env-file .image.env.next \
             -f compose.prod.yaml.next config --quiet
@@ -213,7 +218,6 @@ jobs:
 
           deployment_started=true
           mv compose.prod.yaml.next compose.prod.yaml
-          # Secret PROD_AI_ENV로 만든 .env로 교체합니다. 이후 compose·systemd timer가 이 파일을 읽습니다.
           mv .env.next .env
 
           compose() {
