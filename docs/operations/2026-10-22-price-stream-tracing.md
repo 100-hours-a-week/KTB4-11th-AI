@@ -54,7 +54,7 @@ string is delivered with no `deliver` span.
 
 - The streamer's ratio (`parentbased_traceidratio`) decides which batches are traced.
   `market-http` follows the parent for event spans, so its own ratio does not apply to them.
-- `market-http` REST requests have no remote parent (`OTEL_PROPAGATORS=none`), so they
+- `market-http` REST requests have no remote parent (inbound trace headers are ignored), so they
   are sampled locally with its ratio.
 - Defaults: 0.1 for `market-streamer`, 0.01 for `market-http`.
 - TraceQL results are samples, not totals. Do not read span counts as request or event
@@ -81,11 +81,13 @@ Notes:
 - The service name is fixed in code (`market-streamer`, `market-http`) and wins over
   `OTEL_SERVICE_NAME`. `OTEL_RESOURCE_ATTRIBUTES` still merges, so
   `deployment.environment` distinguishes environments in Tempo.
-- `market-http` must run with `OTEL_PROPAGATORS=none`; both services use the W3C
-  propagator directly rather than the global one.
+- `market-http` ignores inbound trace headers because `main()` sets an empty global
+  propagator in code; `OTEL_PROPAGATORS=none` is kept as belt-and-braces. Both services use
+  the W3C propagator directly rather than the global one.
 - The ECS task `infrastructure/ecs/market-http.json` sets the container variables with
   `OTEL_SDK_DISABLED=true`, so production behavior is unchanged until it is enabled
-  deliberately. `market-streamer` does not run in production.
+  deliberately. `market-streamer` does not run in production. The task has no
+  `OTEL_EXPORTER_OTLP_ENDPOINT`, so enabling tracing there also requires adding it.
 
 For the AWS test system, set on both `market-streamer` and `market-http`:
 `OTEL_SDK_DISABLED=false`, `OTEL_EXPORTER_OTLP_ENDPOINT=<collector in that VPC>`,
@@ -113,10 +115,11 @@ Grafana log-to-trace link is configured outside this repository.
 `scripts/bench-publish-tracing.py MODE` times 1000 `publish()` calls (26 prices, one
 batch, after 50 warmup calls) against a local Valkey, one process per mode. `sampled-in`
 and `sampled-out` use `ALWAYS_ON` / `ALWAYS_OFF` with an in-memory exporter, so network
-export cost is not included.
+export cost is not included. The benchmark flushes the selected Valkey database, so use a
+disposable one (15 above), never the dev database.
 
 ```bash
-for m in off sampled-out sampled-in; do KTB_TEST_VALKEY_URL=redis://localhost:6379/0 uv run python scripts/bench-publish-tracing.py $m; done
+for m in off sampled-out sampled-in; do KTB_TEST_VALKEY_URL=redis://localhost:6379/15 uv run python scripts/bench-publish-tracing.py $m; done
 ```
 
 Two runs per mode (mean / p95 ms per call, max RSS):

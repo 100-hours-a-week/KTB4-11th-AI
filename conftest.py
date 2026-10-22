@@ -28,6 +28,7 @@ def _span_recorder():
     provider = TracerProvider(sampler=sampler)
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
+    assert trace.get_tracer_provider() is provider
     return sampler, exporter
 
 

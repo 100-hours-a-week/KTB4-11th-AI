@@ -381,5 +381,5 @@ def test_sampled_publish_adds_trace_fields_from_the_publish_span(valkey_url, spa
 def test_unsampled_publish_payload_is_unchanged(valkey_url):
     message, stored = asyncio.run(_publish_and_capture(valkey_url, [PRICE]))
     expected = {k: v for k, v in PRICE.items() if k != "trade_value"}
-    assert json.loads(message["data"]) == expected
-    assert json.loads(stored) == expected
+    assert message["data"] == json.dumps(expected)
+    assert stored == json.dumps(expected)
