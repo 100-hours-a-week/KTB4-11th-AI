@@ -19,7 +19,7 @@ At each collection pass, let `end` be the latest complete KST minute covered by 
 
 Stocks with positive `current_volume` and positive `expected_volume` get a relative-volume value of `current_volume / expected_volume`. Sort them by descending relative volume, then descending `current_volume`, then code. Stocks without a usable baseline, followed by stocks with zero current volume, fill the remaining places in descending `current_volume` and code order. Publish ordinal sorted-set scores (`eligible_count - rank + 1`), as the current Kiwoom-based ranking does. The ratio determines order but does not change the public meaning of `score`. A fixed share-count threshold is deliberately omitted: the fallback and positive-volume requirement avoid excluding otherwise valid KOSPI 200 stocks solely because they trade fewer shares.
 
-Only codes with a current-session one-minute bar or a historical baseline are eligible. This avoids publishing unsupported or entirely absent symbols. The endpoint can return fewer than the requested limit only when fewer eligible codes exist. It must never be shortened by filtering a whole-market Kiwoom list.
+Only codes with a current-session one-minute bar or a historical baseline are eligible. If no completed current-session bar is visible for any loaded code, keep the previous ranking instead of publishing a historical-only order. This avoids publishing unsupported or entirely absent symbols and handles the first pass or delayed QuestDB visibility. The endpoint can return fewer than the requested limit only when fewer eligible codes exist. It must never be shortened by filtering a whole-market Kiwoom list.
 
 ## Publication and HTTP behavior
 
