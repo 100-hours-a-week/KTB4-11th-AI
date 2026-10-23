@@ -140,7 +140,7 @@ flowchart LR
 
 - market-streamer는 하나의 Kiwoom WebSocket에서 가격 `0B`와 호가 `0D`를 함께 구독함
 - market-http의 `GET /orderbooks?codes=005930,000660`은 저장된 최신 호가를 반환하고, `GET /orderbooks/stream?codes=005930,000660`은 SSE로 초기 스냅샷과 이후 갱신을 전달함
-- 각 호가 스냅샷은 최우선 순서로 매도·매수 각각 10개 가격과 수량을 포함함
+- 각 호가 스냅샷은 최우선 순서로 가격이 양수인 매도·매수 각각 최대 10개 가격과 수량을 포함하며, 빈 단계는 제외함
 - `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
 - 기존 가격 API는 `/prices`, `/prices/stream`임
 
