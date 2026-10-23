@@ -6,6 +6,7 @@ from opentelemetry.propagate import set_global_textmap
 
 from market_http.app import create_app
 from market_http.observability.metrics import SSEConnectionMetrics
+from market_http.observability.prometheus import MarketMetrics, MetricsServer
 from market_http.observability.tracing import LocalContextPropagator
 from market_http.settings import Settings
 from market_http.valkey import connect_valkey
@@ -15,8 +16,9 @@ def main() -> None:
     set_global_textmap(LocalContextPropagator())
     settings = Settings()
     setup_logging(settings.log_level, service_name="market-http")
+    metrics = MarketMetrics()
     app = create_app(
-        connect_valkey(settings),
+        connect_valkey(settings, metrics),
         settings.questdb_conf,
         postgres_engine=sa.create_engine(
             settings.postgres_dsn,
@@ -43,6 +45,12 @@ def main() -> None:
             else None
         ),
         trace_spans_per_second=settings.trace_spans_per_second,
+        prometheus=metrics,
     )
-    with tracing("market-http"):
-        uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
+    with (
+        metrics.serve(settings.prometheus_bind_host, settings.prometheus_port),
+        tracing("market-http"),
+    ):
+        MetricsServer(
+            uvicorn.Config(app, host=settings.host, port=settings.port, log_config=None), metrics
+        ).run()

@@ -5,6 +5,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from market_http.controllers.dependencies import Codes, Valkey
 from market_http.observability.metrics import track_sse_connection
+from market_http.observability.prometheus import track_delivery
 from market_http.openapi_examples import ORDERBOOK_EXAMPLE
 from market_http.repositories.orderbooks import Orderbook, current_orderbooks, orderbook_key
 from market_http.sse_openapi import sse_openapi
@@ -28,9 +29,11 @@ async def stream_orderbooks(valkey: Valkey, codes: Codes) -> AsyncIterable[Serve
     try:
         await pubsub.subscribe(*(orderbook_key(code) for code in codes))
         for orderbook in await current_orderbooks(valkey, codes):
+            track_delivery()
             yield ServerSentEvent(data=orderbook, event="orderbook")
         async for message in pubsub.listen():
             if message["type"] == "message":
+                track_delivery(live=True)
                 yield ServerSentEvent(
                     data=Orderbook.model_validate_json(message["data"]), event="orderbook"
                 )

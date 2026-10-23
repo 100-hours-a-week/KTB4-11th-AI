@@ -5,6 +5,7 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from market_http.controllers.dependencies import Codes, QuestDBConf, Valkey
 from market_http.observability.metrics import track_sse_connection
+from market_http.observability.prometheus import track_delivery
 from market_http.observability.tracing import track_event
 from market_http.openapi_examples import PRICE_EXAMPLE
 from market_http.repositories.prices import Price, TickPrice, current_prices, price_key
@@ -31,10 +32,12 @@ async def stream_prices(
     try:
         await pubsub.subscribe(*(price_key(code) for code in codes))
         for price in await current_prices(valkey, conf, codes):
+            track_delivery()
             track_event()
             yield ServerSentEvent(data=price, event="price")
         async for message in pubsub.listen():
             if message["type"] == "message":
+                track_delivery(live=True)
                 track_event(message["data"])
                 yield ServerSentEvent(
                     data=TickPrice.model_validate_json(message["data"]), event="price"

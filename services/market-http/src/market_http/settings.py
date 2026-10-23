@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     aws_region: str = "ap-northeast-2"
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)
+    prometheus_bind_host: str = Field(default="127.0.0.1", min_length=1)
+    prometheus_port: int = Field(default=9100, gt=0, lt=65536)
     cors_origins: list[str] = []
     cors_headers: list[str] = []
     docs_enabled: bool = True

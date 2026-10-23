@@ -341,7 +341,7 @@ git commit -m "chore: wire OpenTelemetry settings for market services"
 
 **Files:**
 - Create: `scripts/bench-publish-tracing.py`
-- Create: `docs/operations/2026-10-22-price-stream-tracing.md`
+- Create: `README.md`
 - Modify: `AGENTS.md`
 
 **Interfaces:**
@@ -357,7 +357,7 @@ for m in off sampled-out sampled-in; do KTB_TEST_VALKEY_URL=redis://localhost:63
 
 Expected: three result lines; record them.
 
-- [ ] **Step 3: Write `docs/operations/2026-10-22-price-stream-tracing.md`:**
+- [ ] **Step 3: Write `README.md`:**
   - the trace shape (`publish` → `deliver` per client)
   - T0/T1/T2 definitions and caveats: `publish_to_receive_ms` needs cross-host clock sync; T0 is before the pipeline executes, not Valkey's `PUBLISH`; T2 is `send()` returning, not network delivery; `deliver` includes waiting in FastAPI's SSE buffers
   - sampling: the streamer's ratio drives market-http event spans; REST is sampled locally; TraceQL results are samples
@@ -377,6 +377,6 @@ Expected: three result lines; record them.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/bench-publish-tracing.py docs/operations/2026-10-22-price-stream-tracing.md AGENTS.md
+git add scripts/bench-publish-tracing.py README.md AGENTS.md
 git commit -m "docs: document price stream tracing and publish overhead"
 ```
