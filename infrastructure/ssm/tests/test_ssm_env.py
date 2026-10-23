@@ -141,18 +141,85 @@ def test_upload_prepares_one_variable_and_uploads_only_secrets(monkeypatch, args
     assert calls[0][2]["Overwrite"] is False
 
 
-def test_aws_payload_uses_stdin_instead_of_process_arguments(monkeypatch, args):
-    calls = []
+@pytest.mark.parametrize("failure", [False, True])
+def test_aws_payload_uses_private_temporary_file_and_removes_it(monkeypatch, args, failure):
+    requests = []
 
     def run(command, **kwargs):
-        calls.append((command, kwargs))
+        request = Path(command[command.index("--cli-input-json") + 1].removeprefix("file://"))
+        requests.append(request)
+        assert stat.S_IMODE(request.stat().st_mode) == 0o600
+        assert json.loads(request.read_text())["Value"] == "private-secret"
+        assert "private-secret" not in " ".join(command)
+        assert "input" not in kwargs
+        if failure:
+            return subprocess.CompletedProcess(
+                command,
+                254,
+                "",
+                "An error occurred (AccessDeniedException): rejected private-secret",
+            )
         return subprocess.CompletedProcess(command, 0, '{"Version": 1}', "")
 
     monkeypatch.setattr(ssm_env.subprocess, "run", run)
-    ssm_env.aws_ssm(args, "put-parameter", {"Value": "private-secret"})
-    command, kwargs = calls[0]
-    assert "private-secret" not in " ".join(command)
-    assert json.loads(kwargs["input"])["Value"] == "private-secret"
+    if failure:
+        with pytest.raises(ssm_env.ConfigurationError) as error:
+            ssm_env.aws_ssm(args, "put-parameter", {"Value": "private-secret"})
+        assert "AccessDeniedException" in str(error.value)
+        assert "private-secret" not in str(error.value)
+    else:
+        assert ssm_env.aws_ssm(args, "put-parameter", {"Value": "private-secret"}) == {"Version": 1}
+    assert len(requests) == 1
+    assert not requests[0].exists()
+
+
+@pytest.mark.skipif(shutil.which("aws") is None, reason="AWS CLI unavailable")
+@pytest.mark.parametrize(
+    "operation,payload",
+    [
+        (
+            "put-parameter",
+            {
+                "Name": "/stockspoon/ai/dev/EXAMPLE",
+                "Type": "SecureString",
+                "Value": "dummy-test-value",
+                "Overwrite": True,
+            },
+        ),
+        ("get-parameters", {"Names": ["/stockspoon/ai/dev/EXAMPLE"], "WithDecryption": True}),
+    ],
+)
+def test_real_aws_cli_accepts_request_without_sending_it(monkeypatch, args, operation, payload):
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "testing")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "testing")
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+    run = subprocess.run
+
+    def generate_skeleton(command, **kwargs):
+        return run(command + ["--generate-cli-skeleton", "output"], **kwargs)
+
+    monkeypatch.setattr(ssm_env.subprocess, "run", generate_skeleton)
+    assert isinstance(ssm_env.aws_ssm(args, operation, payload), dict)
+
+
+def test_main_reports_safe_error_details(monkeypatch, args, capsys):
+    def fail(unused):
+        raise ssm_env.ConfigurationError("SSM put-parameter failed (AccessDeniedException)")
+
+    monkeypatch.setattr(ssm_env, "upload", fail)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ssm_env.py",
+            "--environment",
+            "prod",
+            "upload",
+            "--env-file",
+            str(args.base_env),
+        ],
+    )
+    assert ssm_env.main() == 1
+    assert "AccessDeniedException" in capsys.readouterr().err
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose unavailable")
