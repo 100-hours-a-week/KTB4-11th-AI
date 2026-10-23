@@ -7,14 +7,14 @@ from market_http.openapi_examples import ORDERBOOK_EXAMPLE
 
 
 class OrderbookLevel(BaseModel):
-    price: int = Field(ge=0)
+    price: int = Field(gt=0)
     qty: int = Field(ge=0)
 
 
 class Orderbook(BaseModel):
     code: str
-    asks: list[OrderbookLevel] = Field(min_length=10, max_length=10)
-    bids: list[OrderbookLevel] = Field(min_length=10, max_length=10)
+    asks: list[OrderbookLevel] = Field(max_length=10)
+    bids: list[OrderbookLevel] = Field(max_length=10)
     timestamp: datetime
 
     model_config = ConfigDict(json_schema_extra={"examples": [ORDERBOOK_EXAMPLE]})

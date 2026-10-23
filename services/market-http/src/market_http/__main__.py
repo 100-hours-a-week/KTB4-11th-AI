@@ -1,14 +1,18 @@
 import sqlalchemy as sa
 import uvicorn
 from ktb_core.logging import setup_logging
+from ktb_telemetry.tracing import tracing
+from opentelemetry.propagate import set_global_textmap
 
 from market_http.app import create_app
-from market_http.metrics import SSEConnectionMetrics
+from market_http.observability.metrics import SSEConnectionMetrics
+from market_http.observability.tracing import LocalContextPropagator
 from market_http.settings import Settings
 from market_http.valkey import connect_valkey
 
 
 def main() -> None:
+    set_global_textmap(LocalContextPropagator())
     settings = Settings()
     setup_logging(settings.log_level, service_name="market-http")
     app = create_app(
@@ -38,5 +42,7 @@ def main() -> None:
             if settings.metrics_namespace
             else None
         ),
+        trace_spans_per_second=settings.trace_spans_per_second,
     )
-    uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
+    with tracing("market-http"):
+        uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)

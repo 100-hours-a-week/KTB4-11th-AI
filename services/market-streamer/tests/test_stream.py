@@ -12,6 +12,7 @@ from market_streamer.stream import (
     publish,
     publish_orderbooks,
 )
+from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
 
 TODAY = date(2026, 10, 13)
@@ -120,7 +121,7 @@ def test_parse_orderbook_reads_all_ten_levels():
     }
 
 
-def test_parse_captured_sparse_orderbook_preserves_empty_levels():
+def test_parse_captured_sparse_orderbook_excludes_empty_levels():
     result = parse_orderbook(SPARSE_CAPTURE, CAPTURE_DATE)
 
     assert result == {
@@ -129,13 +130,11 @@ def test_parse_captured_sparse_orderbook_preserves_empty_levels():
             {"price": 216500, "qty": 3907},
             {"price": 217000, "qty": 42399},
             {"price": 217500, "qty": 4434},
-            *[{"price": 0, "qty": 0}] * 7,
         ],
         "bids": [
             {"price": 216000, "qty": 34242},
             {"price": 215500, "qty": 118496},
             {"price": 215000, "qty": 95265},
-            *[{"price": 0, "qty": 0}] * 7,
         ],
         "timestamp": "2026-10-15T09:00:00+09:00",
     }
@@ -170,14 +169,20 @@ def test_parse_orderbook_requires_six_digit_time():
         parse_orderbook(entry, TODAY)
 
 
-def test_parse_orderbook_preserves_zero_prices():
-    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "41": "0", "60": "0"}}
+@pytest.mark.parametrize(
+    "ask_fids,bid_fids", [([41], [60, 59]), ([], list(range(51, 61))), (list(range(41, 51)), [])]
+)
+def test_parse_orderbook_excludes_zero_prices_independently(ask_fids, bid_fids):
+    entry = {
+        **ORDERBOOK,
+        "values": {**ORDERBOOK["values"], **{str(fid): "0" for fid in ask_fids + bid_fids}},
+    }
 
     result = parse_orderbook(entry, TODAY)
 
-    assert result["asks"][0] == {"price": 0, "qty": 610}
-    assert result["bids"][-1] == {"price": 0, "qty": 800}
-    assert len(result["asks"]) == len(result["bids"]) == 10
+    assert len(result["asks"]) == 10 - len(ask_fids)
+    assert len(result["bids"]) == 10 - len(bid_fids)
+    assert all(level["price"] > 0 for side in ("asks", "bids") for level in result[side])
 
 
 def test_frame_orderbooks_skips_partial_and_malformed_entries():
@@ -200,13 +205,14 @@ def test_parse_orderbook_rejects_negative_quantities():
         parse_orderbook(entry, TODAY)
 
 
-def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url):
+@pytest.mark.parametrize("entry", [ORDERBOOK, SPARSE_CAPTURE])
+def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url, entry):
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         pubsub = valkey.pubsub()
         await pubsub.subscribe("orderbook:005930")
         await pubsub.get_message(timeout=1)
-        await publish_orderbooks(valkey, [parse_orderbook(ORDERBOOK, TODAY)])
+        await publish_orderbooks(valkey, [parse_orderbook(entry, TODAY)])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
         stored = await valkey.get("orderbook:005930")
         await pubsub.aclose()
@@ -214,7 +220,8 @@ def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url):
         return message, stored
 
     message, stored = asyncio.run(scenario())
-    expected = parse_orderbook(ORDERBOOK, TODAY)
+    expected = parse_orderbook(entry, TODAY)
+    assert all(level["price"] > 0 for side in ("asks", "bids") for level in expected[side])
 
     assert json.loads(stored) == expected
     assert message is not None
@@ -346,3 +353,39 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
         when == datetime(2026, 10, 27, 23, 59, 59, tzinfo=KST)
         for when, _ in valkey.expirations.values()
     )
+
+
+async def _publish_and_capture(valkey_url, prices):
+    valkey = Redis.from_url(valkey_url, decode_responses=True)
+    pubsub = valkey.pubsub()
+    await pubsub.subscribe("price:005930")
+    await pubsub.get_message(timeout=1)
+    await publish(valkey, prices)
+    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+    stored = await valkey.get("price:005930")
+    await pubsub.aclose()
+    await valkey.aclose()
+    return message, stored
+
+
+def test_sampled_publish_adds_trace_fields_from_the_publish_span(valkey_url, spans):
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [PRICE]))
+    (span,) = spans.get_finished_spans()
+    context = span.get_span_context()
+    payload = json.loads(message["data"])
+    assert span.name == "publish" and span.kind == SpanKind.PRODUCER
+    assert span.attributes["prices.received"] == 1
+    assert span.attributes["prices.accepted"] == 1
+    assert (
+        payload["traceparent"]
+        == f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"
+    )
+    assert datetime.fromisoformat(payload["published_at"]).tzinfo is not None
+    assert json.loads(stored) == payload
+
+
+def test_unsampled_publish_payload_is_unchanged(valkey_url):
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [PRICE]))
+    expected = {k: v for k, v in PRICE.items() if k != "trade_value"}
+    assert message["data"] == json.dumps(expected)
+    assert stored == json.dumps(expected)

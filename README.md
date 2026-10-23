@@ -140,7 +140,7 @@ flowchart LR
 
 - market-streamer는 하나의 Kiwoom WebSocket에서 가격 `0B`와 호가 `0D`를 함께 구독함
 - market-http의 `GET /orderbooks?codes=005930,000660`은 저장된 최신 호가를 반환하고, `GET /orderbooks/stream?codes=005930,000660`은 SSE로 초기 스냅샷과 이후 갱신을 전달함
-- 각 호가 스냅샷은 최우선 순서로 매도·매수 각각 10개 가격과 수량을 포함함
+- 각 호가 스냅샷은 최우선 순서로 가격이 양수인 매도·매수 각각 최대 10개 가격과 수량을 포함하며, 빈 단계는 제외함
 - `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
 - 기존 가격 API는 `/prices`, `/prices/stream`임
 
@@ -335,3 +335,8 @@ SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 �
 기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
 리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
 DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.
+
+## EC2 배포 환경 설정
+
+운영·개발 EC2는 GitHub Variable의 `.env` 텍스트와 SSM의 비밀 값을 합쳐 배포용 `.env`를 생성합니다.
+최초 이관과 적용 순서는 [SSM 환경 설정 운영 절차](docs/operations/ssm-environment.md)를 참고하세요.

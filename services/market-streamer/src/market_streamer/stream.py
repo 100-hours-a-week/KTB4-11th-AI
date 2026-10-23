@@ -15,6 +15,7 @@ from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
+from market_streamer.observability.tracing import trace_accepted, traced_publish
 from market_streamer.settings import Settings
 from market_streamer.symbols import load_codes
 from market_streamer.valkey import connect_valkey
@@ -58,8 +59,10 @@ def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
         bid_qty = int(values[str(70 + level)].strip())
         if ask_qty < 0 or bid_qty < 0:
             raise ValueError("orderbook quantities must be nonnegative")
-        asks.append({"price": ask_price, "qty": ask_qty})
-        bids.append({"price": bid_price, "qty": bid_qty})
+        if ask_price > 0:
+            asks.append({"price": ask_price, "qty": ask_qty})
+        if bid_price > 0:
+            bids.append({"price": bid_price, "qty": bid_qty})
     return {
         "code": entry["item"],
         "asks": asks,
@@ -94,6 +97,7 @@ def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, obj
     return orderbooks
 
 
+@traced_publish
 async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
     prices = list(prices)
     async with valkey.pipeline(transaction=False) as pipe:
@@ -121,11 +125,13 @@ async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
         latest[code] = price
         accepted.append(price)
 
+    trace_fields = trace_accepted(len(accepted))
     async with valkey.pipeline(transaction=False) as pipe:
         for price in accepted:
             key = f"price:{price['code']}"
             payload = json.dumps(
                 {field: value for field, value in price.items() if field != "trade_value"}
+                | trace_fields
             )
             pipe.set(key, payload)
             pipe.publish(key, payload)

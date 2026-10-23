@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from market_http.controllers.dependencies import Codes, Valkey
-from market_http.metrics import track_sse_connection
+from market_http.observability.metrics import track_sse_connection
 from market_http.openapi_examples import ORDERBOOK_EXAMPLE
 from market_http.repositories.orderbooks import Orderbook, current_orderbooks, orderbook_key
 from market_http.sse_openapi import sse_openapi
