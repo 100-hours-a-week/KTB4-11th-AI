@@ -29,9 +29,18 @@ class Settings(BaseSettings):
     docs_path_prefix: str = Field(default="", pattern=r"^$|^/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
     log_level: str = "INFO"
     trace_spans_per_second: int = Field(default=100, ge=0)
+    prometheus_enabled: bool = False
+    prometheus_host: str = "127.0.0.1"
+    prometheus_port: int = Field(default=9108, gt=0, lt=65536)
     metrics_namespace: str = ""
     metrics_cluster_name: str = ""
     metrics_service_name: str = ""
+
+    @model_validator(mode="after")
+    def _prometheus_uses_separate_port(self) -> Self:
+        if self.prometheus_enabled and self.prometheus_port == self.port:
+            raise ValueError("prometheus_port must differ from the public API port")
+        return self
 
     @model_validator(mode="after")
     def _metrics_need_dimensions(self) -> Self:

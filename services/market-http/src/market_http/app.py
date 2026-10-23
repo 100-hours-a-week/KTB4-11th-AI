@@ -1,5 +1,5 @@
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager, nullcontext, suppress
 from typing import Literal
 
 import sqlalchemy as sa
@@ -11,6 +11,7 @@ from scalar_fastapi import get_scalar_api_reference
 
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
 from market_http.observability.metrics import SSEConnectionMetrics
+from market_http.observability.prometheus import serve_metrics
 from market_http.observability.tracing import DeliverSpans, SSESendSpans, is_stream
 from market_http.openapi_examples import HEALTH_EXAMPLE
 
@@ -32,19 +33,29 @@ def create_app(
     cors_headers: list[str] | None = None,
     sse_metrics: SSEConnectionMetrics | None = None,
     trace_spans_per_second: int = 100,
+    prometheus_host: str = "127.0.0.1",
+    prometheus_port: int | None = None,
 ) -> FastAPI:
     deliver_spans = DeliverSpans(trace_spans_per_second)
+    if prometheus_port is not None and sse_metrics is None:
+        sse_metrics = SSEConnectionMetrics(namespace="", cluster_name="", service_name="")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         metrics: SSEConnectionMetrics | None = app.state.sse_metrics
         publisher = (
             asyncio.create_task(metrics.publish(deliver_spans.take_counts))
-            if metrics is not None
+            if metrics is not None and metrics.namespace
             else None
         )
         try:
-            yield
+            with (
+                serve_metrics(metrics, prometheus_host, prometheus_port)
+                if metrics is not None and prometheus_port is not None
+                else nullcontext()
+            ) as bound_port:
+                app.state.prometheus_port = bound_port
+                yield
         finally:
             if publisher is not None:
                 publisher.cancel()

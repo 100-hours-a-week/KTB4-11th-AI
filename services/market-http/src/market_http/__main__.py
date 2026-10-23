@@ -43,6 +43,8 @@ def main() -> None:
             else None
         ),
         trace_spans_per_second=settings.trace_spans_per_second,
+        prometheus_host=settings.prometheus_host,
+        prometheus_port=settings.prometheus_port if settings.prometheus_enabled else None,
     )
     with tracing("market-http"):
         uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)
