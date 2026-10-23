@@ -6,6 +6,8 @@ import pytest
 import redis
 from fastapi.testclient import TestClient
 from market_http.app import create_app
+from market_http.observability.pool import observe_pool
+from market_http.observability.prometheus import MarketMetrics
 from market_http.observability.tracing import (
     DeliverSpans,
     SlidingWindowLimiter,
@@ -17,6 +19,8 @@ from opentelemetry import metrics, trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
+
+from .example_entities import ORDERBOOK
 
 TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 PARENT_ID = "b7ad6b7169203331"
@@ -53,7 +57,7 @@ def _traced(flags="01"):
     )
 
 
-async def _drive_stream(app, query, on_body):
+async def _drive_stream(app, query, on_body, path="/prices/stream"):
     disconnect = asyncio.Event()
     messages = []
     requested = False
@@ -77,8 +81,8 @@ async def _drive_stream(app, query, on_body):
         "http_version": "1.1",
         "method": "GET",
         "scheme": "http",
-        "path": "/prices/stream",
-        "raw_path": b"/prices/stream",
+        "path": path,
+        "raw_path": path.encode(),
         "root_path": "",
         "query_string": query.encode(),
         "headers": [(b"accept", b"text/event-stream")],
@@ -305,3 +309,60 @@ def test_rest_prices_ignore_trace_fields(valkey_url):
     assert body[0]["code"] == "005930"
     assert "traceparent" not in body[0]
     assert "published_at" not in body[0]
+
+
+@pytest.mark.parametrize("stream,channel", [("prices", "price"), ("orderbooks", "orderbook")])
+def test_prometheus_counts_snapshot_and_live_event_independent_of_traces(
+    valkey_url, stream, channel
+):
+    metrics = MarketMetrics()
+    payload = _payload() if stream == "prices" else ORDERBOOK.model_dump_json()
+
+    async def scenario():
+        valkey = Redis.from_url(valkey_url, decode_responses=True)
+        observe_pool(valkey.connection_pool, metrics)
+        try:
+            await valkey.set(f"{channel}:005930", payload)
+            app = create_app(valkey, "conf", prometheus=metrics, trace_spans_per_second=0)
+            bodies = []
+
+            async def on_body(body, disconnect):
+                bodies.append(body)
+                if len(bodies) == 1:
+                    await valkey.publish(f"{channel}:005930", payload)
+                else:
+                    disconnect.set()
+
+            await _drive_stream(app, "codes=005930", on_body, f"/{stream}/stream")
+            return bodies
+        finally:
+            await valkey.aclose()
+
+    bodies = asyncio.run(scenario())
+    assert (
+        metrics.registry.get_sample_value("market_http_sse_events_sent_total", {"stream": stream})
+        == 2
+    )
+    assert metrics.registry.get_sample_value(
+        "market_http_sse_events_sent_bytes_total", {"stream": stream}
+    ) == sum(len(body) for body in bodies)
+    assert (
+        metrics.registry.get_sample_value(
+            "market_http_sse_delivery_latency_seconds_count", {"stream": stream}
+        )
+        == 1
+    )
+    assert (
+        metrics.registry.get_sample_value(
+            "market_http_sse_connections_closed_total",
+            {"stream": stream, "reason": "client_disconnect"},
+        )
+        == 1
+    )
+    assert metrics.registry.get_sample_value("market_http_sse_connections", {"stream": stream}) == 0
+    assert (
+        metrics.registry.get_sample_value(
+            "market_http_valkey_pool_acquire_duration_seconds_count", {"result": "success"}
+        )
+        > 0
+    )
