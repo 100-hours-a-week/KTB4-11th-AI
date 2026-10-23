@@ -25,7 +25,7 @@ class TraceContextFilter(logging.Filter):
 
 @contextmanager
 def tracing(service_name: str) -> Iterator[None]:
-    if not (
+    if os.environ.get("OTEL_SDK_DISABLED", "").lower() == "true" or not (
         os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT")
         or os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
     ):

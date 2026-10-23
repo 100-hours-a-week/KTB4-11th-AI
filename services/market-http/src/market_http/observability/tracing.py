@@ -7,6 +7,8 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from opentelemetry import trace
+from opentelemetry.context import Context
+from opentelemetry.propagators.textmap import TextMapPropagator
 from opentelemetry.trace import Span, SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
@@ -16,6 +18,18 @@ propagator = TraceContextTextMapPropagator()
 TRACK_EVENT: ContextVar[Callable[[str | None], None] | None] = ContextVar(
     "track_event", default=None
 )
+
+
+class LocalContextPropagator(TextMapPropagator):
+    def extract(self, carrier, context=None, getter=None) -> Context:
+        return Context()
+
+    def inject(self, carrier, context=None, setter=None) -> None:
+        pass
+
+    @property
+    def fields(self) -> set[str]:
+        return set()
 
 
 def track_event(raw: str | None = None) -> None:
