@@ -48,12 +48,23 @@ def test_tracing_names_the_service_and_flushes_on_exit(monkeypatch):
     assert span.resource.attributes["deployment.environment"] == "test"
 
 
-def test_tracing_disabled_creates_no_recording_spans(monkeypatch):
+@pytest.mark.parametrize("disabled", ["true", "TRUE", "True"])
+def test_tracing_disabled_installs_no_provider_exporter_or_log_filter(monkeypatch, disabled):
     providers = []
+    exporters = []
     monkeypatch.setattr(tracing_module.trace, "set_tracer_provider", providers.append)
-    monkeypatch.setenv("OTEL_SDK_DISABLED", "true")
+
+    def exporter(**kwargs):
+        exporters.append(kwargs)
+        return InMemorySpanExporter()
+
+    monkeypatch.setattr(tracing_module, "OTLPSpanExporter", exporter)
+    monkeypatch.setenv("OTEL_SDK_DISABLED", disabled)
+    setup_logging("INFO", service_name="svc")
     with tracing("svc"):
-        assert not providers[0].get_tracer("t").start_span("s").is_recording()
+        assert providers == []
+        assert exporters == []
+        assert not logging.getLogger().handlers[0].filters
 
 
 def test_logs_inside_a_span_carry_trace_ids_and_keep_fields(capsys, monkeypatch):
