@@ -11,6 +11,7 @@ from scalar_fastapi import get_scalar_api_reference
 
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
 from market_http.observability.metrics import SSEConnectionMetrics
+from market_http.observability.prometheus import MarketMetrics, SSEMetrics
 from market_http.observability.tracing import DeliverSpans, SSESendSpans, is_stream
 from market_http.openapi_examples import HEALTH_EXAMPLE
 
@@ -32,6 +33,7 @@ def create_app(
     cors_headers: list[str] | None = None,
     sse_metrics: SSEConnectionMetrics | None = None,
     trace_spans_per_second: int = 100,
+    prometheus: MarketMetrics | None = None,
 ) -> FastAPI:
     deliver_spans = DeliverSpans(trace_spans_per_second)
 
@@ -73,6 +75,8 @@ def create_app(
         allow_headers=cors_headers if cors_headers is not None else [],
     )
     app.add_middleware(SSESendSpans, deliver_spans=deliver_spans)
+    if prometheus is not None:
+        app.add_middleware(SSEMetrics, metrics=prometheus)
     app.include_router(prices.router)
     app.include_router(orderbooks.router)
     app.include_router(bars.router)

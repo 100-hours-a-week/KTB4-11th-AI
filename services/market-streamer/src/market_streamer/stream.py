@@ -15,6 +15,7 @@ from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
+from market_streamer.observability.metrics import MarketMetrics
 from market_streamer.observability.tracing import trace_accepted, traced_publish
 from market_streamer.settings import Settings
 from market_streamer.symbols import load_codes
@@ -162,7 +163,11 @@ async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, objec
 
 
 async def stream_market_data(
-    client: KiwoomWebSocketClient, valkey: Redis, codes: list[str]
+    client: KiwoomWebSocketClient,
+    valkey: Redis,
+    codes: list[str],
+    *,
+    metrics: MarketMetrics | None = None,
 ) -> None:
     if len(codes) > 200:
         log.warning(
@@ -195,6 +200,8 @@ async def stream_market_data(
                 elif trnm == "REAL":
                     today = datetime.now(KST).date()
                     entries = message.get("data") or []
+                    if metrics is not None:
+                        metrics.receive(entries)
                     for kind, batch in groupby(
                         entries,
                         lambda entry: entry.get("type") if isinstance(entry, dict) else None,
@@ -222,7 +229,7 @@ def seconds_until(stop_at: time, now: datetime) -> float:
     return (datetime.combine(local.date(), stop_at, KST) - local).total_seconds()
 
 
-async def run(settings: Settings, now: datetime) -> None:
+async def run(settings: Settings, now: datetime, *, metrics: MarketMetrics | None = None) -> None:
     codes = load_codes(settings.postgres_dsn, settings.index_name)
     auth = KiwoomAuth(
         settings.kiwoom_mode,
@@ -238,7 +245,7 @@ async def run(settings: Settings, now: datetime) -> None:
         await valkey.ping()
         try:
             async with asyncio.timeout(seconds_until(settings.stop_at, now)):
-                await stream_market_data(client, valkey, codes)
+                await stream_market_data(client, valkey, codes, metrics=metrics)
         except TimeoutError:
             log.info("market_streamer_stopped", stop_at=settings.stop_at.isoformat())
     finally:

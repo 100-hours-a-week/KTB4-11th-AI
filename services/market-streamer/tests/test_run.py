@@ -295,7 +295,7 @@ def test_run_builds_the_client_with_the_keepalive_connect_factory(monkeypatch):
         async def close(self):
             pass
 
-    async def forever(client, valkey, codes):
+    async def forever(client, valkey, codes, *, metrics):
         await asyncio.Event().wait()
 
     class FakeValkey:
@@ -359,7 +359,7 @@ def test_run_exits_cleanly_at_the_stop_time(monkeypatch, now):
         async def aclose(self):
             closed.append("valkey")
 
-    async def forever(client, valkey, codes):
+    async def forever(client, valkey, codes, *, metrics):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(stream, "load_codes", lambda dsn, index_name: ["005930"])

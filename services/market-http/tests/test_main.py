@@ -34,11 +34,12 @@ def test_main_bounds_postgres_connections_and_queries(monkeypatch):
     monkeypatch.setattr(entry, "set_global_textmap", lambda p: calls.update(propagator=p))
     monkeypatch.setattr(entry, "Settings", lambda: settings)
     monkeypatch.setattr(entry, "setup_logging", lambda *args, **kwargs: None)
-    monkeypatch.setattr(entry, "connect_valkey", lambda settings: object())
+    monkeypatch.setattr(entry, "connect_valkey", lambda settings, metrics: object())
     monkeypatch.setattr(entry.sa, "create_engine", create_engine)
     monkeypatch.setattr(entry, "create_app", create_app)
     monkeypatch.setattr(entry, "tracing", lambda name: calls.update(tracing=name) or nullcontext())
-    monkeypatch.setattr(entry.uvicorn, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(entry.MetricsServer, "run", lambda self: None)
+    monkeypatch.setattr(entry.MarketMetrics, "serve", lambda *args: nullcontext())
 
     entry.main()
 
@@ -96,6 +97,8 @@ def test_health_under_uvicorn_with_exporter_endpoint(disabled):
                     server.should_exit = True
                     await task
 
+        serve_metrics = entry.MarketMetrics.serve
+        entry.MarketMetrics.serve = lambda self, host, port: serve_metrics(self, host, 0)
         entry.Settings = lambda: Settings(
             _env_file=None,
             questdb_conf="unused",
@@ -103,8 +106,8 @@ def test_health_under_uvicorn_with_exporter_endpoint(disabled):
             valkey_host="127.0.0.1",
             metrics_namespace="",
         )
-        entry.uvicorn.run = lambda app, **kwargs: asyncio.run(
-            asyncio.wait_for(serve(app), timeout=10)
+        entry.MetricsServer.run = lambda self: asyncio.run(
+            asyncio.wait_for(serve(self.config.app), timeout=10)
         )
         entry.main()
     """)
