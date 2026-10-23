@@ -339,4 +339,300 @@ DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.
 ## EC2 배포 환경 설정
 
 운영·개발 EC2는 GitHub Variable의 `.env` 텍스트와 SSM의 비밀 값을 합쳐 배포용 `.env`를 생성합니다.
-최초 이관과 적용 순서는 [SSM 환경 설정 운영 절차](docs/operations/ssm-environment.md)를 참고하세요.
+설정 이름은 `.env.example`, 생성·주입 절차는 `.github/workflows/`의 배포 워크플로를 기준으로 확인합니다.
+
+## 시세 추적과 CloudWatch EMF
+
+추적 설정은 `packages/telemetry`의 `ktb_telemetry`가 담당합니다. OTLP endpoint가 없거나
+`OTEL_SDK_DISABLED=true`이면 추적을 시작하지 않습니다. Compose 기본값도 비활성화입니다.
+활성화할 때는 두 서비스의 `MARKET_STREAMER_OTEL_SDK_DISABLED`와
+`MARKET_HTTP_OTEL_SDK_DISABLED`를 `false`로 바꾸고, 각각의
+`*_OTEL_EXPORTER_OTLP_ENDPOINT`를 컨테이너에서 접근할 수 있는 수집기 주소로 설정합니다.
+기본 endpoint `http://localhost:4318`은 컨테이너 자신의 loopback입니다.
+
+| 컨테이너 설정 | Compose 호스트 설정 | 기본값 |
+| --- | --- | --- |
+| `OTEL_SDK_DISABLED` | 서비스 접두사 + `_OTEL_SDK_DISABLED` | `true` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | 서비스 접두사 + `_OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318` |
+| `OTEL_TRACES_SAMPLER_ARG` | 서비스 접두사 + `_OTEL_TRACES_SAMPLER_ARG` | streamer `0.1`, HTTP `0.01` |
+| `OTEL_RESOURCE_ATTRIBUTES` | 서비스 접두사 + `_OTEL_RESOURCE_ATTRIBUTES` | local Compose `deployment.environment=local`, prod Compose `dev` |
+| `OTEL_TRACES_SAMPLER` | Compose에서 고정 | `parentbased_traceidratio` |
+| `OTEL_PROPAGATORS` | market-http Compose에서 고정 | `none` |
+
+서비스 접두사는 `MARKET_STREAMER` 또는 `MARKET_HTTP`입니다. 직접 실행할 때는 표의
+컨테이너 변수 이름을 사용합니다. ECS market-http는 GitHub Actions의
+`MARKET_HTTP_ENV_JSON`에 같은 컨테이너 변수와 운영 환경 구분 값을 설정합니다.
+서비스 이름은 코드에서 고정하며, HTTP의 외부 요청 trace header는 무시합니다.
+
+가격 추적은 배치별 `publish` PRODUCER span과 이를 부모로 하는 클라이언트별 `deliver`
+CONSUMER span으로 구성합니다. 샘플링된 가격에만 `traceparent`와 `published_at`을 추가하며,
+초기 SSE 스냅샷에는 deliver span을 만들지 않습니다. REST는 FastAPI 요청 추적을 사용하고,
+연결 전체를 span으로 만들지 않도록 SSE 경로는 자동 요청 추적에서 제외합니다.
+
+| 시점 | 의미 |
+| --- | --- |
+| T0 | `published_at`: Valkey 쓰기 파이프라인 실행 직전 |
+| T1 | `deliver` 시작: Pub/Sub 메시지를 받은 직후 |
+| T2 | `deliver` 종료: 해당 이벤트의 ASGI `send()` 반환 직후 |
+
+`publish_to_receive_ms`는 T1−T0이며 두 호스트의 시계 동기화가 필요합니다.
+Valkey가 실제 `PUBLISH`한 시점부터의 순수 전송 시간이 아닙니다. deliver 기간은 T2−T1로,
+SSE 버퍼와 느린 클라이언트의 역압을 포함하지만 클라이언트 수신 완료를 뜻하지 않습니다.
+잘못된 `published_at`은 해당 속성만 생략하고, 잘못된 `traceparent`는 span 없이 전달합니다.
+연결 종료로 미완료 span을 닫으면 `sse.disconnected=true`이므로 지연 통계에서 제외합니다.
+
+`MARKET_HTTP_TRACE_SPANS_PER_SECOND`는 프로세스별 deliver 생성 상한으로 기본 100이며,
+0이면 생성을 중지합니다. 상한을 넘겨도 SSE 메시지는 전달합니다. 생산자 샘플링과
+이 상한 때문에 Tempo span 수를 실제 처리량으로 사용하면 안 됩니다.
+`MARKET_HTTP_METRICS_NAMESPACE`를 설정하면 `MARKET_HTTP_METRICS_CLUSTER_NAME`,
+`MARKET_HTTP_METRICS_SERVICE_NAME`도 필요하며, 60초마다 `active_sse_connections` 로그에
+CloudWatch EMF의 `ActiveSSEConnections`, `DeliverSpansRecorded`, `DeliverSpansSkipped`를
+기록합니다. 마지막 두 값은 구간별 수이며 skipped 비율로 추적 표본 누락을 확인합니다.
+샘플링되지 않은 원본이나 exporter에서 버린 span은 이 skipped 수에 포함되지 않습니다.
+
+전후 성능 비교에서는 샘플링 비율, deliver 상한, 시간대와 연결 수를 맞춥니다.
+Tempo 장애 시 span은 유실될 수 있지만 시세 발행과 SSE는 계속됩니다. SDK export queue는
+`OTEL_BSP_MAX_QUEUE_SIZE`로 제한되며 기본값은 2048입니다. 이 값은 Compose에서 연결하지
+않으므로 필요하면 컨테이너에 직접 설정합니다. span 안의 JSON 로그에는 `trace_id`, `span_id`가
+추가되며 Grafana의 로그→trace 연결은 외부에서 설정합니다. FastAPI의
+`telemetry={"auto_configure": False}`를 유지해 exporter 중복 구성을 막습니다.
+추적 exporter 오류 로그는 시세 처리 실패와 구분해서 알림을 설정합니다.
+
+`scripts/bench-publish-tracing.py`는 `off`, `sampled-out`, `sampled-in` 모드를 비교합니다.
+선택한 Valkey DB를 비우므로 `KTB_TEST_VALKEY_URL`에 반드시 폐기용 인스턴스를 지정합니다.
+이 로컬 벤치마크는 메모리 exporter를 사용하므로 네트워크 export 비용이나 VPC 성능을
+검증하지 않습니다.
+
+## QuestDB 체크포인트와 운영 진단
+
+market-collector는 현재 PostgreSQL 구성 종목만 대상으로 물리 시간 단위 `1m`, `1d`의
+최신 UTC 체크포인트를 조회합니다. 먼저 엄격한 최근 7일 조건으로 조회하고, 빠진
+종목·시간 단위 쌍만 기간 제한 없이 다시 조회합니다. 구성 종목이 비면 QuestDB를 조회하지
+않으며, 탈퇴 종목은 제외합니다. 정확히 7일 경계인 값과 오래된 체크포인트도 fallback으로
+보존합니다. 조회 실패는 전파하며, 빈 결과로 바꿔 초기 수집을 유발하지 않습니다.
+
+체크포인트가 없는 경우에만 중복 시각을 제거한 최신 1분봉 8,000개·일봉 300개로 초기
+수집을 제한합니다. 기존 체크포인트가 있으면 저장 경계까지 페이지를 조회하고 모든 새 봉을
+저장합니다. 이는 초기 요청 제한이며 보관 데이터 삭제나 TTL이 아닙니다.
+
+portfolio-builder의 일봉 분석 universe는 PostgreSQL의 현재 KOSPI 200 구성 종목을 읽고,
+market-http에서 종목별 최신 일봉 최대 300개를 가져옵니다. 과거 QuestDB 직접 조회의
+400일 조건이나 symbol cast 필터를 현재 경로의 계약으로 사용하지 않습니다. 일봉 도구의
+동시 첫 조회는 Lock으로 보호하고 한 에이전트 실행 안에서 첫 성공 결과를 공유합니다.
+실패는 캐시하지 않으며 다음 실행에서 구성 종목과 데이터를 다시 읽습니다.
+
+운영 체크포인트는 collector의 `checkpoint_query_phase_complete`,
+`checkpoint_query_complete`, `checkpoint_query_failed` 로그로 단계별 소요 시간, 요청 종목,
+반환 행, fallback/missing 쌍과 오류를 확인합니다. JVM 사용량(total−free), RSS, native/mapped
+할당, GC와 컨테이너 working set을 함께 확인합니다. mapped 할당은 상주 RAM과 다르고,
+전역 메트릭과 로컬 합성 데이터 벤치마크만으로 운영 메모리·GC 문제가 해결됐다고 판단하지 않습니다.
+
+```bash
+docker compose -f compose.prod.yaml exec -T questdb curl -fsS http://localhost:9003/metrics
+docker compose -f compose.prod.yaml run --rm -T questdb-migrate \
+  python infrastructure/questdb/inspect_checkpoint.py \
+  --metrics-url http://questdb:9003/metrics --repeats 3 > checkpoint-report.json
+```
+
+진단 스크립트는 SELECT/EXPLAIN만 실행하며 마이그레이션을 적용하지 않습니다. 이전의 무제한
+조회와 cutoff-only 비교를 측정하는 도구이므로 현재 recent-first/fallback 파이프라인의 시간으로
+대체해서 읽으면 안 됩니다. `--compare-aggregate`는 비용이 큰 과거 전체 이력 집계를 추가합니다.
+매핑 비교는 수집이 멈춘 동일 데이터에서 수행합니다. 별도 live query 사이의 동시 쓰기는
+매핑 차이를 만들 수 있습니다. 짧은 조회의 전후 샘플은 정확한 메모리 최고점이 아닙니다.
+실제 운영 비용이 확인되기 전에 별도 체크포인트 테이블이나 heap 증가를 해결책으로 단정하지 않습니다.
+
+## Market Prometheus metrics
+
+Issue: [#392](https://github.com/100-hours-a-week/KTB4-11th-AI/issues/392).
+
+### Collection endpoints and access
+
+Both console entry points start a dedicated Prometheus HTTP listener for the
+lifetime of their process. `/metrics` is on this listener, separate from the
+public market API. The API port does not expose `/metrics`. A binding failure
+fails service startup; normal or exceptional exit closes the listener.
+
+| Service | Bind environment variable | Default | Port environment variable | Default |
+| --- | --- | --- | --- | --- |
+| market-http | MARKET_HTTP_PROMETHEUS_BIND_HOST | 127.0.0.1 | MARKET_HTTP_PROMETHEUS_PORT | 9100 |
+| market-streamer | MARKET_STREAMER_PROMETHEUS_BIND_HOST | 127.0.0.1 | MARKET_STREAMER_PROMETHEUS_PORT | 9100 |
+
+Ports must be 1–65535, bind hosts must be nonempty. Directly running both processes
+on one machine requires distinct ports, for example HTTP 9101 and streamer 9102.
+Each container has its own network namespace, so both can use 9100. The supplied
+Compose files pass through these variables and preserve the loopback default;
+they do not publish a metrics port. Loopback means the container/task loopback,
+not the Docker host. A colocated collector in the same network namespace can
+scrape the default listener.
+
+For a separate Prometheus container, explicitly set each bind host to `0.0.0.0`
+and scrape `market-http:9100` and `market-streamer:9100` on a private container
+network. Do not publish those container ports on a public host interface. For
+host-based collection, add loopback-only mappings (HTTP `127.0.0.1:9101:9100`,
+streamer `127.0.0.1:9102:9100`) in an operator-owned Compose override and still
+bind to `0.0.0.0` inside the container. For VPC collection use a private interface
+and security group/firewall rules permitting only the collector. These endpoints
+have no application authentication; the binding and network rules enforce access.
+
+Production market-http runs in ECS with `awsvpc`. Cloud owns the task security
+group and collector configuration. `MARKET_HTTP_ENV_JSON` can pass the two
+environment variables through the existing CD workflow. A collector sidecar in
+the same task can use loopback; a remote collector requires the explicit bind
+override and permitted task-port access. Do not add this port to the public ALB.
+Cloud owns deployment and the collector infrastructure configuration.
+
+Example private-network scrape configuration, after the explicit bind overrides:
+
+```yaml
+scrape_configs:
+  - job_name: market-http
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['market-http:9100']
+  - job_name: market-streamer
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['market-streamer:9100']
+```
+
+Scrape every replica separately. Registries are per process and counters reset on
+restart; use `rate()` before summing replicas. The streamer exits at its configured
+stop time and exposes no endpoint while stopped. Schedule availability and feed
+freshness alerts for expected operating/trading hours. Do not start multiple API
+workers sharing one listener port; this entry point runs one Uvicorn process.
+
+### Metric contract
+
+| Metric | Type | Unit | Labels | Meaning |
+| --- | --- | --- | --- | --- |
+| market_http_sse_connections | Gauge | connections | stream | Accepted active connections |
+| market_http_sse_connections_started_total | Counter | connections | stream | Successful SSE response starts |
+| market_http_sse_connections_closed_total | Counter | connections | stream, reason | Closed accepted connections |
+| market_streamer_market_events_received_total | Counter | events | kind | Original entries before validation/deduplication |
+| market_streamer_market_events_received_bytes_total | Counter | bytes | kind | Original entries re-encoded as compact UTF-8 JSON |
+| market_http_sse_events_sent_total | Counter | events | stream | Complete data events whose ASGI send returned |
+| market_http_sse_events_sent_bytes_total | Counter | bytes | stream | Wire bytes for those complete SSE data events |
+| market_streamer_market_data_age_seconds | Gauge | seconds | kind | Elapsed monotonic time since original receipt |
+| market_http_sse_delivery_latency_seconds | Histogram | seconds | stream | Pub/Sub receipt to completed ASGI send |
+| market_http_valkey_pool_connections | Gauge | connections | state | Pool counts and in-flight acquisition requests |
+| market_http_valkey_pool_acquire_duration_seconds | Histogram | seconds | result | Completed pool acquisition duration |
+| market_http_valkey_pool_acquire_timeouts_total | Counter | timeouts | none | Actual acquisition timeouts |
+
+Allowed values, and no others:
+
+- `stream`: `prices`, `orderbooks`.
+- `kind`: `price`, `orderbook`.
+- `reason`: `normal`, `client_disconnect`, `cancelled`, `send_error`, `server_shutdown`, `unknown`.
+- `state`: `in_use`, `available`, `acquiring`.
+- `result`: `success`, `timeout`, `error`.
+
+No user, symbol, connection, trace ID, or exception text is a label. Histogram
+exposition adds the standard `le` bucket label; the client also emits standard
+`_created`, `_count`, `_sum`, and `_bucket` series. Histograms use the client
+library's default second-based buckets (5 ms through 10 s, plus infinity).
+
+#### Measurement boundaries
+
+SSE connections begin only after the accepted 200 response start has been sent;
+validation failures do not count. Every accepted connection closes once, including
+generator failures. `normal` means the response completed, `client_disconnect`
+means ASGI received a disconnect, `cancelled` means task cancellation without a
+disconnect, `send_error` means the ASGI send failed, and `unknown` covers other
+failures. An observed Uvicorn shutdown signal takes precedence as
+`server_shutdown`; a forced process kill cannot run cleanup or increment counters.
+
+Event counts and bytes exclude keepalive comments and empty terminal bodies.
+Complete data events are counted after the send containing their terminating
+blank line returns, including events split across body chunks. Bytes include SSE
+fields and delimiters, excluding HTTP/TCP/TLS overhead. ASGI success means the
+server accepted the write, not that the client read or rendered it. Initial
+snapshots contribute to events and bytes but not delivery latency. Live latency
+includes parsing, encoding and backpressure after Pub/Sub receipt, independently
+of OpenTelemetry sampling; it excludes upstream socket and Valkey transit time.
+
+The Kiwoom SDK exposes decoded entries, not original socket-frame bytes. Received
+bytes are therefore a reproducible payload-size measurement: each original
+`0B`/`0D` entry serialized with compact separators and UTF-8 non-ASCII text.
+This includes malformed entries and duplicates but excludes outer frame metadata,
+JSON whitespace differences, socket framing, and transport overhead. It must not
+be presented as measured network bandwidth. All entries in a frame are recorded
+before awaiting publication. Feed age is calculated during each scrape and keeps
+growing during silence; it is NaN before the first event of that kind.
+
+The existing nonblocking Redis pool, retries, TLS and IAM configuration are
+preserved. `in_use` and `available` read current pool counts (available means
+created idle connections, not unused capacity). `acquiring` counts in-flight
+`get_connection()` calls, including lock and connection setup time. It is not an
+internal queue waiting for free capacity, and can overlap `in_use` during setup.
+Pool exhaustion remains immediate and is `error`; built-in or Redis timeouts are
+`timeout`. Cancellation propagates unchanged and releases in-flight accounting;
+it does not fabricate a completed success/error/timeout observation. Counts are
+read individually at scrape time and are not an atomic pool-wide snapshot.
+
+CloudWatch EMF and OpenTelemetry are retained. Prometheus metrics remain active
+when EMF is unset or tracing is disabled/sampled out.
+
+### Queries for panels and alerts
+
+```promql
+sum by (kind) (rate(market_streamer_market_events_received_total[1m]))
+sum by (kind) (rate(market_streamer_market_events_received_bytes_total[1m]))
+sum by (stream) (rate(market_http_sse_events_sent_total[1m]))
+sum by (stream) (rate(market_http_sse_events_sent_bytes_total[1m]))
+sum by (stream) (market_http_sse_connections)
+sum by (stream, reason) (rate(market_http_sse_connections_closed_total[5m]))
+histogram_quantile(0.95, sum by (stream, le) (rate(market_http_sse_delivery_latency_seconds_bucket[5m])))
+sum by (state) (market_http_valkey_pool_connections)
+histogram_quantile(0.95, sum by (result, le) (rate(market_http_valkey_pool_acquire_duration_seconds_bucket[5m])))
+sum(rate(market_http_valkey_pool_acquire_timeouts_total[5m]))
+```
+
+Starting alert expressions to calibrate with Cloud during trading hours:
+
+```promql
+market_streamer_market_data_age_seconds > 30
+market_streamer_market_data_age_seconds != market_streamer_market_data_age_seconds
+up{job=~"market-http|market-streamer"} == 0
+absent(up{job="market-streamer"})
+sum(rate(market_http_valkey_pool_acquire_timeouts_total[5m])) > 0
+```
+
+The NaN comparison detects a feed that has never received an event; `up` detects
+a failed scrape and `absent` detects a missing target. Configure alert durations
+and schedules externally rather than assuming silence means failure overnight.
+
+### Verification
+
+From inside each service container (or from the same network namespace), using
+the default port:
+
+```bash
+docker compose -f compose.local.yaml exec market-http python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9100/metrics').read().decode())"
+docker compose -f compose.local.yaml exec market-streamer python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9100/metrics').read().decode())"
+```
+
+For a running jobs-profile streamer, `exec` targets the persistent service
+container; for a one-shot `compose run` container, execute against that container
+name instead. Confirm the public API listener returns 404 for `/metrics`.
+
+Open a price and an orderbook SSE connection with available test symbols. Check
+active/start counts, both sent counters, and live delivery histogram samples;
+disconnect each and check active counts return to their prior values. Stop the
+feed while retaining the process and scrape twice to verify increasing age.
+Exercise a deliberately small disposable Valkey pool and check immediate
+exhaustion records `error`, without becoming a wait or timeout. Do not run
+FLUSHDB-capable tests against a useful datastore.
+
+Automated regression tests:
+
+```bash
+uv run pytest services/market-http services/market-streamer -ra
+uv run ruff check .
+uv run ruff format --check .
+uv run tach check
+uv run tach check-external -e services
+```
+
+Set `KTB_TEST_VALKEY_URL` only to a disposable test instance to include the
+Valkey/SSE integration tests; they call FLUSHDB. Production scraping, Grafana
+panels, alert calibration and live load testing belong to the Cloud handoff.

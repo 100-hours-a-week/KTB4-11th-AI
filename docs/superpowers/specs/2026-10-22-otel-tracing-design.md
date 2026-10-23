@@ -125,7 +125,7 @@ Where it runs: `market-streamer` does not run in production (`.github/workflows/
 - Production `market-http` (ECS) takes its environment from the `MARKET_HTTP_ENV_JSON` GitHub Actions variable (since `233ad78`). `tracing()` does nothing unless an OTLP endpoint is set, so production stays untraced until that variable gains the `OTEL_*` entries (user decision, 2026-10-22).
 - `compose.local.yaml`/`compose.prod.yaml`: pass the `OTEL_*` variables through for `market-streamer` and `market-http`, defaulting to disabled.
 - `.env.example`: document the variables with tracing disabled by default.
-- A short runbook in `docs/operations/` lists the variables the AWS test system must set.
+- The tracing runbook in `README.md` lists the variables the AWS test system must set.
 
 Inbound trace context on `market-http`: the API is public with CORS `*`, so client-supplied `traceparent` headers must not force sampling or join foreign traces. `market-http` `main()` sets an empty global propagator in code (`OTEL_PROPAGATORS=none` is kept as belt-and-braces) so the FastAPI instrumentation ignores incoming headers, and REST requests are sampled locally by their own ratio. The SSE code extracts the Valkey message's context with `TraceContextTextMapPropagator` directly, independent of the global propagator. (Builder's call.)
 - Dependencies: `ktb-telemetry` depends on `opentelemetry-api`, `opentelemetry-sdk`, and `opentelemetry-exporter-otlp-proto-http`. `market-streamer` and `market-http` add the `ktb-telemetry` workspace dependency (plus `opentelemetry-api` for their own direct imports), with matching `COPY`/install entries in their Dockerfiles and `docker/app.Dockerfile`, `tach.toml` modules, and regenerated `docker/requirements/market-streamer.txt`, `market-http.txt`, and `app.txt`.
@@ -139,7 +139,7 @@ Inbound trace context on `market-http`: the API is public with CORS `*`, so clie
 
 ## Documentation
 
-- `docs/operations/`: how to read the price-stream trace in Grafana/Tempo, what T0/T1/T2 mean and their caveats (cross-host clock sync for T1−T0; T0 is before the pipeline executes, not when Valkey runs `PUBLISH`; T2 is `send()` returning, not network delivery), sampling guidance, and the overhead results.
+- `README.md`: how to read the price-stream trace in Grafana/Tempo, what T0/T1/T2 mean and their caveats (cross-host clock sync for T1−T0; T0 is before the pipeline executes, not when Valkey runs `PUBLISH`; T2 is `send()` returning, not network delivery), sampling guidance, and the overhead results.
 - `AGENTS.md`: the logging/tracing rule, the `elapsed_ms` deprecation, and steps to add tracing to another service (sync and async).
 
 ## Decisions

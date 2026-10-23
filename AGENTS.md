@@ -126,6 +126,33 @@ third-party dependencies.
 
 ## Contracts to preserve
 
+Operational setup, metric contracts, tracing interpretation, and checkpoint diagnostics
+belong in `README.md`; do not create a separate `docs/operations` directory.
+
+### Market observability
+
+- Preserve CloudWatch EMF and OpenTelemetry when changing Prometheus instrumentation.
+  Keep public API routes separate from the private `/metrics` listeners.
+- `MARKET_HTTP_PROMETHEUS_BIND_HOST` and `MARKET_STREAMER_PROMETHEUS_BIND_HOST`
+  default to `127.0.0.1`; their service-prefixed `PROMETHEUS_PORT` defaults to 9100.
+  Compose must preserve loopback defaults and leave remote access an explicit configuration.
+- Keep metric names, units and bounded labels aligned with the README contract. Pool
+  `state="acquiring"` means in-flight acquisition calls, not a queue waiting for capacity.
+  Preserve the existing nonblocking pool, retries, TLS/IAM and exception behavior.
+- Count SSE events/bytes only after successful ASGI sends; exclude keepalives and
+  rejected/preflight requests. Measure live delivery latency independently of trace sampling;
+  initial snapshots have no Pub/Sub receipt timestamp.
+- Count original `0B`/`0D` entries before parsing/deduplication. Received byte counts
+  measure compact UTF-8 entry JSON, not exact socket bandwidth. Calculate feed age at
+  scrape time and expose NaN before first receipt. Never label metrics with user,
+  symbol, connection or trace identifiers.
+- Keep FastAPI telemetry auto-configuration disabled to avoid duplicate exporters.
+  Preserve SSE trace exclusion, producer sampling and the deliver-span rate limit.
+- Collector checkpoints must preserve stale boundaries through historical fallback.
+  Apply bootstrap limits only when no checkpoint exists; propagate query failures.
+  Use current collector logs to measure the production pipeline: the read-only
+  `inspect_checkpoint.py` compares historical query variants, not that pipeline.
+
 ### News and portfolios
 
 - Embedding dimensions must match the PostgreSQL `vector(2000)` column. Recalibrate
