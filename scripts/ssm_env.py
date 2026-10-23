@@ -13,6 +13,10 @@ SECRET_PATTERN = re.compile(r"(?:^|_)(?:KEY|SECRET|PASSWORD|TOKEN|DSN|CREDENTIAL
 RESERVED_KEYS = {"APP_IMAGE", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"}
 
 
+class ConfigurationError(ValueError):
+    pass
+
+
 def parameter_type(key, value, secure_keys=()):
     if key in secure_keys or SECRET_PATTERN.search(key):
         return "SecureString"
@@ -25,42 +29,48 @@ def parameter_type(key, value, secure_keys=()):
 
 
 def aws_ssm(args, operation, payload):
-    result = subprocess.run(
-        [
-            args.aws_cli,
-            "ssm",
-            operation,
-            "--region",
-            args.region,
-            "--cli-input-json",
-            "file:///dev/stdin",
-            "--output",
-            "json",
-            "--no-cli-pager",
-            "--no-paginate",
-            "--cli-connect-timeout",
-            "10",
-            "--cli-read-timeout",
-            "30",
-        ],
-        input=json.dumps(payload),
-        capture_output=True,
-        text=True,
-        env={**os.environ, "AWS_CLI_AUTO_PROMPT": "off"},
-    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", encoding="utf-8") as request:
+        json.dump(payload, request, ensure_ascii=False)
+        request.flush()
+        result = subprocess.run(
+            [
+                args.aws_cli,
+                "ssm",
+                operation,
+                "--region",
+                args.region,
+                "--cli-input-json",
+                f"file://{request.name}",
+                "--output",
+                "json",
+                "--no-cli-pager",
+                "--no-paginate",
+                "--cli-connect-timeout",
+                "10",
+                "--cli-read-timeout",
+                "30",
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "AWS_CLI_AUTO_PROMPT": "off"},
+        )
     if result.returncode:
-        raise ValueError(f"SSM {operation} failed; check AWS identity, region, and IAM permissions")
+        match = re.search(r"An error occurred \(([A-Za-z0-9_.-]+)\)", result.stderr)
+        code = match.group(1) if match else f"CLI exit {result.returncode}"
+        raise ConfigurationError(
+            f"SSM {operation} failed ({code}); check AWS identity, region, and IAM permissions"
+        )
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
-        raise ValueError(f"SSM {operation} returned invalid JSON") from None
+        raise ConfigurationError(f"SSM {operation} returned invalid JSON") from None
 
 
 def validate_key(key):
     if not KEY_PATTERN.fullmatch(key):
-        raise ValueError("Invalid environment variable name in configuration")
+        raise ConfigurationError("Invalid environment variable name in configuration")
     if key in RESERVED_KEYS:
-        raise ValueError(f"{key} must not be stored in application parameters")
+        raise ConfigurationError(f"{key} must not be stored in application parameters")
 
 
 def read_base_env(path):
@@ -86,7 +96,7 @@ def read_base_env(path):
         text=True,
     )
     if result.returncode:
-        raise ValueError("Unable to parse the GitHub Variable as a Compose env file")
+        raise ConfigurationError("Unable to parse the GitHub Variable as a Compose env file")
     values = json.loads(result.stdout)["services"]["config"]["environment"]
     return {
         key: value.replace("$$", "$") if value is not None else None
@@ -112,44 +122,46 @@ def fetch(args):
     prefix = f"/stockspoon/ai/{args.environment}/"
     parameters = read_base_env(args.base_env)
     if not parameters:
-        raise ValueError("The GitHub Variable must contain an env file")
+        raise ConfigurationError("The GitHub Variable must contain an env file")
     references = {}
     for key, value in parameters.items():
         validate_key(key)
         if value is None:
-            raise ValueError(f"{key} must have an explicit value")
+            raise ConfigurationError(f"{key} must have an explicit value")
         if value.startswith("ssm://"):
             name = value[len("ssm://") :]
             if not name.startswith(prefix) or not re.fullmatch(
                 r"[A-Za-z0-9_.-]+", name[len(prefix) :]
             ):
-                raise ValueError(f"{key} must reference a parameter in its own environment")
+                raise ConfigurationError(f"{key} must reference a parameter in its own environment")
             references[key] = name
         elif value and parameter_type(key, value) == "SecureString":
-            raise ValueError(f"{key} must contain an ssm:// reference instead of a secret value")
+            raise ConfigurationError(
+                f"{key} must contain an ssm:// reference instead of a secret value"
+            )
     names = sorted(set(references.values()))
     secrets = {}
     for offset in range(0, len(names), 10):
         batch = names[offset : offset + 10]
         response = aws_ssm(args, "get-parameters", {"Names": batch, "WithDecryption": True})
         if response.get("InvalidParameters"):
-            raise ValueError("Referenced SSM parameters do not exist")
+            raise ConfigurationError("Referenced SSM parameters do not exist")
         for parameter in response.get("Parameters", []):
             name = parameter["Name"]
             if name not in batch or name in secrets:
-                raise ValueError("SSM returned an unexpected or duplicate parameter")
+                raise ConfigurationError("SSM returned an unexpected or duplicate parameter")
             if parameter["Type"] != "SecureString":
-                raise ValueError("Referenced SSM parameters must use SecureString")
+                raise ConfigurationError("Referenced SSM parameters must use SecureString")
             secrets[name] = parameter["Value"]
         if any(name not in secrets for name in batch):
-            raise ValueError("SSM did not return all referenced parameters")
+            raise ConfigurationError("SSM did not return all referenced parameters")
     for key, name in references.items():
         parameters[key] = secrets[name]
     compose = args.compose_file.read_text()
     required = set(re.findall(r"(?<!\$)\$\{([A-Z][A-Z0-9_]*):\?", compose)) - {"APP_IMAGE"}
     missing = sorted(key for key in required if not parameters.get(key))
     if missing:
-        raise ValueError("Missing required parameters: " + ", ".join(missing))
+        raise ConfigurationError("Missing required parameters: " + ", ".join(missing))
     write_env(args.output, parameters)
     print(f"Merged {len(parameters)} settings with {len(secrets)} SSM secrets")
 
@@ -158,7 +170,7 @@ def upload(args):
     try:
         from dotenv import dotenv_values
     except ImportError:
-        raise ValueError(
+        raise ConfigurationError(
             "Run upload with: uv run --with python-dotenv python scripts/ssm_env.py"
         ) from None
     values = dotenv_values(args.env_file, interpolate=False)
@@ -172,7 +184,7 @@ def upload(args):
             base_values[key] = ""
             continue
         if "${" in value:
-            raise ValueError(
+            raise ConfigurationError(
                 f"{key} contains an unresolved interpolation; use the final literal value"
             )
         if parameter_type(key, value, args.secure_key) == "String":
@@ -180,7 +192,7 @@ def upload(args):
             continue
         base_values[key] = f"ssm:///stockspoon/ai/{args.environment}/{key}"
         if len(value.encode()) > 4096:
-            raise ValueError(f"{key} exceeds the Standard parameter 4 KiB limit")
+            raise ConfigurationError(f"{key} exceeds the Standard parameter 4 KiB limit")
         pending.append(
             {
                 "Name": f"/stockspoon/ai/{args.environment}/{key}",
@@ -191,10 +203,10 @@ def upload(args):
             }
         )
     if not base_values:
-        raise ValueError("No settings to prepare")
+        raise ConfigurationError("No settings to prepare")
     if args.base_output is not None:
         if args.base_output.resolve() == args.env_file.resolve():
-            raise ValueError("The base output must not overwrite the source env file")
+            raise ConfigurationError("The base output must not overwrite the source env file")
         write_env(args.base_output, base_values)
         print("Prepared GitHub Variable env file with SSM references")
     for parameter in pending:
@@ -225,6 +237,9 @@ def main():
             fetch(args)
         else:
             upload(args)
+    except ConfigurationError as error:
+        print(f"SSM configuration failed: {error}", file=sys.stderr)
+        return 1
     except (ValueError, OSError, KeyError, TypeError):
         print(
             "SSM configuration failed; check parameter names, types, required keys and IAM access",
