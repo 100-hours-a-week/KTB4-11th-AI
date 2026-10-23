@@ -13,7 +13,7 @@ The Backend and Frontend need the current ten ask levels and ten bid levels, inc
 
 For each `REAL` frame, the streamer handles every `data[]` entry in arrival order. `0B` entries continue through the current price and ranking path. `0D` entries become orderbook snapshots; unrelated types are ignored. A malformed `0D` entry is logged and skipped without dropping valid entries from that frame. The orderbook path must not change the price JSON, ranking keys, or price endpoint behavior.
 
-Kiwoom identifies `0D` as 주식호가잔량. Its FID mapping is `41`–`50` for ask prices, `61`–`70` for ask quantities, `51`–`60` for bid prices, and `71`–`80` for bid quantities; FID `21` is the quote time. These mappings are also exercised in [Kiwoom's reference tests](https://github.com/Kiwoom-Securities/Kiwoom-Plugin/blob/main/tests/test_normalize.py). Level 1 is the best price on each side. Strip whitespace, take the absolute value of signed prices, and parse quantities as nonnegative integers. A zero price marks an unavailable level, regardless of its quantity; preserve both values and the level's original slot. Consumers must exclude unavailable levels from best-price and liquidity calculations. A frame missing a required level, quantity, or valid `HHMMSS` time is not a complete snapshot and is skipped. The live check below must confirm that Kiwoom sends complete snapshots, rather than incremental changes.
+Kiwoom identifies `0D` as 주식호가잔량. Its FID mapping is `41`–`50` for ask prices, `61`–`70` for ask quantities, `51`–`60` for bid prices, and `71`–`80` for bid quantities; FID `21` is the quote time. These mappings are also exercised in [Kiwoom's reference tests](https://github.com/Kiwoom-Securities/Kiwoom-Plugin/blob/main/tests/test_normalize.py). Level 1 is the best price on each side. Strip whitespace, take the absolute value of signed prices, and parse quantities as nonnegative integers. A zero price marks an unavailable level, regardless of its quantity; exclude that level from the stored and published arrays. Each side is filtered independently while preserving the order and quantities of valid levels. A frame missing a required level, quantity, or valid `HHMMSS` time is not a complete snapshot and is skipped. The live check below must confirm that Kiwoom sends complete snapshots, rather than incremental changes.
 
 ## Valkey and HTTP contract
 
@@ -28,7 +28,7 @@ The key and pub/sub channel are both `orderbook:{code}`. Each accepted snapshot 
 }
 ```
 
-The example abbreviates the arrays; a stored live snapshot contains exactly ten entries in each array, ordered best price first. `timestamp` combines FID `21` with the KST trading date, as the price stream does for FID `20`. The full arrays are replaced on every accepted update; no merging of levels is needed.
+A stored live snapshot contains zero to ten entries in each array, ordered best price first, with strictly positive prices and nonnegative quantities. `timestamp` combines FID `21` with the KST trading date, as the price stream does for FID `20`. The full arrays are replaced on every accepted update; no merging of levels is needed.
 
 `GET /orderbooks?codes=005930,000660` reuses the existing six-character code validation and de-duplication. It pipelines one `GET` per `orderbook:{code}`, safe for Valkey cluster mode, and returns available snapshots in requested-code order. Missing codes are omitted, yielding `[]` when no snapshots exist.
 
