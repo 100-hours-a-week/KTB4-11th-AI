@@ -145,7 +145,8 @@ third-party dependencies.
 - Use the official QuestDB Python client. Market-collector shares one Kiwoom client and
   request limiter across bar and index requests.
 - Market-streamer uses one socket for `0B` prices and `0D` orderbooks, writing snapshots
-  with `SET` and `PUBLISH` to `price:{code}` and `orderbook:{code}`.
+  with `SET` to `price:{code}` and `orderbook:{code}`, then publishes to `market:prices`
+  and `market:orderbooks`.
 - Orderbooks contain up to ten ask and bid levels per side, excluding zero prices.
   Their timestamp combines exchange quote time with the KST trading date and represents snapshot freshness.
 - Market HTTP is public without authentication. Its only Valkey write is `SET NX` to

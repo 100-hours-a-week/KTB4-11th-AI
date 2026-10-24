@@ -66,7 +66,7 @@ def test_stream_sends_snapshot_then_published_update(valkey_url, ask_count, bid_
         subscription = MarketSubscription(valkey)
         events = stream_orderbooks(valkey, ["005930"], subscription)
         snapshot = await anext(events)
-        await valkey.publish("orderbook:005930", live.model_dump_json())
+        await valkey.publish("market:orderbooks", live.model_dump_json())
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
         await subscription.stop()
@@ -87,7 +87,7 @@ def test_stream_receives_update_published_during_snapshot_read(monkeypatch, valk
     live = BOOK.model_copy(update={"timestamp": datetime(2026, 10, 15, 0, 2)})
 
     async def publish_during_snapshot(valkey, codes):
-        await valkey.publish("orderbook:005930", live.model_dump_json())
+        await valkey.publish("market:orderbooks", live.model_dump_json())
         await asyncio.sleep(0.05)
         return []
 

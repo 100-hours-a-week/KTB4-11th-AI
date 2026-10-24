@@ -102,7 +102,7 @@ def _stream_events(valkey_url, publish, **app_options):
         async def on_body(body, disconnect):
             bodies.append(body)
             if len(bodies) == 1:
-                await valkey.publish("price:005930", publish)
+                await valkey.publish("market:prices", publish)
             else:
                 disconnect.set()
 
@@ -328,9 +328,12 @@ def test_rest_prices_ignore_trace_fields(valkey_url):
     assert "published_at" not in body[0]
 
 
-@pytest.mark.parametrize("stream,channel", [("prices", "price"), ("orderbooks", "orderbook")])
+@pytest.mark.parametrize(
+    "stream,key_prefix,publish_channel",
+    [("prices", "price", "market:prices"), ("orderbooks", "orderbook", "market:orderbooks")],
+)
 def test_prometheus_counts_snapshot_and_live_event_independent_of_traces(
-    valkey_url, stream, channel
+    valkey_url, stream, key_prefix, publish_channel
 ):
     metrics = MarketMetrics()
     payload = _payload() if stream == "prices" else ORDERBOOK.model_dump_json()
@@ -339,14 +342,14 @@ def test_prometheus_counts_snapshot_and_live_event_independent_of_traces(
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         observe_pool(valkey.connection_pool, metrics)
         try:
-            await valkey.set(f"{channel}:005930", payload)
+            await valkey.set(f"{key_prefix}:005930", payload)
             app = create_app(valkey, "conf", prometheus=metrics, trace_spans_per_second=0)
             bodies = []
 
             async def on_body(body, disconnect):
                 bodies.append(body)
                 if len(bodies) == 1:
-                    await valkey.publish(f"{channel}:005930", payload)
+                    await valkey.publish(publish_channel, payload)
                 else:
                     disconnect.set()
 
