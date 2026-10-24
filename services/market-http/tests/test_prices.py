@@ -134,9 +134,9 @@ def test_live_stream_keeps_raw_tick_without_limits(monkeypatch):
             self.acks = asyncio.Queue()
             self.messages = asyncio.Queue()
 
-        async def psubscribe(self, *patterns):
-            for pattern in patterns:
-                await self.acks.put({"type": "psubscribe", "channel": pattern})
+        async def subscribe(self, *channels):
+            for channel in channels:
+                await self.acks.put({"type": "subscribe", "channel": channel})
 
         async def get_message(self, *, ignore_subscribe_messages, timeout):
             return await self.acks.get()
@@ -165,7 +165,11 @@ def test_live_stream_keeps_raw_tick_without_limits(monkeypatch):
         event_task = asyncio.create_task(anext(events))
         await asyncio.sleep(0)
         await valkey.pubsub_client.messages.put(
-            {"type": "pmessage", "channel": "price:005930", "data": _cached_price(STREAMED)}
+            {
+                "type": "message",
+                "channel": "market:prices",
+                "data": _cached_price(STREAMED),
+            }
         )
         event = await event_task
         await events.aclose()
@@ -291,7 +295,7 @@ def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, val
         await subscription.start()
         events = stream_prices(valkey, "conf", ["005930"], subscription)
         snapshot = await anext(events)
-        await valkey.publish("price:005930", _cached_price(live))
+        await valkey.publish("market:prices", _cached_price(live))
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
         await subscription.stop()
@@ -323,7 +327,7 @@ def test_stream_reads_live_prices_from_the_shared_subscription(monkeypatch, valk
         await subscription.start()
         published_task = asyncio.create_task(anext(events))
         await asyncio.sleep(0)
-        await valkey.publish("price:005930", _cached_price(STREAMED))
+        await valkey.publish("market:prices", _cached_price(STREAMED))
         published = await asyncio.wait_for(published_task, 5)
         await events.aclose()
         await subscription.stop()

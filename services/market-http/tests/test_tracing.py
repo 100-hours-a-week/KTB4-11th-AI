@@ -102,7 +102,7 @@ def _stream_events(valkey_url, publish, **app_options):
         async def on_body(body, disconnect):
             bodies.append(body)
             if len(bodies) == 1:
-                await valkey.publish("price:005930", publish)
+                await valkey.publish("market:prices", publish)
             else:
                 disconnect.set()
 

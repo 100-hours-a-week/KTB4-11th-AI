@@ -135,7 +135,7 @@ async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
                 | trace_fields
             )
             pipe.set(key, payload)
-            pipe.publish(key, payload)
+            pipe.publish("market:prices", payload)
             code = str(price["code"])
             timestamp = datetime.fromisoformat(str(price["timestamp"]))
             if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
@@ -158,7 +158,7 @@ async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, objec
             key = f"orderbook:{orderbook['code']}"
             payload = json.dumps(orderbook)
             pipe.set(key, payload)
-            pipe.publish(key, payload)
+            pipe.publish("market:orderbooks", payload)
         await pipe.execute()
 
 
