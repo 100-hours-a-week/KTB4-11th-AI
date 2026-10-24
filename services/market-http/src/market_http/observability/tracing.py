@@ -15,7 +15,7 @@ from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapProp
 tracer = trace.get_tracer(__name__)
 propagator = TraceContextTextMapPropagator()
 
-TRACK_EVENT: ContextVar[Callable[[str | None], None] | None] = ContextVar(
+TRACK_EVENT: ContextVar[Callable[[str | None, datetime | None], None] | None] = ContextVar(
     "track_event", default=None
 )
 
@@ -32,10 +32,10 @@ class LocalContextPropagator(TextMapPropagator):
         return set()
 
 
-def track_event(raw: str | None = None) -> None:
+def track_event(raw: str | None = None, *, received: datetime | None = None) -> None:
     track = TRACK_EVENT.get()
     if track is not None:
-        track(raw)
+        track(raw, received)
 
 
 def is_stream(scope) -> bool:
@@ -72,12 +72,14 @@ class DeliverSpans:
         self.recorded = self.skipped = 0
         return counts
 
-    def start(self, raw: str, connection_id: str) -> Span | None:
+    def start(
+        self, raw: str, connection_id: str, *, received: datetime | None = None
+    ) -> Span | None:
         if '"traceparent"' not in raw or isinstance(
             trace.get_tracer_provider(), trace.ProxyTracerProvider
         ):
             return None
-        received = datetime.now(UTC)
+        received = received if received is not None else datetime.now(UTC)
         fields = json.loads(raw)
         if not isinstance(fields.get("traceparent"), str):
             return None
@@ -117,8 +119,12 @@ class SSESendSpans:
         pending: deque[Span | None] = deque()
         connection_id = uuid.uuid4().hex
 
-        def track(raw: str | None) -> None:
-            pending.append(None if raw is None else self.deliver_spans.start(raw, connection_id))
+        def track(raw: str | None, received: datetime | None) -> None:
+            pending.append(
+                None
+                if raw is None
+                else self.deliver_spans.start(raw, connection_id, received=received)
+            )
 
         async def send_then_end(message):
             await send(message)

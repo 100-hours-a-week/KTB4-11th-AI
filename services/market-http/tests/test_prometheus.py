@@ -14,6 +14,22 @@ def value(metrics, name, **labels):
     return metrics.registry.get_sample_value(name, labels)
 
 
+def test_live_latency_includes_time_waiting_in_the_shared_queue(monkeypatch):
+    metrics = MarketMetrics()
+    monkeypatch.setattr("market_http.observability.prometheus.time.monotonic", lambda: 15.0)
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200})
+        track_delivery(live=True, received_at=10.0)
+        await send({"type": "http.response.body", "body": b"data: live\n\n"})
+
+    async def send(message):
+        pass
+
+    asyncio.run(SSEMetrics(app, metrics)({"type": "http", "path": "/prices/stream"}, None, send))
+    assert value(metrics, "market_http_sse_delivery_latency_seconds_sum", stream="prices") == 5.0
+
+
 def test_sse_counts_complete_successful_events_and_live_latency():
     metrics = MarketMetrics()
     observed = []

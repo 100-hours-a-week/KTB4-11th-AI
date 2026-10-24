@@ -13,10 +13,10 @@ FRAME_END = re.compile(rb"\r?\n\r?\n")
 REASONS = ("normal", "client_disconnect", "cancelled", "send_error", "server_shutdown", "unknown")
 
 
-def track_delivery(*, live: bool = False) -> None:
+def track_delivery(*, live: bool = False, received_at: float | None = None) -> None:
     pending = DELIVERY.get()
     if pending is not None:
-        pending.append(time.monotonic() if live else None)
+        pending.append((time.monotonic() if received_at is None else received_at) if live else None)
 
 
 class MarketMetrics:
