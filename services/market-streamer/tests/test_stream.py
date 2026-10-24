@@ -285,6 +285,7 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
             self.values = {}
             self.ranks = {}
             self.expirations = {}
+            self.publishes = []
             self.commands = []
 
         def pipeline(self, **kwargs):
@@ -322,6 +323,8 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
                     results.append(self.values.get(key))
                 elif op == "set":
                     self.values[key] = args[0]
+                elif op == "publish":
+                    self.publishes.append((key, args[0]))
                 elif op == "zadd":
                     self.ranks.setdefault(key, {}).update(args[0])
                 elif op == "expireat":
@@ -349,6 +352,7 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
         "ranking:change_rate:20261013": {"005930": 2.5},
     }
     assert set(valkey.expirations) == set(valkey.ranks)
+    assert [channel for channel, _ in valkey.publishes] == ["market:prices"]
     assert all(options == {"nx": True} for _, options in valkey.expirations.values())
     assert all(
         when == datetime(2026, 10, 27, 23, 59, 59, tzinfo=KST)

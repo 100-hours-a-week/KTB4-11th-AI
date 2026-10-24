@@ -141,12 +141,14 @@ class MarketSubscription:
                 if isinstance(channel, bytes):
                     channel = channel.decode()
                 data: Any = message["data"]
-                if isinstance(data, bytes):
-                    data = data.decode()
                 try:
-                    code = str(json.loads(data)["code"])
+                    if isinstance(data, bytes):
+                        data = data.decode()
+                    code = json.loads(data)["code"]
+                    if not isinstance(code, str):
+                        raise ValueError("event code must be a string")
                     subscriber_key = f"{CHANNEL_PREFIXES[channel]}:{code}"
-                except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+                except (KeyError, TypeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
                     logger.warning(
                         "market subscription received invalid event", extra={"channel": channel}
                     )

@@ -150,6 +150,28 @@ def test_market_subscription_closes_a_slow_client_when_its_queue_overflows():
     asyncio.run(scenario())
 
 
+def test_market_subscription_skips_invalid_events_without_stopping_the_listener():
+    async def scenario():
+        valkey = FakeValkey()
+        subscription = MarketSubscription(valkey)
+
+        async with subscription.subscribe(["price:005930"]) as samsung:
+            for data in ("not json", "{}", '{"code": 5930}', b"\xff"):
+                await valkey.pubsubs[0].messages.put(
+                    {"type": "message", "channel": "market:prices", "data": data}
+                )
+            await valkey.pubsubs[0].messages.put(market_message("price:005930", "accepted"))
+
+            event = await asyncio.wait_for(samsung.get(), 1)
+            assert event is not None
+            assert json.loads(event.data)["value"] == "accepted"
+            assert not valkey.pubsubs[0].closed
+
+        await subscription.stop()
+
+    asyncio.run(scenario())
+
+
 def test_open_does_not_clear_a_newer_stop_in_progress():
     async def scenario():
         valkey = FakeValkey(hold_close=True)
