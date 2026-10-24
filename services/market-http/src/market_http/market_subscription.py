@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 from collections import defaultdict
@@ -12,7 +13,8 @@ from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
 
-PATTERNS = ("price:*", "orderbook:*")
+CHANNEL_PREFIXES = {"market:prices": "price", "market:orderbooks": "orderbook"}
+CHANNELS = tuple(CHANNEL_PREFIXES)
 QUEUE_CAPACITY = 256
 
 
@@ -116,8 +118,8 @@ class MarketSubscription:
     async def _listen(self, ready: asyncio.Event) -> None:
         pubsub = self._valkey.pubsub()
         try:
-            await pubsub.psubscribe(*PATTERNS)
-            pending = set(PATTERNS)
+            await pubsub.subscribe(*CHANNELS)
+            pending = set(CHANNELS)
             while pending:
                 acknowledgement = await pubsub.get_message(
                     ignore_subscribe_messages=False, timeout=None
@@ -127,22 +129,32 @@ class MarketSubscription:
                     channel = channel.decode()
                 if (
                     acknowledgement
-                    and acknowledgement["type"] == "psubscribe"
-                    and channel in PATTERNS
+                    and acknowledgement["type"] == "subscribe"
+                    and channel in CHANNELS
                 ):
                     pending.discard(channel)
             ready.set()
             async for message in pubsub.listen():
-                if message["type"] != "pmessage":
+                if message["type"] != "message":
                     continue
                 channel = message["channel"]
                 if isinstance(channel, bytes):
                     channel = channel.decode()
                 data: Any = message["data"]
-                if isinstance(data, bytes):
-                    data = data.decode()
+                try:
+                    if isinstance(data, bytes):
+                        data = data.decode()
+                    code = json.loads(data)["code"]
+                    if not isinstance(code, str):
+                        raise ValueError("event code must be a string")
+                    subscriber_key = f"{CHANNEL_PREFIXES[channel]}:{code}"
+                except (KeyError, TypeError, UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                    logger.warning(
+                        "market subscription received invalid event", extra={"channel": channel}
+                    )
+                    continue
                 event = MarketEvent(data, time.monotonic(), datetime.now(UTC))
-                for queue in tuple(self._subscribers.get(channel, ())):
+                for queue in tuple(self._subscribers.get(subscriber_key, ())):
                     if queue.full():
                         self._close_subscriber(queue)
                     else:

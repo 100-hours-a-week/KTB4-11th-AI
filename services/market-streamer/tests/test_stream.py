@@ -210,7 +210,7 @@ def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url, ent
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         pubsub = valkey.pubsub()
-        await pubsub.subscribe("orderbook:005930")
+        await pubsub.subscribe("market:orderbooks")
         await pubsub.get_message(timeout=1)
         await publish_orderbooks(valkey, [parse_orderbook(entry, TODAY)])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
@@ -225,7 +225,7 @@ def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url, ent
 
     assert json.loads(stored) == expected
     assert message is not None
-    assert message["channel"] == "orderbook:005930"
+    assert message["channel"] == "market:orderbooks"
     assert json.loads(message["data"]) == expected
 
 
@@ -258,7 +258,7 @@ def test_publish_sets_and_publishes_each_price(valkey_url):
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         pubsub = valkey.pubsub()
-        await pubsub.subscribe("price:005930")
+        await pubsub.subscribe("market:prices")
         await pubsub.get_message(timeout=1)
         await publish(valkey, [PRICE])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
@@ -273,6 +273,7 @@ def test_publish_sets_and_publishes_each_price(valkey_url):
         key: value for key, value in PRICE.items() if key != "trade_value"
     }
     assert message is not None
+    assert message["channel"] == "market:prices"
     assert json.loads(message["data"]) == {
         key: value for key, value in PRICE.items() if key != "trade_value"
     }
@@ -284,6 +285,7 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
             self.values = {}
             self.ranks = {}
             self.expirations = {}
+            self.publishes = []
             self.commands = []
 
         def pipeline(self, **kwargs):
@@ -321,6 +323,8 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
                     results.append(self.values.get(key))
                 elif op == "set":
                     self.values[key] = args[0]
+                elif op == "publish":
+                    self.publishes.append((key, args[0]))
                 elif op == "zadd":
                     self.ranks.setdefault(key, {}).update(args[0])
                 elif op == "expireat":
@@ -348,6 +352,7 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
         "ranking:change_rate:20261013": {"005930": 2.5},
     }
     assert set(valkey.expirations) == set(valkey.ranks)
+    assert [channel for channel, _ in valkey.publishes] == ["market:prices"]
     assert all(options == {"nx": True} for _, options in valkey.expirations.values())
     assert all(
         when == datetime(2026, 10, 27, 23, 59, 59, tzinfo=KST)
@@ -358,7 +363,7 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
 async def _publish_and_capture(valkey_url, prices):
     valkey = Redis.from_url(valkey_url, decode_responses=True)
     pubsub = valkey.pubsub()
-    await pubsub.subscribe("price:005930")
+    await pubsub.subscribe("market:prices")
     await pubsub.get_message(timeout=1)
     await publish(valkey, prices)
     message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)

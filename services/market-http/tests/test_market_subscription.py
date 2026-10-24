@@ -1,9 +1,19 @@
 import asyncio
+import json
 import time
 from datetime import UTC, datetime
 
 import pytest
 from market_http.market_subscription import MarketSubscription
+
+
+def market_message(key: str, value: str) -> dict[str, str | bytes]:
+    kind, code = key.split(":")
+    return {
+        "type": "message",
+        "channel": f"market:{kind}s",
+        "data": json.dumps({"code": code, "value": value}),
+    }
 
 
 class FakePubSub:
@@ -15,15 +25,15 @@ class FakePubSub:
         self.subscribed = asyncio.Event()
         self.close_started = asyncio.Event()
         self.close_release = asyncio.Event()
-        self.patterns: tuple[str, ...] | None = None
+        self.channels: tuple[str, ...] | None = None
         self.closed = False
 
-    async def psubscribe(self, *patterns: str) -> None:
-        self.patterns = patterns
+    async def subscribe(self, *channels: str) -> None:
+        self.channels = channels
         self.subscribed.set()
         if self.acknowledge:
-            for pattern in patterns:
-                await self.acks.put({"type": "psubscribe", "channel": pattern})
+            for channel in channels:
+                await self.acks.put({"type": "subscribe", "channel": channel})
 
     async def get_message(self, *, ignore_subscribe_messages: bool, timeout: float | None):
         return await self.acks.get()
@@ -51,7 +61,7 @@ class FakeValkey:
         return pubsub
 
 
-def test_market_subscription_fans_one_valkey_pattern_subscription_to_matching_clients():
+def test_market_subscription_fans_one_valkey_channel_subscription_to_matching_clients():
     async def scenario():
         valkey = FakeValkey()
         subscription = MarketSubscription(valkey)
@@ -62,23 +72,31 @@ def test_market_subscription_fans_one_valkey_pattern_subscription_to_matching_cl
             subscription.subscribe(["orderbook:005930"]) as orderbook,
         ):
             assert len(valkey.pubsubs) == 1
-            assert valkey.pubsubs[0].patterns == ("price:*", "orderbook:*")
+            assert valkey.pubsubs[0].channels == ("market:prices", "market:orderbooks")
 
             await valkey.pubsubs[0].messages.put(
-                {"type": "pmessage", "channel": "price:005930", "data": "samsung"}
+                {
+                    "type": "message",
+                    "channel": "market:prices",
+                    "data": json.dumps({"code": "005930", "value": "samsung"}),
+                }
             )
             received = await asyncio.wait_for(samsung.get(), 1)
             assert received is not None
-            assert received.data == "samsung"
+            assert received.data == json.dumps({"code": "005930", "value": "samsung"})
             assert received.received_at <= time.monotonic()
             assert received.received <= datetime.now(UTC)
             assert sk_hynix.empty()
             assert orderbook.empty()
             await valkey.pubsubs[0].messages.put(
-                {"type": "pmessage", "channel": b"orderbook:005930", "data": b"book"}
+                {
+                    "type": "message",
+                    "channel": b"market:orderbooks",
+                    "data": json.dumps({"code": "005930", "value": "book"}).encode(),
+                }
             )
             book = await asyncio.wait_for(orderbook.get(), 1)
-            assert book is not None and book.data == "book"
+            assert book is not None and book.data == json.dumps({"code": "005930", "value": "book"})
             assert samsung.empty()
 
         await subscription.stop()
@@ -87,7 +105,7 @@ def test_market_subscription_fans_one_valkey_pattern_subscription_to_matching_cl
     asyncio.run(scenario())
 
 
-def test_market_subscription_waits_for_valkey_pattern_subscription_acknowledgement():
+def test_market_subscription_waits_for_valkey_channel_subscription_acknowledgement():
     async def scenario():
         valkey = FakeValkey(acknowledge=False)
         subscription = MarketSubscription(valkey)
@@ -99,13 +117,13 @@ def test_market_subscription_waits_for_valkey_pattern_subscription_acknowledgeme
         await asyncio.sleep(0)
         assert not started.done()
 
-        await valkey.pubsubs[0].acks.put({"type": "psubscribe", "channel": "price:*"})
+        await valkey.pubsubs[0].acks.put({"type": "subscribe", "channel": "market:prices"})
         await asyncio.sleep(0)
         assert not started.done()
-        await valkey.pubsubs[0].acks.put({"type": "psubscribe", "channel": "price:*"})
+        await valkey.pubsubs[0].acks.put({"type": "subscribe", "channel": "market:prices"})
         await asyncio.sleep(0)
         assert not started.done()
-        await valkey.pubsubs[0].acks.put({"type": "psubscribe", "channel": b"orderbook:*"})
+        await valkey.pubsubs[0].acks.put({"type": "subscribe", "channel": b"market:orderbooks"})
         await asyncio.wait_for(started, 1)
         await subscription.stop()
 
@@ -119,17 +137,35 @@ def test_market_subscription_closes_a_slow_client_when_its_queue_overflows():
 
         async with subscription.subscribe(["price:005930"]) as samsung:
             for index in range(samsung.maxsize + 1):
-                await valkey.pubsubs[0].messages.put(
-                    {"type": "pmessage", "channel": "price:005930", "data": str(index)}
-                )
+                await valkey.pubsubs[0].messages.put(market_message("price:005930", str(index)))
             await asyncio.sleep(0)
             assert await asyncio.wait_for(samsung.get(), 1) is None
-            await valkey.pubsubs[0].messages.put(
-                {"type": "pmessage", "channel": "price:005930", "data": "after overflow"}
-            )
+            await valkey.pubsubs[0].messages.put(market_message("price:005930", "after overflow"))
             await asyncio.sleep(0)
             assert samsung.empty()
             assert not subscription._subscribers
+
+        await subscription.stop()
+
+    asyncio.run(scenario())
+
+
+def test_market_subscription_skips_invalid_events_without_stopping_the_listener():
+    async def scenario():
+        valkey = FakeValkey()
+        subscription = MarketSubscription(valkey)
+
+        async with subscription.subscribe(["price:005930"]) as samsung:
+            for data in ("not json", "{}", '{"code": 5930}', b"\xff"):
+                await valkey.pubsubs[0].messages.put(
+                    {"type": "message", "channel": "market:prices", "data": data}
+                )
+            await valkey.pubsubs[0].messages.put(market_message("price:005930", "accepted"))
+
+            event = await asyncio.wait_for(samsung.get(), 1)
+            assert event is not None
+            assert json.loads(event.data)["value"] == "accepted"
+            assert not valkey.pubsubs[0].closed
 
         await subscription.stop()
 
@@ -180,7 +216,7 @@ def test_start_waits_for_failed_listener_cleanup_before_raising():
         async def fail_subscribe(*patterns):
             raise ConnectionError("subscription failed")
 
-        pubsub.psubscribe = fail_subscribe
+        pubsub.subscribe = fail_subscribe
         valkey.pubsub = lambda: pubsub
         subscription = MarketSubscription(valkey)
         started = asyncio.create_task(subscription.start())
@@ -240,7 +276,7 @@ def test_stop_does_not_interrupt_failed_listener_connection_cleanup():
         async def fail_subscribe(*patterns):
             raise ConnectionError("subscription failed")
 
-        pubsub.psubscribe = fail_subscribe
+        pubsub.subscribe = fail_subscribe
         valkey.pubsub = lambda: pubsub
         subscription = MarketSubscription(valkey)
         started = asyncio.create_task(subscription.start())
@@ -269,11 +305,9 @@ def test_old_context_cleanup_preserves_new_generation_subscribers():
         await subscription.open()
         async with subscription.subscribe(["price:005930"]) as new_messages:
             await old.__aexit__(None, None, None)
-            await valkey.pubsubs[1].messages.put(
-                {"type": "pmessage", "channel": "price:005930", "data": "new generation"}
-            )
+            await valkey.pubsubs[1].messages.put(market_message("price:005930", "new generation"))
             event = await asyncio.wait_for(new_messages.get(), 1)
-            assert event is not None and event.data == "new generation"
+            assert event is not None and json.loads(event.data)["value"] == "new generation"
         assert not subscription._subscribers
         await subscription.stop()
         assert all(pubsub.closed for pubsub in valkey.pubsubs)
@@ -321,8 +355,8 @@ def test_cancelling_one_start_waiter_preserves_shared_listener_for_others():
         with pytest.raises(asyncio.CancelledError):
             await first
         others = [asyncio.create_task(subscription.start()) for _ in range(20)]
-        for pattern in ("price:*", "orderbook:*"):
-            await valkey.pubsubs[0].acks.put({"type": "psubscribe", "channel": pattern})
+        for channel in ("market:prices", "market:orderbooks"):
+            await valkey.pubsubs[0].acks.put({"type": "subscribe", "channel": channel})
         await asyncio.wait_for(asyncio.gather(*others), 1)
         assert len(valkey.pubsubs) == 1
         await subscription.stop()
@@ -371,11 +405,13 @@ def test_subscription_buffers_multichannel_burst_without_coalescing():
             assert messages.maxsize == 256
             for index in range(256):
                 await valkey.pubsubs[0].messages.put(
-                    {"type": "pmessage", "channel": channels[index % 3], "data": str(index)}
+                    market_message(channels[index % 3], str(index))
                 )
             await asyncio.sleep(0)
             assert [
-                event.data for _ in range(256) if (event := messages.get_nowait()) is not None
+                json.loads(event.data)["value"]
+                for _ in range(256)
+                if (event := messages.get_nowait()) is not None
             ] == [str(i) for i in range(256)]
         await subscription.stop()
 

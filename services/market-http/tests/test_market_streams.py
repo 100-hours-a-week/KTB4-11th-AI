@@ -34,7 +34,7 @@ def test_shared_stream_registers_before_snapshot_and_preserves_bursts_and_hooks(
             assert len(valkey.pubsubs) == 1
             for _ in range(3):
                 await valkey.pubsubs[0].messages.put(
-                    {"type": "pmessage", "channel": f"{feed}:005930", "data": live}
+                    {"type": "message", "channel": f"market:{feed}s", "data": live}
                 )
             await asyncio.sleep(0)
             snapshot_completed.append((time.monotonic(), datetime.now(UTC)))
