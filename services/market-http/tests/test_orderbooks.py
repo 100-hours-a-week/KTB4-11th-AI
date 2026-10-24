@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from market_http.app import create_app
 from market_http.controllers import orderbooks as orderbooks_controller
 from market_http.controllers.orderbooks import stream_orderbooks
+from market_http.market_subscription import MarketSubscription
 from market_http.repositories.orderbooks import Orderbook, OrderbookLevel
 from redis.asyncio import Redis
 
@@ -62,11 +63,13 @@ def test_stream_sends_snapshot_then_published_update(valkey_url, ask_count, bid_
 
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
-        events = stream_orderbooks(valkey, ["005930"])
+        subscription = MarketSubscription(valkey)
+        events = stream_orderbooks(valkey, ["005930"], subscription)
         snapshot = await anext(events)
         await valkey.publish("orderbook:005930", live.model_dump_json())
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
+        await subscription.stop()
         await valkey.aclose()
         return snapshot, published
 
@@ -92,9 +95,11 @@ def test_stream_receives_update_published_during_snapshot_read(monkeypatch, valk
 
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
-        events = stream_orderbooks(valkey, ["005930"])
+        subscription = MarketSubscription(valkey)
+        events = stream_orderbooks(valkey, ["005930"], subscription)
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
+        await subscription.stop()
         await valkey.aclose()
         return published
 
