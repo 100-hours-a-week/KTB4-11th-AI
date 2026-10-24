@@ -1,14 +1,19 @@
-from collections.abc import AsyncIterable
+from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Depends
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 
-from market_http.controllers.dependencies import Codes, QuestDBConf, Valkey
+from market_http.controllers.dependencies import (
+    Codes,
+    QuestDBConf,
+    SharedMarketSubscription,
+    Valkey,
+)
 from market_http.observability.metrics import track_sse_connection
 from market_http.observability.prometheus import track_delivery
 from market_http.observability.tracing import track_event
 from market_http.openapi_examples import PRICE_EXAMPLE
-from market_http.repositories.prices import Price, TickPrice, current_prices, price_key
+from market_http.repositories.prices import Price, TickPrice, current_prices
 from market_http.sse_openapi import sse_openapi
 
 router = APIRouter()
@@ -26,21 +31,19 @@ async def get_prices(valkey: Valkey, conf: QuestDBConf, codes: Codes) -> list[Pr
     openapi_extra=sse_openapi("price", Price, PRICE_EXAMPLE, live_model=TickPrice),
 )
 async def stream_prices(
-    valkey: Valkey, conf: QuestDBConf, codes: Codes
-) -> AsyncIterable[ServerSentEvent]:
-    pubsub = valkey.pubsub()
-    try:
-        await pubsub.subscribe(*(price_key(code) for code in codes))
+    valkey: Valkey, conf: QuestDBConf, codes: Codes, subscription: SharedMarketSubscription
+) -> AsyncIterator[ServerSentEvent]:
+    async with subscription.subscribe([f"price:{code}" for code in codes]) as messages:
         for price in await current_prices(valkey, conf, codes):
             track_delivery()
             track_event()
             yield ServerSentEvent(data=price, event="price")
-        async for message in pubsub.listen():
-            if message["type"] == "message":
-                track_delivery(live=True)
-                track_event(message["data"])
-                yield ServerSentEvent(
-                    data=TickPrice.model_validate_json(message["data"]), event="price"
-                )
-    finally:
-        await pubsub.aclose()
+        while True:
+            message = await messages.get()
+            if message is None:
+                return
+            raw = message.data
+            track_delivery(live=True, received_at=message.received_at)
+            track_event(raw, received=message.received)
+            tick = TickPrice.model_validate_json(raw)
+            yield ServerSentEvent(data=tick, event="price")

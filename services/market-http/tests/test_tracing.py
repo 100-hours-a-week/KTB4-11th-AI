@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import redis
@@ -180,6 +180,23 @@ def test_deliver_spans_are_not_created_or_counted_while_tracing_is_off(monkeypat
     assert deliver_spans.take_counts() == (0, 0)
 
 
+def test_deliver_span_uses_pubsub_receipt_time_before_queue_wait(spans):
+    published = datetime(2026, 10, 13, tzinfo=UTC)
+    received = published + timedelta(milliseconds=125)
+    raw = _payload(traceparent=f"00-{TRACE_ID}-{PARENT_ID}-01", published_at=published.isoformat())
+
+    async def app(scope, receive, send):
+        track_event(raw, received=received)
+        await send({"type": "http.response.body", "body": b"data: live\n\n"})
+
+    async def send(message):
+        pass
+
+    asyncio.run(_run(SSESendSpans(app, DeliverSpans(100)), send))
+    (deliver,) = _deliver_spans(spans)
+    assert deliver.attributes["publish_to_receive_ms"] == 125.0
+
+
 def test_track_event_outside_a_stream_does_nothing():
     track_event("anything")
 
@@ -230,7 +247,7 @@ def test_non_string_traceparent_still_streams_without_a_span(valkey_url, spans, 
 
 
 class _NamedSpans:
-    def start(self, raw, connection_id):
+    def start(self, raw, connection_id, *, received=None):
         return trace.get_tracer("test").start_span(raw)
 
 

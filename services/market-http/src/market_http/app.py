@@ -10,6 +10,7 @@ from redis.asyncio import Redis
 from scalar_fastapi import get_scalar_api_reference
 
 from market_http.controllers import bars, indices, orderbooks, prices, rankings
+from market_http.market_subscription import MarketSubscription
 from market_http.observability.metrics import SSEConnectionMetrics
 from market_http.observability.prometheus import MarketMetrics, SSEMetrics
 from market_http.observability.tracing import DeliverSpans, SSESendSpans, is_stream
@@ -39,6 +40,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        await app.state.market_subscription.open()
         metrics: SSEConnectionMetrics | None = app.state.sse_metrics
         publisher = (
             asyncio.create_task(metrics.publish(deliver_spans.take_counts))
@@ -52,6 +54,7 @@ def create_app(
                 publisher.cancel()
                 with suppress(asyncio.CancelledError):
                     await publisher
+            await app.state.market_subscription.stop()
             if postgres_engine is not None:
                 await asyncio.to_thread(postgres_engine.dispose)
 
@@ -68,6 +71,7 @@ def create_app(
     app.state.questdb_conf = questdb_conf
     app.state.postgres_engine = postgres_engine
     app.state.sse_metrics = sse_metrics
+    app.state.market_subscription = MarketSubscription(valkey)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins if cors_origins is not None else [],

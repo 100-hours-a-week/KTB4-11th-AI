@@ -10,6 +10,7 @@ from ktb_core.krx import KST
 from market_http.app import create_app
 from market_http.controllers import prices as price_controller
 from market_http.controllers.prices import stream_prices
+from market_http.market_subscription import MarketSubscription
 from market_http.repositories import prices as prices_module
 from market_http.repositories.prices import Price, TickPrice, questdb_price
 from redis.asyncio import Redis
@@ -129,25 +130,46 @@ def test_live_stream_keeps_raw_tick_without_limits(monkeypatch):
         return []
 
     class Pubsub:
-        async def subscribe(self, *channels):
-            pass
+        def __init__(self):
+            self.acks = asyncio.Queue()
+            self.messages = asyncio.Queue()
+
+        async def psubscribe(self, *patterns):
+            for pattern in patterns:
+                await self.acks.put({"type": "psubscribe", "channel": pattern})
+
+        async def get_message(self, *, ignore_subscribe_messages, timeout):
+            return await self.acks.get()
 
         async def listen(self):
-            yield {"type": "message", "data": _cached_price(STREAMED)}
+            while True:
+                yield await self.messages.get()
 
         async def aclose(self):
             pass
 
     class Valkey:
+        def __init__(self):
+            self.pubsub_client = Pubsub()
+
         def pubsub(self):
-            return Pubsub()
+            return self.pubsub_client
 
     monkeypatch.setattr(price_controller, "current_prices", no_snapshot)
 
     async def scenario():
-        events = stream_prices(Valkey(), "conf", ["005930"])
-        event = await anext(events)
+        valkey = Valkey()
+        subscription = MarketSubscription(valkey)
+        await subscription.start()
+        events = stream_prices(valkey, "conf", ["005930"], subscription)
+        event_task = asyncio.create_task(anext(events))
+        await asyncio.sleep(0)
+        await valkey.pubsub_client.messages.put(
+            {"type": "pmessage", "channel": "price:005930", "data": _cached_price(STREAMED)}
+        )
+        event = await event_task
         await events.aclose()
+        await subscription.stop()
         return event
 
     event = asyncio.run(scenario())
@@ -265,11 +287,14 @@ def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, val
 
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
-        events = stream_prices(valkey, "conf", ["005930"])
+        subscription = MarketSubscription(valkey)
+        await subscription.start()
+        events = stream_prices(valkey, "conf", ["005930"], subscription)
         snapshot = await anext(events)
         await valkey.publish("price:005930", _cached_price(live))
         published = await asyncio.wait_for(anext(events), 5)
         await events.aclose()
+        await subscription.stop()
         await valkey.aclose()
         return snapshot, published
 
@@ -283,3 +308,29 @@ def test_stream_subscribes_then_sends_snapshot_then_live_events(monkeypatch, val
     assert published.data == TickPrice.model_validate(live.model_dump())
     assert "upper_limit_price" not in published.data.model_dump()
     assert "lower_limit_price" not in published.data.model_dump()
+
+
+def test_stream_reads_live_prices_from_the_shared_subscription(monkeypatch, valkey_url):
+    async def no_snapshot(valkey, conf, codes):
+        return []
+
+    monkeypatch.setattr(price_controller, "current_prices", no_snapshot)
+
+    async def scenario():
+        valkey = Redis.from_url(valkey_url, decode_responses=True)
+        subscription = MarketSubscription(valkey)
+        events = stream_prices(valkey, "conf", ["005930"], subscription)
+        await subscription.start()
+        published_task = asyncio.create_task(anext(events))
+        await asyncio.sleep(0)
+        await valkey.publish("price:005930", _cached_price(STREAMED))
+        published = await asyncio.wait_for(published_task, 5)
+        await events.aclose()
+        await subscription.stop()
+        await valkey.aclose()
+        return published
+
+    published = asyncio.run(scenario())
+
+    assert published.event == "price"
+    assert published.data == TickPrice.model_validate(STREAMED.model_dump())
