@@ -16,7 +16,7 @@ from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
 from market_streamer.observability.metrics import MarketMetrics
-from market_streamer.observability.tracing import trace_accepted, traced_publish
+from market_streamer.observability.tracing import trace_fields, traced_publish
 from market_streamer.settings import Settings
 from market_streamer.symbols import load_codes
 from market_streamer.valkey import connect_valkey
@@ -100,39 +100,12 @@ def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, obj
 
 @traced_publish
 async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
-    prices = list(prices)
+    fields = trace_fields()
     async with valkey.pipeline(transaction=False) as pipe:
         for price in prices:
-            pipe.get(f"price:{price['code']}")
-        stored = await pipe.execute()
-
-    accepted = []
-    latest = {}
-    for price, raw in zip(prices, stored, strict=True):
-        code = str(price["code"])
-        previous = latest.get(code) or (json.loads(raw) if raw else None)
-        if previous:
-            previous_timestamp = datetime.fromisoformat(previous["timestamp"])
-            current_timestamp = datetime.fromisoformat(str(price["timestamp"]))
-            if current_timestamp < previous_timestamp or (
-                current_timestamp.date() == previous_timestamp.date()
-                and int(price["volume"]) < int(previous["volume"])
-            ):
-                continue
-            if current_timestamp == previous_timestamp and int(price["volume"]) == int(
-                previous["volume"]
-            ):
-                continue
-        latest[code] = price
-        accepted.append(price)
-
-    trace_fields = trace_accepted(len(accepted))
-    async with valkey.pipeline(transaction=False) as pipe:
-        for price in accepted:
             key = f"price:{price['code']}"
             payload = json.dumps(
-                {field: value for field, value in price.items() if field != "trade_value"}
-                | trace_fields
+                {field: value for field, value in price.items() if field != "trade_value"} | fields
             )
             pipe.set(key, payload)
             pipe.publish("market:prices", payload)

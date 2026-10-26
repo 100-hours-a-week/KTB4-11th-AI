@@ -19,15 +19,15 @@ def traced_publish(publish: Publish) -> Publish:
         prices = list(prices)
         with tracer.start_as_current_span(
             "publish", kind=SpanKind.PRODUCER, attributes={"prices.received": len(prices)}
-        ):
+        ) as span:
             await publish(valkey, prices)
+            span.set_attribute("prices.published", len(prices))
 
     return traced
 
 
-def trace_accepted(accepted: int) -> dict[str, str]:
+def trace_fields() -> dict[str, str]:
     span = trace.get_current_span()
-    span.set_attribute("prices.accepted", accepted)
     if not span.is_recording():
         return {}
     fields = {"published_at": datetime.now(UTC).isoformat()}
