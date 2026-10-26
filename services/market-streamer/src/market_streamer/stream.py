@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Iterable
+from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
 from itertools import groupby
 from typing import Any
@@ -15,6 +15,7 @@ from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
+from market_streamer.dto import Orderbook, OrderbookLevel, Price
 from market_streamer.observability.metrics import MarketMetrics
 from market_streamer.observability.tracing import trace_fields, traced_publish
 from market_streamer.settings import Settings
@@ -31,21 +32,21 @@ async def connect_kiwoom(uri: str, timeout_seconds: int) -> ClientConnection:
     return await connect(uri, open_timeout=timeout_seconds, ping_interval=20, ping_timeout=20)
 
 
-def parse_tick(entry: dict[str, Any], today: date) -> dict[str, object]:
+def parse_tick(entry: dict[str, Any], today: date) -> Price:
     values = entry["values"]
     clock = datetime.strptime(values["20"].strip(), "%H%M%S").time()
-    return {
-        "code": entry["item"],
-        "price": abs(int(values["10"].strip())),
-        "change": int(values["11"].strip()),
-        "rate": float(values["12"].strip()),
-        "volume": abs(int(values["13"].strip())),
-        "trade_value": abs(int(values["14"].strip())),
-        "timestamp": datetime.combine(today, clock, KST).isoformat(),
-    }
+    return Price(
+        code=entry["item"],
+        price=abs(int(values["10"].strip())),
+        change=int(values["11"].strip()),
+        rate=float(values["12"].strip()),
+        volume=abs(int(values["13"].strip())),
+        trade_value=abs(int(values["14"].strip())),
+        timestamp=datetime.combine(today, clock, KST).isoformat(),
+    )
 
 
-def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
+def parse_orderbook(entry: dict[str, Any], today: date) -> Orderbook:
     values = entry["values"]
     time_value = values["21"].strip()
     if len(time_value) != 6 or not time_value.isdigit():
@@ -61,18 +62,18 @@ def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
         if ask_qty < 0 or bid_qty < 0:
             raise ValueError("orderbook quantities must be nonnegative")
         if ask_price > 0:
-            asks.append({"price": ask_price, "qty": ask_qty})
+            asks.append(OrderbookLevel(price=ask_price, qty=ask_qty))
         if bid_price > 0:
-            bids.append({"price": bid_price, "qty": bid_qty})
-    return {
-        "code": entry["item"],
-        "asks": asks,
-        "bids": bids,
-        "timestamp": datetime.combine(today, clock, KST).isoformat(),
-    }
+            bids.append(OrderbookLevel(price=bid_price, qty=bid_qty))
+    return Orderbook(
+        code=entry["item"],
+        asks=asks,
+        bids=bids,
+        timestamp=datetime.combine(today, clock, KST).isoformat(),
+    )
 
 
-def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]]:
+def frame_prices(message: dict[str, Any], today: date) -> list[Price]:
     prices = []
     for entry in message.get("data") or []:
         try:
@@ -85,7 +86,7 @@ def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]
     return prices
 
 
-def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, object]]:
+def frame_orderbooks(message: dict[str, Any], today: date) -> list[Orderbook]:
     orderbooks = []
     for entry in message.get("data") or []:
         try:
@@ -99,25 +100,26 @@ def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, obj
 
 
 @traced_publish
-async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
+async def publish(valkey: Redis, prices: list[Price]) -> None:
     fields = trace_fields()
     async with valkey.pipeline(transaction=False) as pipe:
         for price in prices:
-            key = f"price:{price['code']}"
+            key = f"price:{price.code}"
             payload = json.dumps(
-                {field: value for field, value in price.items() if field != "trade_value"} | fields
+                {field: value for field, value in asdict(price).items() if field != "trade_value"}
+                | fields
             )
             pipe.set(key, payload)
             pipe.publish("market:prices", payload)
-            code = str(price["code"])
-            timestamp = datetime.fromisoformat(str(price["timestamp"]))
+            code = price.code
+            timestamp = datetime.fromisoformat(price.timestamp)
             if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
                 day = timestamp.astimezone(KST).date()
                 expiry = datetime.combine(day + timedelta(days=14), time(23, 59, 59), KST)
                 for kind, score in (
-                    ("volume", int(price["volume"])),
-                    ("trade_value", int(price["trade_value"])),
-                    ("change_rate", float(price["rate"])),
+                    ("volume", price.volume),
+                    ("trade_value", price.trade_value),
+                    ("change_rate", price.rate),
                 ):
                     rank_key = f"ranking:{kind}:{day:%Y%m%d}"
                     pipe.zadd(rank_key, {code: score})
@@ -125,11 +127,11 @@ async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
         await pipe.execute()
 
 
-async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, object]]) -> None:
+async def publish_orderbooks(valkey: Redis, orderbooks: list[Orderbook]) -> None:
     async with valkey.pipeline(transaction=False) as pipe:
         for orderbook in orderbooks:
-            key = f"orderbook:{orderbook['code']}"
-            payload = json.dumps(orderbook)
+            key = f"orderbook:{orderbook.code}"
+            payload = json.dumps(asdict(orderbook))
             pipe.set(key, payload)
             pipe.publish("market:orderbooks", payload)
         await pipe.execute()
