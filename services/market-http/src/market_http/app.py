@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
@@ -39,7 +40,7 @@ def create_app(
     deliver_spans = DeliverSpans(trace_spans_per_second)
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         try:
             async with app.state.market_subscription.run():
                 metrics: SSEConnectionMetrics | None = app.state.sse_metrics

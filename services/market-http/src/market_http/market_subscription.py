@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from collections import defaultdict
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,7 +32,7 @@ class MarketSubscription:
         self._task: asyncio.Task[None] | None = None
 
     @asynccontextmanager
-    async def run(self) -> AsyncIterator[None]:
+    async def run(self) -> AsyncGenerator[None]:
         async with self._valkey.pubsub() as pubsub:
             await pubsub.subscribe(*CHANNELS)
             pending = set(CHANNELS)
@@ -64,7 +64,7 @@ class MarketSubscription:
     @asynccontextmanager
     async def subscribe(
         self, codes: Sequence[str]
-    ) -> AsyncIterator[asyncio.Queue[MarketEvent | None]]:
+    ) -> AsyncGenerator[asyncio.Queue[MarketEvent | None]]:
         if self._task is None or self._task.done():
             raise RuntimeError("market subscription is not running")
         queue: asyncio.Queue[MarketEvent | None] = asyncio.Queue(maxsize=QUEUE_CAPACITY)
