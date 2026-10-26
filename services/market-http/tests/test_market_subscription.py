@@ -105,6 +105,30 @@ def test_market_subscription_fans_one_valkey_channel_subscription_to_matching_cl
     asyncio.run(scenario())
 
 
+def test_cancelled_subscriber_unregisters_all_codes():
+    async def scenario():
+        valkey = FakeValkey()
+        subscription = MarketSubscription(valkey)
+        entered = asyncio.Event()
+
+        async def consume():
+            async with subscription.subscribe(["price:005930", "orderbook:005930"]):
+                entered.set()
+                await asyncio.Event().wait()
+
+        consumer = asyncio.create_task(consume())
+        await asyncio.wait_for(entered.wait(), 1)
+        assert set(subscription._subscribers) == {"price:005930", "orderbook:005930"}
+        consumer.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await consumer
+        assert not subscription._subscribers
+        await subscription.stop()
+        assert valkey.pubsubs[0].closed
+
+    asyncio.run(scenario())
+
+
 def test_market_subscription_waits_for_valkey_channel_subscription_acknowledgement():
     async def scenario():
         valkey = FakeValkey(acknowledge=False)

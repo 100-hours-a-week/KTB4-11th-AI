@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from collections import defaultdict
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -91,7 +91,7 @@ class MarketSubscription:
     @asynccontextmanager
     async def subscribe(
         self, codes: Sequence[str]
-    ) -> AsyncIterator[asyncio.Queue[MarketEvent | None]]:
+    ) -> AsyncGenerator[asyncio.Queue[MarketEvent | None]]:
         await self.start()
         queue: asyncio.Queue[MarketEvent | None] = asyncio.Queue(maxsize=QUEUE_CAPACITY)
         async with self._lifecycle_lock:
