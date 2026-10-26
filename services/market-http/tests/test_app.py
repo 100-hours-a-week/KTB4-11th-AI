@@ -7,21 +7,24 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 from market_http import openapi_examples
 from market_http.app import create_app
-from redis.asyncio import Redis
 
 from .example_entities import ENTITIES, HEALTH
+from .test_market_subscription import FakeValkey
 
 
-def test_health_touches_no_datastore():
-    with TestClient(create_app(Redis(host="127.0.0.1", port=1), "unused")) as client:
+def test_health_returns_ok_after_subscription_startup():
+    valkey = FakeValkey()
+    with TestClient(create_app(valkey, "unused")) as client:
+        assert valkey.pubsubs[0].channels == ("market:prices", "market:orderbooks")
         response = client.get("/health")
 
+    assert valkey.pubsubs[0].closed
     assert response.status_code == 200
     assert response.json() == HEALTH.model_dump(mode="json")
 
 
 def test_cors_blocks_origins_by_default():
-    with TestClient(create_app(Redis(host="127.0.0.1", port=1), "unused")) as client:
+    with TestClient(create_app(FakeValkey(), "unused")) as client:
         response = client.get("/health", headers={"Origin": "https://example.com"})
 
     assert "access-control-allow-origin" not in response.headers
@@ -30,7 +33,7 @@ def test_cors_blocks_origins_by_default():
 def test_cors_preflight_uses_configured_origins_and_headers():
     with TestClient(
         create_app(
-            Redis(host="127.0.0.1", port=1),
+            FakeValkey(),
             "unused",
             cors_origins=["https://app.example.com"],
             cors_headers=["Authorization"],
@@ -53,9 +56,7 @@ def test_cors_preflight_uses_configured_origins_and_headers():
 
 
 def test_docs_use_public_prefix_without_moving_api_routes():
-    with TestClient(
-        create_app(Redis(host="127.0.0.1", port=1), "unused", docs_path_prefix="/market")
-    ) as client:
+    with TestClient(create_app(FakeValkey(), "unused", docs_path_prefix="/market")) as client:
         docs = client.get("/scalar")
         schema = client.get("/openapi.json")
         health = client.get("/health")
@@ -69,16 +70,14 @@ def test_docs_use_public_prefix_without_moving_api_routes():
 
 
 def test_docs_are_unavailable_when_disabled():
-    with TestClient(
-        create_app(Redis(host="127.0.0.1", port=1), "unused", docs_enabled=False)
-    ) as client:
+    with TestClient(create_app(FakeValkey(), "unused", docs_enabled=False)) as client:
         for path in ("/scalar", "/docs", "/redoc", "/openapi.json"):
             assert client.get(path).status_code == 404
         assert client.get("/health").status_code == 200
 
 
 def test_docs_examples_match_test_entities():
-    with TestClient(create_app(Redis(host="127.0.0.1", port=1), "unused")) as client:
+    with TestClient(create_app(FakeValkey(), "unused")) as client:
         schema = client.get("/openapi.json").json()
 
     for name, entity in ENTITIES.items():

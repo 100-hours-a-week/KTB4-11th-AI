@@ -69,11 +69,19 @@ def test_health_under_uvicorn_with_exporter_endpoint(disabled):
     script = textwrap.dedent("""
         import asyncio
         import socket
+        from contextlib import asynccontextmanager
 
         import httpx
         import uvicorn
         from market_http import __main__ as entry
+        from market_http.market_subscription import MarketSubscription
         from market_http.settings import Settings
+
+        @asynccontextmanager
+        async def subscription_lifespan(self):
+            yield
+
+        MarketSubscription.run = subscription_lifespan
 
         async def serve(app):
             with socket.socket() as sock:
@@ -104,6 +112,7 @@ def test_health_under_uvicorn_with_exporter_endpoint(disabled):
             questdb_conf="unused",
             postgres_dsn="postgresql+psycopg://unused@127.0.0.1:1/unused",
             valkey_host="127.0.0.1",
+            valkey_port=1,
             metrics_namespace="",
         )
         entry.MetricsServer.run = lambda self: asyncio.run(

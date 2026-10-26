@@ -21,6 +21,7 @@ from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
 
 from .example_entities import ORDERBOOK
+from .test_market_subscription import FakeValkey
 
 TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 PARENT_ID = "b7ad6b7169203331"
@@ -89,7 +90,8 @@ async def _drive_stream(app, query, on_body, path="/prices/stream"):
         "client": ("127.0.0.1", 1),
         "server": ("testserver", 80),
     }
-    await asyncio.wait_for(app(scope, receive, send), 10)
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(app(scope, receive, send), 10)
     return messages
 
 
@@ -310,7 +312,7 @@ def test_fastapi_does_not_add_its_own_exporters(monkeypatch, spans):
     monkeypatch.setattr(TracerProvider, "add_span_processor", added.append)
     monkeypatch.setattr(metrics, "set_meter_provider", added.append)
 
-    with TestClient(create_app(Redis(host="127.0.0.1", port=1), "unused")):
+    with TestClient(create_app(FakeValkey(), "unused")):
         pass
 
     assert added == []

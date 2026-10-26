@@ -9,6 +9,8 @@ from redis.asyncio import ConnectionPool
 from redis.exceptions import MaxConnectionsError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
+from .test_market_subscription import FakeValkey
+
 
 def value(metrics, name, **labels):
     return metrics.registry.get_sample_value(name, labels)
@@ -144,11 +146,10 @@ def test_stream_with_proxy_root_path_is_counted():
 def test_cors_preflight_is_not_an_sse_connection():
     from fastapi.testclient import TestClient
     from market_http.app import create_app
-    from redis.asyncio import Redis
 
     metrics = MarketMetrics()
     app = create_app(
-        Redis(host="127.0.0.1", port=1),
+        FakeValkey(),
         "unused",
         prometheus=metrics,
         cors_origins=["https://example.com"],

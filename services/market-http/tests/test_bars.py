@@ -6,9 +6,9 @@ import pytest
 from fastapi.testclient import TestClient
 from market_http.app import create_app
 from market_http.repositories import bars as bars_module
-from redis.asyncio import Redis
 
 from .example_entities import PAGE
+from .test_market_subscription import FakeValkey
 
 NEWEST = datetime(2026, 10, 13, 6, 30, tzinfo=UTC)
 
@@ -60,7 +60,7 @@ def _rows(count):
 
 @pytest.fixture
 def client():
-    with TestClient(create_app(Redis(host="127.0.0.1", port=1), "conf")) as client:
+    with TestClient(create_app(FakeValkey(), "conf")) as client:
         yield client
 
 

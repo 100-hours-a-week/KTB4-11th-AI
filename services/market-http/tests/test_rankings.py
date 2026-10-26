@@ -12,10 +12,12 @@ from market_http.repositories.rankings import read_rankings
 from market_http.services import rankings as ranking_service
 
 from .example_entities import INDEX, RANKING
+from .test_market_subscription import FakeValkey
 
 
-class Valkey:
+class Valkey(FakeValkey):
     def __init__(self, sets):
+        super().__init__()
         self.sets = sets
 
     async def exists(self, key):
