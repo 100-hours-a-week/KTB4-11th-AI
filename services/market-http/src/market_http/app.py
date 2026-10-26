@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
@@ -39,22 +40,23 @@ def create_app(
     deliver_spans = DeliverSpans(trace_spans_per_second)
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        await app.state.market_subscription.open()
-        metrics: SSEConnectionMetrics | None = app.state.sse_metrics
-        publisher = (
-            asyncio.create_task(metrics.publish(deliver_spans.take_counts))
-            if metrics is not None
-            else None
-        )
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         try:
-            yield
+            async with app.state.market_subscription.run():
+                metrics: SSEConnectionMetrics | None = app.state.sse_metrics
+                publisher = (
+                    asyncio.create_task(metrics.publish(deliver_spans.take_counts))
+                    if metrics is not None
+                    else None
+                )
+                try:
+                    yield
+                finally:
+                    if publisher is not None:
+                        publisher.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await publisher
         finally:
-            if publisher is not None:
-                publisher.cancel()
-                with suppress(asyncio.CancelledError):
-                    await publisher
-            await app.state.market_subscription.stop()
             if postgres_engine is not None:
                 await asyncio.to_thread(postgres_engine.dispose)
 

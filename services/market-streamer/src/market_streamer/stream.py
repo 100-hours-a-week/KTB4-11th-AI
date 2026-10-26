@@ -1,9 +1,11 @@
 import asyncio
 import json
-from collections.abc import Iterable
+import os
+from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
 from itertools import groupby
 from typing import Any
+from uuid import uuid4
 
 from kiwoom import KiwoomAuth, KiwoomWebSocketClient
 from kiwoom.core.errors import normalize_return_code
@@ -15,6 +17,7 @@ from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
+from market_streamer.dto import Orderbook, OrderbookLevel, Price
 from market_streamer.observability.metrics import MarketMetrics
 from market_streamer.observability.tracing import trace_fields, traced_publish
 from market_streamer.settings import Settings
@@ -31,21 +34,21 @@ async def connect_kiwoom(uri: str, timeout_seconds: int) -> ClientConnection:
     return await connect(uri, open_timeout=timeout_seconds, ping_interval=20, ping_timeout=20)
 
 
-def parse_tick(entry: dict[str, Any], today: date) -> dict[str, object]:
+def parse_tick(entry: dict[str, Any], today: date) -> Price:
     values = entry["values"]
     clock = datetime.strptime(values["20"].strip(), "%H%M%S").time()
-    return {
-        "code": entry["item"],
-        "price": abs(int(values["10"].strip())),
-        "change": int(values["11"].strip()),
-        "rate": float(values["12"].strip()),
-        "volume": abs(int(values["13"].strip())),
-        "trade_value": abs(int(values["14"].strip())),
-        "timestamp": datetime.combine(today, clock, KST).isoformat(),
-    }
+    return Price(
+        code=entry["item"],
+        price=abs(int(values["10"].strip())),
+        change=int(values["11"].strip()),
+        rate=float(values["12"].strip()),
+        volume=abs(int(values["13"].strip())),
+        trade_value=abs(int(values["14"].strip())),
+        timestamp=datetime.combine(today, clock, KST).isoformat(),
+    )
 
 
-def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
+def parse_orderbook(entry: dict[str, Any], today: date) -> Orderbook:
     values = entry["values"]
     time_value = values["21"].strip()
     if len(time_value) != 6 or not time_value.isdigit():
@@ -61,18 +64,18 @@ def parse_orderbook(entry: dict[str, Any], today: date) -> dict[str, object]:
         if ask_qty < 0 or bid_qty < 0:
             raise ValueError("orderbook quantities must be nonnegative")
         if ask_price > 0:
-            asks.append({"price": ask_price, "qty": ask_qty})
+            asks.append(OrderbookLevel(price=ask_price, qty=ask_qty))
         if bid_price > 0:
-            bids.append({"price": bid_price, "qty": bid_qty})
-    return {
-        "code": entry["item"],
-        "asks": asks,
-        "bids": bids,
-        "timestamp": datetime.combine(today, clock, KST).isoformat(),
-    }
+            bids.append(OrderbookLevel(price=bid_price, qty=bid_qty))
+    return Orderbook(
+        code=entry["item"],
+        asks=asks,
+        bids=bids,
+        timestamp=datetime.combine(today, clock, KST).isoformat(),
+    )
 
 
-def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]]:
+def frame_prices(message: dict[str, Any], today: date) -> list[Price]:
     prices = []
     for entry in message.get("data") or []:
         try:
@@ -85,7 +88,7 @@ def frame_prices(message: dict[str, Any], today: date) -> list[dict[str, object]
     return prices
 
 
-def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, object]]:
+def frame_orderbooks(message: dict[str, Any], today: date) -> list[Orderbook]:
     orderbooks = []
     for entry in message.get("data") or []:
         try:
@@ -99,25 +102,26 @@ def frame_orderbooks(message: dict[str, Any], today: date) -> list[dict[str, obj
 
 
 @traced_publish
-async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
+async def publish(valkey: Redis, prices: list[Price]) -> None:
     fields = trace_fields()
     async with valkey.pipeline(transaction=False) as pipe:
         for price in prices:
-            key = f"price:{price['code']}"
+            key = f"price:{price.code}"
             payload = json.dumps(
-                {field: value for field, value in price.items() if field != "trade_value"} | fields
+                {field: value for field, value in asdict(price).items() if field != "trade_value"}
+                | fields
             )
             pipe.set(key, payload)
             pipe.publish("market:prices", payload)
-            code = str(price["code"])
-            timestamp = datetime.fromisoformat(str(price["timestamp"]))
+            code = price.code
+            timestamp = datetime.fromisoformat(price.timestamp)
             if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
                 day = timestamp.astimezone(KST).date()
                 expiry = datetime.combine(day + timedelta(days=14), time(23, 59, 59), KST)
                 for kind, score in (
-                    ("volume", int(price["volume"])),
-                    ("trade_value", int(price["trade_value"])),
-                    ("change_rate", float(price["rate"])),
+                    ("volume", price.volume),
+                    ("trade_value", price.trade_value),
+                    ("change_rate", price.rate),
                 ):
                     rank_key = f"ranking:{kind}:{day:%Y%m%d}"
                     pipe.zadd(rank_key, {code: score})
@@ -125,11 +129,11 @@ async def publish(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
         await pipe.execute()
 
 
-async def publish_orderbooks(valkey: Redis, orderbooks: Iterable[dict[str, object]]) -> None:
+async def publish_orderbooks(valkey: Redis, orderbooks: list[Orderbook]) -> None:
     async with valkey.pipeline(transaction=False) as pipe:
         for orderbook in orderbooks:
-            key = f"orderbook:{orderbook['code']}"
-            payload = json.dumps(orderbook)
+            key = f"orderbook:{orderbook.code}"
+            payload = json.dumps(asdict(orderbook))
             pipe.set(key, payload)
             pipe.publish("market:orderbooks", payload)
         await pipe.execute()
@@ -150,51 +154,71 @@ async def stream_market_data(
             excluded_codes=codes[200:],
         )
     codes = codes[:200]
-    delay = 1.0
-    while True:
-        try:
-            requested_count = len(codes)
-            for registered_count, stock_code in enumerate(codes, start=1):
-                log.debug(
-                    "kiwoom_registering",
-                    stock_code=stock_code,
-                    registered_count=registered_count,
-                    requested_count=requested_count,
+    lifecycle_log = log.bind(
+        pid=os.getpid(),
+        listener_id=uuid4().hex,
+        requested_count=len(codes),
+        feed_types=["0B", "0D"],
+    )
+    ready = False
+    attempt = 0
+    try:
+        delay = 1.0
+        while True:
+            attempt += 1
+            ready = False
+            attempt_log = lifecycle_log.bind(attempt=attempt)
+            try:
+                attempt_log.info("kiwoom_registering")
+                body = build_reg_packet(codes, ["0B", "0D"])
+                await client.subscribe(api_url=WEBSOCKET_PATH, body=body)
+                async for message in client.iter_messages():
+                    trnm = message.get("trnm")
+                    if trnm == "REG":
+                        if (normalize_return_code(message.get("return_code")) or 0) != 0:
+                            raise RuntimeError(f"REG rejected: {message.get('return_msg')}")
+                        delay = 1.0
+                        if not ready:
+                            ready = True
+                            attempt_log.info("kiwoom_registered")
+                    elif trnm == "REAL":
+                        today = datetime.now(KST).date()
+                        entries = message.get("data") or []
+                        if metrics is not None:
+                            metrics.receive(entries)
+                        for kind, batch in groupby(
+                            entries,
+                            lambda entry: entry.get("type") if isinstance(entry, dict) else None,
+                        ):
+                            frame = {"data": list(batch)}
+                            if kind == "0B":
+                                prices = frame_prices(frame, today)
+                                if prices:
+                                    await publish(valkey, prices)
+                            elif kind == "0D":
+                                orderbooks = frame_orderbooks(frame, today)
+                                if orderbooks:
+                                    await publish_orderbooks(valkey, orderbooks)
+                attempt_log.warning("kiwoom_stream_closed", phase="running" if ready else "startup")
+            except Exception as error:
+                attempt_log.exception(
+                    "kiwoom_stream_failed",
+                    phase="running" if ready else "startup",
+                    error_type=type(error).__name__,
                 )
-            body = build_reg_packet(codes, ["0B", "0D"])
-            await client.subscribe(api_url=WEBSOCKET_PATH, body=body)
-            async for message in client.iter_messages():
-                trnm = message.get("trnm")
-                if trnm == "REG":
-                    if (normalize_return_code(message.get("return_code")) or 0) != 0:
-                        raise RuntimeError(f"REG rejected: {message.get('return_msg')}")
-                    delay = 1.0
-                    log.info("kiwoom_registered", requested_count=requested_count)
-                elif trnm == "REAL":
-                    today = datetime.now(KST).date()
-                    entries = message.get("data") or []
-                    if metrics is not None:
-                        metrics.receive(entries)
-                    for kind, batch in groupby(
-                        entries,
-                        lambda entry: entry.get("type") if isinstance(entry, dict) else None,
-                    ):
-                        frame = {"data": list(batch)}
-                        if kind == "0B":
-                            prices = frame_prices(frame, today)
-                            if prices:
-                                await publish(valkey, prices)
-                        elif kind == "0D":
-                            orderbooks = frame_orderbooks(frame, today)
-                            if orderbooks:
-                                await publish_orderbooks(valkey, orderbooks)
-            log.warning("kiwoom_stream_closed")
-        except Exception:
-            log.exception("kiwoom_stream_failed", requested_count=len(codes))
-        finally:
-            await client.close()
-        await asyncio.sleep(delay)
-        delay = min(delay * 2, MAX_BACKOFF)
+            finally:
+                await client.close()
+            attempt_log.info("kiwoom_stream_retrying", delay_seconds=delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, MAX_BACKOFF)
+    except asyncio.CancelledError:
+        lifecycle_log.info(
+            "kiwoom_stream_stopped",
+            attempt=attempt,
+            phase="running" if ready else "startup",
+            reason="cancelled",
+        )
+        raise
 
 
 def seconds_until(stop_at: time, now: datetime) -> float:

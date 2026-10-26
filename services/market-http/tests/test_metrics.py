@@ -12,7 +12,8 @@ from market_http.app import create_app
 from market_http.controllers import orderbooks, prices
 from market_http.observability.metrics import SSEConnectionMetrics, track_sse_connection
 from market_http.settings import Settings
-from redis.asyncio import Redis
+
+from .test_market_subscription import FakeValkey
 
 
 def test_only_stream_routes_count_connections_and_release_on_exit():
@@ -127,7 +128,7 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
         metrics = SSEConnectionMetrics(
             namespace="test", cluster_name="c", service_name="s", interval=0.001
         )
-        app = create_app(Redis(host="127.0.0.1", port=1), "unused", sse_metrics=metrics)
+        app = create_app(FakeValkey(), "unused", sse_metrics=metrics)
         async with app.router.lifespan_context(app):
             await asyncio.sleep(0.005)
             metrics.active_connections = 2
@@ -158,7 +159,9 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
             for payload in payloads
         )
         await asyncio.sleep(0.005)
-        assert len(caplog.records) == len(events)
+        assert len([r for r in caplog.records if r.message == "active_sse_connections"]) == len(
+            events
+        )
 
     asyncio.run(scenario())
 
@@ -167,7 +170,7 @@ def test_disabled_metrics_start_no_publisher(caplog):
     caplog.set_level(logging.INFO)
 
     async def scenario():
-        app = create_app(Redis(host="127.0.0.1", port=1), "unused")
+        app = create_app(FakeValkey(), "unused")
         async with app.router.lifespan_context(app):
             assert app.state.sse_metrics is None
             dependency = track_sse_connection(Request({"type": "http", "app": app}))

@@ -12,6 +12,7 @@ from market_http.repositories.orderbooks import Orderbook, OrderbookLevel
 from redis.asyncio import Redis
 
 from .example_entities import ORDERBOOK
+from .test_market_subscription import FakeValkey
 
 BOOK = ORDERBOOK
 LEVELS = BOOK.asks
@@ -49,7 +50,7 @@ def test_orderbooks_returns_empty_list_when_all_codes_are_missing(valkey_url):
 
 @pytest.mark.parametrize("codes", ["5930", "005930,", "abcdef", ""])
 def test_orderbooks_rejects_malformed_codes(codes):
-    with TestClient(create_app(Redis(host="127.0.0.1", port=1), "conf")) as client:
+    with TestClient(create_app(FakeValkey(), "conf")) as client:
         assert client.get(f"/orderbooks?codes={codes}").status_code == 422
 
 
@@ -64,12 +65,12 @@ def test_stream_sends_snapshot_then_published_update(valkey_url, ask_count, bid_
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         subscription = MarketSubscription(valkey)
-        events = stream_orderbooks(valkey, ["005930"], subscription)
-        snapshot = await anext(events)
-        await valkey.publish("market:orderbooks", live.model_dump_json())
-        published = await asyncio.wait_for(anext(events), 5)
-        await events.aclose()
-        await subscription.stop()
+        async with subscription.run():
+            events = stream_orderbooks(valkey, ["005930"], subscription)
+            snapshot = await anext(events)
+            await valkey.publish("market:orderbooks", live.model_dump_json())
+            published = await asyncio.wait_for(anext(events), 5)
+            await events.aclose()
         await valkey.aclose()
         return snapshot, published
 
@@ -96,10 +97,10 @@ def test_stream_receives_update_published_during_snapshot_read(monkeypatch, valk
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         subscription = MarketSubscription(valkey)
-        events = stream_orderbooks(valkey, ["005930"], subscription)
-        published = await asyncio.wait_for(anext(events), 5)
-        await events.aclose()
-        await subscription.stop()
+        async with subscription.run():
+            events = stream_orderbooks(valkey, ["005930"], subscription)
+            published = await asyncio.wait_for(anext(events), 5)
+            await events.aclose()
         await valkey.aclose()
         return published
 
