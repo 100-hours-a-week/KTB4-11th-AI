@@ -159,7 +159,9 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
             for payload in payloads
         )
         await asyncio.sleep(0.005)
-        assert len(caplog.records) == len(events)
+        assert len([r for r in caplog.records if r.message == "active_sse_connections"]) == len(
+            events
+        )
 
     asyncio.run(scenario())
 

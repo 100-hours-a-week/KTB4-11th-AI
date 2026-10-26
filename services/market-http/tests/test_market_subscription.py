@@ -225,7 +225,9 @@ def test_subscription_buffers_multichannel_burst_without_coalescing():
 
 
 @pytest.mark.parametrize("phase", ["startup", "running"])
-def test_owner_cancellation_closes_connection_and_notifies_clients(phase):
+def test_owner_cancellation_closes_connection_and_notifies_clients(phase, caplog):
+    caplog.set_level("INFO")
+
     async def scenario():
         valkey = FakeValkey(acknowledge=phase == "running", hold_close=True)
         subscription = MarketSubscription(valkey)
@@ -262,6 +264,13 @@ def test_owner_cancellation_closes_connection_and_notifies_clients(phase):
             await client.__aexit__(None, None, None)
 
     asyncio.run(scenario())
+    ready = [r for r in caplog.records if r.message == "market_subscription_ready"]
+    assert len(ready) == (1 if phase == "running" else 0)
+    stopped = [r for r in caplog.records if r.message == "market_subscription_stopped"]
+    assert len(stopped) == 1
+    assert stopped[0].fields["reason"] == (
+        "shutdown" if phase == "running" else "startup_cancelled"
+    )
 
 
 def test_startup_failure_closes_connection_before_raising():
@@ -419,3 +428,112 @@ def test_old_client_cleanup_preserves_subscribers_after_lifespan_restart():
         assert all(pubsub.closed for pubsub in valkey.pubsubs)
 
     asyncio.run(scenario())
+
+
+def test_lifecycle_logs_readiness_and_recovery_only_after_both_channel_acks(caplog):
+    async def scenario():
+        valkey = FakeValkey(acknowledge=False)
+        subscription = MarketSubscription(valkey)
+        lifetime = subscription.run()
+        started = asyncio.create_task(lifetime.__aenter__())
+        while not valkey.pubsubs:
+            await asyncio.sleep(0)
+        pubsub = valkey.pubsubs[0]
+        await pubsub.subscribed.wait()
+        for channel in ("market:prices", "market:prices", "unknown"):
+            await pubsub.acks.put({"type": "subscribe", "channel": channel})
+        await asyncio.sleep(0)
+        assert not started.done()
+        assert not any(record.message.endswith("_ready") for record in caplog.records)
+        await pubsub.acks.put({"type": "subscribe", "channel": "market:orderbooks"})
+        await started
+        ready = [r for r in caplog.records if r.message == "market_subscription_ready"]
+        assert len(ready) == 1
+        assert ready[0].fields["channels"] == ["market:prices", "market:orderbooks"]
+        assert ready[0].fields["pid"] > 0
+        assert ready[0].fields["listener_id"]
+        for channel in ("market:prices", "market:prices", "unknown"):
+            await pubsub.messages.put({"type": "subscribe", "channel": channel})
+        await asyncio.sleep(0)
+        assert not any(r.message == "market_subscription_recovered" for r in caplog.records)
+        await pubsub.messages.put({"type": "subscribe", "channel": "market:orderbooks"})
+        await asyncio.sleep(0)
+        recovered = [r for r in caplog.records if r.message == "market_subscription_recovered"]
+        assert len(recovered) == 1
+        assert recovered[0].fields["listener_id"] == ready[0].fields["listener_id"]
+        await lifetime.__aexit__(None, None, None)
+        assert caplog.records[-1].message == "market_subscription_stopped"
+        assert caplog.records[-1].fields["reason"] == "shutdown"
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["startup", "runtime", "ended"])
+def test_lifecycle_logs_distinguish_failure_phase(caplog, failure):
+    async def scenario():
+        valkey = FakeValkey()
+        pubsub = valkey.pubsub()
+        valkey.pubsub = lambda: pubsub
+
+        async def fail_subscribe(*channels):
+            raise ConnectionError("unavailable")
+
+        async def fail_listen():
+            if failure == "runtime":
+                raise ConnectionError("lost feed")
+            return
+            yield
+
+        if failure == "startup":
+            pubsub.subscribe = fail_subscribe
+        else:
+            pubsub.listen = fail_listen
+        subscription = MarketSubscription(valkey)
+        if failure == "startup":
+            with pytest.raises(ConnectionError):
+                async with subscription.run():
+                    pass
+        else:
+            async with subscription.run():
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+        expected = {
+            "startup": "market_subscription_start_failed",
+            "runtime": "market subscription listener failed",
+            "ended": "market_subscription_ended",
+        }[failure]
+        records = [r for r in caplog.records if r.message == expected]
+        assert len(records) == 1
+        assert records[0].fields["listener_id"]
+        assert not any(r.message == "market_subscription_stopped" for r in caplog.records)
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+
+
+def test_shutdown_does_not_log_recovery_from_late_subscription_acks(caplog):
+    async def scenario():
+        valkey = FakeValkey()
+        pubsub = valkey.pubsub()
+        valkey.pubsub = lambda: pubsub
+        listening = asyncio.Event()
+
+        async def late_acks():
+            listening.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                for channel in ("market:prices", "market:orderbooks"):
+                    yield {"type": "subscribe", "channel": channel}
+
+        pubsub.listen = late_acks
+        async with MarketSubscription(valkey).run():
+            await listening.wait()
+        assert not any(r.message == "market_subscription_recovered" for r in caplog.records)
+        assert not any(r.message == "market_subscription_resubscribing" for r in caplog.records)
+        assert not any(r.message == "market_subscription_ended" for r in caplog.records)
+        assert caplog.records[-1].message == "market_subscription_stopped"
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())

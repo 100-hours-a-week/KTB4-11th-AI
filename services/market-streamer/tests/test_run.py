@@ -204,7 +204,7 @@ def test_stream_publishes_real_entries_in_arrival_order(monkeypatch):
     ]
 
 
-def test_registration_logs_each_code_at_debug_level_and_the_requested_count(monkeypatch, caplog):
+def test_registration_logs_one_attempt_and_ack_with_feed_context(monkeypatch, caplog):
     _record(monkeypatch)
     codes = ["000660", "005930"]
 
@@ -222,13 +222,16 @@ def test_registration_logs_each_code_at_debug_level_and_the_requested_count(monk
         asyncio.run(stream.stream_market_data(RegistrationClient(), object(), codes))
 
     registrations = [record for record in caplog.records if record.message == "kiwoom_registering"]
-    assert [record.levelno for record in registrations] == [logging.DEBUG, logging.DEBUG]
-    assert [record.fields for record in registrations] == [
-        {"stock_code": "000660", "registered_count": 1, "requested_count": 2},
-        {"stock_code": "005930", "registered_count": 2, "requested_count": 2},
-    ]
+    assert len(registrations) == 1
+    assert registrations[0].levelno == logging.INFO
     registered = next(record for record in caplog.records if record.message == "kiwoom_registered")
-    assert registered.fields == {"requested_count": 2}
+    for record in (registrations[0], registered):
+        assert record.fields["requested_count"] == 2
+        assert record.fields["feed_types"] == ["0B", "0D"]
+        assert record.fields["attempt"] == 1
+        assert record.fields["pid"] > 0
+        assert record.fields["listener_id"]
+    assert registered.fields["listener_id"] == registrations[0].fields["listener_id"]
 
 
 def test_rejected_registration_logs_the_requested_count(monkeypatch, caplog):
@@ -250,7 +253,10 @@ def test_rejected_registration_logs_the_requested_count(monkeypatch, caplog):
         )
 
     failed = next(record for record in caplog.records if record.message == "kiwoom_stream_failed")
-    assert failed.fields == {"requested_count": 2}
+    assert failed.fields["requested_count"] == 2
+    assert failed.fields["feed_types"] == ["0B", "0D"]
+    assert failed.fields["phase"] == "startup"
+    assert failed.fields["error_type"] == "RuntimeError"
 
 
 def test_rejected_registration_backs_off_exponentially(monkeypatch):
@@ -369,3 +375,37 @@ def test_run_exits_cleanly_at_the_stop_time(monkeypatch, now):
     asyncio.run(stream.run(Settings(), now))
 
     assert closed == ["valkey"]
+
+
+@pytest.mark.parametrize("failure", ["closed", "runtime", "cancelled"])
+def test_stream_lifecycle_distinguishes_exit_after_registration(monkeypatch, caplog, failure):
+    _record(monkeypatch)
+
+    class Client:
+        async def subscribe(self, **kwargs):
+            pass
+
+        async def iter_messages(self):
+            yield REG_OK
+            yield REG_OK
+            if failure == "runtime":
+                raise ConnectionError("lost feed")
+            if failure == "cancelled":
+                raise asyncio.CancelledError
+
+        async def close(self):
+            if failure != "cancelled":
+                raise asyncio.CancelledError
+
+    with caplog.at_level("INFO", logger=stream.__name__), pytest.raises(asyncio.CancelledError):
+        asyncio.run(stream.stream_market_data(Client(), object(), ["005930"]))
+    registered = [r for r in caplog.records if r.message == "kiwoom_registered"]
+    assert len(registered) == 1
+    event = {
+        "closed": "kiwoom_stream_closed",
+        "runtime": "kiwoom_stream_failed",
+        "cancelled": "kiwoom_stream_stopped",
+    }[failure]
+    record = next(r for r in caplog.records if r.message == event)
+    assert record.fields["phase"] == "running"
+    assert record.fields["listener_id"] == registered[0].fields["listener_id"]

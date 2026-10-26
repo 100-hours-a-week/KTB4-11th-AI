@@ -1,9 +1,11 @@
 import asyncio
 import json
+import os
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
 from itertools import groupby
 from typing import Any
+from uuid import uuid4
 
 from kiwoom import KiwoomAuth, KiwoomWebSocketClient
 from kiwoom.core.errors import normalize_return_code
@@ -152,51 +154,71 @@ async def stream_market_data(
             excluded_codes=codes[200:],
         )
     codes = codes[:200]
-    delay = 1.0
-    while True:
-        try:
-            requested_count = len(codes)
-            for registered_count, stock_code in enumerate(codes, start=1):
-                log.debug(
-                    "kiwoom_registering",
-                    stock_code=stock_code,
-                    registered_count=registered_count,
-                    requested_count=requested_count,
+    lifecycle_log = log.bind(
+        pid=os.getpid(),
+        listener_id=uuid4().hex,
+        requested_count=len(codes),
+        feed_types=["0B", "0D"],
+    )
+    ready = False
+    attempt = 0
+    try:
+        delay = 1.0
+        while True:
+            attempt += 1
+            ready = False
+            attempt_log = lifecycle_log.bind(attempt=attempt)
+            try:
+                attempt_log.info("kiwoom_registering")
+                body = build_reg_packet(codes, ["0B", "0D"])
+                await client.subscribe(api_url=WEBSOCKET_PATH, body=body)
+                async for message in client.iter_messages():
+                    trnm = message.get("trnm")
+                    if trnm == "REG":
+                        if (normalize_return_code(message.get("return_code")) or 0) != 0:
+                            raise RuntimeError(f"REG rejected: {message.get('return_msg')}")
+                        delay = 1.0
+                        if not ready:
+                            ready = True
+                            attempt_log.info("kiwoom_registered")
+                    elif trnm == "REAL":
+                        today = datetime.now(KST).date()
+                        entries = message.get("data") or []
+                        if metrics is not None:
+                            metrics.receive(entries)
+                        for kind, batch in groupby(
+                            entries,
+                            lambda entry: entry.get("type") if isinstance(entry, dict) else None,
+                        ):
+                            frame = {"data": list(batch)}
+                            if kind == "0B":
+                                prices = frame_prices(frame, today)
+                                if prices:
+                                    await publish(valkey, prices)
+                            elif kind == "0D":
+                                orderbooks = frame_orderbooks(frame, today)
+                                if orderbooks:
+                                    await publish_orderbooks(valkey, orderbooks)
+                attempt_log.warning("kiwoom_stream_closed", phase="running" if ready else "startup")
+            except Exception as error:
+                attempt_log.exception(
+                    "kiwoom_stream_failed",
+                    phase="running" if ready else "startup",
+                    error_type=type(error).__name__,
                 )
-            body = build_reg_packet(codes, ["0B", "0D"])
-            await client.subscribe(api_url=WEBSOCKET_PATH, body=body)
-            async for message in client.iter_messages():
-                trnm = message.get("trnm")
-                if trnm == "REG":
-                    if (normalize_return_code(message.get("return_code")) or 0) != 0:
-                        raise RuntimeError(f"REG rejected: {message.get('return_msg')}")
-                    delay = 1.0
-                    log.info("kiwoom_registered", requested_count=requested_count)
-                elif trnm == "REAL":
-                    today = datetime.now(KST).date()
-                    entries = message.get("data") or []
-                    if metrics is not None:
-                        metrics.receive(entries)
-                    for kind, batch in groupby(
-                        entries,
-                        lambda entry: entry.get("type") if isinstance(entry, dict) else None,
-                    ):
-                        frame = {"data": list(batch)}
-                        if kind == "0B":
-                            prices = frame_prices(frame, today)
-                            if prices:
-                                await publish(valkey, prices)
-                        elif kind == "0D":
-                            orderbooks = frame_orderbooks(frame, today)
-                            if orderbooks:
-                                await publish_orderbooks(valkey, orderbooks)
-            log.warning("kiwoom_stream_closed")
-        except Exception:
-            log.exception("kiwoom_stream_failed", requested_count=len(codes))
-        finally:
-            await client.close()
-        await asyncio.sleep(delay)
-        delay = min(delay * 2, MAX_BACKOFF)
+            finally:
+                await client.close()
+            attempt_log.info("kiwoom_stream_retrying", delay_seconds=delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, MAX_BACKOFF)
+    except asyncio.CancelledError:
+        lifecycle_log.info(
+            "kiwoom_stream_stopped",
+            attempt=attempt,
+            phase="running" if ready else "startup",
+            reason="cancelled",
+        )
+        raise
 
 
 def seconds_until(stop_at: time, now: datetime) -> float:
