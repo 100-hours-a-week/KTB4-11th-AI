@@ -15,7 +15,7 @@ from ktb_core.logging import get_logger
 from redis.asyncio import Redis
 from websockets.asyncio.client import ClientConnection, connect
 
-from market_streamer.dto import OrderbookDTO, OrderbookLevelDTO, PriceDTO
+from market_streamer.dto import Orderbook, OrderbookLevel, Price
 from market_streamer.observability.metrics import MarketMetrics
 from market_streamer.observability.tracing import trace_fields, traced_publish
 from market_streamer.settings import Settings
@@ -32,10 +32,10 @@ async def connect_kiwoom(uri: str, timeout_seconds: int) -> ClientConnection:
     return await connect(uri, open_timeout=timeout_seconds, ping_interval=20, ping_timeout=20)
 
 
-def parse_tick(entry: dict[str, Any], today: date) -> PriceDTO:
+def parse_tick(entry: dict[str, Any], today: date) -> Price:
     values = entry["values"]
     clock = datetime.strptime(values["20"].strip(), "%H%M%S").time()
-    return PriceDTO(
+    return Price(
         code=entry["item"],
         price=abs(int(values["10"].strip())),
         change=int(values["11"].strip()),
@@ -46,7 +46,7 @@ def parse_tick(entry: dict[str, Any], today: date) -> PriceDTO:
     )
 
 
-def parse_orderbook(entry: dict[str, Any], today: date) -> OrderbookDTO:
+def parse_orderbook(entry: dict[str, Any], today: date) -> Orderbook:
     values = entry["values"]
     time_value = values["21"].strip()
     if len(time_value) != 6 or not time_value.isdigit():
@@ -62,10 +62,10 @@ def parse_orderbook(entry: dict[str, Any], today: date) -> OrderbookDTO:
         if ask_qty < 0 or bid_qty < 0:
             raise ValueError("orderbook quantities must be nonnegative")
         if ask_price > 0:
-            asks.append(OrderbookLevelDTO(price=ask_price, qty=ask_qty))
+            asks.append(OrderbookLevel(price=ask_price, qty=ask_qty))
         if bid_price > 0:
-            bids.append(OrderbookLevelDTO(price=bid_price, qty=bid_qty))
-    return OrderbookDTO(
+            bids.append(OrderbookLevel(price=bid_price, qty=bid_qty))
+    return Orderbook(
         code=entry["item"],
         asks=asks,
         bids=bids,
@@ -73,7 +73,7 @@ def parse_orderbook(entry: dict[str, Any], today: date) -> OrderbookDTO:
     )
 
 
-def frame_prices(message: dict[str, Any], today: date) -> list[PriceDTO]:
+def frame_prices(message: dict[str, Any], today: date) -> list[Price]:
     prices = []
     for entry in message.get("data") or []:
         try:
@@ -86,7 +86,7 @@ def frame_prices(message: dict[str, Any], today: date) -> list[PriceDTO]:
     return prices
 
 
-def frame_orderbooks(message: dict[str, Any], today: date) -> list[OrderbookDTO]:
+def frame_orderbooks(message: dict[str, Any], today: date) -> list[Orderbook]:
     orderbooks = []
     for entry in message.get("data") or []:
         try:
@@ -100,7 +100,7 @@ def frame_orderbooks(message: dict[str, Any], today: date) -> list[OrderbookDTO]
 
 
 @traced_publish
-async def publish(valkey: Redis, prices: list[PriceDTO]) -> None:
+async def publish(valkey: Redis, prices: list[Price]) -> None:
     fields = trace_fields()
     async with valkey.pipeline(transaction=False) as pipe:
         for price in prices:
@@ -127,7 +127,7 @@ async def publish(valkey: Redis, prices: list[PriceDTO]) -> None:
         await pipe.execute()
 
 
-async def publish_orderbooks(valkey: Redis, orderbooks: list[OrderbookDTO]) -> None:
+async def publish_orderbooks(valkey: Redis, orderbooks: list[Orderbook]) -> None:
     async with valkey.pipeline(transaction=False) as pipe:
         for orderbook in orderbooks:
             key = f"orderbook:{orderbook.code}"

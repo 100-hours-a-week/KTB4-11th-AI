@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class PriceDTO:
+class Price:
     code: str
     price: int
     change: int
@@ -13,14 +13,14 @@ class PriceDTO:
 
 
 @dataclass(frozen=True)
-class OrderbookLevelDTO:
+class OrderbookLevel:
     price: int
     qty: int
 
 
 @dataclass(frozen=True)
-class OrderbookDTO:
+class Orderbook:
     code: str
-    asks: list[OrderbookLevelDTO]
-    bids: list[OrderbookLevelDTO]
+    asks: list[OrderbookLevel]
+    bids: list[OrderbookLevel]
     timestamp: str

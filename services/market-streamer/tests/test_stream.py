@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 import pytest
 from ktb_core.krx import KST
-from market_streamer.dto import OrderbookDTO, OrderbookLevelDTO, PriceDTO
+from market_streamer.dto import Orderbook, OrderbookLevel, Price
 from market_streamer.observability.tracing import traced_publish
 from market_streamer.stream import (
     frame_orderbooks,
@@ -105,7 +105,7 @@ FULL_CAPTURE = captured_orderbook(
 
 def test_parse_tick_strips_padding_and_direction_signs():
     result = parse_tick(TICK, TODAY)
-    assert isinstance(result, PriceDTO)
+    assert isinstance(result, Price)
     assert result.volume == 12345678
     assert asdict(result) == PRICE
 
@@ -257,7 +257,7 @@ def test_frame_prices_skips_malformed_entries():
         ],
     }
 
-    assert frame_prices(message, TODAY) == [PriceDTO(**PRICE)]
+    assert frame_prices(message, TODAY) == [Price(**PRICE)]
 
 
 def test_publish_sets_and_publishes_each_price(valkey_url):
@@ -266,7 +266,7 @@ def test_publish_sets_and_publishes_each_price(valkey_url):
         pubsub = valkey.pubsub()
         await pubsub.subscribe("market:prices")
         await pubsub.get_message(timeout=1)
-        await publish(valkey, [PriceDTO(**PRICE)])
+        await publish(valkey, [Price(**PRICE)])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
         stored = await valkey.get("price:005930")
         await pubsub.aclose()
@@ -340,13 +340,13 @@ def test_publish_uses_dated_keys_and_keeps_last_received_tick():
         valkey = Valkey()
         newer = {**PRICE, "volume": 300, "trade_value": 2000, "rate": 2.5}
         older = {**PRICE, "volume": 100, "trade_value": 1000, "rate": -1.0}
-        await publish(valkey, [PriceDTO(**newer)])
+        await publish(valkey, [Price(**newer)])
         await publish(
             valkey,
             [
-                PriceDTO(**older),
-                PriceDTO(**older),
-                PriceDTO(**{**older, "timestamp": "2026-10-13T09:00:23+09:00", "volume": 400}),
+                Price(**older),
+                Price(**older),
+                Price(**{**older, "timestamp": "2026-10-13T09:00:23+09:00", "volume": 400}),
             ],
         )
         return valkey
@@ -395,7 +395,7 @@ def test_publish_delivers_every_tick_in_order_regardless_of_cache(valkey_url, ca
             async with valkey.pubsub() as pubsub:
                 await pubsub.subscribe("market:prices")
                 await pubsub.get_message(timeout=1)
-                await publish(valkey, [PriceDTO(**tick) for tick in ticks])
+                await publish(valkey, [Price(**tick) for tick in ticks])
                 received = []
                 for _ in ticks:
                     message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1)
@@ -429,7 +429,7 @@ async def _publish_and_capture(valkey_url, prices):
 
 
 def test_sampled_publish_adds_trace_fields_from_the_publish_span(valkey_url, spans):
-    message, stored = asyncio.run(_publish_and_capture(valkey_url, [PriceDTO(**PRICE)]))
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [Price(**PRICE)]))
     (span,) = spans.get_finished_spans()
     context = span.get_span_context()
     payload = json.loads(message["data"])
@@ -445,14 +445,14 @@ def test_sampled_publish_adds_trace_fields_from_the_publish_span(valkey_url, spa
 
 
 def test_unsampled_publish_payload_is_unchanged(valkey_url):
-    message, stored = asyncio.run(_publish_and_capture(valkey_url, [PriceDTO(**PRICE)]))
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [Price(**PRICE)]))
     expected = {k: v for k, v in PRICE.items() if k != "trade_value"}
     assert message["data"] == json.dumps(expected)
     assert stored == json.dumps(expected)
 
 
 def test_traced_publish_passes_the_original_typed_batch_and_records_counts(spans):
-    prices = [PriceDTO(**PRICE), PriceDTO(**{**PRICE, "code": "000660"})]
+    prices = [Price(**PRICE), Price(**{**PRICE, "code": "000660"})]
     received = []
 
     @traced_publish
@@ -470,7 +470,7 @@ def test_traced_publish_passes_the_original_typed_batch_and_records_counts(spans
 def test_parsed_orderbook_contains_typed_levels():
     result = parse_orderbook(ORDERBOOK, TODAY)
 
-    assert isinstance(result, OrderbookDTO)
-    assert all(isinstance(level, OrderbookLevelDTO) for level in result.asks + result.bids)
+    assert isinstance(result, Orderbook)
+    assert all(isinstance(level, OrderbookLevel) for level in result.asks + result.bids)
     assert result.asks[0].price == 81959
     assert result.bids[0].qty == 710
