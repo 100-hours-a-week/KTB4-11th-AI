@@ -1,5 +1,5 @@
 import functools
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from opentelemetry import trace
@@ -7,16 +7,17 @@ from opentelemetry.trace import SpanKind
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 from redis.asyncio import Redis
 
+from market_streamer.dto import PriceDTO
+
 tracer = trace.get_tracer(__name__)
 propagator = TraceContextTextMapPropagator()
 
-Publish = Callable[[Redis, Iterable[dict[str, object]]], Awaitable[None]]
+Publish = Callable[[Redis, list[PriceDTO]], Awaitable[None]]
 
 
 def traced_publish(publish: Publish) -> Publish:
     @functools.wraps(publish)
-    async def traced(valkey: Redis, prices: Iterable[dict[str, object]]) -> None:
-        prices = list(prices)
+    async def traced(valkey: Redis, prices: list[PriceDTO]) -> None:
         with tracer.start_as_current_span(
             "publish", kind=SpanKind.PRODUCER, attributes={"prices.received": len(prices)}
         ) as span:

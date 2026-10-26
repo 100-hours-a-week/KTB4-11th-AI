@@ -130,11 +130,11 @@ def test_stream_publishes_ticks_and_registers_again_after_disconnect(monkeypatch
         assert socket.sent[0] == {"trnm": "LOGIN", "token": "token"}
         assert socket.sent[1]["trnm"] == "REG"
         assert socket.sent[1]["data"] == [{"item": codes, "type": ["0B", "0D"]}]
-    assert [[price["code"] for price in prices] for prices in published] == [["005930"]]
-    assert published[0][0]["timestamp"].endswith("T09:01:23+09:00")
-    assert [[book["code"] for book in orderbooks] for orderbooks in books] == [["005930"]]
-    assert books[0][0]["timestamp"].endswith("T09:01:24+09:00")
-    assert books[0][0]["asks"][0]["price"] == abs(100000 - 41)
+    assert [[price.code for price in prices] for prices in published] == [["005930"]]
+    assert published[0][0].timestamp.endswith("T09:01:23+09:00")
+    assert [[book.code for book in orderbooks] for orderbooks in books] == [["005930"]]
+    assert books[0][0].timestamp.endswith("T09:01:24+09:00")
+    assert books[0][0].asks[0].price == abs(100000 - 41)
     assert delays == [1.0, 1.0]
 
 
@@ -174,7 +174,7 @@ def test_malformed_orderbook_does_not_suppress_valid_tick(monkeypatch):
         client = _client([FakeSocket([LOGIN_OK, REG_OK, frame])])
         asyncio.run(stream.stream_market_data(client, object(), ["005930"]))
 
-    assert [[price["code"] for price in prices] for prices in published] == [["005930"]]
+    assert [[price.code for price in prices] for prices in published] == [["005930"]]
     assert books == []
 
 
@@ -183,10 +183,10 @@ def test_stream_publishes_real_entries_in_arrival_order(monkeypatch):
     published = []
 
     async def record_prices(valkey, prices):
-        published.extend(("price", price["code"]) for price in prices)
+        published.extend(("price", price.code) for price in prices)
 
     async def record_orderbooks(valkey, orderbooks):
-        published.extend(("orderbook", orderbook["code"]) for orderbook in orderbooks)
+        published.extend(("orderbook", orderbook.code) for orderbook in orderbooks)
 
     monkeypatch.setattr(stream, "publish", record_prices)
     monkeypatch.setattr(stream, "publish_orderbooks", record_orderbooks)
