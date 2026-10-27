@@ -43,6 +43,29 @@
       },
       "systemControls": [],
       "secrets": []
+    },
+    {
+      "name": "amazon-ssm-agent",
+      "image": "public.ecr.aws/aws-fis/aws-fis-ssm-agent-non-root@sha256:e02eb349d88841348891208365ab4038567689964e5ede178390244721949cc4",
+      "cpu": 0,
+      "memoryReservation": 128,
+      "memory": 256,
+      "essential": false,
+      "stopTimeout": 60,
+      "environment": [
+        {
+          "name": "MANAGED_INSTANCE_ROLE_NAME",
+          "value": "stockspoon-v2-prod-market-http-fis-ssm"
+        }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/stockspoon-v2-prod/market-http",
+          "awslogs-region": "ap-northeast-2",
+          "awslogs-stream-prefix": "fis-ssm"
+        }
+      }
     }
   ],
   "volumes": [],
@@ -55,5 +78,7 @@
   "runtimePlatform": {
     "cpuArchitecture": "X86_64",
     "operatingSystemFamily": "LINUX"
-  }
+  },
+  "pidMode": "task",
+  "enableFaultInjection": true
 }
