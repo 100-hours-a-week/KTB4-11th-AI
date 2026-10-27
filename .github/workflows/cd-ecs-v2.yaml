@@ -91,7 +91,14 @@ jobs:
           set -Eeuo pipefail
           [[ "$(git rev-parse HEAD)" == "$IMAGE_TAG" ]]
           jq -e --arg family "$TASK_FAMILY" --arg name "$CONTAINER_NAME" \
-            '.family == $family and ([.containerDefinitions[] | select(.name == $name)] | length) == 1' \
+            '.family == $family and .networkMode == "awsvpc" and .pidMode == "task"
+             and .enableFaultInjection == true
+             and ([.containerDefinitions[] | select(.name == $name)] | length) == 1
+             and ([.containerDefinitions[] | select(.name == "amazon-ssm-agent"
+               and .essential == false
+               and (.image | test("@sha256:[a-f0-9]{64}$"))
+               and any(.environment[]; .name == "MANAGED_INSTANCE_ROLE_NAME"
+                 and .value == "stockspoon-v2-prod-market-http-fis-ssm"))] | length) == 1' \
             "$TASK_TEMPLATE" > /dev/null
 
       - name: Configure AWS credentials with OIDC
