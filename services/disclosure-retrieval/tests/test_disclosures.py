@@ -1,0 +1,203 @@
+import io
+import json
+from datetime import date
+
+import sqlalchemy as sa
+
+
+def seed(engine, stock, receipt, period, published, text, vector, kind="annual", indexed=True):
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO corporations(stock_code,corp_code,name) VALUES "
+                "(:stock,:corp,:name) ON CONFLICT DO NOTHING"
+            ),
+            {"stock": stock, "corp": f"00{stock}", "name": f"회사{stock}"},
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO "
+                "disclosures(receipt_id,stock_code,corp_code,company_name,title,business_year,kind,period_end,published_date,raw_payload,status)"
+                " VALUES "
+                "(:receipt,:stock,:corp,:name,'보고서',:year,:kind,:period,:published,'{}','ready')"
+            ),
+            {
+                "receipt": receipt,
+                "stock": stock,
+                "corp": f"00{stock}",
+                "name": f"회사{stock}",
+                "year": period.year,
+                "kind": kind,
+                "period": period,
+                "published": published,
+            },
+        )
+        doc = conn.execute(
+            sa.text(
+                "INSERT INTO "
+                "disclosure_documents(receipt_id,archive_key,source_hash,parser_version,documents)"
+                " VALUES (:receipt,'test','test','v1','[]') RETURNING id"
+            ),
+            {"receipt": receipt},
+        ).scalar_one()
+        if indexed:
+            idx = conn.execute(
+                sa.text(
+                    "INSERT INTO "
+                    "disclosure_indexes(document_id,signature,model,dimensions,status,active)"
+                    " VALUES (:doc,'v1','test-model',2000,'ready',true) RETURNING id"
+                ),
+                {"doc": doc},
+            ).scalar_one()
+            conn.execute(
+                sa.text(
+                    "INSERT INTO "
+                    "disclosure_chunks(index_id,ordinal,section,topic,document_name,start_offset,end_offset,text,embedding)"
+                    " VALUES "
+                    "(:idx,0,'위험관리','risk','main.xml',0,:end,:text,CAST(:vector AS "
+                    "vector))"
+                ),
+                {"idx": idx, "end": len(text), "text": text, "vector": json.dumps(vector)},
+            )
+
+
+def test_latest_groups_corrections_and_keeps_unindexed(client, engine):
+    v = [1.0] + [0.0] * 1999
+    seed(engine, "005930", "20260301000001", date(2025, 12, 31), date(2026, 3, 1), "원본", v)
+    seed(engine, "005930", "20260401000001", date(2025, 12, 31), date(2026, 4, 1), "정정", v)
+    seed(
+        engine,
+        "005930",
+        "20260501000001",
+        date(2026, 3, 31),
+        date(2026, 5, 1),
+        "미색인",
+        v,
+        kind="q1",
+        indexed=False,
+    )
+    result = client.get("/stocks/005930/disclosures?limit=3&as_of=2026-06-01")
+    assert result.status_code == 200
+    rows = result.json()["reports"]
+    assert len(rows) == 2
+    assert rows[0]["index_status"] == "pending"
+    assert rows[1]["published_date"] == "2026-04-01"
+    assert "receipt_id" not in rows[0] and "url" not in rows[0]
+    old = client.get("/stocks/005930/disclosures?as_of=2026-03-15").json()["reports"]
+    assert len(old) == 1 and old[0]["published_date"] == "2026-03-01"
+
+
+def test_search_history_is_optional_and_company_date_isolated(client, engine, monkeypatch):
+    v = [1.0] + [0.0] * 1999
+    seed(engine, "005930", "20240301000001", date(2023, 12, 31), date(2024, 3, 1), "과거 소송", v)
+    seed(engine, "005930", "20250301000001", date(2024, 12, 31), date(2025, 3, 1), "최근 소송", v)
+    seed(engine, "005930", "20260301000001", date(2025, 12, 31), date(2026, 3, 1), "미래 소송", v)
+    seed(engine, "000660", "20250301000002", date(2024, 12, 31), date(2025, 3, 1), "다른 기업", v)
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://localhost/v1")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "test-model")
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout: io.BytesIO(
+            json.dumps({"data": [{"index": 0, "embedding": v}]}).encode()
+        ),
+    )
+    body = {"query": "소송 위험", "latest_limit": 1, "as_of": "2025-06-01"}
+    current = client.post("/stocks/005930/disclosures/search", json=body)
+    assert current.status_code == 200, current.text
+    assert [c["text"] for c in current.json()["latest_evidence"]] == ["최근 소송"]
+    assert current.json()["historical_evidence"] == []
+    body["include_history"] = True
+    history = client.post("/stocks/005930/disclosures/search", json=body).json()
+    assert [c["text"] for c in history["historical_evidence"]] == ["과거 소송"]
+    assert all(
+        "start_offset" not in c and "receipt_id" not in c for c in history["latest_evidence"]
+    )
+
+
+def test_empty_search_needs_no_embedding_configuration(client):
+    assert client.post("/stocks/005930/disclosures/search", json={"query": "위험"}).json() == {
+        "reports": [],
+        "latest_evidence": [],
+        "historical_evidence": [],
+    }
+
+
+def test_disclosure_request_limits(client):
+    assert client.get("/stocks/005930/disclosures?limit=4").status_code == 422
+    assert client.post("/stocks/005930/disclosures/search", json={"query": "  "}).status_code == 422
+    assert (
+        client.post(
+            "/stocks/005930/disclosures/search", json={"query": "위험", "top_k": 21}
+        ).status_code
+        == 422
+    )
+
+
+def test_returned_evidence_includes_table_context(client, engine, monkeypatch):
+    v = [1.0] + [0.0] * 1999
+    seed(engine, "005930", "context-test", date(2025, 12, 31), date(2026, 3, 1), "A | 100", v)
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://localhost/v1")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "test-model")
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout: io.BytesIO(
+            json.dumps({"data": [{"index": 0, "embedding": v}]}).encode()
+        ),
+    )
+    data = client.post(
+        "/stocks/005930/disclosures/search", json={"query": "매출", "as_of": "2026-06-01"}
+    ).json()
+    assert "context" in data["latest_evidence"][0]
+
+
+def test_exact_search_scores_every_filtered_chunk_before_top_k(client, engine, monkeypatch):
+    vector = [1.0] + [0.0] * 1999
+    seed(engine, "005930", "exact-search", date(2025, 12, 31), date(2026, 3, 1), "기준", vector)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO disclosure_chunks "
+                "(index_id,ordinal,section,topic,document_name,"
+                "start_offset,end_offset,text,embedding) "
+                "SELECT i.id,n,'위험','risk','main.xml',n,n+1,'후보 ' || n, "
+                "CAST(:vector AS halfvec) FROM disclosure_indexes i "
+                "JOIN disclosure_documents d ON d.id=i.document_id "
+                "CROSS JOIN generate_series(1,600) AS series(n) WHERE d.receipt_id='exact-search'"
+            ),
+            {"vector": json.dumps(vector)},
+        )
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda req, timeout: io.BytesIO(
+            json.dumps({"data": [{"index": 0, "embedding": vector}]}).encode()
+        ),
+    )
+    captured = []
+
+    def capture(conn, cursor, statement, parameters, context, executemany):
+        if "filtered_chunks AS MATERIALIZED" in statement:
+            captured.append((statement, parameters))
+
+    sa.event.listen(engine, "before_cursor_execute", capture)
+    try:
+        response = client.post(
+            "/stocks/005930/disclosures/search",
+            json={"query": "위험", "as_of": "2026-06-01", "top_k": 6},
+        )
+    finally:
+        sa.event.remove(engine, "before_cursor_execute", capture)
+    assert response.status_code == 200, response.text
+    assert len(response.json()["latest_evidence"]) == 6
+    assert captured
+    statement, parameters = captured[0]
+    with engine.connect() as conn:
+        plan = conn.exec_driver_sql(
+            "EXPLAIN (ANALYZE, FORMAT JSON) " + statement, parameters
+        ).scalar_one()[0]["Plan"]
+    nodes, pending = [], [plan]
+    while pending:
+        node = pending.pop()
+        nodes.append(node)
+        pending.extend(node.get("Plans", []))
+    candidates = next(node for node in nodes if node.get("Subplan Name") == "CTE candidates")
+    assert candidates["Actual Rows"] == 601

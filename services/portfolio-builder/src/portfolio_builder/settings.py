@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     postgres_dsn: str
     market_http_base_uri: str
     news_http_base_uri: str
+    disclosure_retrieval_base_uri: str = Field(min_length=1)
+    disclosure_retrieval_timeout: float = Field(default=40, gt=0, le=120)
     llm_api_key: SecretStr = Field(min_length=1)
     llm_model: str
     thinking_level: Literal["none", "minimal", "low", "medium", "high", "xhigh"] = "medium"

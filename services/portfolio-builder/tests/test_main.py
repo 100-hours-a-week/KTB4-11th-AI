@@ -9,6 +9,7 @@ from portfolio_builder.briefing import Briefing
 from portfolio_builder.explain import ExplanationRejected, Explanations
 
 REQUIRED = {
+    "PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_BASE_URI": "http://disclosure-retrieval:8000",
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI": "http://market-http:8000",
     "PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI": "http://news-http:8000",
@@ -69,6 +70,7 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
     assert {t.name for t in captured["tools"]} == {
         "get_news_cluster",
         "search_news_cluster",
+        "search_disclosures",
         "search_graph",
         "find_graph_paths",
         "analyze_technicals",

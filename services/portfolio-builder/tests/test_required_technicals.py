@@ -42,10 +42,32 @@ def tools_for(saved, results=None, delay=0):
             }
         )
 
-    return [analyze, submit]
+    @tool("search_disclosures", description="Search periodic report evidence")
+    def search() -> str:
+        return json.dumps({"reports": [], "latest_evidence": [], "historical_evidence": []})
+
+    return [analyze, submit, search]
 
 
 def run(replies, tools):
+    replies = [
+        message.model_copy(
+            update={
+                "tool_calls": [
+                    *message.tool_calls,
+                    {
+                        "name": "search_disclosures",
+                        "args": {},
+                        "id": f"rag-{message.id}",
+                        "type": "tool_call",
+                    },
+                ]
+            }
+        )
+        if any(call["name"] == "analyze_technicals" for call in message.tool_calls)
+        else message
+        for message in replies
+    ]
     log = Recorder()
     result = run_agent(
         model=ScriptedModel(messages=iter(replies)),

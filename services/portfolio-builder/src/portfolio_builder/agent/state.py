@@ -11,6 +11,7 @@ type Usage = dict[str, float | None]
 
 class PortfolioState(AgentState):
     portfolio_id: NotRequired[int]
+    disclosures_checked: NotRequired[Annotated[bool, operator.or_]]
     technicals_checked: NotRequired[Annotated[bool, operator.or_]]
     turns: NotRequired[Annotated[int, operator.add]]
     usage: NotRequired[Annotated[Usage, reduce_usage]]

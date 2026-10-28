@@ -17,7 +17,9 @@ from portfolio_builder.explain import (
 from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
+from portfolio_builder.retrieval_client import RetrievalClient
 from portfolio_builder.settings import Settings
+from portfolio_builder.tools.disclosures import disclosure_tools
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
 from portfolio_builder.tools.submit import submit_tool
@@ -38,6 +40,9 @@ def main() -> None:
     ) as end:
         engine = sa.create_engine(settings.postgres_dsn)
         news_client = NewsClient(settings.news_http_base_uri)
+        retrieval_client = RetrievalClient(
+            settings.disclosure_retrieval_base_uri, settings.disclosure_retrieval_timeout
+        )
         try:
             unexplained = load_unexplained(engine)
             if unexplained is None:
@@ -61,6 +66,7 @@ def main() -> None:
                 )
                 tools = [
                     *news_tools(news_client),
+                    *disclosure_tools(retrieval_client),
                     *graph_tools(news_client),
                     technicals_tool(engine, HttpMarket(settings.market_http_base_uri, engine)),
                     submit_tool(
