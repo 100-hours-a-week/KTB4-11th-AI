@@ -54,6 +54,7 @@ def test_main_bounds_postgres_connections_and_queries(monkeypatch):
         },
     )
     assert calls["app"]["postgres_engine"] is engine
+    assert calls["app"]["memory_profile_settings"] is settings
     assert calls["tracing"] == "market-http"
     assert calls["propagator"].fields == set()
 
