@@ -140,6 +140,11 @@ class MarketSubscription:
                     continue
                 channel = message["channel"]
                 data = message["data"]
+                payload_bytes = 0
+                if channel in CHANNEL_PREFIXES:
+                    payload_bytes = len(data.encode("utf-8"))
+                    if self._metrics is not None:
+                        self._metrics.received(channel, payload_bytes)
                 try:
                     code = json.loads(data)["code"]
                     if not isinstance(code, str):
@@ -150,9 +155,7 @@ class MarketSubscription:
                         "market subscription received invalid event", extra={"channel": channel}
                     )
                     continue
-                event = MarketEvent(
-                    data, time.monotonic(), datetime.now(UTC), len(data.encode("utf-8"))
-                )
+                event = MarketEvent(data, time.monotonic(), datetime.now(UTC), payload_bytes)
                 for queue in tuple(self._subscribers.get(subscriber_key, ())):
                     if queue.full():
                         self._close_subscriber(queue, "overflow")

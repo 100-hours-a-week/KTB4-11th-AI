@@ -6,13 +6,42 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 
 import uvicorn
-from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, start_http_server
+from prometheus_client import (
+    CollectorRegistry,
+    Counter,
+    Gauge,
+    Histogram,
+    ProcessCollector,
+    start_http_server,
+)
 
 from market_http.observability.queues import QueueMetrics
 
 DELIVERY: ContextVar[deque[float | None] | None] = ContextVar("sse_delivery", default=None)
 FRAME_END = re.compile(rb"\r?\n\r?\n")
 REASONS = ("normal", "client_disconnect", "cancelled", "send_error", "server_shutdown", "unknown")
+
+
+class DeliveryMarkers(deque[float | None]):
+    def __init__(self, metrics: "MarketMetrics", stream: str) -> None:
+        super().__init__()
+        self._metrics = metrics
+        self._stream = stream
+
+    def append(self, marker: float | None) -> None:
+        super().append(marker)
+        self._metrics.delivery_markers_pending.labels(self._stream).inc()
+
+    def popleft(self) -> float | None:
+        marker = super().popleft()
+        self._metrics.delivery_markers_pending.labels(self._stream).dec()
+        return marker
+
+    def clear(self) -> None:
+        count = len(self)
+        super().clear()
+        if count:
+            self._metrics.delivery_markers_pending.labels(self._stream).dec(count)
 
 
 def track_delivery(*, live: bool = False, received_at: float | None = None) -> None:
@@ -24,6 +53,7 @@ def track_delivery(*, live: bool = False, received_at: float | None = None) -> N
 class MarketMetrics:
     def __init__(self):
         self.registry = CollectorRegistry()
+        ProcessCollector(registry=self.registry)
         self.queues = QueueMetrics(self.registry)
         self.shutting_down = False
         self.connections = Gauge(
@@ -56,6 +86,48 @@ class MarketMetrics:
             ["stream"],
             registry=self.registry,
         )
+        self.live_events = Counter(
+            "market_http_sse_live_events_sent",
+            "Pub/Sub data events after complete ASGI send",
+            ["stream"],
+            registry=self.registry,
+        )
+        self.received_messages = Counter(
+            "market_http_pubsub_messages_received",
+            "Known Pub/Sub messages before validation",
+            ["channel"],
+            registry=self.registry,
+        )
+        self.received_bytes = Counter(
+            "market_http_pubsub_payload_received_bytes",
+            "Known Pub/Sub payload UTF-8 bytes before validation",
+            ["channel"],
+            registry=self.registry,
+        )
+        self.send_operations_in_flight = Gauge(
+            "market_http_sse_send_operations_in_flight",
+            "Current ASGI body send calls",
+            ["stream"],
+            registry=self.registry,
+        )
+        self.send_body_bytes_in_flight = Gauge(
+            "market_http_sse_send_body_bytes_in_flight",
+            "Body bytes owned by current ASGI body send calls",
+            ["stream"],
+            registry=self.registry,
+        )
+        self.observer_buffer_bytes = Gauge(
+            "market_http_sse_observer_buffer_bytes",
+            "Current SSE framing buffer bytes",
+            ["stream"],
+            registry=self.registry,
+        )
+        self.delivery_markers_pending = Gauge(
+            "market_http_sse_delivery_markers_pending",
+            "Current SSE delivery markers",
+            ["stream"],
+            registry=self.registry,
+        )
         self.latency = Histogram(
             "market_http_sse_delivery_latency_seconds",
             "Pub/Sub receipt to completed ASGI send",
@@ -80,7 +152,18 @@ class MarketMetrics:
             registry=self.registry,
         )
         for stream in ("prices", "orderbooks"):
-            for metric in (self.connections, self.started, self.events, self.bytes, self.latency):
+            for metric in (
+                self.connections,
+                self.started,
+                self.events,
+                self.bytes,
+                self.live_events,
+                self.latency,
+                self.send_operations_in_flight,
+                self.send_body_bytes_in_flight,
+                self.observer_buffer_bytes,
+                self.delivery_markers_pending,
+            ):
                 metric.labels(stream)
             for reason in REASONS:
                 self.closed.labels(stream, reason)
@@ -88,6 +171,13 @@ class MarketMetrics:
             self.pool_connections.labels(state)
         for result in ("success", "timeout", "error"):
             self.pool_duration.labels(result)
+        for channel in ("market:prices", "market:orderbooks"):
+            self.received_messages.labels(channel)
+            self.received_bytes.labels(channel)
+
+    def received(self, channel: str, payload_bytes: int) -> None:
+        self.received_messages.labels(channel).inc()
+        self.received_bytes.labels(channel).inc(payload_bytes)
 
     @contextmanager
     def serve(self, host: str, port: int):
@@ -124,7 +214,7 @@ class SSEMetrics:
         if scope["type"] != "http" or scope.get("method", "GET") != "GET" or stream is None:
             return await self.app(scope, receive, send)
         metrics = self.metrics
-        pending: deque[float | None] = deque()
+        pending = DeliveryMarkers(metrics, stream)
         token = DELIVERY.set(pending)
         accepted = False
         reason = "normal"
@@ -139,11 +229,20 @@ class SSEMetrics:
 
         async def observed_send(message):
             nonlocal accepted, reason, buffer
+            body = message.get("body", b"")
+            sending_body = message["type"] == "http.response.body"
+            if sending_body:
+                metrics.send_operations_in_flight.labels(stream).inc()
+                metrics.send_body_bytes_in_flight.labels(stream).inc(len(body))
             try:
                 await send(message)
             except Exception:
                 reason = "send_error"
                 raise
+            finally:
+                if sending_body:
+                    metrics.send_operations_in_flight.labels(stream).dec()
+                    metrics.send_body_bytes_in_flight.labels(stream).dec(len(body))
             if (
                 message["type"] == "http.response.start"
                 and message["status"] == 200
@@ -152,11 +251,13 @@ class SSEMetrics:
                 accepted = True
                 metrics.started.labels(stream).inc()
                 metrics.connections.labels(stream).inc()
-            if not accepted or message["type"] != "http.response.body":
+            if not accepted or not sending_body:
                 return
-            buffer += message.get("body", b"")
+            buffer += body
+            metrics.observer_buffer_bytes.labels(stream).set(len(buffer))
             while match := FRAME_END.search(buffer):
                 frame, buffer = buffer[: match.end()], buffer[match.end() :]
+                metrics.observer_buffer_bytes.labels(stream).set(len(buffer))
                 if not any(
                     line.startswith(b"data:") or line == b"data" for line in frame.splitlines()
                 ):
@@ -165,6 +266,7 @@ class SSEMetrics:
                 metrics.bytes.labels(stream).inc(len(frame))
                 received = pending.popleft() if pending else None
                 if received is not None:
+                    metrics.live_events.labels(stream).inc()
                     metrics.latency.labels(stream).observe(time.monotonic() - received)
 
         try:
@@ -178,6 +280,8 @@ class SSEMetrics:
                 reason = "unknown"
             raise
         finally:
+            pending.clear()
+            metrics.observer_buffer_bytes.labels(stream).set(0)
             DELIVERY.reset(token)
             if accepted:
                 metrics.connections.labels(stream).dec()
