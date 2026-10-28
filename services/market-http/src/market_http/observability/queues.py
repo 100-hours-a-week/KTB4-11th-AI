@@ -1,14 +1,9 @@
-from __future__ import annotations
-
 import asyncio
 from dataclasses import dataclass
 from threading import Lock
-from typing import TYPE_CHECKING
+from typing import Any
 
 from prometheus_client import CollectorRegistry, Counter, Gauge
-
-if TYPE_CHECKING:
-    from market_http.market_subscription import MarketEvent
 
 STREAMS = ("prices", "orderbooks", "mixed")
 CLOSE_REASONS = ("overflow", "listener_end", "shutdown", "subscriber_exit")
@@ -23,17 +18,17 @@ class _QueueState:
 
 
 class ObservedQueue(asyncio.Queue):
-    def __init__(self, metrics: QueueMetrics, stream: str) -> None:
+    def __init__(self, metrics: "QueueMetrics", stream: str) -> None:
         super().__init__(maxsize=QUEUE_CAPACITY)
         self._metrics = metrics
         self._stream = stream
 
-    def put_nowait(self, item: MarketEvent | None) -> None:
+    def put_nowait(self, item: Any | None) -> None:
         super().put_nowait(item)
         if item is not None:
             self._metrics._put(self, item)
 
-    def get_nowait(self) -> MarketEvent | None:
+    def get_nowait(self) -> Any | None:
         item = super().get_nowait()
         if item is not None:
             self._metrics._get(self, item)
@@ -148,7 +143,7 @@ class QueueMetrics:
                 "max_events": max((self._current_max(stream) for stream in STREAMS), default=0),
             }
 
-    def _put(self, queue: ObservedQueue, event: MarketEvent) -> None:
+    def _put(self, queue: ObservedQueue, event: Any) -> None:
         payload_bytes = event.payload_bytes or len(event.data.encode("utf-8"))
         with self._lock:
             state = self._states.get(queue)
@@ -164,7 +159,7 @@ class QueueMetrics:
             self._high_watermarks[stream] = max(self._high_watermarks[stream], state.events)
             self._publish(stream)
 
-    def _get(self, queue: ObservedQueue, event: MarketEvent) -> None:
+    def _get(self, queue: ObservedQueue, event: Any) -> None:
         payload_bytes = event.payload_bytes or len(event.data.encode("utf-8"))
         with self._lock:
             state = self._states.get(queue)

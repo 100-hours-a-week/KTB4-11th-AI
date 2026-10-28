@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -9,10 +7,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from market_http.settings import Settings
+from market_http.settings import Settings
 
 logger = logging.getLogger(__name__)
 MAX_PROFILE_BYTES = 128 * 1024 * 1024

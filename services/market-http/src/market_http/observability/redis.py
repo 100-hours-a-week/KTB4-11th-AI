@@ -1,17 +1,13 @@
-from __future__ import annotations
-
 import asyncio
 import logging
 import os
 from types import MethodType
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from redis.asyncio.client import PubSub
 
 from market_http.observability.memory import current_rss_bytes
-
-if TYPE_CHECKING:
-    from market_http.observability.queues import QueueMetrics
+from market_http.observability.queues import QueueMetrics
 
 logger = logging.getLogger(__name__)
 CHANNELS = ("market:prices", "market:orderbooks")

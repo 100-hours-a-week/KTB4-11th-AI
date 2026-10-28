@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -11,17 +9,15 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 
+from market_http.observability.prometheus import MarketMetrics
 from market_http.observability.queues import ObservedQueue
 from market_http.observability.redis import SubscriptionObserver, observe_pubsub
-
-if TYPE_CHECKING:
-    from market_http.observability.prometheus import MarketMetrics
 
 logger = logging.getLogger(__name__)
 
