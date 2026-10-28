@@ -67,11 +67,32 @@ def render(template, image, secret, environment):
         )
     if not 0 < float(env["OTEL_TRACES_SAMPLER_ARG"]) <= 1:
         raise ValueError("Trace sample ratio must be greater than zero and at most one")
+    if env.get("MARKET_HTTP_MEMORY_PROFILE_ENABLED", "false").lower() == "true":
+        env.setdefault("MARKET_HTTP_MEMORY_PROFILE_START_MODE", "trigger")
+        env.setdefault("MARKET_HTTP_MEMORY_PROFILE_DIR", "/profiles")
+        if env["MARKET_HTTP_MEMORY_PROFILE_DIR"] != "/profiles":
+            raise ValueError("ECS memory profiles must use the persistent /profiles mount")
     task = copy.deepcopy(template)
     containers = [c for c in task["containerDefinitions"] if c["name"] == "market-http"]
     if len(containers) != 1 or containers[0].get("command") != ["market-http"]:
         raise ValueError("Expected one native market-http application container")
     container = containers[0]
+    if env.get("MARKET_HTTP_MEMORY_PROFILE_ENABLED", "false").lower() == "true":
+        volume = {
+            "name": "market-memory",
+            "host": {"sourcePath": "/var/lib/stockspoon/market-memory"},
+        }
+        mount = {"sourceVolume": "market-memory", "containerPath": "/profiles", "readOnly": False}
+        volumes = task.setdefault("volumes", [])
+        mounts = container.setdefault("mountPoints", [])
+        if any(v.get("name") == "market-memory" and v != volume for v in volumes):
+            raise ValueError("Conflicting market-memory host volume")
+        if any(m.get("containerPath") == "/profiles" and m != mount for m in mounts):
+            raise ValueError("Conflicting /profiles mount")
+        if volume not in volumes:
+            volumes.append(volume)
+        if mount not in mounts:
+            mounts.append(mount)
     container["image"] = image
     container["environment"] = [{"name": k, "value": v} for k, v in sorted(env.items())]
     container["secrets"] = [{"name": "MARKET_HTTP_POSTGRES_DSN", "valueFrom": secret}]
