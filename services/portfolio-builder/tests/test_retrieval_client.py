@@ -18,8 +18,13 @@ def test_disclosure_search_posts_query_and_preserves_evidence():
                 "kind": "annual",
                 "period_end": "2025-12-31",
                 "published_date": "2026-03-01",
+                "receipt_id": "20260301000001",
+                "chunk_id": 12,
                 "section": "사업",
                 "topic": "business",
+                "document_name": "00001.xml",
+                "start_offset": 0,
+                "end_offset": 5,
                 "text": "매출 증가",
                 "context": "",
                 "score": 0.9,
@@ -27,6 +32,10 @@ def test_disclosure_search_posts_query_and_preserves_evidence():
             }
         ],
         "historical_evidence": [],
+        "latest_searched": 1,
+        "latest_returned": 1,
+        "history_searched": 0,
+        "history_returned": 0,
     }
     with patch(
         "portfolio_builder.retrieval_client.urlopen", return_value=response(payload)

@@ -5,7 +5,18 @@ from datetime import date
 import sqlalchemy as sa
 
 
-def seed(engine, stock, receipt, period, published, text, vector, kind="annual", indexed=True):
+def seed(
+    engine,
+    stock,
+    receipt,
+    period,
+    published,
+    text,
+    vector,
+    kind="annual",
+    indexed=True,
+    model="test-model",
+):
     with engine.begin() as conn:
         conn.execute(
             sa.text(
@@ -45,9 +56,9 @@ def seed(engine, stock, receipt, period, published, text, vector, kind="annual",
                 sa.text(
                     "INSERT INTO "
                     "disclosure_indexes(document_id,signature,model,dimensions,status,active)"
-                    " VALUES (:doc,'v1','test-model',2000,'ready',true) RETURNING id"
+                    " VALUES (:doc,'v1',:model,2000,'ready',true) RETURNING id"
                 ),
-                {"doc": doc},
+                {"doc": doc, "model": model},
             ).scalar_one()
             conn.execute(
                 sa.text(
@@ -80,7 +91,7 @@ def test_latest_groups_corrections_and_keeps_unindexed(client, engine):
     assert result.status_code == 200
     rows = result.json()["reports"]
     assert len(rows) == 2
-    assert rows[0]["index_status"] == "pending"
+    assert rows[0]["index_state"] == "pending"
     assert rows[1]["published_date"] == "2026-04-01"
     assert "receipt_id" not in rows[0] and "url" not in rows[0]
     old = client.get("/stocks/005930/disclosures?as_of=2026-03-15").json()["reports"]
@@ -110,7 +121,8 @@ def test_search_history_is_optional_and_company_date_isolated(client, engine, mo
     history = client.post("/stocks/005930/disclosures/search", json=body).json()
     assert [c["text"] for c in history["historical_evidence"]] == ["과거 소송"]
     assert all(
-        "start_offset" not in c and "receipt_id" not in c for c in history["latest_evidence"]
+        c["receipt_id"] and c["document_name"] == "main.xml" and c["start_offset"] == 0
+        for c in history["latest_evidence"]
     )
 
 
@@ -119,6 +131,10 @@ def test_empty_search_needs_no_embedding_configuration(client):
         "reports": [],
         "latest_evidence": [],
         "historical_evidence": [],
+        "latest_searched": 0,
+        "latest_returned": 0,
+        "history_searched": 0,
+        "history_returned": 0,
     }
 
 
@@ -201,3 +217,72 @@ def test_exact_search_scores_every_filtered_chunk_before_top_k(client, engine, m
         pending.extend(node.get("Plans", []))
     candidates = next(node for node in nodes if node.get("Subplan Name") == "CTE candidates")
     assert candidates["Actual Rows"] == 601
+
+
+def _answer(vector):
+    return lambda req, timeout: io.BytesIO(
+        json.dumps({"data": [{"index": 0, "embedding": vector}]}).encode()
+    )
+
+
+def test_evidence_identifies_its_receipt_chunk_and_character_range(client, engine, monkeypatch):
+    v = [1.0] + [0.0] * 1999
+    seed(engine, "005930", "20260301000009", date(2025, 12, 31), date(2026, 3, 1), "위험 설명", v)
+    monkeypatch.setattr("urllib.request.urlopen", _answer(v))
+
+    item = client.post(
+        "/stocks/005930/disclosures/search", json={"query": "위험", "as_of": "2026-06-01"}
+    ).json()["latest_evidence"][0]
+
+    assert item["receipt_id"] == "20260301000009"
+    assert isinstance(item["chunk_id"], int)
+    assert item["document_name"] == "main.xml"
+    assert (item["start_offset"], item["end_offset"]) == (0, len("위험 설명"))
+
+
+def test_a_partial_reindex_returns_the_evidence_that_matches_the_configured_space(
+    client, engine, monkeypatch
+):
+    v = [1.0] + [0.0] * 1999
+    seed(engine, "005930", "20260301000010", date(2025, 12, 31), date(2026, 3, 1), "현재 공간", v)
+    seed(
+        engine,
+        "005930",
+        "20260401000010",
+        date(2026, 3, 31),
+        date(2026, 4, 1),
+        "다른 공간",
+        v,
+        kind="q1",
+        model="retired-model",
+    )
+    monkeypatch.setattr("urllib.request.urlopen", _answer(v))
+
+    response = client.post(
+        "/stocks/005930/disclosures/search", json={"query": "위험", "as_of": "2026-06-01"}
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [c["text"] for c in body["latest_evidence"]] == ["현재 공간"]
+    assert {r["index_state"] for r in body["reports"]} == {"ready", "other_space"}
+
+
+def test_no_distance_threshold_is_applied_unless_one_is_requested(client, engine, monkeypatch):
+    stored = [1.0] + [0.0] * 1999
+    orthogonal = [0.0, 1.0] + [0.0] * 1998
+    seed(
+        engine, "005930", "20260301000011", date(2025, 12, 31), date(2026, 3, 1), "먼 근거", stored
+    )
+    monkeypatch.setattr("urllib.request.urlopen", _answer(orthogonal))
+    body = {"query": "위험", "as_of": "2026-06-01"}
+
+    kept = client.post("/stocks/005930/disclosures/search", json=body).json()
+    assert [c["text"] for c in kept["latest_evidence"]] == ["먼 근거"]
+    assert (kept["latest_searched"], kept["latest_returned"]) == (1, 1)
+
+    filtered = client.post(
+        "/stocks/005930/disclosures/search", json={**body, "max_distance": 0.5}
+    ).json()
+    assert filtered["latest_evidence"] == []
+    assert (filtered["latest_searched"], filtered["latest_returned"]) == (1, 0)

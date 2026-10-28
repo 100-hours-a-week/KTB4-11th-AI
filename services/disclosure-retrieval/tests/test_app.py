@@ -1,12 +1,35 @@
 import io
 import json
+from datetime import date
 
 import pytest
 import sqlalchemy as sa
-from disclosure_retrieval import routes
 from disclosure_retrieval.app import create_app
+from disclosure_retrieval.controllers import disclosures as controller
+from disclosure_retrieval.repositories.disclosures import Evidence, SearchResult
 from disclosure_retrieval.settings import Settings
 from fastapi.testclient import TestClient
+
+
+def evidence(text: str) -> Evidence:
+    return Evidence(
+        receipt_id="20260301000001",
+        chunk_id=1,
+        title="보고서",
+        stock_code="005930",
+        business_year=2025,
+        kind="annual",
+        period_end=date(2025, 12, 31),
+        published_date=date(2026, 3, 1),
+        section="위험관리",
+        topic="risk",
+        document_name="main.xml",
+        start_offset=0,
+        end_offset=len(text),
+        text=text,
+        context="",
+        score=1.0,
+    )
 
 
 def test_retrieval_settings_use_the_disclosure_model(monkeypatch):
@@ -22,7 +45,7 @@ def test_search_embeds_with_training_instruction_and_returns_passages(monkeypatc
     monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://model/v1")
     monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "finetuned-model")
     monkeypatch.setenv("DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION", "Instruct: Find evidence\nQuery: ")
-    monkeypatch.setattr(routes, "report_rows", lambda *args: [{"title": "report"}])
+    monkeypatch.setattr(controller, "report_rows", lambda *args: [{"title": "report"}])
     captured = {}
 
     def embed(request, timeout):
@@ -31,18 +54,15 @@ def test_search_embeds_with_training_instruction_and_returns_passages(monkeypatc
             json.dumps({"data": [{"index": 0, "embedding": [1.0] + [0.0] * 1999}]}).encode()
         )
 
-    def search(conn, stock, selected, vector, body, model, dimensions, distance):
+    def search(conn, stock, selected, vector, params):
         assert stock == "005930"
-        assert model == "finetuned-model" and dimensions == 2000 and len(vector) == 2000
-        assert body.as_of.isoformat() == "2026-10-16"
-        return {
-            "reports": [],
-            "latest_evidence": [{"text": "소송 근거"}],
-            "historical_evidence": [],
-        }
+        assert params.model == "finetuned-model"
+        assert params.dimensions == 2000 and len(vector) == 2000
+        assert params.as_of.isoformat() == "2026-10-16"
+        return SearchResult(latest_evidence=[evidence("소송 근거")])
 
     monkeypatch.setattr("urllib.request.urlopen", embed)
-    monkeypatch.setattr(routes, "search_reports", search)
+    monkeypatch.setattr(controller, "search_reports", search)
     engine = sa.create_engine("sqlite://")
     try:
         with TestClient(create_app(engine, Settings())) as client:

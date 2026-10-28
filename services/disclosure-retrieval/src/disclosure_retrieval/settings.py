@@ -32,4 +32,5 @@ class Settings(BaseSettings):
         default=4096, ge=1, le=16384, validation_alias="DISCLOSURE_EMBEDDING_MAX_TOKENS"
     )
     timeout: float = Field(default=30, gt=0, le=120)
-    max_distance: float = Field(default=0.5, ge=0, le=2)
+    # No default cutoff: an empty result must mean "nothing relevant", not "filtered out".
+    max_distance: float | None = Field(default=None, ge=0, le=2)
