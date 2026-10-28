@@ -6,15 +6,14 @@ import time
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
 from uuid import uuid4
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 
+from market_http.events import MarketEvent
 from market_http.observability.prometheus import MarketMetrics
 from market_http.observability.queues import ObservedQueue
 from market_http.observability.redis import SubscriptionObserver, observe_pubsub
@@ -24,14 +23,6 @@ logger = logging.getLogger(__name__)
 CHANNEL_PREFIXES = {"market:prices": "price", "market:orderbooks": "orderbook"}
 CHANNELS = tuple(CHANNEL_PREFIXES)
 QUEUE_CAPACITY = 256
-
-
-@dataclass(frozen=True, slots=True)
-class MarketEvent:
-    data: str
-    received_at: float
-    received: datetime
-    payload_bytes: int = 0
 
 
 class MarketSubscription:
@@ -102,7 +93,7 @@ class MarketSubscription:
                     )
 
     @staticmethod
-    def _listener_finished(task: asyncio.Task[None], *, fields: dict[str, Any]) -> None:
+    def _listener_finished(task: asyncio.Task[None], *, fields: dict[str, object]) -> None:
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.error(
                 "market subscription listener failed",
@@ -135,7 +126,7 @@ class MarketSubscription:
             self._close_subscriber(queue, "subscriber_exit")
 
     async def _listen(
-        self, pubsub: PubSub, fields: dict[str, Any], observer: SubscriptionObserver
+        self, pubsub: PubSub, fields: dict[str, object], observer: SubscriptionObserver
     ) -> None:
         try:
             async for message in pubsub.listen():

@@ -1,9 +1,10 @@
 import asyncio
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any
 
 from prometheus_client import CollectorRegistry, Counter, Gauge
+
+from market_http.events import MarketEvent
 
 STREAMS = ("prices", "orderbooks", "mixed")
 CLOSE_REASONS = ("overflow", "listener_end", "shutdown", "subscriber_exit")
@@ -23,12 +24,12 @@ class ObservedQueue(asyncio.Queue):
         self._metrics = metrics
         self._stream = stream
 
-    def put_nowait(self, item: Any | None) -> None:
+    def put_nowait(self, item: MarketEvent | None) -> None:
         super().put_nowait(item)
         if item is not None:
             self._metrics._put(self, item)
 
-    def get_nowait(self) -> Any | None:
+    def get_nowait(self) -> MarketEvent | None:
         item = super().get_nowait()
         if item is not None:
             self._metrics._get(self, item)
@@ -143,7 +144,7 @@ class QueueMetrics:
                 "max_events": max((self._current_max(stream) for stream in STREAMS), default=0),
             }
 
-    def _put(self, queue: ObservedQueue, event: Any) -> None:
+    def _put(self, queue: ObservedQueue, event: MarketEvent) -> None:
         payload_bytes = event.payload_bytes or len(event.data.encode("utf-8"))
         with self._lock:
             state = self._states.get(queue)
@@ -159,7 +160,7 @@ class QueueMetrics:
             self._high_watermarks[stream] = max(self._high_watermarks[stream], state.events)
             self._publish(stream)
 
-    def _get(self, queue: ObservedQueue, event: Any) -> None:
+    def _get(self, queue: ObservedQueue, event: MarketEvent) -> None:
         payload_bytes = event.payload_bytes or len(event.data.encode("utf-8"))
         with self._lock:
             state = self._states.get(queue)

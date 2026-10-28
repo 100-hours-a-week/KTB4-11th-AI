@@ -2,8 +2,8 @@ import asyncio
 import logging
 import os
 from types import MethodType
-from typing import Any
 
+from redis.asyncio import Connection
 from redis.asyncio.client import PubSub
 
 from market_http.observability.memory import current_rss_bytes
@@ -31,7 +31,7 @@ class SubscriptionObserver:
         phase = (
             "connection" if event.startswith("reconnect") or event == "connected" else "resubscribe"
         )
-        fields: dict[str, Any] = {
+        fields: dict[str, object] = {
             "listener_id": self._listener_id,
             "task_id": self._task_id,
             "pid": os.getpid(),
@@ -88,7 +88,7 @@ def observe_pubsub(pubsub: PubSub, observer: SubscriptionObserver) -> None:
 
     async def reconnect(
         self: PubSub,
-        conn: Any,
+        conn: Connection,
         error: BaseException | None = None,
         failure_count: int | None = None,
         start_time: float | None = None,
@@ -106,7 +106,7 @@ def observe_pubsub(pubsub: PubSub, observer: SubscriptionObserver) -> None:
             observer.transition("reconnect_failed", reason="connect_failed", error=reconnect_error)
             raise
 
-    async def on_connect(self: PubSub, connection: Any) -> None:
+    async def on_connect(self: PubSub, connection: Connection) -> None:
         nonlocal reconnecting
         if reconnecting:
             observer.transition("connected", reason="socket_connected")
