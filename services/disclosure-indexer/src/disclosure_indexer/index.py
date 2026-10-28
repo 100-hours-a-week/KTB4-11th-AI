@@ -14,22 +14,35 @@ from disclosure_indexer.settings import Settings
 log = get_logger(__name__)
 
 
+def _trim_to_bytes(value: str, max_bytes: int) -> str:
+    """Longest prefix of `value` fitting in `max_bytes`, cut between characters."""
+    return value.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+
+
 def embedding_inputs(
     report: Mapping[str, Any], chunks: list[dict[str, Any]], max_bytes: int
 ) -> list[str]:
+    # The company and period identify the passage and must survive; the heading and table
+    # context are parser output of unbounded length, so they take what room is left.
+    header = (
+        f"{report['company_name']} ({report['stock_code']}) "
+        f"{report['business_year']} {report['kind']} {report['period_end']}\n"
+    )
     inputs = []
     for chunk in chunks:
         body = "\n" + chunk["text"]
-        remaining = max_bytes - len(body.encode("utf-8"))
+        remaining = max_bytes - len((header + body).encode("utf-8"))
         if remaining < 0:
-            raise ValueError("chunk body exceeds embedding input budget")
-        metadata = (
-            f"{report['company_name']} ({report['stock_code']}) "
-            f"{report['business_year']} {report['kind']} {report['period_end']}\n"
-            f"{chunk['section']}\n{chunk['context']}"
-        )
-        prefix = metadata.encode("utf-8")[:remaining].decode("utf-8", errors="ignore")
-        inputs.append(prefix + body)
+            raise ValueError("chunk body leaves no room for the metadata header")
+        detail = f"{chunk['section']}\n{chunk['context']}"
+        trimmed = _trim_to_bytes(detail, remaining)
+        if trimmed != detail:
+            log.warning(
+                "disclosure_metadata_trimmed",
+                document=chunk["document"],
+                dropped_characters=len(detail) - len(trimmed),
+            )
+        inputs.append(header + trimmed + body)
     return inputs
 
 
@@ -53,12 +66,13 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
         )
     config = {
         "chunker": CHUNK_VERSION,
-        "input_format": "metadata-byte-budget-v1",
+        "input_format": "metadata-header-v2",
         "chunk_bytes": settings.chunk_bytes,
         "overlap_bytes": settings.overlap_bytes,
         "input_bytes": settings.input_bytes,
         "model": settings.embedding_model,
         "dimensions": settings.dimensions,
+        "query_instruction": settings.query_instruction,
     }
     signature = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     with engine.begin() as conn:
@@ -85,17 +99,28 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
         with engine.begin() as conn:
             row = (
                 conn.execute(
-                    sa.text(
-                        "SELECT "
-                        "i.id,d.documents,r.company_name,r.stock_code,r.business_year,r.kind,r.period_end"
-                        " FROM disclosure_indexes i JOIN disclosure_documents d ON "
-                        "d.id=i.document_id JOIN disclosures r ON "
-                        "r.receipt_id=d.receipt_id WHERE i.signature=:signature AND "
-                        "(i.status IN ('pending','failed') OR (i.status='processing' AND "
-                        "i.lease_until < now())) AND NOT (i.id=ANY(CAST(:attempted AS "
-                        "bigint[]))) ORDER BY i.id FOR UPDATE OF i SKIP LOCKED LIMIT 1"
-                    ),
-                    {"signature": signature, "attempted": attempted},
+                    sa.text("""
+                        SELECT i.id, d.documents, r.company_name, r.stock_code,
+                            r.business_year, r.kind, r.period_end
+                        FROM disclosure_indexes i
+                        JOIN disclosure_documents d ON d.id = i.document_id
+                        JOIN disclosures r ON r.receipt_id = d.receipt_id
+                        WHERE i.signature = :signature
+                            AND i.attempts < :max_attempts
+                            AND (
+                                i.status IN ('pending', 'failed')
+                                OR (i.status = 'processing' AND i.lease_until < now())
+                            )
+                            AND NOT (i.id = ANY(CAST(:attempted AS bigint[])))
+                        ORDER BY i.id
+                        FOR UPDATE OF i SKIP LOCKED
+                        LIMIT 1
+                    """),
+                    {
+                        "signature": signature,
+                        "attempted": attempted,
+                        "max_attempts": settings.max_attempts,
+                    },
                 )
                 .mappings()
                 .first()
@@ -201,9 +226,8 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                 )
                 conn.execute(
                     sa.text(
-                        "UPDATE disclosure_indexes SET "
-                        "status='ready',active=true,owner=NULL,lease_until=NULL WHERE "
-                        "id=:id"
+                        "UPDATE disclosure_indexes SET status='ready', active=true, "
+                        "attempts=0, owner=NULL, lease_until=NULL WHERE id=:id"
                     ),
                     {"id": index_id},
                 )
@@ -212,12 +236,22 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
         except Exception as error:
             with engine.begin() as conn:
                 conn.execute(
-                    sa.text(
-                        "UPDATE disclosure_indexes SET "
-                        "status='failed',error=:error,owner=NULL,lease_until=NULL WHERE "
-                        "id=:id AND owner=CAST(:owner AS uuid)"
-                    ),
-                    {"id": index_id, "owner": owner, "error": type(error).__name__},
+                    sa.text("""
+                        UPDATE disclosure_indexes
+                        SET attempts = LEAST(attempts + 1, :max_attempts),
+                            status = CASE
+                                WHEN attempts + 1 >= :max_attempts THEN 'dead_letter'
+                                ELSE 'failed'
+                            END,
+                            error = :error, owner = NULL, lease_until = NULL
+                        WHERE id = :id AND owner = CAST(:owner AS uuid)
+                    """),
+                    {
+                        "id": index_id,
+                        "owner": owner,
+                        "error": type(error).__name__,
+                        "max_attempts": settings.max_attempts,
+                    },
                 )
             log.warning(
                 "disclosure_index_failed", index_id=index_id, error_type=type(error).__name__

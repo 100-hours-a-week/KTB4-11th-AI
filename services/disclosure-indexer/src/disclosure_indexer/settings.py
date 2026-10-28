@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     max_tokens: int = Field(
         default=4096, ge=1, le=16384, validation_alias="DISCLOSURE_EMBEDDING_MAX_TOKENS"
     )
+    # Part of the index signature: changing the query prefix changes the vector space, so
+    # stored indexes must stop matching it.
+    query_instruction: str = Field(
+        default=(
+            "Instruct: Retrieve disclosure passages that answer the financial question.\nQuery: "
+        ),
+        validation_alias="DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION",
+    )
     chunk_bytes: int = Field(default=2400, ge=64, le=10000)
     overlap_bytes: int = Field(default=300, ge=0)
     input_bytes: int = Field(default=12000, ge=256, le=16384)
