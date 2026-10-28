@@ -67,3 +67,32 @@ Cloud 리소스 준비 → 앱 템플릿 변경·배포 → 이전 리소스 정
 ```
 
 Cloud의 Task Definition은 최초 서비스 생성용으로만 유지됩니다. 이후 실행 설정은 앱 템플릿이 기준이며, 최초 생성용 Terraform 설정을 수정해도 기존 앱 설정에 반영되지 않습니다.
+
+
+## Market observability
+
+`market-http` uses the tracing SDK already included in the application image. The CD
+renderer enables OTLP HTTP traces, disables OTLP logs/metrics, and requires
+`OTEL_EXPORTER_OTLP_ENDPOINT` in the `MARKET_HTTP_ENV_JSON` repository variable.
+Use the private Tempo address on port 4318. Missing or disabled tracing fails before
+registering a task definition. The existing FIS sidecar and task resources are preserved.
+No instrumentation wrapper image is required.
+
+For the AI EC2 streamer, add these nonsecret settings to `PROD_AI_ENV` before deployment:
+
+```dotenv
+MARKET_STREAMER_OTEL_SDK_DISABLED=false
+MARKET_STREAMER_OTEL_EXPORTER_OTLP_ENDPOINT=http://<private-tempo-ip>:4318
+MARKET_STREAMER_OTEL_TRACES_SAMPLER_ARG=0.1
+MARKET_STREAMER_OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod,deployment.environment.name=prod
+```
+
+Production Compose publishes only `127.0.0.1:9102` from the streamer, whose exporter
+listens on `0.0.0.0:9102` inside the container. Its systemd command uses
+`--service-ports` and `--no-deps`, so publishing the exporter does not start or recreate
+the database services. Cloud-managed Alloy must scrape the host port. The streamer
+still runs from 08:50 to 15:40 KST; off-hours absence is expected.
+
+These are source changes only. Do not run the full AI CD workflow merely to deploy
+observability: that workflow also performs existing database migrations. Prepare and
+review a streamer-only/ECS market-http-only deployment separately.
