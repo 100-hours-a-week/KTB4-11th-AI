@@ -82,6 +82,21 @@ class DartClient:
             raise ValueError("invalid closing month")
         return month
 
+    def financial_statements(
+        self, corp_code: str, year: int, report_code: str, scope: str
+    ) -> list[dict[str, Any]]:
+        """Every account of one statement set. Status 013 means the filing has none."""
+        data = self.json(
+            "fnlttSinglAcntAll.json",
+            {
+                "corp_code": corp_code,
+                "bsns_year": str(year),
+                "reprt_code": report_code,
+                "fs_div": scope,
+            },
+        )
+        return [] if data["status"] == "013" else data.get("list", [])
+
     def reports(self, corp_code: str, start: date, end: date) -> list[dict[str, Any]]:
         rows = []
         for page in range(1, 100_001):

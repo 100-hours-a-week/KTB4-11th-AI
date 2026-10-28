@@ -5,16 +5,19 @@ import json
 import os
 import tempfile
 import zipfile
+from collections.abc import Mapping
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import sqlalchemy as sa
 from ktb_core.logging import get_logger
 
 from disclosure_indexer.dart import DartClient, report_period
-from disclosure_indexer.database import disclosure_sections
+from disclosure_indexer.database import disclosure_financial_facts, disclosure_sections
 from disclosure_indexer.documents import PARSER_VERSION, extract_documents
+from disclosure_indexer.financials import REPORT_CODES, SCOPES, financial_rows
 from disclosure_indexer.sections import section_rows
 from disclosure_indexer.settings import Settings
 
@@ -93,6 +96,42 @@ def refresh_sources(
             )
 
 
+def store_financial_facts(
+    engine: sa.Engine, dart: DartClient, settings: Settings, report: Mapping[str, Any]
+) -> int:
+    """Fetch and replace one filing's structured accounts, consolidated and separate.
+
+    Read without a GPU, so a fetch failure must not change the filing's own status: the
+    documents and sections are already usable.
+    """
+    report_code = REPORT_CODES[report["kind"]]
+    rows = []
+    for scope in SCOPES:
+        payload = dart.financial_statements(
+            report["corp_code"], report["business_year"], report_code, scope
+        )
+        rows.extend(
+            {
+                **row,
+                "receipt_id": report["receipt_id"],
+                "stock_code": report["stock_code"],
+                "business_year": report["business_year"],
+                "kind": report["kind"],
+                "period_end": report["period_end"],
+            }
+            for row in financial_rows(payload, scope)
+        )
+    with engine.begin() as conn:
+        conn.execute(
+            sa.delete(disclosure_financial_facts).where(
+                disclosure_financial_facts.c.receipt_id == report["receipt_id"]
+            )
+        )
+        if rows:
+            conn.execute(sa.insert(disclosure_financial_facts), rows)
+    return len(rows)
+
+
 def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict[str, int]:
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -126,6 +165,7 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
         "unavailable": 0,
         "unclassified": 0,
         "replaced": 0,
+        "facts": 0,
     }
     # Reconcile what is already stored: a parser upgrade, an interrupted parse, or a lost
     # archive file. Bounded like the indexing loop so one run cannot re-parse everything.
@@ -256,6 +296,14 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                         ),
                         "payload": json.dumps(row, ensure_ascii=False),
                     }
+                    params_row = {
+                        "receipt_id": receipt,
+                        "stock_code": company["stock_code"],
+                        "corp_code": company["corp_code"],
+                        "business_year": fiscal_year,
+                        "kind": kind,
+                        "period_end": period,
+                    }
                     with engine.begin() as conn:
                         conn.execute(
                             sa.text(
@@ -295,6 +343,17 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                             content = dart.get("document.xml", {"rcept_no": receipt})
                         status = store_document(engine, settings, receipt, content)
                         result[status] += 1
+                        if status == "ready" and settings.collect_financials:
+                            try:
+                                stored = store_financial_facts(engine, dart, settings, params_row)
+                                result["facts"] += stored
+                            except Exception as error:
+                                result["failed"] += 1
+                                log.warning(
+                                    "disclosure_financials_failed",
+                                    receipt_id=receipt,
+                                    error_type=type(error).__name__,
+                                )
                     except Exception as error:
                         complete = False
                         result["failed"] += 1

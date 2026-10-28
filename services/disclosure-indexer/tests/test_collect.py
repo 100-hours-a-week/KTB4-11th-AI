@@ -516,6 +516,143 @@ def test_reparsing_a_document_replaces_its_sections(company_engine, tmp_path):
     assert headings == ["원본"], "a re-parse must replace sections, not duplicate them"
 
 
+FINANCIAL_REPORT = {
+    "corp_code": "00990002",
+    "stock_code": "990002",
+    "report_nm": "사업보고서 (2025.12)",
+    "rcept_no": "facts-test",
+    "rcept_dt": "20260315",
+}
+
+
+def _dart_with_financials(accounts, document=None):
+    requested = []
+
+    def handle(req):
+        if req.url.path.endswith("fnlttSinglAcntAll.json"):
+            requested.append(
+                (
+                    req.url.params["fs_div"],
+                    req.url.params["reprt_code"],
+                    req.url.params["bsns_year"],
+                )
+            )
+            return httpx.Response(
+                200,
+                json={"status": "000", "list": accounts(req.url.params["fs_div"])},
+            )
+        return _dart(document or _zip(), [FINANCIAL_REPORT])(req)
+
+    return handle, requested
+
+
+def _account(scope):
+    return [
+        {
+            "sj_div": "BS",
+            "account_id": "ifrs-full_Assets",
+            "account_nm": "자산총계",
+            "currency": "KRW",
+            "ord": "1",
+            "thstrm_amount": "1,000" if scope == "CFS" else "900",
+        }
+    ]
+
+
+def test_financial_facts_are_stored_for_both_scopes(company_engine, tmp_path):
+    handle, requested = _dart_with_financials(_account)
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert collect(company_engine, client, settings)["ready"] == 1
+
+    assert sorted(scope for scope, _, _ in requested) == ["CFS", "OFS"]
+    assert {code for _, code, _ in requested} == {"11011"}
+
+    with company_engine.connect() as conn:
+        rows = (
+            conn.execute(
+                sa.text(
+                    "SELECT scope, account_id, value, source_value, normalized, period_end,"
+                    " business_year, kind, stock_code FROM disclosure_financial_facts"
+                    " WHERE receipt_id='facts-test' ORDER BY scope"
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert [row["scope"] for row in rows] == ["CFS", "OFS"]
+    assert [int(row["value"]) for row in rows] == [1000, 900]
+    assert rows[0]["stock_code"] == "990002"
+    assert rows[0]["business_year"] == 2025
+    assert rows[0]["kind"] == "annual"
+    assert rows[0]["period_end"].isoformat() == "2025-12-31"
+
+
+def test_a_financial_fetch_failure_leaves_the_document_usable(company_engine, tmp_path):
+    def handle(req):
+        if req.url.path.endswith("fnlttSinglAcntAll.json"):
+            return httpx.Response(500)
+        return _dart(_zip(), [FINANCIAL_REPORT])(req)
+
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+        attempts=1,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        result = collect(company_engine, client, settings)
+
+    assert result["ready"] == 1, "the filing itself is collected even if its facts are not"
+    assert result["failed"] >= 1
+    with company_engine.connect() as conn:
+        assert (
+            conn.execute(
+                sa.text("SELECT status FROM disclosures WHERE receipt_id='facts-test'")
+            ).scalar_one()
+            == "ready"
+        )
+
+
+def test_refetching_facts_replaces_them_instead_of_duplicating(company_engine, tmp_path):
+    handle, _ = _dart_with_financials(_account)
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        collect(company_engine, client, settings)
+        with company_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "UPDATE disclosure_documents SET extraction_status='pending' "
+                    "WHERE receipt_id='facts-test'"
+                )
+            )
+        collect(company_engine, client, settings)
+
+    with company_engine.connect() as conn:
+        assert (
+            conn.execute(
+                sa.text(
+                    "SELECT count(*) FROM disclosure_financial_facts WHERE receipt_id='facts-test'"
+                )
+            ).scalar_one()
+            == 2
+        )
+
+
 def test_temporary_api_error_is_not_archived_as_a_document(tmp_path):
     from unittest.mock import MagicMock
 

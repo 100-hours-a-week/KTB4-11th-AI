@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     recheck_days: int = Field(default=400, ge=1)
     # How far back to re-fetch a receipt and compare its hash, catching a replaced source.
     refresh_days: int = Field(default=30, ge=0)
+    collect_financials: bool = True
     postgres_dsn: str
     embedding_base_uri: str = Field(min_length=1, validation_alias="DISCLOSURE_EMBEDDING_BASE_URI")
     embedding_model: str = Field(min_length=1, validation_alias="DISCLOSURE_EMBEDDING_MODEL")

@@ -1,7 +1,7 @@
 import sqlalchemy as sa
 from fastapi import FastAPI, HTTPException
 
-from disclosure_retrieval.controllers import disclosures, sections
+from disclosure_retrieval.controllers import disclosures, financials, sections
 from disclosure_retrieval.settings import Settings
 
 
@@ -11,6 +11,7 @@ def create_app(engine: sa.Engine, settings: Settings) -> FastAPI:
     app.state.settings = settings
     app.include_router(disclosures.router)
     app.include_router(sections.router)
+    app.include_router(financials.router)
 
     @app.get("/health")
     def health() -> dict[str, str]:
