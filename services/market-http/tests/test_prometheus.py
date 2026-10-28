@@ -1,6 +1,8 @@
 import asyncio
+from urllib.request import urlopen
 
 import pytest
+from market_http.market_subscription import MarketSubscription
 from market_http.observability.pool import observe_pool
 from market_http.observability.prometheus import MarketMetrics, SSEMetrics, track_delivery
 from market_http.settings import Settings
@@ -59,6 +61,146 @@ def test_sse_counts_complete_successful_events_and_live_latency():
         value(metrics, "market_http_sse_connections_closed_total", stream="prices", reason="normal")
         == 1
     )
+
+
+def test_live_rate_excludes_snapshot_ping_and_failed_send():
+    metrics = MarketMetrics()
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200})
+        track_delivery()
+        await send({"type": "http.response.body", "body": b"data: snapshot\n\n"})
+        track_delivery(live=True)
+        await send({"type": "http.response.body", "body": b": ping\n\n"})
+        await send({"type": "http.response.body", "body": b"data: live\n\n"})
+        track_delivery(live=True)
+        await send({"type": "http.response.body", "body": b"data: failed\n\n"})
+
+    async def send(message):
+        if message.get("body") == b"data: failed\n\n":
+            raise OSError("send failed")
+
+    async def scenario():
+        with pytest.raises(OSError, match="send failed"):
+            await SSEMetrics(app, metrics)({"type": "http", "path": "/prices/stream"}, None, send)
+
+    asyncio.run(scenario())
+    assert value(metrics, "market_http_sse_events_sent_total", stream="prices") == 2
+    assert value(metrics, "market_http_sse_live_events_sent_total", stream="prices") == 1
+
+
+@pytest.mark.parametrize("outcome", ["release", "cancel", "error"])
+def test_blocked_send_and_split_frame_release_all_gauges(outcome):
+    metrics = MarketMetrics()
+    entered = asyncio.Event()
+    released = asyncio.Event()
+    body = b"data: li"
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200})
+        track_delivery(live=True, received_at=10.0)
+        await send({"type": "http.response.body", "body": body})
+        if outcome == "error":
+            raise ValueError("generator failed")
+        await send({"type": "http.response.body", "body": b"ve\n\n"})
+
+    async def send(message):
+        if message.get("body") == body:
+            entered.set()
+            await released.wait()
+
+    async def scenario():
+        task = asyncio.create_task(
+            SSEMetrics(app, metrics)({"type": "http", "path": "/prices/stream"}, None, send)
+        )
+        await entered.wait()
+        assert value(metrics, "market_http_sse_send_operations_in_flight", stream="prices") == 1
+        assert value(metrics, "market_http_sse_send_body_bytes_in_flight", stream="prices") == len(
+            body
+        )
+        assert value(metrics, "market_http_sse_observer_buffer_bytes", stream="prices") == 0
+        assert value(metrics, "market_http_sse_delivery_markers_pending", stream="prices") == 1
+        assert value(metrics, "market_http_sse_events_sent_total", stream="prices") == 0
+        if outcome == "cancel":
+            task.cancel()
+        else:
+            released.set()
+        if outcome == "error":
+            with pytest.raises(ValueError, match="generator failed"):
+                await task
+        elif outcome == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            await task
+
+    asyncio.run(scenario())
+    expected = float(outcome == "release")
+    assert value(metrics, "market_http_sse_events_sent_total", stream="prices") == expected
+    assert value(metrics, "market_http_sse_live_events_sent_total", stream="prices") == expected
+    for name in (
+        "market_http_sse_send_operations_in_flight",
+        "market_http_sse_send_body_bytes_in_flight",
+        "market_http_sse_observer_buffer_bytes",
+        "market_http_sse_delivery_markers_pending",
+    ):
+        assert value(metrics, name, stream="prices") == 0
+
+
+def test_cardinality_and_idle_endpoint():
+    metrics = MarketMetrics()
+    payload = generate_latest(metrics.registry)
+    with metrics.serve("127.0.0.1", 0) as server:
+        port = server.server_address[1]
+        with urlopen(f"http://127.0.0.1:{port}/metrics") as response:  # noqa: S310
+            listener_payload = response.read()
+    for metric in (
+        b"market_http_pubsub_messages_received_total",
+        b"market_http_pubsub_payload_received_bytes_total",
+        b"market_http_sse_live_events_sent_total",
+        b"market_http_sse_send_operations_in_flight",
+        b"market_http_sse_send_body_bytes_in_flight",
+        b"market_http_sse_observer_buffer_bytes",
+        b"market_http_sse_delivery_markers_pending",
+    ):
+        assert metric in payload
+        assert metric in listener_payload
+    assert b"connection=" not in payload
+    assert b"code=" not in payload
+    assert b"task=" not in payload
+    assert b"listener=" not in payload
+
+
+def test_received_counts_before_validation_and_without_subscribers():
+    metrics = MarketMetrics()
+
+    async def scenario():
+        valkey = FakeValkey()
+        subscription = MarketSubscription(valkey, metrics)
+        async with subscription.run():
+            await valkey.pubsubs[0].messages.put(
+                {"type": "message", "channel": "market:prices", "data": "not json"}
+            )
+            await valkey.pubsubs[0].messages.put(
+                {"type": "message", "channel": "market:prices", "data": '{"code":"none"}'}
+            )
+            await valkey.pubsubs[0].messages.put(
+                {"type": "subscribe", "channel": "market:prices", "data": "ignored"}
+            )
+            await valkey.pubsubs[0].messages.put(
+                {"type": "message", "channel": "market:unknown", "data": '{"code":"none"}'}
+            )
+            await asyncio.sleep(0)
+
+    asyncio.run(scenario())
+    received = "not json" + '{"code":"none"}'
+    assert (
+        value(metrics, "market_http_pubsub_messages_received_total", channel="market:prices") == 2
+    )
+    assert value(
+        metrics, "market_http_pubsub_payload_received_bytes_total", channel="market:prices"
+    ) == len(received.encode("utf-8"))
+    assert value(metrics, "market_http_sse_queues", stream="prices") == 0
 
 
 @pytest.mark.parametrize(
@@ -226,3 +368,23 @@ def test_prometheus_bind_settings_from_environment(monkeypatch):
     monkeypatch.setenv("MARKET_HTTP_PROMETHEUS_PORT", "9101")
     settings = Settings(**required)
     assert (settings.prometheus_bind_host, settings.prometheus_port) == ("10.0.0.3", 9101)
+
+
+def test_new_metrics_registry_starts_without_previous_queue_state():
+    previous = MarketMetrics()
+    queue = previous.queues.open("prices")
+    previous.queues.close(queue, "subscriber_exit")
+
+    restarted = MarketMetrics()
+    assert (
+        value(restarted, "market_http_pubsub_messages_received_total", channel="market:prices") == 0
+    )
+    assert value(restarted, "market_http_sse_live_events_sent_total", stream="prices") == 0
+    assert value(restarted, "market_http_sse_queue_high_watermark_events", stream="prices") == 0
+    assert restarted.queues.snapshot() == {
+        "queues": 0,
+        "events": 0,
+        "payload_bytes": 0,
+        "max_events": 0,
+    }
+    assert not previous.queues._states

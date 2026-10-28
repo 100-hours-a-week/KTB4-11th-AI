@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     valkey_cache_name: str | None = None
     valkey_tls: bool = False
     valkey_auth_mode: Literal["none", "iam"] = "none"
+    task_id: str | None = None
+    memory_profile_enabled: bool = False
+    memory_profile_dir: str = "/tmp/market-http-memory"
+    memory_profile_interval_seconds: float = Field(default=10, ge=1)
+    memory_profile_max_snapshots: int = Field(default=12, ge=1, le=120)
     aws_region: str = "ap-northeast-2"
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)
