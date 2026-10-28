@@ -141,6 +141,32 @@ class Embedder:
             for row in rows
         ]
 
+    @modal.method()
+    def measure(self, documents: list[list[str]], task: str) -> dict[str, object]:
+        """Encode once and report cost. Reachable from the SDK only, never over HTTP."""
+        import time
+
+        import torch
+
+        torch.cuda.reset_peak_memory_stats()
+        tokens = self._token_count(documents, task)
+        started = time.perf_counter()
+        rows = self._encode(documents, task)
+        elapsed = time.perf_counter() - started
+        free, total = torch.cuda.mem_get_info()
+        return {
+            "task": task,
+            "documents": len(rows),
+            "vectors": sum(len(row) for row in rows),
+            "dimensions": len(rows[0][0]) if rows and rows[0] else 0,
+            "tokens": tokens,
+            "encode_seconds": round(elapsed, 3),
+            "vram_peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            "vram_reserved_gib": round(torch.cuda.max_memory_reserved() / 2**30, 2),
+            "vram_total_gib": round(total / 2**30, 2),
+            "vram_free_gib": round(free / 2**30, 2),
+        }
+
     @modal.fastapi_endpoint(method="GET", docs=False, requires_proxy_auth=True)
     def identity(self) -> dict[str, object]:
         return MANIFEST.embedding_identity()
@@ -213,24 +239,38 @@ class Reranker:
         self.yes_id = self.tokenizer.encode("yes", add_special_tokens=False)[0]
         self.no_id = self.tokenizer.encode("no", add_special_tokens=False)[0]
 
+    @modal.method()
+    def measure(self, query: str, candidates: list[dict]) -> dict[str, object]:
+        """Rerank once and report cost. Reachable from the SDK only, never over HTTP."""
+        import time
+
+        import torch
+
+        torch.cuda.reset_peak_memory_stats()
+        started = time.perf_counter()
+        scores = self._score(query, candidates)
+        elapsed = time.perf_counter() - started
+        free, total = torch.cuda.mem_get_info()
+        return {
+            "candidates": len(scores),
+            "rerank_seconds": round(elapsed, 3),
+            "vram_peak_gib": round(torch.cuda.max_memory_allocated() / 2**30, 2),
+            "vram_reserved_gib": round(torch.cuda.max_memory_reserved() / 2**30, 2),
+            "vram_total_gib": round(total / 2**30, 2),
+            "vram_free_gib": round(free / 2**30, 2),
+            "top_score": max(score["score"] for score in scores),
+        }
+
     @modal.fastapi_endpoint(method="GET", docs=False, requires_proxy_auth=True)
     def identity(self) -> dict[str, object]:
         return MANIFEST.reranker_identity()
 
-    @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
-    def rerank(self, payload: dict) -> dict[str, object]:
+    def _score(self, query: str, candidates: list[dict]) -> list[dict[str, object]]:
+        """Per candidate, the yes/no logit difference and its sigmoid."""
         import math
 
         import torch
 
-        try:
-            require_identity(payload.get("identity"), MANIFEST.reranker_identity())
-            query = payload["query"]
-            candidates = payload["candidates"]
-            if not candidates:
-                raise ValueError("candidates must not be empty")
-        except Exception as error:
-            return _reject(error)
         scores = []
         for candidate in candidates:
             prompt = (
@@ -242,11 +282,9 @@ class Reranker:
             )
             batch = self.tokenizer(prompt, return_tensors="pt", truncation=False)
             if batch["input_ids"].shape[1] > MANIFEST.max_tokens:
-                return _reject(
-                    ValueError(
-                        f"candidate {candidate['chunk_id']} is "
-                        f"{batch['input_ids'].shape[1]} tokens, over the limit"
-                    )
+                raise ValueError(
+                    f"candidate {candidate['chunk_id']} is "
+                    f"{batch['input_ids'].shape[1]} tokens, over the limit"
                 )
             batch = {name: value.cuda() for name, value in batch.items()}
             with torch.inference_mode():
@@ -259,4 +297,17 @@ class Reranker:
                     "score": 1 / (1 + math.exp(-difference)),
                 }
             )
+        return scores
+
+    @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
+    def rerank(self, payload: dict) -> dict[str, object]:
+        try:
+            require_identity(payload.get("identity"), MANIFEST.reranker_identity())
+            query = payload["query"]
+            candidates = payload["candidates"]
+            if not candidates:
+                raise ValueError("candidates must not be empty")
+            scores = self._score(query, candidates)
+        except Exception as error:
+            return _reject(error)
         return {"identity": MANIFEST.reranker_identity(), "scores": scores}
