@@ -19,6 +19,78 @@ from disclosure_indexer.settings import Settings
 log = get_logger(__name__)
 
 
+def collection_windows(
+    today: date, closing: int, settings: Settings
+) -> tuple[int, list[tuple[date, date]]]:
+    """The 90-day DART listing windows covering the business year under collection."""
+    last_close = date(today.year, closing, calendar.monthrange(today.year, closing)[1])
+    completed = today.year if last_close < today else today.year - 1
+    year = settings.business_year or completed
+    previous_close = date(year - 1, closing, calendar.monthrange(year - 1, closing)[1])
+    start = previous_close + timedelta(days=1)
+    end = (
+        today
+        if settings.business_year is None
+        else min(today, date(year + 1, closing, calendar.monthrange(year + 1, closing)[1]))
+    )
+    windows = []
+    while start <= end:
+        finish = min(end, start + timedelta(days=89))
+        windows.append((start, finish))
+        start = finish + timedelta(days=1)
+    return year, windows
+
+
+def refresh_sources(
+    engine: sa.Engine, dart: DartClient, settings: Settings, today: date, result: dict[str, int]
+) -> None:
+    """Re-fetch recently published receipts and re-store any whose source bytes changed.
+
+    A disclosure re-published under the same receipt number is invisible otherwise: the
+    receipt is already `ready`, so nothing downloads it again to notice the new hash.
+    """
+    if not settings.refresh_days:
+        return
+    with engine.connect() as conn:
+        recent = (
+            conn.execute(
+                sa.text("""
+                    SELECT r.receipt_id, d.source_hash
+                    FROM disclosures r
+                    JOIN LATERAL (
+                        SELECT source_hash FROM disclosure_documents
+                        WHERE receipt_id = r.receipt_id ORDER BY id DESC LIMIT 1
+                    ) d ON true
+                    WHERE r.status IN ('ready', 'unavailable')
+                        AND r.published_date >= :cutoff
+                    ORDER BY r.published_date DESC, r.receipt_id DESC
+                    LIMIT :limit
+                """),
+                {
+                    "cutoff": today - timedelta(days=settings.refresh_days),
+                    "limit": settings.document_limit,
+                },
+            )
+            .mappings()
+            .all()
+        )
+    for entry in recent:
+        try:
+            content = dart.get("document.xml", {"rcept_no": entry["receipt_id"]})
+            if hashlib.sha256(content).hexdigest() == entry["source_hash"]:
+                continue
+            result[store_document(engine, settings, entry["receipt_id"], content)] += 1
+            result["replaced"] += 1
+            log.info("disclosure_source_replaced", receipt_id=entry["receipt_id"])
+        except Exception as error:
+            result["failed"] += 1
+            log.warning(
+                "disclosure_refresh_failed",
+                receipt_id=entry["receipt_id"],
+                error_type=type(error).__name__,
+            )
+
+
 def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict[str, int]:
     from datetime import datetime
     from zoneinfo import ZoneInfo
@@ -45,21 +117,37 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
         )
     if not companies:
         raise RuntimeError("no KOSPI200 companies; run market-syncer")
-    result = {"ready": 0, "failed": 0, "skipped": 0, "unavailable": 0}
+    result = {
+        "ready": 0,
+        "failed": 0,
+        "skipped": 0,
+        "unavailable": 0,
+        "unclassified": 0,
+        "replaced": 0,
+    }
+    # Reconcile what is already stored: a parser upgrade, an interrupted parse, or a lost
+    # archive file. Bounded like the indexing loop so one run cannot re-parse everything.
     with engine.connect() as conn:
         archived = (
             conn.execute(
                 sa.text("""
-            SELECT r.receipt_id,d.archive_key,d.source_hash,d.parser_version,
-                d.extraction_status FROM disclosures r
-            JOIN LATERAL (
-                SELECT id,archive_key,source_hash,parser_version,extraction_status
-                FROM disclosure_documents
-                WHERE receipt_id=r.receipt_id ORDER BY id DESC LIMIT 1
-            ) d ON true
-            WHERE r.status IN ('pending','failed','ready','unavailable')
-        """),
-                {"parser": PARSER_VERSION},
+                    SELECT r.receipt_id, d.archive_key, d.source_hash, d.parser_version,
+                        d.extraction_status
+                    FROM disclosures r
+                    JOIN LATERAL (
+                        SELECT id, archive_key, source_hash, parser_version, extraction_status
+                        FROM disclosure_documents
+                        WHERE receipt_id = r.receipt_id ORDER BY id DESC LIMIT 1
+                    ) d ON true
+                    WHERE r.status IN ('pending', 'failed', 'ready', 'unavailable')
+                        AND NOT (
+                            d.parser_version = :parser
+                            AND d.extraction_status IN ('ready', 'unavailable')
+                        )
+                    ORDER BY r.updated_at
+                    LIMIT :limit
+                """),
+                {"parser": PARSER_VERSION, "limit": settings.document_limit},
             )
             .mappings()
             .all()
@@ -67,12 +155,6 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
     for entry in archived:
         try:
             archive = settings.archive_root / entry["archive_key"]
-            if (
-                entry["parser_version"] == PARSER_VERSION
-                and entry["extraction_status"] == "ready"
-                and archive.is_file()
-            ):
-                continue
             content = (
                 archive.read_bytes()
                 if archive.is_file()
@@ -107,22 +189,18 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
     for company in companies:
         try:
             closing = dart.closing_month(company["corp_code"])
-            last_close = date(today.year, closing, calendar.monthrange(today.year, closing)[1])
-            completed = today.year if last_close < today else today.year - 1
-            year = settings.business_year or completed
-            previous_close = date(year - 1, closing, calendar.monthrange(year - 1, closing)[1])
-            start = previous_close + timedelta(days=1)
-            end = (
-                today
-                if settings.business_year is None
-                else min(today, date(year + 1, closing, calendar.monthrange(year + 1, closing)[1]))
+            year, windows = collection_windows(today, closing, settings)
+        except Exception as error:
+            result["failed"] += 1
+            log.warning(
+                "disclosure_company_failed",
+                stock_code=company["stock_code"],
+                error_type=type(error).__name__,
             )
-            windows = []
-            while start <= end:
-                finish = min(end, start + timedelta(days=89))
-                windows.append((start, finish))
-                start = finish + timedelta(days=1)
-            for begin, finish in windows:
+            continue
+        # One window per try: a transient listing failure costs that window, not the rest.
+        for begin, finish in windows:
+            try:
                 with engine.connect() as conn:
                     done = conn.execute(
                         sa.text(
@@ -138,13 +216,22 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                             "current": settings.business_year is None,
                         },
                     ).scalar()
-                if done and finish < today - timedelta(days=7):
+                if done and finish < today - timedelta(days=settings.recheck_days):
                     continue
                 complete = True
                 for row in dart.reports(company["corp_code"], begin, finish):
                     try:
                         fiscal_year, kind, period = report_period(row["report_nm"], closing)
                     except ValueError:
+                        # The closing month is read fresh each run, so a company that changed
+                        # its fiscal year stops matching its own history. Never silent.
+                        result["unclassified"] += 1
+                        log.warning(
+                            "disclosure_unclassified",
+                            stock_code=company["stock_code"],
+                            title=row["report_nm"],
+                            closing_month=closing,
+                        )
                         continue
                     if (
                         fiscal_year < year
@@ -246,13 +333,16 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                             "complete": complete,
                         },
                     )
-        except Exception as error:
-            result["failed"] += 1
-            log.warning(
-                "disclosure_company_failed",
-                stock_code=company["stock_code"],
-                error_type=type(error).__name__,
-            )
+            except Exception as error:
+                result["failed"] += 1
+                log.warning(
+                    "disclosure_window_failed",
+                    stock_code=company["stock_code"],
+                    start_date=begin.isoformat(),
+                    end_date=finish.isoformat(),
+                    error_type=type(error).__name__,
+                )
+    refresh_sources(engine, dart, settings, today, result)
     return result
 
 
