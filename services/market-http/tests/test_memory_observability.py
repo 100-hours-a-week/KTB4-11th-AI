@@ -173,3 +173,94 @@ def test_profile_budget_and_single_flight(tmp_path, monkeypatch):
     assert maximum == 1
     assert dumps == 1
     assert len(list(tmp_path.glob("*/*.snapshot"))) == 1
+
+
+def test_trigger_waits_for_operator_and_produces_loadable_evidence(tmp_path):
+    settings = _settings(
+        tmp_path,
+        memory_profile_enabled=True,
+        memory_profile_start_mode="trigger",
+        memory_profile_max_snapshots=1,
+    )
+
+    async def run():
+        async with memory.memory_profiling(settings):
+            state_path = next(tmp_path.glob("*/profile-state.json"))
+            assert json.loads(state_path.read_text())["status"] == "armed"
+            await asyncio.sleep(0.05)
+            assert not tracemalloc.is_tracing()
+            assert not list(tmp_path.rglob("*.snapshot"))
+            (state_path.parent / "capture.trigger").write_text("capture")
+            async with asyncio.timeout(5):
+                while json.loads(state_path.read_text())["status"] != "finished":
+                    await asyncio.sleep(0.02)
+            assert not tracemalloc.is_tracing()
+            assert (state_path.parent / "capture.claimed").exists()
+
+    asyncio.run(run())
+    snapshots = list(tmp_path.rglob("*.snapshot"))
+    assert len(snapshots) == 1
+    assert tracemalloc.Snapshot.load(snapshots[0])
+    assert snapshots[0].with_suffix(".json").exists()
+    assert not list(tmp_path.rglob("*.partial"))
+
+
+def test_trigger_shutdown_before_request_does_not_start_tracing(tmp_path):
+    settings = _settings(tmp_path, memory_profile_enabled=True, memory_profile_start_mode="trigger")
+
+    async def run():
+        async with memory.memory_profiling(settings):
+            await asyncio.sleep(0.01)
+
+    asyncio.run(run())
+    state = json.loads(next(tmp_path.glob("*/profile-state.json")).read_text())
+    assert state["status"] == "cancelled"
+    assert not tracemalloc.is_tracing()
+    assert not list(tmp_path.rglob("*.snapshot"))
+
+
+def test_failed_snapshot_is_not_published_as_completed(tmp_path, monkeypatch):
+    snapshot = tracemalloc.Snapshot([], 1)
+    path = tmp_path / "sample.snapshot"
+
+    def fail(self, filename):
+        from pathlib import Path
+
+        Path(filename).write_bytes(b"incomplete")
+        raise OSError("full disk")
+
+    monkeypatch.setattr(tracemalloc.Snapshot, "dump", fail)
+    with pytest.raises(OSError):
+        memory._dump_snapshot(snapshot, path, path.with_suffix(".json"), {})
+    assert not path.exists()
+    assert not path.with_suffix(".json").exists()
+
+
+def test_burst_trigger_preserves_budget_until_release_window(tmp_path):
+    settings = _settings(
+        tmp_path,
+        memory_profile_enabled=True,
+        memory_profile_start_mode="trigger",
+        memory_profile_burst_trigger=True,
+        memory_profile_interval_seconds=1,
+        memory_profile_max_snapshots=2,
+    )
+
+    async def run():
+        async with memory.memory_profiling(settings):
+            state_path = next(tmp_path.glob("*/profile-state.json"))
+            (state_path.parent / "capture.trigger").touch()
+            async with asyncio.timeout(5):
+                while json.loads(state_path.read_text())["status"] != "baseline_ready":
+                    await asyncio.sleep(0.02)
+            assert len(list(tmp_path.rglob("*.snapshot"))) == 1
+            await asyncio.sleep(1.1)
+            assert len(list(tmp_path.rglob("*.snapshot"))) == 1
+            (state_path.parent / "capture.burst").touch()
+            async with asyncio.timeout(5):
+                while json.loads(state_path.read_text())["status"] != "finished":
+                    await asyncio.sleep(0.02)
+
+    asyncio.run(run())
+    assert len(list(tmp_path.rglob("*.snapshot"))) == 2
+    assert not tracemalloc.is_tracing()
