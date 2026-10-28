@@ -58,6 +58,7 @@ async def _capture_snapshot(run_dir: Path, sequence: int) -> int | None:
     )
     try:
         await asyncio.shield(dump_task)
+        return snapshot_path.stat().st_size
     except asyncio.CancelledError:
         with suppress(Exception):
             await asyncio.shield(dump_task)
@@ -74,7 +75,6 @@ async def _capture_snapshot(run_dir: Path, sequence: int) -> int | None:
             extra={"fields": {"reason": "snapshot_failed", "error": type(error).__name__}},
         )
         return None
-    return snapshot_path.stat().st_size
 
 
 @asynccontextmanager

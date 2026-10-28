@@ -102,6 +102,33 @@ def test_profiler_disk_failure_and_cancel_are_nonfatal(tmp_path, monkeypatch, ca
     assert not tracemalloc.is_tracing()
 
 
+def test_profiler_baseline_stat_failure_is_nonfatal(tmp_path, monkeypatch, caplog):
+    settings = _settings(tmp_path, memory_profile_enabled=True)
+    entered = False
+
+    original_stat = memory.Path.stat
+
+    def fail_stat(self, *args, **kwargs):
+        if self.suffix == ".snapshot":
+            raise OSError("metadata unavailable")
+        return original_stat(self, *args, **kwargs)
+
+    async def run():
+        nonlocal entered
+        async with memory.memory_profiling(settings):
+            entered = True
+            await asyncio.sleep(0)
+
+    monkeypatch.setattr(memory.Path, "stat", fail_stat)
+    asyncio.run(run())
+
+    stopped = [record for record in caplog.records if record.message == "memory_profile_stopped"]
+    assert entered
+    assert len(stopped) == 1
+    assert stopped[0].fields == {"reason": "dump_failed", "error": "OSError"}
+    assert not tracemalloc.is_tracing()
+
+
 def test_existing_tracemalloc_owner_is_not_stopped(tmp_path, caplog):
     tracemalloc.start(1)
     settings = _settings(tmp_path, memory_profile_enabled=True)
