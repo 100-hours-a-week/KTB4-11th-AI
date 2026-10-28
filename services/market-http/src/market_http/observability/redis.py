@@ -53,11 +53,8 @@ class SubscriptionObserver:
         self.transition("ready", reason="initial_subscribe")
 
     def acknowledge(self, channel: str) -> None:
-        if channel not in CHANNELS:
+        if channel not in CHANNELS or self._pending is None:
             return
-        if self._pending is None:
-            self.transition("resubscribing", reason="subscribe_ack")
-        assert self._pending is not None
         self._pending.discard(channel)
         if not self._pending:
             self.transition("recovered", reason="all_channels_acknowledged")

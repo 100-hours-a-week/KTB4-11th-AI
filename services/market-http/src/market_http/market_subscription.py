@@ -136,8 +136,7 @@ class MarketSubscription:
                     subscribers.discard(queue)
                     if not subscribers:
                         del self._subscribers[code]
-            if self._metrics is not None and isinstance(queue, ObservedQueue):
-                self._metrics.queues.close(queue, "subscriber_exit")
+            self._close_subscriber(queue, "subscriber_exit")
 
     async def _listen(
         self, pubsub: PubSub, fields: dict[str, Any], observer: SubscriptionObserver

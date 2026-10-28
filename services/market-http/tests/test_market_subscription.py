@@ -460,8 +460,12 @@ def test_lifecycle_logs_readiness_and_recovery_only_after_both_channel_acks(capl
         await pubsub.messages.put({"type": "subscribe", "channel": "market:orderbooks"})
         await asyncio.sleep(0)
         recovered = [r for r in caplog.records if r.message == "market_subscription_recovered"]
-        assert len(recovered) == 1
-        assert recovered[0].fields["listener_id"] == ready[0].fields["listener_id"]
+        assert not recovered
+        assert not any(
+            r.message == "market_subscription_resubscribing"
+            and r.fields["reason"] == "subscribe_ack"
+            for r in caplog.records
+        )
         await lifetime.__aexit__(None, None, None)
         assert caplog.records[-1].message == "market_subscription_stopped"
         assert caplog.records[-1].fields["reason"] == "shutdown"
@@ -535,6 +539,31 @@ def test_queue_close_logs_once_with_pre_drain_snapshot(caplog):
     assert full[0].fields["reason"] == "overflow"
     assert len(closed) == 0
     assert "005930" not in str(full[0].fields)
+
+
+def test_subscriber_exit_logs_once_with_pre_drain_snapshot_under_nested_cleanup(caplog):
+    async def scenario():
+        valkey = FakeValkey()
+        subscription = MarketSubscription(valkey, MarketMetrics())
+        client = subscription.subscribe(["price:005930"])
+        async with subscription.run():
+            queue = await client.__aenter__()
+            for index in range(256):
+                await valkey.pubsubs[0].messages.put(market_message("price:005930", str(index)))
+            await asyncio.sleep(0)
+            await client.__aexit__(None, None, None)
+            assert queue.get_nowait() is None
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+    closed = [
+        record for record in caplog.records if record.message == "market_sse_subscription_closed"
+    ]
+    assert len(closed) == 1
+    assert closed[0].fields["reason"] == "subscriber_exit"
+    assert closed[0].fields["events"] == 256
+    assert closed[0].fields["max_events"] == 256
+    assert "005930" not in str(closed[0].fields)
 
 
 def test_shutdown_does_not_log_recovery_from_late_subscription_acks(caplog):

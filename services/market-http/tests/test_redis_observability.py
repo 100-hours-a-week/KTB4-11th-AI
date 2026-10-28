@@ -116,6 +116,17 @@ def test_connection_then_both_generation_acks(caplog):
     ]
 
 
+def test_known_acks_without_reconnect_generation_do_not_start_recovery(caplog):
+    observer = SubscriptionObserver(listener_id="listener", task_id=None, queues=None)
+    with caplog.at_level(logging.INFO):
+        observer.ready()
+        observer.acknowledge("market:prices")
+        observer.acknowledge("market:orderbooks")
+
+    assert not records(caplog, "market_subscription_resubscribing")
+    assert not records(caplog, "market_subscription_recovered")
+
+
 def test_reconnect_and_resubscribe_failure_are_distinct(caplog):
     observer = SubscriptionObserver(listener_id="listener", task_id=None, queues=None)
     with caplog.at_level(logging.INFO):
