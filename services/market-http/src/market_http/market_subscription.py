@@ -18,6 +18,7 @@ from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 
 from market_http.observability.queues import ObservedQueue
+from market_http.observability.redis import SubscriptionObserver, observe_pubsub
 
 if TYPE_CHECKING:
     from market_http.observability.prometheus import MarketMetrics
@@ -38,17 +39,27 @@ class MarketEvent:
 
 
 class MarketSubscription:
-    def __init__(self, valkey: Redis, metrics: MarketMetrics | None = None) -> None:
+    def __init__(
+        self, valkey: Redis, metrics: MarketMetrics | None = None, *, task_id: str | None = None
+    ) -> None:
         self._valkey = valkey
         self._metrics = metrics
+        self._task_id = task_id
         self._subscribers: dict[str, set[asyncio.Queue[MarketEvent | None]]] = defaultdict(set)
         self._task: asyncio.Task[None] | None = None
 
     @asynccontextmanager
     async def run(self) -> AsyncGenerator[None]:
         fields = {"pid": os.getpid(), "listener_id": uuid4().hex, "channels": list(CHANNELS)}
+        observer = SubscriptionObserver(
+            listener_id=fields["listener_id"],
+            task_id=self._task_id,
+            queues=self._metrics.queues if self._metrics is not None else None,
+        )
         logger.info("market_subscription_starting", extra={"fields": fields})
         async with self._valkey.pubsub() as pubsub:
+            if isinstance(pubsub, PubSub):
+                observe_pubsub(pubsub, observer)
             try:
                 await pubsub.subscribe(*CHANNELS)
                 pending = set(CHANNELS)
@@ -64,12 +75,19 @@ class MarketSubscription:
                     extra={"fields": {**fields, "reason": "startup_cancelled"}},
                 )
                 raise
-            except Exception:
-                logger.exception("market_subscription_start_failed", extra={"fields": fields})
+            except Exception as error:
+                observer.transition(
+                    "reconnect_failed", reason="startup_connect_failed", error=error
+                )
+                logger.error(
+                    "market_subscription_start_failed",
+                    extra={"fields": {**fields, "error_type": type(error).__name__}},
+                )
                 raise
-            logger.info("market_subscription_ready", extra={"fields": fields})
+            observer.ready()
             task = asyncio.create_task(
-                self._listen(pubsub, fields), name=f"market-subscription-{fields['listener_id']}"
+                self._listen(pubsub, fields, observer),
+                name=f"market-subscription-{fields['listener_id']}",
             )
             self._task = task
             task.add_done_callback(partial(self._listener_finished, fields=fields))
@@ -92,8 +110,7 @@ class MarketSubscription:
         if not task.cancelled() and (error := task.exception()) is not None:
             logger.error(
                 "market subscription listener failed",
-                exc_info=(type(error), error, error.__traceback__),
-                extra={"fields": fields},
+                extra={"fields": {**fields, "error_type": type(error).__name__}},
             )
 
     @asynccontextmanager
@@ -122,19 +139,15 @@ class MarketSubscription:
             if self._metrics is not None and isinstance(queue, ObservedQueue):
                 self._metrics.queues.close(queue, "subscriber_exit")
 
-    async def _listen(self, pubsub: PubSub, fields: dict[str, Any]) -> None:
-        pending = set(CHANNELS)
+    async def _listen(
+        self, pubsub: PubSub, fields: dict[str, Any], observer: SubscriptionObserver
+    ) -> None:
         try:
             async for message in pubsub.listen():
                 if self._task is None:
                     break
                 if message["type"] == "subscribe" and message["channel"] in CHANNELS:
-                    if pending == set(CHANNELS):
-                        logger.info("market_subscription_resubscribing", extra={"fields": fields})
-                    pending.discard(message["channel"])
-                    if not pending:
-                        logger.info("market_subscription_recovered", extra={"fields": fields})
-                        pending = set(CHANNELS)
+                    observer.acknowledge(message["channel"])
                     continue
                 if message["type"] != "message":
                     continue
@@ -189,9 +202,19 @@ class MarketSubscription:
             if not subscribers:
                 del self._subscribers[channel]
         if self._metrics is not None and isinstance(queue, ObservedQueue):
-            self._metrics.queues.close(
+            snapshot = self._metrics.queues.snapshot()
+            closed = self._metrics.queues.close(
                 queue, reason, rejected_events=1 if reason == "overflow" else 0
             )
+            if closed:
+                logger.warning(
+                    (
+                        "market_sse_queue_full"
+                        if reason == "overflow"
+                        else "market_sse_subscription_closed"
+                    ),
+                    extra={"fields": {"reason": reason, **snapshot}},
+                )
         while not queue.empty():
             queue.get_nowait()
         queue.put_nowait(None)

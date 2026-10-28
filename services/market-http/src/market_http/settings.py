@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     valkey_cache_name: str | None = None
     valkey_tls: bool = False
     valkey_auth_mode: Literal["none", "iam"] = "none"
+    task_id: str | None = None
     aws_region: str = "ap-northeast-2"
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)

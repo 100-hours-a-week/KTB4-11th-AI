@@ -36,6 +36,7 @@ def create_app(
     sse_metrics: SSEConnectionMetrics | None = None,
     trace_spans_per_second: int = 100,
     prometheus: MarketMetrics | None = None,
+    task_id: str | None = None,
 ) -> FastAPI:
     deliver_spans = DeliverSpans(trace_spans_per_second)
 
@@ -73,7 +74,7 @@ def create_app(
     app.state.questdb_conf = questdb_conf
     app.state.postgres_engine = postgres_engine
     app.state.sse_metrics = sse_metrics
-    app.state.market_subscription = MarketSubscription(valkey, prometheus)
+    app.state.market_subscription = MarketSubscription(valkey, prometheus, task_id=task_id)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins if cors_origins is not None else [],

@@ -27,6 +27,13 @@ def test_defaults(monkeypatch):
     assert settings.postgres_timeout_seconds == 5
     assert settings.docs_enabled is True
     assert settings.docs_path_prefix == ""
+    assert settings.task_id is None
+
+
+def test_task_id_from_environment(monkeypatch):
+    _populate(monkeypatch, MARKET_HTTP_TASK_ID="task-42")
+
+    assert Settings().task_id == "task-42"
 
 
 @pytest.mark.parametrize("value", ["0", "-1"])

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 from market_http.market_subscription import MarketSubscription
+from market_http.observability.prometheus import MarketMetrics
 
 
 def market_message(key: str, value: str) -> dict[str, str]:
@@ -324,7 +325,7 @@ def test_listener_failure_notifies_clients_and_does_not_restart(monkeypatch):
                 assert pubsub.closed
         assert pubsub.closed
         await asyncio.sleep(0)
-        assert str(errors[0]["exc_info"][1]) == "runtime feed failure"
+        assert errors[0]["extra"]["fields"]["error_type"] == "ConnectionError"
 
     asyncio.run(scenario())
 
@@ -510,6 +511,30 @@ def test_lifecycle_logs_distinguish_failure_phase(caplog, failure):
 
     with caplog.at_level("INFO"):
         asyncio.run(scenario())
+
+
+def test_queue_close_logs_once_with_pre_drain_snapshot(caplog):
+    async def scenario():
+        valkey = FakeValkey()
+        subscription = MarketSubscription(valkey, MarketMetrics())
+        async with subscription.run():
+            async with subscription.subscribe(["price:005930"]):
+                for index in range(257):
+                    await valkey.pubsubs[0].messages.put(market_message("price:005930", str(index)))
+                await asyncio.sleep(0)
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+    full = [record for record in caplog.records if record.message == "market_sse_queue_full"]
+    closed = [
+        record for record in caplog.records if record.message == "market_sse_subscription_closed"
+    ]
+    assert len(full) == 1
+    assert full[0].fields["max_events"] == 256
+    assert full[0].fields["events"] == 256
+    assert full[0].fields["reason"] == "overflow"
+    assert len(closed) == 0
+    assert "005930" not in str(full[0].fields)
 
 
 def test_shutdown_does_not_log_recovery_from_late_subscription_acks(caplog):

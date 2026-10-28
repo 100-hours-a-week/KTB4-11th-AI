@@ -118,13 +118,13 @@ class QueueMetrics:
             self._publish(stream)
         return queue
 
-    def close(self, queue: ObservedQueue, reason: str, *, rejected_events: int = 0) -> None:
+    def close(self, queue: ObservedQueue, reason: str, *, rejected_events: int = 0) -> bool:
         if reason not in CLOSE_REASONS:
             raise ValueError(f"unknown queue close reason: {reason}")
         with self._lock:
             state = self._states.pop(queue, None)
             if state is None:
-                return
+                return False
             stream = state.stream
             self._counts[stream][state.events] -= 1
             self._queues[stream] -= 1
@@ -137,6 +137,7 @@ class QueueMetrics:
             if discarded:
                 self.discarded.labels(stream, reason).inc(discarded)
             self._publish(stream)
+            return True
 
     def snapshot(self) -> dict[str, int]:
         with self._lock:
