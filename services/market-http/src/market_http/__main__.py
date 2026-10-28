@@ -47,6 +47,7 @@ def main() -> None:
         trace_spans_per_second=settings.trace_spans_per_second,
         prometheus=metrics,
         task_id=settings.task_id,
+        memory_profile_settings=settings,
     )
     with (
         metrics.serve(settings.prometheus_bind_host, settings.prometheus_port),

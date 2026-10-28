@@ -28,6 +28,42 @@ def test_defaults(monkeypatch):
     assert settings.docs_enabled is True
     assert settings.docs_path_prefix == ""
     assert settings.task_id is None
+    assert settings.memory_profile_enabled is False
+    assert settings.memory_profile_dir == "/tmp/market-http-memory"
+    assert settings.memory_profile_interval_seconds == 10
+    assert settings.memory_profile_max_snapshots == 12
+
+
+def test_memory_profile_settings_from_environment(monkeypatch):
+    _populate(
+        monkeypatch,
+        MARKET_HTTP_MEMORY_PROFILE_ENABLED="true",
+        MARKET_HTTP_MEMORY_PROFILE_DIR="/tmp/profiles",
+        MARKET_HTTP_MEMORY_PROFILE_INTERVAL_SECONDS="1.5",
+        MARKET_HTTP_MEMORY_PROFILE_MAX_SNAPSHOTS="2",
+    )
+
+    settings = Settings()
+
+    assert settings.memory_profile_enabled is True
+    assert settings.memory_profile_dir == "/tmp/profiles"
+    assert settings.memory_profile_interval_seconds == 1.5
+    assert settings.memory_profile_max_snapshots == 2
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("MEMORY_PROFILE_INTERVAL_SECONDS", "0"),
+        ("MEMORY_PROFILE_MAX_SNAPSHOTS", "0"),
+        ("MEMORY_PROFILE_MAX_SNAPSHOTS", "121"),
+    ],
+)
+def test_memory_profile_limits_are_bounded(monkeypatch, name, value):
+    _populate(monkeypatch, **{f"MARKET_HTTP_{name}": value})
+
+    with pytest.raises(ValidationError, match=name.lower()):
+        Settings()
 
 
 def test_task_id_from_environment(monkeypatch):
