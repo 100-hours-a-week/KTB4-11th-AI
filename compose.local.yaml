@@ -149,6 +149,57 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  disclosure-indexer:
+    profiles: ["jobs"]
+    build:
+      context: .
+      dockerfile: docker/disclosure-indexer.Dockerfile
+    environment:
+      DISCLOSURE_INDEXER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DISCLOSURE_INDEXER_DART_API_KEY: ${DISCLOSURE_INDEXER_DART_API_KEY:-}
+      DISCLOSURE_INDEXER_ARCHIVE_ROOT: /app/archive
+      DISCLOSURE_INDEXER_LOG_LEVEL: ${DISCLOSURE_INDEXER_LOG_LEVEL:-INFO}
+      DISCLOSURE_INDEXER_BUSINESS_YEAR: ${DISCLOSURE_INDEXER_BUSINESS_YEAR:-}
+      DISCLOSURE_EMBEDDING_BASE_URI: ${DISCLOSURE_EMBEDDING_BASE_URI:-}
+      DISCLOSURE_EMBEDDING_API_KEY: ${DISCLOSURE_EMBEDDING_API_KEY:-}
+      DISCLOSURE_EMBEDDING_MODEL: ${DISCLOSURE_EMBEDDING_MODEL:-}
+      DISCLOSURE_EMBEDDING_DIMENSIONS: ${DISCLOSURE_EMBEDDING_DIMENSIONS:-2000}
+      DISCLOSURE_EMBEDDING_MAX_TOKENS: ${DISCLOSURE_EMBEDDING_MAX_TOKENS:-4096}
+      DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION: ${DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION:-}
+    volumes:
+      - disclosure-archive:/app/archive
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  disclosure-retrieval:
+    build:
+      context: .
+      dockerfile: docker/disclosure-retrieval.Dockerfile
+    environment:
+      DISCLOSURE_RETRIEVAL_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      DISCLOSURE_RETRIEVAL_LOG_LEVEL: ${DISCLOSURE_RETRIEVAL_LOG_LEVEL:-INFO}
+      DISCLOSURE_RETRIEVAL_MAX_DISTANCE: ${DISCLOSURE_RETRIEVAL_MAX_DISTANCE:-}
+      DISCLOSURE_EMBEDDING_BASE_URI: ${DISCLOSURE_EMBEDDING_BASE_URI:-}
+      DISCLOSURE_EMBEDDING_API_KEY: ${DISCLOSURE_EMBEDDING_API_KEY:-}
+      DISCLOSURE_EMBEDDING_MODEL: ${DISCLOSURE_EMBEDDING_MODEL:-}
+      DISCLOSURE_EMBEDDING_DIMENSIONS: ${DISCLOSURE_EMBEDDING_DIMENSIONS:-2000}
+      DISCLOSURE_EMBEDDING_MAX_TOKENS: ${DISCLOSURE_EMBEDDING_MAX_TOKENS:-4096}
+      DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION: ${DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION:-}
+    ports:
+      - "127.0.0.1:8002:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
   market-collector:
     profiles: ["jobs"]
     build:
@@ -247,6 +298,7 @@ services:
       PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: http://market-http:8000
       PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: http://news-http:8000
+      PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_BASE_URI: http://disclosure-retrieval:8000
       PORTFOLIO_BUILDER_LLM_API_KEY: ${PORTFOLIO_BUILDER_LLM_API_KEY:-}
       PORTFOLIO_BUILDER_LLM_MODEL: ${PORTFOLIO_BUILDER_LLM_MODEL:-}
       PORTFOLIO_BUILDER_THINKING_LEVEL: ${PORTFOLIO_BUILDER_THINKING_LEVEL:-medium}
@@ -260,6 +312,8 @@ services:
         condition: service_healthy
       news-http:
         condition: service_started
+      disclosure-retrieval:
+        condition: service_healthy
     restart: "no"
 
   portfolio-rebalancer:
@@ -301,5 +355,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  disclosure-archive:
   postgres-data:
   questdb-data:
