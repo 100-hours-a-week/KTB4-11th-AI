@@ -82,13 +82,17 @@ Snapshots are on: `enable_memory_snapshot=True` with the experimental `enable_gp
 | --- | --- | --- | --- |
 | First startup, cold volume (downloads weights) | 187.9s | 921.3s | 1 each |
 | Fresh start, warm volume, no snapshot | 137.3s | 1570.9s | 1 each |
-| Snapshot creation (one-time) | 329.1s | pending | 1 |
-| **Snapshot restore, p50** | **1.77s** | pending | 5 |
-| Snapshot restore, min | 0.94s | pending | 5 |
-| Snapshot restore, max (a miss) | **222.7s** | pending | 5 |
+| Snapshot creation (one-time) | 329.1s | 1348.4s | 1 each |
+| **Snapshot restore, p50** | **1.77s** | **0.8s** | 5 / 1 so far |
+| Snapshot restore, min | 0.94s | 0.8s | 5 / 1 so far |
+| Snapshot restore, max (a miss) | **222.7s** | not yet observed | 5 / 1 so far |
 | Warm (container already up) | 0.6–0.8s | 7.0s | see §2, §3 |
 
 Embedder restore samples, in order: **2.91, 222.7, 1.77, 0.94, 1.73** seconds.
+
+Reranker: snapshot creation 1348.4s, first restore **0.8s**. Two further restore samples
+were still running when this was written, so the reranker has one restore sample and no
+observed miss — that is a sample size, not a claim that it misses less often.
 
 ### What the snapshot changes, and what it does not
 
