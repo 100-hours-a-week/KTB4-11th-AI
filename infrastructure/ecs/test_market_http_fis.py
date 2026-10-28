@@ -1,5 +1,6 @@
 import json
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -18,8 +19,12 @@ class MarketHttpFisDeploymentTests(unittest.TestCase):
         step = step.split("\n      - name:", 1)[0]
         self.verify = "jq -e" + step.split("          jq -e", 1)[1]
         step = workflow.split("      - name: Register task definition revision", 1)[1]
-        self.render = "jq --arg name" + step.split("          jq --arg name", 1)[1]
-        self.render = self.render.split("> next.json", 1)[0] + "> next.json"
+        self.render = "python3" + step.split("          python3", 1)[1]
+        self.render = self.render.split("\n          arn=", 1)[0]
+        self.render = self.render.replace(
+            "scripts/render_market_http_task.py",
+            shlex.quote(str(ROOT / "scripts/render_market_http_task.py")),
+        )
 
     def run_command(self, command, template):
         with tempfile.TemporaryDirectory() as folder:
@@ -32,7 +37,12 @@ class MarketHttpFisDeploymentTests(unittest.TestCase):
                 "CONTAINER_NAME": "market-http",
                 "IMAGE": "example.invalid/market@sha256:" + "a" * 64,
                 "POSTGRES_DSN_SECRET_ARN": "arn:aws:ssm:ap-northeast-2:123456789012:parameter/test",
-                "MARKET_HTTP_ENV_JSON": '{"MARKET_HTTP_TEST":"fixture"}',
+                "MARKET_HTTP_ENV_JSON": json.dumps(
+                    {
+                        "MARKET_HTTP_TEST": "fixture",
+                        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://10.0.11.236:4318",
+                    }
+                ),
             }
             result = subprocess.run(
                 ["bash", "-c", command], cwd=folder, env=env, capture_output=True, text=True
