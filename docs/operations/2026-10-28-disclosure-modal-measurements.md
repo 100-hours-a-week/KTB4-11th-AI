@@ -34,7 +34,7 @@ GPU reports **22.06 GiB** usable on the L4.
 
 One sample per row except the 15,740-token case, which is two.
 
-The cold start includes the one-time 33.6GB download into the Modal volume plus adapter verification and load. Later cold starts read from the volume and were not measured separately yet.
+The cold start includes the one-time 33.6GB download into the Modal volume plus adapter verification and load. §4 separates the startup states.
 
 Output width is **1024** in every run, and a 2-document request with 1 and 3 chunks returned 4 vectors, so truncation from the checkpoint's 2048 dimensions and per-document grouping both behave as contracted.
 
@@ -61,17 +61,63 @@ Over-budget input is refused, not truncated, and the count is in real tokenizer 
 
 ## 3. Reranker
 
-Pending — measurement in progress at the time of writing. To record: cold start including the base download, warm latency for 5 and 50 candidates, VRAM peak under a 50-candidate pool.
+| Run | Candidates | Rerank | Wall | VRAM peak | VRAM reserved | Free |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cold start | 5 | 4.85s | **921.3s** | 2.79 GiB | 7.24 GiB | 14.58 GiB |
+| Warm | 50 | **6.74s** | 6.97s | 2.79 GiB | 7.24 GiB | 14.58 GiB |
 
-## 4. Not Yet Measured
+One sample per row. The cold start includes the one-time base download.
 
-- Second cold start from a warm volume, and Modal memory-snapshot restore versus a fresh start after a restore miss.
+The design's 50-candidate pool costs 6.74s warm, and NF4 keeps the footprint small: 7.24 GiB reserved of 22.06, leaving 14.58 GiB free. The reranker has ample headroom on an L4 and is not what constrains the hardware choice — the embedder is.
+
+Scores look like a working adapter rather than a no-op: a passage about currency risk scored 0.977 and 0.981 against a currency-risk query.
+
+## 4. Startup States
+
+The serving design asks for first startup, restore, and a fresh start after a restore miss to be measured separately. These are those states, kept apart.
+
+Snapshots are on: `enable_memory_snapshot=True` with the experimental `enable_gpu_snapshot`, and the model load moved into `@modal.enter(snap=True)` so the snapshot captures the loaded model including GPU memory.
+
+| State | Embedder | Reranker | Samples |
+| --- | --- | --- | --- |
+| First startup, cold volume (downloads weights) | 187.9s | 921.3s | 1 each |
+| Fresh start, warm volume, no snapshot | 137.3s | 1570.9s | 1 each |
+| Snapshot creation (one-time) | 329.1s | pending | 1 |
+| **Snapshot restore, p50** | **1.77s** | pending | 5 |
+| Snapshot restore, min | 0.94s | pending | 5 |
+| Snapshot restore, max (a miss) | **222.7s** | pending | 5 |
+| Warm (container already up) | 0.6–0.8s | 7.0s | see §2, §3 |
+
+Embedder restore samples, in order: **2.91, 222.7, 1.77, 0.94, 1.73** seconds.
+
+### What the snapshot changes, and what it does not
+
+Snapshots decide whether serverless is usable here. A fresh start costs 137s; a restore costs **1.77s at the median** — roughly 75× faster, and small enough that a cold search is no longer a minutes-long event.
+
+But the distribution is bimodal, not fast. One of five samples took **222.7s**: a restore miss, where the snapshot was not available on the assigned worker and the container paid a full load instead. Four hits of about 1–3s and one miss of 222.7s is a 4-in-5 hit rate on a five-sample run.
+
+So with n=5 the max *is* approximately p95, and p95 is a restore miss. Stated plainly:
+
+- A typical cold search now starts in under two seconds.
+- Roughly one search in five pays something close to four minutes.
+- Five samples do not establish a hit rate. This needs a longer run before any availability promise is made, and the miss rate is the number that decides whether `min_containers=1` is worth its idle cost.
+
+The one-time 329s snapshot creation is paid again whenever the image or the loading code changes, which includes every dependency bump.
+
+### A volume write that did not survive
+
+The reranker's warm-volume fresh start (1570.9s) was *worse* than its first start (921.3s). A later start that re-pays the download means the weights were not in the volume: a `modal.Volume` commits in the background and on clean exit, so a container that is killed can lose what it wrote.
+
+Snapshots hide this on a restore hit but not on a miss. The durable fix is to download the weights during the image build rather than depend on a volume write surviving, which also removes Hugging Face from the startup path entirely.
+
+## 5. Not Yet Measured
+
 - End-to-end search latency through `disclosure-retrieval` including PostgreSQL.
 - Parity: identical input through the evaluation path versus the service, with a recorded tolerance, and the effect of halfvec storage on Top-5.
 - Cost for 100 randomly timed requests a day.
 
-## 5. Operational Notes
+## 6. Operational Notes
 
 - All five HTTP endpoints require Modal proxy auth. The first deploy published them unauthenticated; that is fixed, and a proxy auth token must be minted in the Modal dashboard for the services to call them.
 - The `measure` methods are Modal methods, not web endpoints, so the measurement surface is reachable from the SDK only.
-- A cold path that needs both an embedding and a rerank pays two cold starts, because the models are in separate containers. The embedder's 188s first start drops substantially once the volume is populated, but that number is still unmeasured.
+- A cold path that needs both an embedding and a rerank pays two starts, because the models are in separate containers. §4 gives the per-state numbers.

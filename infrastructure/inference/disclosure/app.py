@@ -90,9 +90,14 @@ def _reject(error: Exception) -> dict[str, object]:
     volumes={CACHE: cache},
     scaledown_window=IDLE_TIMEOUT,
     timeout=900,
+    # Loading 33.6GB of weights costs over two minutes even from a warm volume, and at
+    # ~100 requests a day almost every request is cold. The snapshot captures the loaded
+    # model, GPU memory included, so a restore skips the load entirely.
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
 )
 class Embedder:
-    @modal.enter()
+    @modal.enter(snap=True)
     def load(self) -> None:
         import torch
         from peft import PeftModel
@@ -208,9 +213,14 @@ class Embedder:
     volumes={CACHE: cache},
     scaledown_window=IDLE_TIMEOUT,
     timeout=900,
+    # Loading 33.6GB of weights costs over two minutes even from a warm volume, and at
+    # ~100 requests a day almost every request is cold. The snapshot captures the loaded
+    # model, GPU memory included, so a restore skips the load entirely.
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
 )
 class Reranker:
-    @modal.enter()
+    @modal.enter(snap=True)
     def load(self) -> None:
         import torch
         from peft import PeftModel
