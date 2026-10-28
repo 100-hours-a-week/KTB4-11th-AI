@@ -368,3 +368,23 @@ def test_prometheus_bind_settings_from_environment(monkeypatch):
     monkeypatch.setenv("MARKET_HTTP_PROMETHEUS_PORT", "9101")
     settings = Settings(**required)
     assert (settings.prometheus_bind_host, settings.prometheus_port) == ("10.0.0.3", 9101)
+
+
+def test_new_metrics_registry_starts_without_previous_queue_state():
+    previous = MarketMetrics()
+    queue = previous.queues.open("prices")
+    previous.queues.close(queue, "subscriber_exit")
+
+    restarted = MarketMetrics()
+    assert (
+        value(restarted, "market_http_pubsub_messages_received_total", channel="market:prices") == 0
+    )
+    assert value(restarted, "market_http_sse_live_events_sent_total", stream="prices") == 0
+    assert value(restarted, "market_http_sse_queue_high_watermark_events", stream="prices") == 0
+    assert restarted.queues.snapshot() == {
+        "queues": 0,
+        "events": 0,
+        "payload_bytes": 0,
+        "max_events": 0,
+    }
+    assert not previous.queues._states
