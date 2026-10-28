@@ -146,7 +146,10 @@ third-party dependencies.
   request limiter across bar and index requests.
 - Market-streamer uses one socket for `0B` prices and `0D` orderbooks, writing snapshots
   with `SET` to `price:{code}` and `orderbook:{code}`, then publishes to `market:prices`
-  and `market:orderbooks`.
+  and `market:orderbooks` for AI market-http and to `price:{code}` and
+  `orderbook:{code}` for Backend. Each snapshot and both channel messages use the same
+  JSON payload. Preserve both channel contracts; coordinate channel or payload changes
+  with AI and Backend consumers before deployment.
 - Orderbooks contain up to ten ask and bid levels per side, excluding zero prices.
   Their timestamp combines exchange quote time with the KST trading date and represents snapshot freshness.
 - Market HTTP is public without authentication. Its only Valkey write is `SET NX` to

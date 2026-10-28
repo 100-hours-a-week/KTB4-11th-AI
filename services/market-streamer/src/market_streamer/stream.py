@@ -113,6 +113,7 @@ async def publish(valkey: Redis, prices: list[Price]) -> None:
             )
             pipe.set(key, payload)
             pipe.publish("market:prices", payload)
+            pipe.publish(key, payload)
             code = price.code
             timestamp = datetime.fromisoformat(price.timestamp)
             if MARKET_OPEN <= timestamp.time() <= MARKET_CLOSE:
@@ -136,6 +137,7 @@ async def publish_orderbooks(valkey: Redis, orderbooks: list[Orderbook]) -> None
             payload = json.dumps(asdict(orderbook))
             pipe.set(key, payload)
             pipe.publish("market:orderbooks", payload)
+            pipe.publish(key, payload)
         await pipe.execute()
 
 

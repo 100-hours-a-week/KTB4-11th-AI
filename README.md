@@ -144,6 +144,21 @@ flowchart LR
 - `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
 - 기존 가격 API는 `/prices`, `/prices/stream`임
 
+#### AI/BE Pub/Sub 계약
+
+market-streamer는 각 이벤트의 동일한 JSON payload를 최신 스냅샷 키에 `SET`하고,
+고정 채널과 종목별 채널 양쪽에 `PUBLISH`함.
+
+| 구분 | 스냅샷 키 | AI market-http 구독 채널 | BE AiQuoteAdapter 구독 채널 |
+| --- | --- | --- | --- |
+| 현재가 | `price:{code}` | `market:prices` | `price:{code}` |
+| 호가 | `orderbook:{code}` | `market:orderbooks` | `orderbook:{code}` |
+
+AI는 고정 채널을 `SUBSCRIBE`하고 요청 종목을 필터링하며, BE는 주문에 필요한 종목별
+채널을 `SUBSCRIBE`함. ElastiCache Serverless에서 지원하지 않는 `PSUBSCRIBE`는 사용하지 않음.
+채널 또는 payload를 변경할 때는 AI/BE 소비자 담당자와 계약 및 배포 순서를 사전에 협의해야 함.
+이중 발행으로 이벤트마다 `PUBLISH`가 1회 추가되어 Valkey 처리량과 비용이 증가함.
+
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 
 - PostgreSQL의 이전 포트폴리오와 news-http의 최근 뉴스, 관련 기업과 테마를 묶어 에이전트의 시작 자료를 생성함
