@@ -144,21 +144,6 @@ flowchart LR
 - `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
 - 기존 가격 API는 `/prices`, `/prices/stream`임
 
-#### AI/BE Pub/Sub 계약
-
-market-streamer는 각 이벤트의 동일한 JSON payload를 최신 스냅샷 키에 `SET`하고,
-고정 채널과 종목별 채널 양쪽에 `PUBLISH`함.
-
-| 구분 | 스냅샷 키 | AI market-http 구독 채널 | BE AiQuoteAdapter 구독 채널 |
-| --- | --- | --- | --- |
-| 현재가 | `price:{code}` | `market:prices` | `price:{code}` |
-| 호가 | `orderbook:{code}` | `market:orderbooks` | `orderbook:{code}` |
-
-AI는 고정 채널을 `SUBSCRIBE`하고 요청 종목을 필터링하며, BE는 주문에 필요한 종목별
-채널을 `SUBSCRIBE`함. ElastiCache Serverless에서 지원하지 않는 `PSUBSCRIBE`는 사용하지 않음.
-채널 또는 payload를 변경할 때는 AI/BE 소비자 담당자와 계약 및 배포 순서를 사전에 협의해야 함.
-이중 발행으로 이벤트마다 `PUBLISH`가 1회 추가되어 Valkey 처리량과 비용이 증가함.
-
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 
 - PostgreSQL의 이전 포트폴리오와 news-http의 최근 뉴스, 관련 기업과 테마를 묶어 에이전트의 시작 자료를 생성함
@@ -321,37 +306,3 @@ erDiagram
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
 | `portfolios.status` | `portfolio-builder` | `0008` |
 | `portfolio_reasons.id` | `portfolio-builder` | `0010` |
-
-## 리밸런서 통신 경로
-
-| 작업 | 경로 |
-|---|---|
-| 사용자·계좌 정보 조회 | 기존 HTTP `GET /api/v1/users/ai-server` |
-| 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
-| 주문 취소 요청 | AI → 같은 Order FIFO 큐; `order.cancel` |
-| HTTP 조회·응답 검증 실패 | 구조화 로그 기록 후 실패 종료 |
-
-매 실행 시작에 HTTP로 사용자 정보를 한 번 조회합니다. 조회한 잔고·보유량과 남은 실행 횟수로
-범위·수량을 계산하고, 대기 주문 취소 요청 다음에 재주문 요청을 같은 계좌 FIFO 그룹으로 바로 발행합니다.
-취소 반영을 기다리는 HTTP 재조회나 대기 주문 잔존에 따른 보류는 하지 않습니다.
-취소 요청 발행이 실패한 계좌에는 신규 주문을 보내지 않습니다. 편출 종목은 매도만 요청하며
-이번 매도의 예상 대금은 매수 예산에 더하지 않습니다.
-취소 메시지 발행 성공은 취소 완료가 아닙니다. 백엔드는 같은 그룹의 취소 처리를 마친 뒤 다음 주문을 처리해야 합니다.
-조회 실패나 잘못된 응답은 기존 구조화 로그로 기록하고 주문 요청 없이 종료합니다.
-`users: []`는 정상 응답입니다.
-
-주문 생성에는 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
-`MessageDeduplicationId`로 사용합니다. SDK 재시도는 동일 eventId와 본문을 유지합니다.
-FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계산한 주문은 새 이벤트입니다.
-계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
-
-HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용합니다.
-SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
-기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
-리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
-DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.
-
-## EC2 배포 환경 설정
-
-운영·개발 EC2는 GitHub Variable의 `.env` 텍스트와 SSM의 비밀 값을 합쳐 배포용 `.env`를 생성합니다.
-최초 이관과 적용 순서는 [SSM 환경 설정 운영 절차](docs/operations/ssm-environment.md)를 참고하세요.
