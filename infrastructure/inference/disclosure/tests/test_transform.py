@@ -1,7 +1,13 @@
 import math
 
 import pytest
-from transform import int8_embedding
+from transform import (
+    INT8_MAX,
+    INT8_MIN,
+    int8_embedding,
+    quantize,
+    truncate_and_normalize,
+)
 
 
 def test_the_transform_applies_the_evaluated_order():
@@ -46,6 +52,29 @@ def test_clipping_bounds_the_integer_range():
     vector = int8_embedding([50.0, 0.0, 0.0, 0.0], dimensions=4)
 
     assert vector == pytest.approx([1.0, 0.0, 0.0, 0.0])
+
+
+def test_quantize_matches_the_checkpoint_bounds():
+    # The reference clips to [-128, 127]; tanh*127 never reaches -128, so the bound must
+    # not be tightened to -127 on the chance that it one day would.
+    assert quantize([-50.0, 50.0]) == [-127.0, 127.0]
+    assert (INT8_MIN, INT8_MAX) == (-128, 127)
+
+
+def test_truncating_happens_before_normalising():
+    # The checkpoint emits 2048 dimensions and the index stores 1024. Normalising the full
+    # width first would scale every stored vector by a factor the evaluation never used.
+    quantized = [3.0, 4.0, 120.0, 120.0]
+
+    assert truncate_and_normalize(quantized, 2) == pytest.approx([0.6, 0.8])
+
+
+def test_the_serving_path_and_the_whole_transform_agree():
+    # The app lets the model quantize and only truncates and normalises; that must equal
+    # running the whole transform locally.
+    raw = [0.3, -0.7, 0.9, 0.1, -0.4, 0.6]
+
+    assert truncate_and_normalize(quantize(raw), 4) == int8_embedding(raw, 4)
 
 
 def test_an_all_zero_output_is_rejected_rather_than_divided_by_zero():

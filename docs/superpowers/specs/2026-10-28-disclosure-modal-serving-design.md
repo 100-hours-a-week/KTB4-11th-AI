@@ -65,15 +65,39 @@ Every request carries the caller's `identity`. A mismatch against the loaded man
 
 Input beyond 16,384 tokenizer tokens is rejected with 422, counted in actual tokenizer tokens rather than bytes or characters. Truncation is never silent.
 
-## 6. Output Transform
+## 6. Output Transform and the Checkpoint's Own API
 
-The evaluated pipeline, in order, applied to the embedding model's output:
+Read from the checkpoint's `modeling_pplx_contextual.py` at the pinned revision, not inferred.
+
+The model is **not** a generic encoder. `PplxContextualModel.encode(documents, task=...)` takes `list[list[str]]` — a list of documents, each a list of chunks — joins each document's chunks with the configured `document_prefix` (`"[D] "`) and `boundary_marker` (`"<|chunk_sep|>"`), encodes the whole document as one sequence, and pools each chunk back out of it by character span. Queries go through `task="query"`, which requires exactly one string per row and prepends `query_prefix` (`"[Q] "`).
+
+So the grouped context encoding the serving design asks for is the checkpoint's own contract. Hand-rolled mean pooling over `last_hidden_state` would produce different vectors and must not be used.
+
+`encode` already performs part of the transform:
+
+```python
+vectors = torch.round(torch.tanh(projected) * 127).clamp(-128, 127)
+```
+
+Two corrections to what the earlier design recorded:
+
+- The clip range is **[-128, 127]**, not [-127, 127]. After `tanh * 127` the lower bound never binds, but it is kept identical because a difference here is a difference in every stored vector.
+- The checkpoint's `embedding_dim` is **2048**, so "the first 1024 dimensions" is a truncation of the model's output. Truncation must happen **before** normalization — `encode` is therefore called with `normalize_embeddings=False`, and the service truncates to 1024 and then normalizes. Normalizing 2048 first would scale every stored vector by a factor the evaluation never applied.
+
+The full order, with the split between model and service marked:
 
 ```
-tanh → multiply by 127 → round → clip to [-127, 127] → take the first 1024 dimensions → L2 normalize
+tanh → ×127 → round → clip [-128, 127]      (the checkpoint's encode)
+→ first 1024 dimensions → L2 normalize       (the service)
 ```
 
 This is an output transform, not weight quantization. It is versioned as `transform_version` in the manifest and travels in `/v1/identity`, because a change to it changes every vector and must invalidate stored indexes.
+
+The checkpoint's own `document_length` and `query_length` are 262,144 tokens. The 16,384-token limit is this project's contract from its evaluation, not the model's, and is enforced against `prepare_inputs`, which is what the model actually sees once the prefix and separators are added.
+
+Library versions are forced by the checkpoint: it was saved with transformers 5.3.0 and its remote code imports `Qwen3_5Model`, which transformers 4.x does not have. torch 2.14.1, transformers 5.3.0, peft 0.21.2, accelerate 1.15.0, bitsandbytes 0.50.2 and huggingface_hub 1.33.0 resolve together.
+
+The base weights are 33.6GB on disk because the checkpoint is stored in float32; loaded in bf16 that is roughly 18GB of VRAM. The download happens once into a Modal volume.
 
 The reranker keeps its evaluated prompt template, preceding context and instruction, and scores from the yes/no logits. Its quantization is NF4, which is weight quantization and was part of the evaluation.
 

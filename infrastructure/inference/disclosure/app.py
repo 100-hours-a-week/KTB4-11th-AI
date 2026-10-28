@@ -14,7 +14,7 @@ from pathlib import Path
 
 import modal
 from contracts import IdentityMismatch, Manifest, document_groups, require_identity
-from transform import int8_embedding
+from transform import truncate_and_normalize
 
 HERE = Path(__file__).parent
 MANIFEST = Manifest.load(HERE / "model_manifest.json")
@@ -26,13 +26,15 @@ CACHE = "/cache"
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
-        "torch==2.9.1",
-        "transformers==4.57.1",
-        "peft==0.18.0",
-        "bitsandbytes==0.49.0",
-        "accelerate==1.12.0",
-        "safetensors==0.7.0",
-        "huggingface_hub==1.22.0",
+        # The embedding checkpoint was saved with transformers 5.3 and its remote code
+        # imports Qwen3_5Model, which 4.x does not have. These versions resolve together.
+        "torch==2.14.1",
+        "transformers==5.3.0",
+        "peft==0.21.2",
+        "bitsandbytes==0.50.2",
+        "accelerate==1.15.0",
+        "safetensors==0.8.0",
+        "huggingface_hub==1.33.0",
         "fastapi[standard]==0.142.2",
     )
     .env({"HF_HOME": CACHE, "TOKENIZERS_PARALLELISM": "false"})
@@ -94,13 +96,10 @@ class Embedder:
     def load(self) -> None:
         import torch
         from peft import PeftModel
-        from transformers import AutoModel, AutoTokenizer
+        from transformers import AutoModel
 
         spec = MANIFEST.embedding
         _verify_adapter(spec["adapter_repo"], spec["adapter_revision"], spec["adapter_sha256"])
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            spec["base_repo"], revision=spec["base_revision"], trust_remote_code=True
-        )
         base = AutoModel.from_pretrained(
             spec["base_repo"],
             revision=spec["base_revision"],
@@ -113,28 +112,40 @@ class Embedder:
         self.model.eval().cuda()
         self.dimensions = spec["dimensions"]
 
-    def _encode(self, texts: list[str]) -> list[list[float]]:
-        import torch
+    def _token_count(self, documents: list[list[str]], task: str) -> int:
+        # The checkpoint's own prepare_inputs adds the [D]/[Q] prefix and the chunk
+        # separators, so the budget is measured on what the model will actually see.
+        features = self.model.prepare_inputs(documents, task)
+        return int(features["input_ids"].shape[1])
 
-        batch = self.tokenizer(texts, padding=True, truncation=False, return_tensors="pt")
-        if batch["input_ids"].shape[1] > MANIFEST.max_tokens:
-            raise ValueError(
-                f"input is {batch['input_ids'].shape[1]} tokens, over the "
-                f"{MANIFEST.max_tokens}-token limit"
-            )
-        batch = {name: value.cuda() for name, value in batch.items()}
-        with torch.inference_mode():
-            output = self.model(**batch)
-        hidden = output.last_hidden_state
-        mask = batch["attention_mask"].unsqueeze(-1).to(hidden.dtype)
-        pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
-        return [row.float().tolist() for row in pooled]
+    def _encode(self, documents: list[list[str]], task: str) -> list[list[list[float]]]:
+        """One list of vectors per document, one vector per chunk, in order.
 
-    @modal.fastapi_endpoint(method="GET", docs=False)
+        The checkpoint encodes a document's chunks as a single context sequence and pools
+        each chunk out of it, so grouping is the model's own contract rather than ours.
+        Quantization is left to `encode`; truncation to 1024 and normalisation are applied
+        here, in that order, because the index stores the leading half of 2048 dimensions.
+        """
+        count = self._token_count(documents, task)
+        if count > MANIFEST.max_tokens:
+            raise ValueError(f"input is {count} tokens, over the {MANIFEST.max_tokens}-token limit")
+        rows = self.model.encode(
+            documents,
+            task=task,
+            normalize_embeddings=False,
+            convert_to_numpy=True,
+            quantization="int8",
+        )
+        return [
+            [truncate_and_normalize(vector.tolist(), self.dimensions) for vector in row]
+            for row in rows
+        ]
+
+    @modal.fastapi_endpoint(method="GET", docs=False, requires_proxy_auth=True)
     def identity(self) -> dict[str, object]:
         return MANIFEST.embedding_identity()
 
-    @modal.fastapi_endpoint(method="POST", docs=False)
+    @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
     def document_embeddings(self, payload: dict) -> dict[str, object]:
         try:
             require_identity(payload.get("identity"), MANIFEST.embedding_identity())
@@ -144,29 +155,25 @@ class Embedder:
         vectors: dict[str, list[float]] = {}
         # One encode call per document: the context group is the document, never the batch.
         for group in groups:
-            texts = [text for _, text in group.chunks]
             try:
-                raw = self._encode(texts)
+                (encoded,) = self._encode([[text for _, text in group.chunks]], "document")
             except ValueError as error:
                 return _reject(error)
-            for (chunk_id, _), values in zip(group.chunks, raw, strict=True):
-                vectors[str(chunk_id)] = int8_embedding(values, self.dimensions)
+            for (chunk_id, _), vector in zip(group.chunks, encoded, strict=True):
+                vectors[str(chunk_id)] = vector
         return {"identity": MANIFEST.embedding_identity(), "vectors": vectors}
 
-    @modal.fastapi_endpoint(method="POST", docs=False)
+    @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
     def query_embedding(self, payload: dict) -> dict[str, object]:
         try:
             require_identity(payload.get("identity"), MANIFEST.embedding_identity())
             query = payload["query"]
             if not query.strip():
                 raise ValueError("query is empty")
-            (raw,) = self._encode([query])
+            ((vector,),) = self._encode([[query]], "query")
         except Exception as error:
             return _reject(error)
-        return {
-            "identity": MANIFEST.embedding_identity(),
-            "vector": int8_embedding(raw, self.dimensions),
-        }
+        return {"identity": MANIFEST.embedding_identity(), "vector": vector}
 
 
 @app.cls(
@@ -206,11 +213,11 @@ class Reranker:
         self.yes_id = self.tokenizer.encode("yes", add_special_tokens=False)[0]
         self.no_id = self.tokenizer.encode("no", add_special_tokens=False)[0]
 
-    @modal.fastapi_endpoint(method="GET", docs=False)
+    @modal.fastapi_endpoint(method="GET", docs=False, requires_proxy_auth=True)
     def identity(self) -> dict[str, object]:
         return MANIFEST.reranker_identity()
 
-    @modal.fastapi_endpoint(method="POST", docs=False)
+    @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
     def rerank(self, payload: dict) -> dict[str, object]:
         import math
 
