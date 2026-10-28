@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -9,11 +11,16 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
+
+from market_http.observability.queues import ObservedQueue
+
+if TYPE_CHECKING:
+    from market_http.observability.prometheus import MarketMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +34,13 @@ class MarketEvent:
     data: str
     received_at: float
     received: datetime
+    payload_bytes: int = 0
 
 
 class MarketSubscription:
-    def __init__(self, valkey: Redis) -> None:
+    def __init__(self, valkey: Redis, metrics: MarketMetrics | None = None) -> None:
         self._valkey = valkey
+        self._metrics = metrics
         self._subscribers: dict[str, set[asyncio.Queue[MarketEvent | None]]] = defaultdict(set)
         self._task: asyncio.Task[None] | None = None
 
@@ -69,9 +78,9 @@ class MarketSubscription:
             finally:
                 stopping = self._task is task
                 self._task = None
+                self._close_all_subscribers("shutdown")
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
-                self._close_all_subscribers()
                 if stopping:
                     logger.info(
                         "market_subscription_stopped",
@@ -93,7 +102,12 @@ class MarketSubscription:
     ) -> AsyncGenerator[asyncio.Queue[MarketEvent | None]]:
         if self._task is None or self._task.done():
             raise RuntimeError("market subscription is not running")
-        queue: asyncio.Queue[MarketEvent | None] = asyncio.Queue(maxsize=QUEUE_CAPACITY)
+        stream = self._stream(codes)
+        queue: asyncio.Queue[MarketEvent | None] = (
+            self._metrics.queues.open(stream)
+            if self._metrics is not None
+            else asyncio.Queue(maxsize=QUEUE_CAPACITY)
+        )
         for code in codes:
             self._subscribers[code].add(queue)
         try:
@@ -105,6 +119,8 @@ class MarketSubscription:
                     subscribers.discard(queue)
                     if not subscribers:
                         del self._subscribers[code]
+            if self._metrics is not None and isinstance(queue, ObservedQueue):
+                self._metrics.queues.close(queue, "subscriber_exit")
 
     async def _listen(self, pubsub: PubSub, fields: dict[str, Any]) -> None:
         pending = set(CHANNELS)
@@ -134,30 +150,45 @@ class MarketSubscription:
                         "market subscription received invalid event", extra={"channel": channel}
                     )
                     continue
-                event = MarketEvent(data, time.monotonic(), datetime.now(UTC))
+                event = MarketEvent(
+                    data, time.monotonic(), datetime.now(UTC), len(data.encode("utf-8"))
+                )
                 for queue in tuple(self._subscribers.get(subscriber_key, ())):
                     if queue.full():
-                        self._close_subscriber(queue)
+                        self._close_subscriber(queue, "overflow")
                     else:
                         queue.put_nowait(event)
             if self._task is not None:
                 logger.warning("market_subscription_ended", extra={"fields": fields})
         finally:
             self._task = None
-            self._close_all_subscribers()
+            self._close_all_subscribers("listener_end")
             await pubsub.aclose()
 
-    def _close_all_subscribers(self) -> None:
+    @staticmethod
+    def _stream(codes: Sequence[str]) -> str:
+        streams = {code.partition(":")[0] for code in codes}
+        if streams == {"price"}:
+            return "prices"
+        if streams == {"orderbook"}:
+            return "orderbooks"
+        return "mixed"
+
+    def _close_all_subscribers(self, reason: str) -> None:
         queues = {queue for subscribers in self._subscribers.values() for queue in subscribers}
         self._subscribers.clear()
         for queue in queues:
-            self._close_subscriber(queue)
+            self._close_subscriber(queue, reason)
 
-    def _close_subscriber(self, queue: asyncio.Queue[MarketEvent | None]) -> None:
+    def _close_subscriber(self, queue: asyncio.Queue[MarketEvent | None], reason: str) -> None:
         for channel, subscribers in tuple(self._subscribers.items()):
             subscribers.discard(queue)
             if not subscribers:
                 del self._subscribers[channel]
+        if self._metrics is not None and isinstance(queue, ObservedQueue):
+            self._metrics.queues.close(
+                queue, reason, rejected_events=1 if reason == "overflow" else 0
+            )
         while not queue.empty():
             queue.get_nowait()
         queue.put_nowait(None)

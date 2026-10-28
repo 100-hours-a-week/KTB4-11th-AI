@@ -73,7 +73,7 @@ def create_app(
     app.state.questdb_conf = questdb_conf
     app.state.postgres_engine = postgres_engine
     app.state.sse_metrics = sse_metrics
-    app.state.market_subscription = MarketSubscription(valkey)
+    app.state.market_subscription = MarketSubscription(valkey, prometheus)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins if cors_origins is not None else [],

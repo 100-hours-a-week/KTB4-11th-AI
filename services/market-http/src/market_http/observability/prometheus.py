@@ -8,6 +8,8 @@ from contextvars import ContextVar
 import uvicorn
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, start_http_server
 
+from market_http.observability.queues import QueueMetrics
+
 DELIVERY: ContextVar[deque[float | None] | None] = ContextVar("sse_delivery", default=None)
 FRAME_END = re.compile(rb"\r?\n\r?\n")
 REASONS = ("normal", "client_disconnect", "cancelled", "send_error", "server_shutdown", "unknown")
@@ -22,6 +24,7 @@ def track_delivery(*, live: bool = False, received_at: float | None = None) -> N
 class MarketMetrics:
     def __init__(self):
         self.registry = CollectorRegistry()
+        self.queues = QueueMetrics(self.registry)
         self.shutting_down = False
         self.connections = Gauge(
             "market_http_sse_connections",
