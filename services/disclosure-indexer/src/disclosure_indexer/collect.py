@@ -13,7 +13,9 @@ import sqlalchemy as sa
 from ktb_core.logging import get_logger
 
 from disclosure_indexer.dart import DartClient, report_period
+from disclosure_indexer.database import disclosure_sections
 from disclosure_indexer.documents import PARSER_VERSION, extract_documents
+from disclosure_indexer.sections import section_rows
 from disclosure_indexer.settings import Settings
 
 log = get_logger(__name__)
@@ -378,6 +380,7 @@ def store_document(engine: sa.Engine, settings: Settings, receipt: str, content:
             {key: value for key, value in document.items() if key != "body"} for document in docs
         ]
         status = "ready" if any(doc["status"] == "ready" for doc in docs) else "unavailable"
+        rows = section_rows(docs)
         with engine.begin() as conn:
             conn.execute(
                 sa.text(
@@ -386,6 +389,26 @@ def store_document(engine: sa.Engine, settings: Settings, receipt: str, content:
                 ),
                 {"docs": json.dumps(docs, ensure_ascii=False), "status": status, "id": document_id},
             )
+            # Sections are readable without embeddings, so they land with the parse and are
+            # replaced wholesale when this document version is parsed again.
+            conn.execute(
+                sa.delete(disclosure_sections).where(
+                    disclosure_sections.c.document_id == document_id
+                )
+            )
+            if rows:
+                conn.execute(
+                    sa.insert(disclosure_sections),
+                    [
+                        {
+                            **row,
+                            "document_id": document_id,
+                            "receipt_id": receipt,
+                            "parser_version": PARSER_VERSION,
+                        }
+                        for row in rows
+                    ],
+                )
             conn.execute(
                 sa.text(
                     "UPDATE disclosures SET status=:status, "

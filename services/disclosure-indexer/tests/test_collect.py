@@ -439,6 +439,83 @@ def test_a_failing_window_does_not_skip_the_remaining_windows(company_engine, tm
     assert result["ready"] == 1, "a later window must still be collected"
 
 
+def test_parsed_sections_are_stored_for_direct_reads(company_engine, tmp_path):
+    report = {
+        "corp_code": "00990002",
+        "stock_code": "990002",
+        "report_nm": "사업보고서 (2025.12)",
+        "rcept_no": "sections-test",
+        "rcept_dt": "20260315",
+    }
+    body = "<DOCUMENT><TITLE>II. 사업의 내용</TITLE><P>반도체 매출</P></DOCUMENT>"
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+    )
+    with httpx.Client(transport=httpx.MockTransport(_dart(_zip(body), [report]))) as client:
+        assert collect(company_engine, client, settings)["ready"] == 1
+
+    with company_engine.connect() as conn:
+        rows = (
+            conn.execute(
+                sa.text(
+                    "SELECT heading, topic, text, document_name, start_offset, end_offset,"
+                    " parser_version FROM disclosure_sections WHERE receipt_id='sections-test'"
+                    " ORDER BY document_order, ordinal"
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert [row["heading"] for row in rows] == ["II. 사업의 내용"]
+    assert rows[0]["text"] == "반도체 매출"
+    assert rows[0]["document_name"] == "main.xml"
+    assert rows[0]["parser_version"] == PARSER_VERSION
+    assert rows[0]["end_offset"] >= rows[0]["start_offset"]
+
+
+def test_reparsing_a_document_replaces_its_sections(company_engine, tmp_path):
+    report = {
+        "corp_code": "00990002",
+        "stock_code": "990002",
+        "report_nm": "사업보고서 (2025.12)",
+        "rcept_no": "resection-test",
+        "rcept_dt": "20260315",
+    }
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+    )
+    first = _zip("<DOCUMENT><TITLE>원본</TITLE><P>원본 본문</P></DOCUMENT>")
+    with httpx.Client(transport=httpx.MockTransport(_dart(first, [report]))) as client:
+        collect(company_engine, client, settings)
+    with company_engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "UPDATE disclosure_documents SET extraction_status='pending' "
+                "WHERE receipt_id='resection-test'"
+            )
+        )
+    with httpx.Client(transport=httpx.MockTransport(_dart(first, [report]))) as client:
+        collect(company_engine, client, settings)
+
+    with company_engine.connect() as conn:
+        headings = (
+            conn.execute(
+                sa.text("SELECT heading FROM disclosure_sections WHERE receipt_id='resection-test'")
+            )
+            .scalars()
+            .all()
+        )
+    assert headings == ["원본"], "a re-parse must replace sections, not duplicate them"
+
+
 def test_temporary_api_error_is_not_archived_as_a_document(tmp_path):
     from unittest.mock import MagicMock
 
