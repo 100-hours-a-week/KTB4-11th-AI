@@ -116,6 +116,37 @@ def test_connection_then_both_generation_acks(caplog):
     ]
 
 
+def test_repeated_recovery_cycles_have_distinct_monotonic_connection_generations(caplog):
+    observer = SubscriptionObserver(listener_id="listener", task_id=None, queues=None)
+    with caplog.at_level(logging.INFO):
+        for _ in range(2):
+            observer.transition(
+                "reconnect_started", reason="connection_lost", error=ConnectionError()
+            )
+            observer.transition("connected", reason="socket_connected")
+            observer.transition("resubscribing", reason="on_connect")
+            observer.acknowledge("market:prices")
+            observer.acknowledge("market:orderbooks")
+
+    transitions = [
+        record for record in caplog.records if record.message.startswith("market_subscription_")
+    ]
+    assert [record.fields["connection_generation"] for record in transitions] == [
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+    ]
+    assert [
+        record.fields["connection_generation"]
+        for record in records(caplog, "market_subscription_recovered")
+    ] == [1, 2]
+
+
 def test_known_acks_without_reconnect_generation_do_not_start_recovery(caplog):
     observer = SubscriptionObserver(listener_id="listener", task_id=None, queues=None)
     with caplog.at_level(logging.INFO):
@@ -177,6 +208,7 @@ def test_transition_fields_safe_without_task_or_proc(monkeypatch, caplog):
     assert fields["listener_id"] == "listener"
     assert fields["task_id"] is None
     assert fields["pid"] > 0
+    assert fields["connection_generation"] == 0
     assert fields["queues"] == 0
     assert fields["rss_bytes"] is None
     assert fields["error_type"] == "ConnectionError"

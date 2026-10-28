@@ -24,9 +24,12 @@ class SubscriptionObserver:
         self._listener_id = listener_id
         self._task_id = task_id
         self._queues = queues
+        self._connection_generation = 0
         self._pending: set[str] | None = None
 
     def transition(self, event: str, *, reason: str, error: BaseException | None = None) -> None:
+        if event == "reconnect_started":
+            self._connection_generation += 1
         if event == "resubscribing":
             self._pending = set(CHANNELS)
         phase = (
@@ -36,6 +39,7 @@ class SubscriptionObserver:
             "listener_id": self._listener_id,
             "task_id": self._task_id,
             "pid": os.getpid(),
+            "connection_generation": self._connection_generation,
             "channels": list(CHANNELS),
             "reason": reason,
             "phase": phase,
