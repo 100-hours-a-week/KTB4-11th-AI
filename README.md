@@ -340,5 +340,3 @@ DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.
 
 운영·개발 EC2는 GitHub Variable의 `.env` 텍스트와 SSM의 비밀 값을 합쳐 배포용 `.env`를 생성합니다.
 최초 이관과 적용 순서는 [SSM 환경 설정 운영 절차](docs/operations/ssm-environment.md)를 참고하세요.
-
-market-http의 Redis 복구·SSE/Prometheus 관측과 Cloud FIS 인계 범위는 [market-http Redis 복구·메모리 관측 운영 인계](docs/operations/market-http-redis-recovery-observability.md)를 참고하세요. 이 문서는 구현 완료와 미실행 FIS 증거를 구분합니다.
