@@ -116,14 +116,14 @@ Also: the checkpoint was saved with **transformers 5.3.0** and its remote code i
 | VRAM reserved, max input | **21.28 / 22.06 GiB** (0.54 free) | 7.24 / 22.06 GiB |
 | Warm | 0.34s (37 tok) / 13.0s (15,740 tok) | 6.74s (50 candidates) |
 | Fresh start, no snapshot | 137.3s | 1570.9s |
-| Snapshot restore p50 | **1.77s** (n=5) | 0.8s (n=1, 2 pending) |
-| Snapshot restore max | **222.7s** — a miss | pending |
+| Snapshot restore p50 | **1.77s** (n=5) | **1.35s** (n=3) |
+| Snapshot restore max | **222.7s** — a miss | **1371.3s** — a miss |
 
 **24GB works but has no margin.** At 15,740 tokens the embedder reserves 96% of the card. One request at a time per container, no room to raise the token limit, and the two models could never share one card. Moving to 40/48GB buys margin and batching; that is a cost decision, not a correctness one.
 
 **Snapshots decide viability.** At ~100 requests/day against a 120s scaledown, nearly every request is cold. Restore at the median is ~75× faster than a fresh start, so a cold search starts in under two seconds instead of over two minutes.
 
-**But the distribution is bimodal.** One of five restore samples took 222.7s — a restore miss, where the snapshot was not on the assigned worker. With n=5 the max *is* approximately p95, so **p95 is a miss**. Five samples do not establish a hit rate.
+**But the distribution is bimodal, and both models missed.** One of five embedder samples took 222.7s; one of three reranker samples took 1371.3s. Two misses in eight samples. The reranker's miss is six times worse because on a miss it re-pays its base download, so a miss there is a 23-minute start, not a slow one. With n=5 and n=3 the max *is* approximately p95, so **p95 is a miss for both**. Eight samples do not establish a hit rate.
 
 ### Security note
 
@@ -133,7 +133,7 @@ The first deploy published all five endpoints **unauthenticated** — anyone wit
 
 Ordered by what blocks what.
 
-1. **Weights into the image build.** The reranker's warm-volume fresh start (1570.9s) was *worse* than its first (921.3s), meaning the volume did not retain its weights — a `modal.Volume` commits in the background and on clean exit, so a killed container loses what it wrote. Downloading during the image build removes this and takes Hugging Face out of the startup path. This is the clearest remaining win.
+1. **Weights into the image build.** The reranker's warm-volume fresh start (1570.9s) was *worse* than its first (921.3s), and its restore miss cost 1371.3s — the volume does not retain its weights, so every miss re-pays the download. A `modal.Volume` commits in the background and on clean exit, so a killed container loses what it wrote. Downloading during the image build removes this and takes Hugging Face out of the startup path. On this evidence it is required, not an optimisation.
 2. **A longer restore-rate run.** The miss rate is the number that decides whether `min_containers=1` earns its idle cost. Five samples cannot answer it.
 3. **Wire the services to Modal.** Nothing calls the deployed endpoints yet. `disclosure-indexer` and `disclosure-retrieval` still use `embed.py` against `DISCLOSURE_EMBEDDING_BASE_URI`, and there is no reranker call anywhere — `top_k` defaults to 6 with no top-50 pool.
 4. **The 1024-dimension cutover.** `settings.dimensions` is pinned `ge=2000, le=2000` and the column is `halfvec(2000)`. Serving two spaces at once additionally needs `disclosure_indexes_active_idx` relaxed, which permits one active index per document.

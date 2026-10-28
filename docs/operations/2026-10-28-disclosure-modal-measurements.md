@@ -83,28 +83,28 @@ Snapshots are on: `enable_memory_snapshot=True` with the experimental `enable_gp
 | First startup, cold volume (downloads weights) | 187.9s | 921.3s | 1 each |
 | Fresh start, warm volume, no snapshot | 137.3s | 1570.9s | 1 each |
 | Snapshot creation (one-time) | 329.1s | 1348.4s | 1 each |
-| **Snapshot restore, p50** | **1.77s** | **0.8s** | 5 / 1 so far |
-| Snapshot restore, min | 0.94s | 0.8s | 5 / 1 so far |
-| Snapshot restore, max (a miss) | **222.7s** | not yet observed | 5 / 1 so far |
+| **Snapshot restore, p50** | **1.77s** | **1.35s** | 5 / 3 |
+| Snapshot restore, min | 0.94s | 0.80s | 5 / 3 |
+| Snapshot restore, max (a miss) | **222.7s** | **1371.3s** | 5 / 3 |
 | Warm (container already up) | 0.6–0.8s | 7.0s | see §2, §3 |
 
 Embedder restore samples, in order: **2.91, 222.7, 1.77, 0.94, 1.73** seconds.
 
-Reranker: snapshot creation 1348.4s, first restore **0.8s**. Two further restore samples
-were still running when this was written, so the reranker has one restore sample and no
-observed miss — that is a sample size, not a claim that it misses less often.
+Reranker restore samples, in order: **0.80, 1371.32, 1.35** seconds. Snapshot creation 1348.4s.
 
 ### What the snapshot changes, and what it does not
 
 Snapshots decide whether serverless is usable here. A fresh start costs 137s; a restore costs **1.77s at the median** — roughly 75× faster, and small enough that a cold search is no longer a minutes-long event.
 
-But the distribution is bimodal, not fast. One of five samples took **222.7s**: a restore miss, where the snapshot was not available on the assigned worker and the container paid a full load instead. Four hits of about 1–3s and one miss of 222.7s is a 4-in-5 hit rate on a five-sample run.
+But the distribution is bimodal, not fast. **Both models missed.** One of five embedder samples took 222.7s and one of three reranker samples took **1371.3s** — a restore miss, where the snapshot was not available on the assigned worker and the container paid a full load instead. Across both models that is 2 misses in 8 restore samples.
 
-So with n=5 the max *is* approximately p95, and p95 is a restore miss. Stated plainly:
+The reranker's miss is six times worse than the embedder's, because on a miss it re-pays its base download (see below). A miss is not a slow start; for the reranker it is a 23-minute start.
 
-- A typical cold search now starts in under two seconds.
-- Roughly one search in five pays something close to four minutes.
-- Five samples do not establish a hit rate. This needs a longer run before any availability promise is made, and the miss rate is the number that decides whether `min_containers=1` is worth its idle cost.
+With n=5 and n=3 the max *is* approximately p95, so p95 is a restore miss for both. Stated plainly:
+
+- A typical cold search now starts in one to three seconds.
+- A miss costs minutes, and for the reranker over twenty.
+- Eight samples do not establish a hit rate. This needs a longer run before any availability promise is made, and the miss rate is the number that decides whether `min_containers=1` is worth its idle cost.
 
 The one-time 329s snapshot creation is paid again whenever the image or the loading code changes, which includes every dependency bump.
 
@@ -112,7 +112,7 @@ The one-time 329s snapshot creation is paid again whenever the image or the load
 
 The reranker's warm-volume fresh start (1570.9s) was *worse* than its first start (921.3s). A later start that re-pays the download means the weights were not in the volume: a `modal.Volume` commits in the background and on clean exit, so a container that is killed can lose what it wrote.
 
-Snapshots hide this on a restore hit but not on a miss. The durable fix is to download the weights during the image build rather than depend on a volume write surviving, which also removes Hugging Face from the startup path entirely.
+Snapshots hide this on a restore hit but not on a miss, and the 1371.3s miss above is what a miss costs when the download has to be re-paid. The durable fix is to download the weights during the image build rather than depend on a volume write surviving, which also removes Hugging Face from the startup path entirely. On this evidence that is required, not an optimisation.
 
 ## 5. Not Yet Measured
 
