@@ -5,7 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 import sqlalchemy as sa
-from ktb_core.disclosure_models import model_identity
+from ktb_core.embedding.config import model_identity
 from ktb_core.logging import get_logger
 
 from disclosure_indexer.chunks import CHUNK_VERSION, chunk_sections

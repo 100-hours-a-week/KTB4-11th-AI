@@ -1,6 +1,6 @@
 from typing import Literal
 
-from ktb_core.disclosure_models import embedding_space
+from ktb_core.embedding.config import embedding_space
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 

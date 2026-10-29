@@ -4,7 +4,7 @@ from typing import Annotated, Self
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from ktb_core.disclosure_models import model_identity
+from ktb_core.embedding.config import model_identity
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from disclosure_retrieval import inference
