@@ -1,10 +1,9 @@
-import json
 from pathlib import Path
 
 import pytest
 from contracts import IdentityMismatch, Manifest, document_groups, require_identity
 
-MANIFEST = Path(__file__).resolve().parents[4] / "packages/core/src/ktb_core/disclosure_models.json"
+MANIFEST = Path(__file__).resolve().parents[4] / "packages/core/src/ktb_core/embedding/config.py"
 
 
 @pytest.fixture
@@ -95,13 +94,11 @@ def test_blank_chunk_text_is_rejected():
         document_groups([{"document_id": "a", "chunks": [{"chunk_id": 1, "text": "   "}]}])
 
 
-def test_the_manifest_on_disk_is_valid_json():
-    assert set(json.loads(MANIFEST.read_text())) == {
-        "transform_version",
-        "max_tokens",
-        "embedding",
-        "reranker",
-    }
+def test_serving_and_services_use_the_same_model_configuration(manifest):
+    from ktb_core.embedding.config import model_identity
+
+    assert manifest.embedding_identity() == model_identity("embedding")
+    assert manifest.reranker_identity() == model_identity("reranker")
 
 
 def test_reranker_uses_the_evaluated_chat_template():

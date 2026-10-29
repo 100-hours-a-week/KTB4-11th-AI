@@ -1,4 +1,3 @@
-import json
 import sys
 from types import SimpleNamespace
 
@@ -17,9 +16,10 @@ def test_image_build_downloads_both_revisions_before_serving(tmp_path, monkeypat
 
     monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(snapshot_download=download))
     monkeypatch.setattr(weights, "verify_adapter", lambda path, expected: None)
-    manifest = tmp_path / "manifest.json"
+    manifest = tmp_path / "model_config.py"
     manifest.write_text(
-        json.dumps(
+        "DISCLOSURE_MODELS = "
+        + repr(
             {
                 "embedding": {
                     "base_repo": "base",

@@ -18,9 +18,11 @@ Runtime model loading uses local paths and offline mode. A snapshot miss still h
 the model, but cannot re-download it from Hugging Face. Image downloads and deserialization
 still take time; startup and inference measurements are recorded in the final implementation plan.
 
-The immutable manifest is `packages/core/src/ktb_core/disclosure_models.json`. The runtime
-copies that file into its image; both CPU services read the same file from the core wheel.
-Core contains only identity data/functions, with no network client or GPU dependencies.
+The model settings live in `packages/core/src/ktb_core/embedding/config.py`, alongside
+the existing news configuration. Modal copies that file into its image as
+`/root/model_config.py`; CPU services import the same disclosure identity values.
+The separate disclosure model files were removed. HTTP calls belong to each service's
+inference client; core contains no HTTP transport or GPU dependencies.
 
 The reranker uses the evaluated financial chat template, NF4 with double quantization,
 float32 preparation of non-quantized layers, no KV cache and last-token logits only. Its
@@ -81,18 +83,20 @@ historical restore measurements do not establish an availability guarantee.
 
 ## Storage, scheduling and cutover
 
-Run migration `0016` through the existing dedicated migration job. It creates
+Run migration `0012` through the existing dedicated migration job. It creates
 `disclosure_narrative_chunks` with `halfvec(1024)` and keeps the legacy
 `disclosure_chunks` with `halfvec(2000)`. Dimensions are checked against the parent index;
 model revisions, adapter hash and transform are recorded with every new index. Activation
 replaces only the same dimension, preserving the legacy index for rollback.
 
-The new systemd timer checks filings daily at **05:00 KST**, aligned with one hourly news
-collection run and before the weekday 06:00 portfolio pipeline. `news-http` itself is an
-HTTP server, not a scheduled job. The timer does not run the indexer a second time in the
-morning pipeline. It uses the company universe already stored by market-syncer. Source
-refresh, late corrections and bounded embedding retries remain eligible even without new
-filings. No eligible documents means zero inference calls.
+At **05:00 KST**, the indexer timer first starts the collection unit, which runs
+`news-preprocessor-disclosures` in the existing news-preprocessor image. That command
+archives originals and stores parsed documents, sections and financial facts. The
+indexer then reads PostgreSQL and stores narrative embeddings in pgvector. Collection
+failure does not block retries for documents already stored in the DB. Only the collector
+uses the DART key and archive volume. The hourly news command, read-only news-http server
+and weekday 06:00 portfolio pipeline retain their roles. No eligible documents means zero
+inference calls. Migration 0012 creates the complete disclosure schema.
 
 Parsed sections retain whether they came from narrative or a table. Known narrative topics
 are embedded; tables and unclassified sections remain available through direct section

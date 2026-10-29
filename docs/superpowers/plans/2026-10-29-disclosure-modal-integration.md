@@ -1,18 +1,25 @@
 # Disclosure RAG: Final Implementation Plan
 
 Finalized: 2026-10-29, after implementation and validation.
-Scope: issue #346. This is the only implementation document included in this PR.
+Scope: service issue #346 / PR #432 and Modal serving issue #431 / PR #430.
+Review and merge #432 before #430. This is the only implementation plan included in the PRs.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
 ## 1. Service boundaries
 
 | Component | Responsibility |
 | --- | --- |
-| disclosure-indexer | Collect periodic OpenDART filings, retain source archives, parse sections/facts and index narrative passages |
+| news-preprocessor-disclosures | Collect periodic OpenDART filings, archive originals and store parsed documents, sections and financial facts in PostgreSQL |
+| disclosure-indexer | Read stored documents from PostgreSQL, embed narrative passages and store vectors in pgvector |
 | disclosure-retrieval | Read financial facts and sections directly; return ranked narrative evidence without answer generation |
 | Modal Embedder | Encode ordered document context groups and queries with the same pinned Context checkpoint |
 | Modal Reranker | Score exact-search candidates with the trained Qwen model |
 | portfolio-builder | Use disclosure evidence and technical analysis before saving a new portfolio |
+
+The hourly news command and read-only news-http server retain their existing roles.
+The separate daily collection command belongs to the existing news-preprocessor package.
+Data flows from OpenDART through that command into PostgreSQL, then through the DB-only
+indexer into pgvector. The indexer does not call OpenDART or open source archive files.
 
 The existing news pipeline keeps its own model and configuration. CPU services call Modal
 through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libraries.
@@ -27,20 +34,25 @@ through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libra
   and normalized NUMERIC values. Missing values remain null. Store named sections for direct reads.
 - [x] Embed recognized narrative sections. Tables and unclassified sections remain accessible
   through section storage. Context groups preserve source order and never cross physical files.
-- [x] Add migrations 0012–0016 after the existing dev head. Store new narrative vectors in
+- [x] Create the final disclosure schema in migration 0012 after revision 0011.
+  The five unreleased revisions were consolidated after confirming no shared DB had applied them. Store new narrative vectors in
   halfvec(1024), preserving legacy halfvec(2000) data. Enforce parent-index dimensions and identity.
 - [x] Activate indexes atomically. During rollback, accept an older parser's index only when
   its source hash matches the latest document. Never serve an index from a replaced source.
 
 Run migrations through the existing dedicated migration job, then build the new index before
 switching callers. To roll back, restore the previous provider/model/prefix and 2000 dimensions;
-no schema downgrade is required. Schema downgrade refuses automatic deletion of 1024 indexes.
+no schema downgrade is required. Downgrading 0012 to 0011 removes the disclosure tables,
+including their stored documents and vectors; provider rollback does not require this operation.
 
 ## 3. Model contracts and Modal deployment
 
-The authoritative manifest is `packages/core/src/ktb_core/disclosure_models.json`, packaged
-with core and copied into the Modal images. Core contains shared identity data and generic
-HTTP handling; inference clients belong to their services.
+The model configuration is `packages/core/src/ktb_core/embedding/config.py`. It contains
+the existing news settings and the pinned disclosure model configuration. Modal copies
+this same Python file into its images as `/root/model_config.py`; CPU services import
+its identity functions. Separate disclosure model JSON/Python files are unnecessary.
+HTTP request and 303 result polling code stays inside each service's inference client;
+core has no HTTP transport or GPU dependencies.
 
 | Role | Model and selected adapter |
 | --- | --- |
@@ -107,20 +119,32 @@ DISCLOSURE_RETRIEVAL_TIMEOUT=150
 PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_TIMEOUT=480
 ```
 
-- [x] Schedule indexing daily at 05:00 KST, aligned with hourly news collection and before
-  the weekday 06:00 portfolio pipeline. news-http itself is a long-running HTTP service.
+- [x] The 05:00 KST indexer timer starts `ktb-disclosure-collector.service` first.
+  That unit runs `news-preprocessor-disclosures` using the existing news-preprocessor
+  image, then the indexer reads PostgreSQL. `Wants` plus `After` preserves this order
+  while allowing indexing of previously stored documents after collection failure.
+  The hourly news command and weekday 06:00 portfolio pipeline retain their schedules.
+- [x] Pass DART credentials through `NEWS_PREPROCESSOR_DART_API_KEY`; configure collection
+  with `NEWS_PREPROCESSOR_DISCLOSURE_*`. Mount archives only in news-preprocessor.
+  The indexer needs neither DART credentials nor filesystem access to originals.
 - [x] Run no inference when there is no eligible work; retain retries when no new filing appears.
 - [x] Build separate CPU service images and include both services in the shared app image.
   Keep GPU dependencies only in Modal images.
 
 ## 6. Verification results
 
-- [x] Merge current dev (0f61ead) and run the dedicated-DB suite: 1,327 passed, 49 skipped,
-  two subtests passed. Ruff lint/format, module/dependency boundaries and whitespace checks passed.
+- [x] Merge current dev (0f61ead) and run the dedicated-DB suite after ownership,
+  migration and model configuration changes: **1,331 passed, 49 skipped, two subtests passed**
+  in 44.61 seconds. The service-only branch passed 1,301 tests with 49 skips.
+  Ruff lint/format, module/dependency boundaries and whitespace checks passed.
+- [x] Compare all eight disclosure tables before and after migration consolidation:
+  columns, checks, unique constraints, foreign keys and indexes match. Downgrade to 0011
+  removes the feature tables; upgrading again recreates the same final schema.
 - [x] Verify migration upgrade/downgrade, both CPU images, packaged model identity, absence
   of Modal/torch in CPU images and Compose propagation of model settings/timeouts.
-- [x] Pass CI Dev, including Python 3.14 compatibility, requirements verification, dependency
-  audit, all service images and the combined app image. Server deployment was skipped for the PR.
+- [x] The earlier implementation passed CI Dev, including Python 3.14 compatibility,
+  requirements verification, dependency audit and image builds. The updated PR commits
+  must complete their own CI checks before merge. PR CI does not deploy the CPU services.
 - [x] Validate document/query embedding and 50-candidate reranking on actual GPUs. A
   16,003-token document encoded in 8.634 seconds, with peak allocated/reserved VRAM of
   19.04/21.34 GiB; reported free memory was 0.42 GiB. Concurrency remains one input per container.
@@ -152,3 +176,24 @@ Official references: [GPU snapshots](https://modal.com/docs/guide/memory-snapsho
 [GPU preferences](https://modal.com/docs/guide/gpu),
 [303 result URLs](https://modal.com/docs/guide/webhook-timeouts),
 [proxy authentication](https://modal.com/docs/guide/webhook-proxy-auth).
+
+## 8. Local execution and configuration changes
+
+Migrate with `KTB_POSTGRES_DSN` through the dedicated migration job, not service startup.
+After market-syncer has stored the corporation universe, run collection and indexing:
+
+```bash
+docker compose -f compose.local.yaml --profile jobs run --rm news-preprocessor news-preprocessor-disclosures
+docker compose -f compose.local.yaml --profile jobs run --rm disclosure-indexer
+```
+
+The first command stores source documents, sections and structured financial facts without
+calling an embedding model. The second reads stored documents and calls the configured
+embedding endpoint only when eligible work exists. Retrieval returns evidence without
+generating an answer. SQL financial and section reads do not require GPU inference.
+
+Existing deployment files must move any `DISCLOSURE_INDEXER_DART_API_KEY` value to
+`NEWS_PREPROCESSOR_DART_API_KEY` and rename collection options from
+`DISCLOSURE_INDEXER_*` to `NEWS_PREPROCESSOR_DISCLOSURE_*`. Keep indexing options such as
+chunk size, batch size, embedding timeout and lease duration under `DISCLOSURE_INDEXER_*`.
+The archive volume stays the same; its mount moves to news-preprocessor.

@@ -18,10 +18,10 @@ from transform import truncate_and_normalize
 from weights import download_weights, verify_adapter
 
 HERE = Path(__file__).parent
-MANIFEST_PATH = (HERE / "../../../packages/core/src/ktb_core/disclosure_models.json").resolve()
-if not MANIFEST_PATH.exists():
-    MANIFEST_PATH = Path("/root/model_manifest.json")
-MANIFEST = Manifest.load(MANIFEST_PATH)
+MODEL_CONFIG_PATH = (HERE / "../../../packages/core/src/ktb_core/embedding/config.py").resolve()
+if not MODEL_CONFIG_PATH.exists():
+    MODEL_CONFIG_PATH = Path("/root/model_config.py")
+MANIFEST = Manifest.load(MODEL_CONFIG_PATH)
 
 GPU = os.environ.get("DISCLOSURE_INFERENCE_GPU", "L4,A10").split(",")
 IDLE_TIMEOUT = 120
@@ -40,7 +40,7 @@ image = (
         "fastapi[standard]==0.142.2",
     )
     .env({"HF_HOME": CACHE, "TOKENIZERS_PARALLELISM": "false"})
-    .add_local_file(MANIFEST_PATH, "/root/model_manifest.json", copy=True)
+    .add_local_file(MODEL_CONFIG_PATH, "/root/model_config.py", copy=True)
     .add_local_file(HERE / "contracts.py", "/root/contracts.py", copy=True)
     .add_local_file(HERE / "transform.py", "/root/transform.py", copy=True)
     .add_local_file(HERE / "weights.py", "/root/weights.py", copy=True)

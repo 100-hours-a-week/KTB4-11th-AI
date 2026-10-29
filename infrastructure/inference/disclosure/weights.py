@@ -1,5 +1,6 @@
 import hashlib
 import json
+import runpy
 from pathlib import Path
 
 
@@ -21,11 +22,11 @@ def verify_adapter(directory: str, expected_sha256: str) -> None:
 
 
 def download_weights(
-    kind: str, manifest_path: str = "/root/model_manifest.json", model_root: str = "/models"
+    kind: str, config_path: str = "/root/model_config.py", model_root: str = "/models"
 ) -> None:
     from huggingface_hub import snapshot_download
 
-    spec = json.loads(Path(manifest_path).read_text())[kind]
+    spec = runpy.run_path(config_path)["DISCLOSURE_MODELS"][kind]
     for part in ("base", "adapter"):
         snapshot_download(
             repo_id=spec[f"{part}_repo"],

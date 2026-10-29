@@ -7,7 +7,7 @@ than served.
 Pure Python and no GPU, so these rules are provable on CPU.
 """
 
-import json
+import runpy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -34,7 +34,7 @@ class Manifest:
 
     @classmethod
     def load(cls, path: Path) -> "Manifest":
-        data = json.loads(Path(path).read_text())
+        data = runpy.run_path(str(path))["DISCLOSURE_MODELS"]
         return cls(
             transform_version=data["transform_version"],
             max_tokens=data["max_tokens"],

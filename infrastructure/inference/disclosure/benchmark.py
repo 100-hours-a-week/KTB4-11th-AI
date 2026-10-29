@@ -28,8 +28,8 @@ def retrieval_metrics(question: dict, ids: list[str]) -> dict[str, float]:
 def main() -> None:
     import numpy as np
     import sqlalchemy as sa
-    from ktb_core.disclosure_models import model_identity
-    from ktb_core.http import post_json
+    from disclosure_retrieval.inference import post_json
+    from ktb_core.embedding.config import model_identity
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", type=Path, required=True)
