@@ -13,21 +13,23 @@ import os
 from pathlib import Path
 
 import modal
-from contracts import IdentityMismatch, Manifest, document_groups, require_identity
+from contracts import IdentityMismatch, Manifest, document_groups, require_identity, reranker_prompt
 from transform import truncate_and_normalize
+from weights import download_weights, verify_adapter
 
 HERE = Path(__file__).parent
-MANIFEST = Manifest.load(HERE / "model_manifest.json")
+MANIFEST_PATH = (HERE / "../../../packages/core/src/ktb_core/disclosure_models.json").resolve()
+if not MANIFEST_PATH.exists():
+    MANIFEST_PATH = Path("/root/model_manifest.json")
+MANIFEST = Manifest.load(MANIFEST_PATH)
 
-GPU = os.environ.get("DISCLOSURE_INFERENCE_GPU", "L4")
+GPU = os.environ.get("DISCLOSURE_INFERENCE_GPU", "L4,A10").split(",")
 IDLE_TIMEOUT = 120
 CACHE = "/cache"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install(
-        # The embedding checkpoint was saved with transformers 5.3 and its remote code
-        # imports Qwen3_5Model, which 4.x does not have. These versions resolve together.
         "torch==2.14.1",
         "transformers==5.3.0",
         "peft==0.21.2",
@@ -38,42 +40,19 @@ image = (
         "fastapi[standard]==0.142.2",
     )
     .env({"HF_HOME": CACHE, "TOKENIZERS_PARALLELISM": "false"})
-    .add_local_file(HERE / "model_manifest.json", "/root/model_manifest.json")
-    .add_local_file(HERE / "contracts.py", "/root/contracts.py")
-    .add_local_file(HERE / "transform.py", "/root/transform.py")
+    .add_local_file(MANIFEST_PATH, "/root/model_manifest.json", copy=True)
+    .add_local_file(HERE / "contracts.py", "/root/contracts.py", copy=True)
+    .add_local_file(HERE / "transform.py", "/root/transform.py", copy=True)
+    .add_local_file(HERE / "weights.py", "/root/weights.py", copy=True)
 )
 
 app = modal.App("disclosure-inference")
-# Weights are downloaded once and reused, so a warm start does not re-pull from Hugging Face.
-cache = modal.Volume.from_name("disclosure-model-cache", create_if_missing=True)
-
-
-def _verify_adapter(repo: str, revision: str, expected_sha256: str) -> str:
-    """Refuse an adapter whose weights are not the evaluated ones.
-
-    A LoRA with all-zero B matrices loads cleanly and silently does nothing; one such
-    upload is already on record for this project, so the check is not optional.
-    """
-    import hashlib
-
-    import numpy as np
-    from huggingface_hub import hf_hub_download
-    from safetensors.numpy import load_file
-
-    path = hf_hub_download(repo, "adapter_model.safetensors", revision=revision)
-    digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    if digest != expected_sha256:
-        raise RuntimeError(f"{repo} adapter sha256 is {digest}, expected {expected_sha256}")
-    tensors = load_file(path)
-    b_tensors = {name: value for name, value in tensors.items() if "lora_B" in name}
-    if not b_tensors:
-        raise RuntimeError(f"{repo} adapter has no lora_B tensors")
-    zero = [name for name, value in b_tensors.items() if not np.any(value)]
-    if zero:
-        raise RuntimeError(f"{repo} adapter has {len(zero)} all-zero lora_B tensors")
-    if any(not np.all(np.isfinite(value)) for value in tensors.values()):
-        raise RuntimeError(f"{repo} adapter has non-finite values")
-    return path
+embedding_image = image.run_function(download_weights, kwargs={"kind": "embedding"}).env(
+    {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+)
+reranker_image = image.run_function(download_weights, kwargs={"kind": "reranker"}).env(
+    {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
+)
 
 
 def _reject(error: Exception) -> dict[str, object]:
@@ -81,18 +60,18 @@ def _reject(error: Exception) -> dict[str, object]:
 
     if isinstance(error, IdentityMismatch):
         raise HTTPException(status_code=409, detail=str(error))
-    raise HTTPException(status_code=422, detail=str(error))
+    if isinstance(error, (ValueError, KeyError, TypeError)):
+        raise HTTPException(status_code=422, detail=str(error))
+    raise HTTPException(status_code=503, detail="Model inference failed") from None
 
 
 @app.cls(
-    image=image,
+    image=embedding_image,
     gpu=GPU,
-    volumes={CACHE: cache},
     scaledown_window=IDLE_TIMEOUT,
-    timeout=900,
-    # Loading 33.6GB of weights costs over two minutes even from a warm volume, and at
-    # ~100 requests a day almost every request is cold. The snapshot captures the loaded
-    # model, GPU memory included, so a restore skips the load entirely.
+    timeout=180,
+    startup_timeout=1800,
+    max_containers=2,
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
 )
@@ -104,22 +83,19 @@ class Embedder:
         from transformers import AutoModel
 
         spec = MANIFEST.embedding
-        _verify_adapter(spec["adapter_repo"], spec["adapter_revision"], spec["adapter_sha256"])
+        verify_adapter("/models/adapter", spec["adapter_sha256"])
         base = AutoModel.from_pretrained(
-            spec["base_repo"],
-            revision=spec["base_revision"],
+            "/models/base",
+            local_files_only=True,
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
-        self.model = PeftModel.from_pretrained(
-            base, spec["adapter_repo"], revision=spec["adapter_revision"]
-        )
+        self.model = PeftModel.from_pretrained(base, "/models/adapter", local_files_only=True)
         self.model.eval().cuda()
         self.dimensions = spec["dimensions"]
+        self._encode([["공시 검색 초기화"]], "query")
 
     def _token_count(self, documents: list[list[str]], task: str) -> int:
-        # The checkpoint's own prepare_inputs adds the [D]/[Q] prefix and the chunk
-        # separators, so the budget is measured on what the model will actually see.
         features = self.model.prepare_inputs(documents, task)
         return int(features["input_ids"].shape[1])
 
@@ -184,7 +160,6 @@ class Embedder:
         except Exception as error:
             return _reject(error)
         vectors: dict[str, list[float]] = {}
-        # One encode call per document: the context group is the document, never the batch.
         for group in groups:
             try:
                 (encoded,) = self._encode([[text for _, text in group.chunks]], "document")
@@ -208,14 +183,12 @@ class Embedder:
 
 
 @app.cls(
-    image=image,
+    image=reranker_image,
     gpu=GPU,
-    volumes={CACHE: cache},
     scaledown_window=IDLE_TIMEOUT,
-    timeout=900,
-    # Loading 33.6GB of weights costs over two minutes even from a warm volume, and at
-    # ~100 requests a day almost every request is cold. The snapshot captures the loaded
-    # model, GPU memory included, so a restore skips the load entirely.
+    timeout=180,
+    startup_timeout=1800,
+    max_containers=2,
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
 )
@@ -223,31 +196,34 @@ class Reranker:
     @modal.enter(snap=True)
     def load(self) -> None:
         import torch
-        from peft import PeftModel
+        from peft import PeftModel, prepare_model_for_kbit_training
         from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
         spec = MANIFEST.reranker
-        _verify_adapter(spec["adapter_repo"], spec["adapter_revision"], spec["adapter_sha256"])
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            spec["base_repo"], revision=spec["base_revision"]
-        )
-        # NF4 is weight quantization and was part of the reranker's evaluation.
+        verify_adapter("/models/adapter", spec["adapter_sha256"])
+        self.tokenizer = AutoTokenizer.from_pretrained("/models/base", local_files_only=True)
         base = AutoModelForCausalLM.from_pretrained(
-            spec["base_repo"],
-            revision=spec["base_revision"],
+            "/models/base",
+            local_files_only=True,
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
             quantization_config=BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
                 bnb_4bit_compute_dtype=torch.bfloat16,
             ),
             device_map="cuda",
         )
-        self.model = PeftModel.from_pretrained(
-            base, spec["adapter_repo"], revision=spec["adapter_revision"]
-        )
+        self.model = PeftModel.from_pretrained(base, "/models/adapter", local_files_only=True)
         self.model.eval()
+        self.model = prepare_model_for_kbit_training(
+            self.model, use_gradient_checkpointing=False
+        ).eval()
+        self.model.config.use_cache = False
         self.yes_id = self.tokenizer.encode("yes", add_special_tokens=False)[0]
         self.no_id = self.tokenizer.encode("no", add_special_tokens=False)[0]
+        self._score("위험 요인", [{"chunk_id": 0, "text": "공시 위험 설명"}])
 
     @modal.method()
     def measure(self, query: str, candidates: list[dict]) -> dict[str, object]:
@@ -283,14 +259,10 @@ class Reranker:
 
         scores = []
         for candidate in candidates:
-            prompt = (
-                "<Instruct>: Judge whether the disclosure passage answers the financial "
-                "question.\n"
-                f"<Query>: {query}\n"
-                f"<Document>: {candidate['text']}\n"
-                "<Answer>:"
+            prompt = reranker_prompt(query, candidate["text"])
+            batch = self.tokenizer(
+                prompt, add_special_tokens=False, return_tensors="pt", truncation=False
             )
-            batch = self.tokenizer(prompt, return_tensors="pt", truncation=False)
             if batch["input_ids"].shape[1] > MANIFEST.max_tokens:
                 raise ValueError(
                     f"candidate {candidate['chunk_id']} is "
@@ -298,13 +270,21 @@ class Reranker:
                 )
             batch = {name: value.cuda() for name, value in batch.items()}
             with torch.inference_mode():
-                logits = self.model(**batch).logits[0, -1]
+                logits = (
+                    self.model(**batch, use_cache=False, logits_to_keep=1).logits[0, -1].float()
+                )
             difference = float(logits[self.yes_id] - logits[self.no_id])
+            if not math.isfinite(difference):
+                raise RuntimeError("reranker produced nonfinite logits")
             scores.append(
                 {
                     "chunk_id": candidate["chunk_id"],
                     "logit_difference": difference,
-                    "score": 1 / (1 + math.exp(-difference)),
+                    "score": (
+                        1 / (1 + math.exp(-difference))
+                        if difference >= 0
+                        else math.exp(difference) / (1 + math.exp(difference))
+                    ),
                 }
             )
         return scores

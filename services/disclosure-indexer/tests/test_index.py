@@ -230,3 +230,112 @@ def test_embedding_input_budgets_long_context_and_preserves_chunk_body():
         assert value.endswith("\n" + chunk["text"])
     assert chunks[0]["context"].startswith("단위: 원")
     assert section["text"] == text
+
+
+def test_modal_grouping_keeps_attachment_boundaries_and_excludes_tables():
+    from disclosure_indexer.index import narrative_groups
+
+    report = {
+        **REPORT,
+        "documents": [
+            {
+                "name": "a.xml",
+                "sections": [
+                    {
+                        "section": "사업",
+                        "topic": "business",
+                        "text": "사업 설명",
+                        "start": 0,
+                        "end": 5,
+                        "document": "a.xml",
+                        "content_kind": "narrative",
+                    },
+                    {
+                        "section": "매출",
+                        "topic": "business",
+                        "text": "매출 | 100",
+                        "start": 7,
+                        "end": 15,
+                        "document": "a.xml",
+                        "content_kind": "table",
+                    },
+                ],
+            },
+            {
+                "name": "b.xml",
+                "sections": [
+                    {
+                        "section": "위험",
+                        "topic": "risk",
+                        "text": "소송 위험",
+                        "start": 0,
+                        "end": 5,
+                        "document": "b.xml",
+                        "content_kind": "narrative",
+                    }
+                ],
+            },
+        ],
+    }
+    chunks, groups = narrative_groups(report, _settings())
+    assert [c["text"] for c in chunks] == ["사업 설명", "소송 위험"]
+    assert [g["document_id"] for g in groups] == ["a.xml:0", "b.xml:0"]
+    assert [g["chunks"][0]["chunk_id"] for g in groups] == [0, 1]
+
+
+def test_modal_index_preserves_legacy_vectors_and_is_idempotent(report_engine, monkeypatch):
+    from ktb_core.disclosure_models import model_identity
+
+    settings = _settings(
+        DISCLOSURE_INFERENCE_BACKEND="modal",
+        DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
+        DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,
+        DISCLOSURE_MODAL_DOCUMENT_URL="https://documents.modal.run",
+        DISCLOSURE_MODAL_KEY="key",
+        DISCLOSURE_MODAL_SECRET="secret",
+    )
+    with report_engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "UPDATE disclosure_documents SET documents=jsonb_set("
+                "documents, '{0,sections,0,content_kind}', '\"narrative\"') "
+                "WHERE receipt_id='index-test'"
+            )
+        )
+    calls = []
+
+    def respond(request, timeout):
+        payload = json.loads(request.data)
+        calls.append(payload)
+        return io.BytesIO(
+            json.dumps(
+                {
+                    "identity": model_identity("embedding"),
+                    "vectors": {
+                        str(c["chunk_id"]): [1.0] + [0.0] * 1023
+                        for g in payload["documents"]
+                        for c in g["chunks"]
+                    },
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    monkeypatch.setattr(
+        "urllib.request.OpenerDirector.open", lambda self, req, timeout: respond(req, timeout)
+    )
+    assert index_documents(report_engine, settings)["ready"] == 1
+    assert index_documents(report_engine, settings)["ready"] == 0
+    assert len(calls) == 1
+    with report_engine.connect() as conn:
+        assert (
+            conn.execute(sa.text("SELECT count(*) FROM disclosure_narrative_chunks")).scalar_one()
+            >= 1
+        )
+        identity = conn.execute(
+            sa.text(
+                "SELECT identity FROM disclosure_indexes i JOIN "
+                "disclosure_documents d ON d.id=i.document_id WHERE d.receipt_id='index-test'"
+            )
+        ).scalar_one()
+        assert identity["adapter_sha256"].startswith("1f5d4367")

@@ -92,4 +92,7 @@ def test_a_section_read_makes_no_embedding_call(client, sectioned, monkeypatch):
         raise AssertionError("a direct section read must not call the embedding server")
 
     monkeypatch.setattr("urllib.request.urlopen", forbidden)
+    monkeypatch.setattr(
+        "urllib.request.OpenerDirector.open", lambda self, req, timeout: forbidden(req, timeout)
+    )
     assert client.get(URL, params={"receipt_id": "sec-1"}).status_code == 200

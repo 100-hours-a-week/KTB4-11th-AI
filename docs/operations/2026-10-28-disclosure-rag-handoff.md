@@ -1,6 +1,10 @@
 # Disclosure RAG: Handoff
 
 Date: 2026-10-28
+
+Continuation: [October 29 Modal integration](2026-10-29-disclosure-modal-integration.md).
+The findings and deployment numbers below describe the earlier branch state; consult the
+continuation for implemented fixes and remaining live-GPU checks.
 Branch: `feat/346-disclosure-rag`, 12 commits on top of `origin/dev` (`b5d43b2`), 93 files, +8438/-9
 Worktree: `.claude/worktrees/346-disclosure-rag`
 Issue: [#346](https://github.com/100-hours-a-week/KTB4-11th-AI/issues/346)

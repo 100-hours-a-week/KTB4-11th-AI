@@ -5,10 +5,12 @@ from typing import Any
 from uuid import uuid4
 
 import sqlalchemy as sa
+from ktb_core.disclosure_models import model_identity
 from ktb_core.logging import get_logger
 
 from disclosure_indexer.chunks import CHUNK_VERSION, chunk_sections
 from disclosure_indexer.embed import embed_vectors
+from disclosure_indexer.inference import embed_documents
 from disclosure_indexer.settings import Settings
 
 log = get_logger(__name__)
@@ -46,20 +48,63 @@ def embedding_inputs(
     return inputs
 
 
-def chunk_column_type(conn: sa.Connection) -> str | None:
+def narrative_groups(
+    report: Mapping[str, Any], settings: Settings
+) -> tuple[list[dict], list[dict]]:
+    chunks, groups = [], []
+    topics = {
+        "litigation",
+        "outlook",
+        "risk",
+        "contracts",
+        "notes",
+        "research",
+        "production",
+        "business",
+    }
+    for document in report["documents"]:
+        sections = [
+            s
+            for s in document["sections"]
+            if s.get("content_kind") == "narrative" and s["topic"] in topics
+        ]
+        local = chunk_sections(sections, settings.chunk_bytes, settings.overlap_bytes)
+        texts = embedding_inputs(report, local, settings.input_bytes)
+        batch, size, group_number = [], 0, 0
+        for chunk, text in zip(local, texts, strict=True):
+            cost = len(text.encode("utf-8")) + 16
+            if cost > settings.context_bytes:
+                raise ValueError("one chunk exceeds the context group budget")
+            if batch and size + cost > settings.context_bytes:
+                groups.append(
+                    {"document_id": f"{document['name']}:{group_number}", "chunks": batch}
+                )
+                batch, size, group_number = [], 0, group_number + 1
+            batch.append({"chunk_id": len(chunks), "text": text})
+            chunks.append({**chunk, "embedding_text": text})
+            size += cost
+        if batch:
+            groups.append({"document_id": f"{document['name']}:{group_number}", "chunks": batch})
+    return chunks, groups
+
+
+def chunk_column_type(conn: sa.Connection, table: str = "disclosure_chunks") -> str | None:
     return conn.execute(
         sa.text(
             "SELECT format_type(atttypid, atttypmod) FROM pg_attribute "
-            "WHERE attrelid = to_regclass('disclosure_chunks') AND attname = 'embedding' "
+            "WHERE attrelid = to_regclass(:table) AND attname = 'embedding' "
             "AND NOT attisdropped"
-        )
+        ),
+        {"table": table},
     ).scalar()
 
 
 def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
+    modal = settings.inference_backend == "modal"
+    table = "disclosure_narrative_chunks" if modal else "disclosure_chunks"
     expected = f"halfvec({settings.dimensions})"
     with engine.connect() as conn:
-        declared = chunk_column_type(conn)
+        declared = chunk_column_type(conn, table) if modal else chunk_column_type(conn)
     if declared != expected:
         raise RuntimeError(
             f"disclosure embedding column mismatch: configured={expected}, database={declared}"
@@ -70,17 +115,27 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
         "chunk_bytes": settings.chunk_bytes,
         "overlap_bytes": settings.overlap_bytes,
         "input_bytes": settings.input_bytes,
-        "model": settings.embedding_model,
+        "model": settings.index_model,
         "dimensions": settings.dimensions,
         "query_instruction": settings.query_instruction,
     }
+    identity = model_identity("embedding") if modal else {}
+    if modal:
+        config.update(
+            identity=identity,
+            grouping="file-byte-context-v1",
+            context_bytes=settings.context_bytes,
+            narrative_rule="topic-and-kind-v1",
+        )
+        config.pop("query_instruction")
     signature = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
     with engine.begin() as conn:
         conn.execute(
             sa.text(
                 "INSERT INTO "
-                "disclosure_indexes(document_id,signature,model,dimensions) SELECT"
-                " d.id,:signature,:model,:dimensions FROM disclosure_documents d "
+                "disclosure_indexes(document_id,signature,model,dimensions,identity) SELECT"
+                " d.id,:signature,:model,:dimensions,CAST(:identity AS jsonb) FROM "
+                "disclosure_documents d "
                 "JOIN disclosures r ON r.receipt_id=d.receipt_id WHERE "
                 "r.status='ready' AND d.id=(SELECT max(v.id) FROM "
                 "disclosure_documents v WHERE v.receipt_id=d.receipt_id) ON "
@@ -88,8 +143,9 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
             ),
             {
                 "signature": signature,
-                "model": settings.embedding_model,
+                "model": settings.index_model,
                 "dimensions": settings.dimensions,
+                "identity": json.dumps(identity),
             },
         )
     result = {"ready": 0, "failed": 0, "chunks": 0}
@@ -139,14 +195,24 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                 {"id": index_id, "owner": owner, "lease": settings.lease_seconds},
             )
         try:
-            sections = [
-                section for document in row["documents"] for section in document["sections"]
-            ]
-            chunks = chunk_sections(sections, settings.chunk_bytes, settings.overlap_bytes)
-            if not chunks:
+            if modal:
+                chunks, groups = narrative_groups(row, settings)
+            else:
+                sections = [s for d in row["documents"] for s in d["sections"]]
+                chunks = chunk_sections(sections, settings.chunk_bytes, settings.overlap_bytes)
+                groups = []
+            if not chunks and not modal:
                 raise ValueError("no searchable text")
             vectors = []
-            for start in range(0, len(chunks), settings.batch_size):
+            batches = (
+                [[group] for group in groups]
+                if modal
+                else [
+                    chunks[start : start + settings.batch_size]
+                    for start in range(0, len(chunks), settings.batch_size)
+                ]
+            )
+            for batch in batches:
                 with engine.begin() as conn:
                     owned = conn.execute(
                         sa.text(
@@ -158,23 +224,25 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                     ).scalar()
                     if owned is None:
                         raise RuntimeError("index lease lost")
-                texts = embedding_inputs(
-                    row, chunks[start : start + settings.batch_size], settings.input_bytes
-                )
-                vectors.extend(
-                    embed_vectors(
-                        texts,
-                        settings.embedding_base_uri,
-                        settings.embedding_model,
-                        settings.dimensions,
-                        settings.embedding_api_key.get_secret_value()
-                        if settings.embedding_api_key
-                        else None,
-                        settings.timeout,
-                        settings.input_bytes,
-                        settings.max_tokens,
+                if modal:
+                    mapped = embed_documents(batch, settings)
+                    vectors.extend(mapped[c["chunk_id"]] for g in batch for c in g["chunks"])
+                else:
+                    texts = embedding_inputs(row, batch, settings.input_bytes)
+                    vectors.extend(
+                        embed_vectors(
+                            texts,
+                            settings.embedding_base_uri,
+                            settings.embedding_model,
+                            settings.dimensions,
+                            settings.embedding_api_key.get_secret_value()
+                            if settings.embedding_api_key
+                            else None,
+                            settings.timeout,
+                            settings.input_bytes,
+                            settings.max_tokens,
+                        )
                     )
-                )
             with engine.begin() as conn:
                 owned = conn.execute(
                     sa.text(
@@ -185,18 +253,17 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                 ).scalar()
                 if owned is None:
                     raise RuntimeError("index lease lost")
-                conn.execute(
-                    sa.text("DELETE FROM disclosure_chunks WHERE index_id=:id"), {"id": index_id}
-                )
+                conn.execute(sa.text(f"DELETE FROM {table} WHERE index_id=:id"), {"id": index_id})
                 for ordinal, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True)):
                     conn.execute(
                         sa.text(
                             "INSERT INTO "
-                            "disclosure_chunks(index_id,ordinal,section,topic,document_na"
-                            "me,start_offset,end_offset,text,context,embedding)"
-                            " VALUES "
+                            f"{table}(index_id,ordinal,section,topic,document_na"
+                            "me,start_offset,end_offset,text,context,embedding"
+                            + (",embedding_text)" if modal else ")")
+                            + " VALUES "
                             "(:id,:ordinal,:section,:topic,:document,:start,:end,:text,:context,CAST(:vector"
-                            " AS halfvec))"
+                            " AS halfvec)" + (",:embedding_text)" if modal else ")")
                         ),
                         {
                             "id": index_id,
@@ -214,15 +281,16 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                                 )
                             },
                             "vector": json.dumps(vector),
+                            "embedding_text": chunk.get("embedding_text", ""),
                         },
                     )
                 conn.execute(
                     sa.text(
                         "UPDATE disclosure_indexes SET active=false WHERE "
                         "document_id=(SELECT document_id FROM disclosure_indexes WHERE "
-                        "id=:id) AND id != :id"
+                        "id=:id) AND dimensions=:dimensions AND id != :id"
                     ),
-                    {"id": index_id},
+                    {"id": index_id, "dimensions": settings.dimensions},
                 )
                 conn.execute(
                     sa.text(

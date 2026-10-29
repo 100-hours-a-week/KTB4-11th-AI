@@ -1,0 +1,20 @@
+[
+  {
+    "id": "005930-2026h1-narrative-pos-01",
+    "seconds": 12.768467832996976,
+    "cached_cosine": 0.9999111890792847,
+    "max_absolute_difference": 0.001384268281981349
+  },
+  {
+    "id": "005930-2026h1-narrative-pos-02",
+    "seconds": 1.2097323750058422,
+    "cached_cosine": 0.9999095797538757,
+    "max_absolute_difference": 0.0013788770884275436
+  },
+  {
+    "id": "005930-2026h1-narrative-pos-03",
+    "seconds": 1.2210174589999951,
+    "cached_cosine": 0.9999018311500549,
+    "max_absolute_difference": 0.001392444595694542
+  }
+]

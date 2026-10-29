@@ -77,3 +77,38 @@ def test_timeout_is_returned_as_a_retryable_tool_error():
     with patch("portfolio_builder.retrieval_client.urlopen", side_effect=TimeoutError):
         with pytest.raises(ToolError):
             RetrievalClient("http://retrieval").search_disclosures("005930", "위험")
+
+
+def test_trained_reranker_scores_survive_tool_response_validation():
+    from portfolio_builder.disclosures import DisclosureSearchResult
+
+    payload = {
+        "reports": [],
+        "latest_evidence": [
+            {
+                "title": "보고서",
+                "stock_code": "005930",
+                "business_year": 2025,
+                "kind": "annual",
+                "period_end": "2025-12-31",
+                "published_date": "2026-03-01",
+                "receipt_id": "20260301000001",
+                "chunk_id": 1,
+                "section": "위험",
+                "topic": "risk",
+                "document_name": "main.xml",
+                "start_offset": 0,
+                "end_offset": 5,
+                "text": "위험 설명",
+                "context": "",
+                "score": 0.8,
+                "method": "cosine+qwen3-reranker",
+                "reranker_score": 0.9,
+                "reranker_logit_difference": 2.2,
+            }
+        ],
+        "historical_evidence": [],
+    }
+    result = DisclosureSearchResult.model_validate(payload).model_dump()
+    assert result["latest_evidence"][0]["reranker_score"] == 0.9
+    assert result["latest_evidence"][0]["reranker_logit_difference"] == 2.2

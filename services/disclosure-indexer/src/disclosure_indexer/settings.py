@@ -1,5 +1,7 @@
 from pathlib import Path
+from typing import Literal
 
+from ktb_core.disclosure_models import embedding_space
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -25,13 +27,13 @@ class Settings(BaseSettings):
     refresh_days: int = Field(default=30, ge=0)
     collect_financials: bool = True
     postgres_dsn: str
-    embedding_base_uri: str = Field(min_length=1, validation_alias="DISCLOSURE_EMBEDDING_BASE_URI")
-    embedding_model: str = Field(min_length=1, validation_alias="DISCLOSURE_EMBEDDING_MODEL")
+    embedding_base_uri: str = Field(default="", validation_alias="DISCLOSURE_EMBEDDING_BASE_URI")
+    embedding_model: str = Field(default="", validation_alias="DISCLOSURE_EMBEDDING_MODEL")
     embedding_api_key: SecretStr | None = Field(
         default=None, validation_alias="DISCLOSURE_EMBEDDING_API_KEY"
     )
     dimensions: int = Field(
-        default=2000, ge=2000, le=2000, validation_alias="DISCLOSURE_EMBEDDING_DIMENSIONS"
+        default=2000, ge=1024, le=2000, validation_alias="DISCLOSURE_EMBEDDING_DIMENSIONS"
     )
     max_tokens: int = Field(
         default=4096, ge=1, le=16384, validation_alias="DISCLOSURE_EMBEDDING_MAX_TOKENS"
@@ -47,11 +49,36 @@ class Settings(BaseSettings):
     chunk_bytes: int = Field(default=2400, ge=64, le=10000)
     overlap_bytes: int = Field(default=300, ge=0)
     input_bytes: int = Field(default=12000, ge=256, le=16384)
+    context_bytes: int = Field(default=12000, ge=256, le=15000)
     batch_size: int = Field(default=16, ge=1, le=100)
     timeout: float = Field(default=120, gt=0)
     lease_seconds: int = Field(default=600, ge=30)
     document_limit: int = Field(default=100, ge=1)
     log_level: str = "INFO"
+
+    inference_backend: Literal["openai", "modal"] = Field(
+        default="openai", validation_alias="DISCLOSURE_INFERENCE_BACKEND"
+    )
+    modal_key: SecretStr | None = Field(default=None, validation_alias="DISCLOSURE_MODAL_KEY")
+    modal_secret: SecretStr | None = Field(default=None, validation_alias="DISCLOSURE_MODAL_SECRET")
+    modal_document_url: str = Field(default="", validation_alias="DISCLOSURE_MODAL_DOCUMENT_URL")
+
+    @property
+    def index_model(self) -> str:
+        return embedding_space() if self.inference_backend == "modal" else self.embedding_model
+
+    @model_validator(mode="after")
+    def valid_inference(self):
+        if self.inference_backend == "modal":
+            if self.dimensions != 1024 or self.max_tokens != 16384:
+                raise ValueError("Modal requires 1024 dimensions and 16384 tokens")
+            if not self.modal_key or not self.modal_secret:
+                raise ValueError("Modal proxy credentials are required")
+            if not self.modal_document_url.startswith("https://"):
+                raise ValueError("Modal endpoint must use HTTPS")
+        elif self.dimensions != 2000 or not self.embedding_model or not self.embedding_base_uri:
+            raise ValueError("Legacy embeddings require a model, base URI and 2000 dimensions")
+        return self
 
     @model_validator(mode="after")
     def valid_budgets(self):

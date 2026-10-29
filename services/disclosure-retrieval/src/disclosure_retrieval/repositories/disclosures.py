@@ -31,7 +31,10 @@ WITH ranked AS (
         FROM disclosure_indexes idx
         JOIN disclosure_documents d ON d.id = idx.document_id
         WHERE d.receipt_id = r.receipt_id AND idx.active AND idx.status = 'ready'
-        ORDER BY d.id DESC, idx.id DESC
+            AND d.source_hash = (SELECT v.source_hash FROM disclosure_documents v
+                        WHERE v.receipt_id = r.receipt_id ORDER BY v.id DESC LIMIT 1)
+        ORDER BY (idx.model = :model AND idx.dimensions = :dimensions) DESC,
+                 d.id DESC, idx.id DESC
         LIMIT 1
     ) i ON true
     WHERE r.revision = 1
@@ -44,13 +47,15 @@ SEARCH_SQL = """
 , filtered_chunks AS MATERIALIZED (
     SELECT r.receipt_id, r.title, r.stock_code, r.business_year, r.kind, r.period_end,
         r.published_date, c.id AS chunk_id, c.section, c.topic, c.document_name,
-        c.start_offset, c.end_offset, c.text, c.context, c.embedding
+        c.start_offset, c.end_offset, c.text, c.context,
+        {embedding_text} AS embedding_text, c.embedding
     FROM reports r
-    JOIN disclosure_chunks c ON c.index_id = r.index_id
+    JOIN {chunk_table} c ON c.index_id = r.index_id
     WHERE r.index_state = 'ready' AND {scope}
 ), candidates AS MATERIALIZED (
     SELECT receipt_id, title, stock_code, business_year, kind, period_end, published_date,
         chunk_id, section, topic, document_name, start_offset, end_offset, text, context,
+        embedding_text,
         embedding <=> CAST(:vector AS halfvec) AS distance
     FROM filtered_chunks
 ), eligible AS (
@@ -74,7 +79,7 @@ LIMIT :top_k
 SEARCHED_SQL = """
 SELECT count(*)
 FROM reports r
-JOIN disclosure_chunks c ON c.index_id = r.index_id
+JOIN {chunk_table} c ON c.index_id = r.index_id
 WHERE r.index_state = 'ready' AND {scope}
 """
 
@@ -128,6 +133,11 @@ class Evidence:
     context: str
     score: float
     method: str = "cosine"
+    embedding_text: str = ""
+    source_url: str = ""
+    reranker_score: float | None = None
+    reranker_logit_difference: float | None = None
+    reranker_adapter_sha256: str | None = None
 
 
 @dataclass
@@ -166,9 +176,23 @@ def to_report(row: dict[str, object]) -> Report:
 
 def _to_evidence(row: dict[str, object]) -> Evidence:
     named = {
-        name: row[name] for name in Evidence.__dataclass_fields__ if name not in ("score", "method")
+        name: row[name]
+        for name in Evidence.__dataclass_fields__
+        if name
+        not in (
+            "score",
+            "method",
+            "source_url",
+            "reranker_score",
+            "reranker_logit_difference",
+            "reranker_adapter_sha256",
+        )
     }
-    return Evidence(**named, score=1 - row["distance"])
+    return Evidence(
+        **named,
+        score=1 - row["distance"],
+        source_url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['receipt_id']}",
+    )
 
 
 def search_reports(
@@ -178,6 +202,9 @@ def search_reports(
     vector: list[float],
     params: SearchParams,
 ) -> SearchResult:
+    modal = params.dimensions == 1024
+    table = "disclosure_narrative_chunks" if modal else "disclosure_chunks"
+    embedding_text = "c.embedding_text" if modal else "c.text"
     result = SearchResult(reports=[to_report(row) for row in selected])
     if not selected:
         return result
@@ -197,14 +224,42 @@ def search_reports(
         scopes.append(("history", "historical_evidence", HISTORY_SCOPE, params.history_limit))
     for name, attribute, scope, document_limit in scopes:
         rows = conn.execute(
-            sa.text(REPORTS_SQL + SEARCH_SQL.format(scope=scope)),
+            sa.text(
+                REPORTS_SQL
+                + SEARCH_SQL.format(scope=scope, chunk_table=table, embedding_text=embedding_text)
+            ),
             {**bound, "document_limit": document_limit},
         ).mappings()
         evidence = [_to_evidence(row) for row in rows]
         searched = conn.execute(
-            sa.text(REPORTS_SQL + SEARCHED_SQL.format(scope=scope)), bound
+            sa.text(REPORTS_SQL + SEARCHED_SQL.format(scope=scope, chunk_table=table)), bound
         ).scalar_one()
         setattr(result, attribute, evidence)
         setattr(result, f"{name}_searched", searched)
         setattr(result, f"{name}_returned", len(evidence))
     return result
+
+
+def search_counts(
+    conn: sa.Connection, stock_code: str, selected: list[dict[str, object]], params: SearchParams
+) -> tuple[int, int]:
+    table = "disclosure_narrative_chunks" if params.dimensions == 1024 else "disclosure_chunks"
+    bound = {
+        "stock": stock_code,
+        "as_of": params.as_of,
+        "model": params.model,
+        "dimensions": params.dimensions,
+        "latest": [r["receipt_id"] for r in selected],
+        "start": params.history_start or date.min,
+    }
+    counts = []
+    for scope in (LATEST_SCOPE, HISTORY_SCOPE):
+        if scope == HISTORY_SCOPE and not params.include_history:
+            counts.append(0)
+            continue
+        counts.append(
+            conn.execute(
+                sa.text(REPORTS_SQL + SEARCHED_SQL.format(scope=scope, chunk_table=table)), bound
+            ).scalar_one()
+        )
+    return counts[0], counts[1]

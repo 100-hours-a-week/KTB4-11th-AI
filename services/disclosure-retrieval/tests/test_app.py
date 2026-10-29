@@ -45,7 +45,9 @@ def test_search_embeds_with_training_instruction_and_returns_passages(monkeypatc
     monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://model/v1")
     monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "finetuned-model")
     monkeypatch.setenv("DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION", "Instruct: Find evidence\nQuery: ")
-    monkeypatch.setattr(controller, "report_rows", lambda *args: [{"title": "report"}])
+    monkeypatch.setattr(
+        controller, "report_rows", lambda *args: [{"title": "report", "index_state": "ready"}]
+    )
     captured = {}
 
     def embed(request, timeout):

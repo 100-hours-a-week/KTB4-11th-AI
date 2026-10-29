@@ -97,4 +97,7 @@ def test_a_financial_read_makes_no_embedding_call(client, facts, monkeypatch):
         raise AssertionError("a direct financial read must not call the embedding server")
 
     monkeypatch.setattr("urllib.request.urlopen", forbidden)
+    monkeypatch.setattr(
+        "urllib.request.OpenerDirector.open", lambda self, req, timeout: forbidden(req, timeout)
+    )
     assert client.get(URL, params={"business_year": 2025}).status_code == 200

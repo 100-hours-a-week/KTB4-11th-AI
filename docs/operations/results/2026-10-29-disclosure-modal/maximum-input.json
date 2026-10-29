@@ -1,0 +1,16 @@
+{
+  "event": "maximum_input",
+  "wall_seconds": 11.064244082997902,
+  "result": {
+    "task": "document",
+    "documents": 1,
+    "vectors": 1,
+    "dimensions": 1024,
+    "tokens": 16003,
+    "encode_seconds": 8.634,
+    "vram_peak_gib": 19.04,
+    "vram_reserved_gib": 21.34,
+    "vram_total_gib": 22.06,
+    "vram_free_gib": 0.42
+  }
+}

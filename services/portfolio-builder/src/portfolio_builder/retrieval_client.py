@@ -43,7 +43,9 @@ class RetrievalClient:
         except (URLError, TimeoutError, OSError, ValueError) as error:
             raise RetrievalUpstreamError("disclosure-retrieval request failed") from error
         try:
-            return DisclosureSearchResult.model_validate(result).model_dump(mode="json")
+            return DisclosureSearchResult.model_validate(result).model_dump(
+                mode="json", exclude_none=True
+            )
         except ValidationError as error:
             raise RetrievalUpstreamError(
                 "disclosure-retrieval returned an invalid response"

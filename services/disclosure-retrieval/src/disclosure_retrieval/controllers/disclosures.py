@@ -1,10 +1,13 @@
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Annotated, Self
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from ktb_core.disclosure_models import model_identity
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from disclosure_retrieval import inference
 from disclosure_retrieval.controllers.database import DbConnection
 from disclosure_retrieval.embed import embed_query
 from disclosure_retrieval.repositories.disclosures import (
@@ -12,6 +15,7 @@ from disclosure_retrieval.repositories.disclosures import (
     SearchParams,
     SearchResult,
     report_rows,
+    search_counts,
     search_reports,
     to_report,
 )
@@ -34,7 +38,7 @@ class SearchRequest(BaseModel):
     include_history: bool = False
     as_of: date = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).date())
     history_start: date | None = None
-    top_k: int = Field(default=6, ge=1, le=20)
+    top_k: int = Field(default=5, ge=1, le=20)
     history_limit: int = Field(default=3, ge=1, le=10)
     max_distance: float | None = Field(default=None, ge=0, le=2)
 
@@ -62,7 +66,7 @@ class SearchRequest(BaseModel):
             include_history=self.include_history,
             history_start=self.history_start,
             history_limit=self.history_limit,
-            model=settings.embedding_model,
+            model=settings.index_model,
             dimensions=settings.dimensions,
             max_distance=self.max_distance
             if self.max_distance is not None
@@ -83,13 +87,17 @@ def disclosures(
     as_of: date | None = None,
 ) -> ReportList:
     cutoff = as_of or datetime.now(ZoneInfo("Asia/Seoul")).date()
-    rows = report_rows(
-        conn, stock_code, limit, cutoff, settings.embedding_model, settings.dimensions
-    )
+    rows = report_rows(conn, stock_code, limit, cutoff, settings.index_model, settings.dimensions)
     return ReportList(reports=[to_report(row) for row in rows])
 
 
-@router.post("/stocks/{stock_code}/disclosures/search")
+@router.post(
+    "/stocks/{stock_code}/disclosures/search",
+    response_model_exclude={
+        "latest_evidence": {"__all__": {"embedding_text"}},
+        "historical_evidence": {"__all__": {"embedding_text"}},
+    },
+)
 def search(
     stock_code: StockCode,
     body: SearchRequest,
@@ -101,21 +109,68 @@ def search(
         stock_code,
         body.latest_limit,
         body.as_of,
-        settings.embedding_model,
+        settings.index_model,
         settings.dimensions,
     )
     if not selected:
         return SearchResult()
+    if settings.inference_backend == "modal":
+        counts = search_counts(conn, stock_code, selected, body.search_params(settings))
+        if counts == (0, 0):
+            conn.commit()
+            return SearchResult(reports=[to_report(row) for row in selected])
+    elif not body.include_history and not any(row["index_state"] == "ready" for row in selected):
+        conn.commit()
+        return SearchResult(reports=[to_report(row) for row in selected])
+    conn.commit()
     try:
-        vector = embed_query(
-            settings.query_instruction + body.query,
-            settings.embedding_base_uri,
-            settings.embedding_model,
-            settings.dimensions,
-            settings.embedding_api_key.get_secret_value() if settings.embedding_api_key else None,
-            settings.timeout,
-            settings.max_tokens,
-        )
-        return search_reports(conn, stock_code, selected, vector, body.search_params(settings))
+        if settings.inference_backend == "modal":
+            vector = inference.embed_query(body.query, settings)
+        else:
+            vector = embed_query(
+                settings.query_instruction + body.query,
+                settings.embedding_base_uri,
+                settings.embedding_model,
+                settings.dimensions,
+                settings.embedding_api_key.get_secret_value()
+                if settings.embedding_api_key
+                else None,
+                settings.timeout,
+                settings.max_tokens,
+            )
+        params = body.search_params(settings)
+        if settings.inference_backend == "modal":
+            params = replace(params, top_k=50)
+        result = search_reports(conn, stock_code, selected, vector, params)
+        conn.commit()
+        if settings.inference_backend == "modal":
+            for attribute, count in (
+                ("latest_evidence", "latest_returned"),
+                ("historical_evidence", "history_returned"),
+            ):
+                candidates = getattr(result, attribute)
+                scores = inference.rerank(
+                    body.query,
+                    [{"chunk_id": row.chunk_id, "text": row.embedding_text} for row in candidates],
+                    settings,
+                )
+                by_id = {row.chunk_id: row for row in candidates}
+                ranked = [
+                    replace(
+                        by_id[row["chunk_id"]],
+                        method="cosine+qwen3-reranker",
+                        reranker_score=row["score"],
+                        reranker_logit_difference=row["logit_difference"],
+                        reranker_adapter_sha256=model_identity("reranker")["adapter_sha256"],
+                    )
+                    for row in scores[: body.top_k]
+                ]
+                setattr(result, attribute, ranked)
+                setattr(result, count, len(ranked))
+        return result
+    except inference.InputBudgetError:
+        raise HTTPException(
+            status_code=422, detail="Disclosure input exceeds the model budget"
+        ) from None
     except (ValueError, RuntimeError):
         raise HTTPException(status_code=503, detail="Disclosure search is unavailable") from None

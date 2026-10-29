@@ -91,3 +91,14 @@ def document_groups(documents: list[dict[str, Any]]) -> list[DocumentGroup]:
             pairs.append((chunk_id, text))
         groups.append(DocumentGroup(document_id=document_id, chunks=tuple(pairs)))
     return groups
+
+
+def reranker_prompt(query: str, text: str) -> str:
+    return (
+        "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query "
+        'and the Instruct provided. Note that the answer can only be "yes" or "no".'
+        "<|im_end|>\n<|im_start|>user\n"
+        "<Instruct>: Retrieve disclosure passages that answer the financial question.\n"
+        f"<Query>: {query}\n<Document>: {text}"
+        "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    )

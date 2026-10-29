@@ -5,7 +5,7 @@ from typing import Any
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-PARSER_VERSION = "sections-v1"
+PARSER_VERSION = "sections-v2-content-kind"
 
 
 def extract_documents(
@@ -57,7 +57,7 @@ def parse_document(raw: bytes, filename: str) -> dict[str, Any]:
     headings = {"title", "h1", "h2", "h3", "h4", "h5", "h6"}
     paragraphs = {"p", "paragraph", "li", "caption"}
 
-    def flush(context: str = ""):
+    def flush(context: str = "", content_kind: str = "narrative"):
         nonlocal offset
         value = "\n".join(buffer).strip()
         buffer.clear()
@@ -74,6 +74,7 @@ def parse_document(raw: bytes, filename: str) -> dict[str, Any]:
                     "end": offset + len(value),
                     "document": filename,
                     "context": context,
+                    "content_kind": content_kind,
                 }
             )
             offset += len(value)
@@ -116,7 +117,7 @@ def parse_document(raw: bytes, filename: str) -> dict[str, Any]:
                     for c in node.find_all(lambda t: t.name.lower() == "caption")
                 ]
                 header = next((line for line in value.splitlines() if " | " in line), "")
-                flush("\n".join([*preceding, *captions, header]))
+                flush("\n".join([*preceding, *captions, header]), "table")
         elif name in paragraphs and not node.find(lambda t: t.name.lower() in headings | {"table"}):
             value = " ".join(node.get_text(" ").split())
             if value:

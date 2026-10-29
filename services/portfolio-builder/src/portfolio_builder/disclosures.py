@@ -31,7 +31,11 @@ class DisclosureEvidence(DisclosurePeriod):
     text: str = Field(min_length=1, pattern=r"\S")
     context: str
     score: FiniteFloat
-    method: Literal["cosine"]
+    method: Literal["cosine", "cosine+qwen3-reranker"]
+    reranker_score: FiniteFloat | None = Field(default=None, ge=0, le=1)
+    reranker_logit_difference: FiniteFloat | None = None
+    reranker_adapter_sha256: str | None = None
+    source_url: str | None = None
 
 
 class DisclosureSearchResult(BaseModel):

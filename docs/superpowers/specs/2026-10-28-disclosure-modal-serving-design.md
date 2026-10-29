@@ -2,6 +2,8 @@
 
 Date: 2026-10-28
 
+Updated implementation and integration status: [October 29 report](../../operations/2026-10-29-disclosure-modal-integration.md). The status and scope statements below describe the original design decision.
+
 Status: Artifacts verified against Hugging Face on 2026-10-28 (§2). Provider decided: Modal. Runtime code, endpoints, and measurements are not implemented. Extends `2026-10-28-disclosure-rag-serving-design.md`, which still holds for everything not restated here.
 
 ## 1. What This Settles

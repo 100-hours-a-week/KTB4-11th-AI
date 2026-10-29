@@ -1,0 +1,6 @@
+{"event": "authenticated_http", "utc": "2026-10-28T18:06:59.244135+00:00", "model": "rerank", "iteration": 0, "seconds": 8.330378000006021, "count": 50, "top_chunk_id": 49}
+{"event": "authenticated_http", "utc": "2026-10-28T18:07:07.386541+00:00", "model": "rerank", "iteration": 1, "seconds": 8.139963250003348, "count": 50, "top_chunk_id": 49}
+{"event": "authenticated_http", "utc": "2026-10-28T18:07:15.523417+00:00", "model": "rerank", "iteration": 2, "seconds": 8.134730124998896, "count": 50, "top_chunk_id": 49}
+{"event": "authenticated_http", "utc": "2026-10-28T18:18:55.295630+00:00", "model": "embed", "iteration": 0, "seconds": 1.669016083003953, "count": 1024}
+{"event": "authenticated_http", "utc": "2026-10-28T18:18:57.124635+00:00", "model": "embed", "iteration": 1, "seconds": 1.8266194579991861, "count": 1024}
+{"event": "authenticated_http", "utc": "2026-10-28T18:18:58.315793+00:00", "model": "embed", "iteration": 2, "seconds": 1.1900814580003498, "count": 1024}

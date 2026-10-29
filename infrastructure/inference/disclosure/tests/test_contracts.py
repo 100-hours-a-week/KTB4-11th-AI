@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from contracts import IdentityMismatch, Manifest, document_groups, require_identity
 
-MANIFEST = Path(__file__).resolve().parents[1] / "model_manifest.json"
+MANIFEST = Path(__file__).resolve().parents[4] / "packages/core/src/ktb_core/disclosure_models.json"
 
 
 @pytest.fixture
@@ -29,7 +29,7 @@ def test_the_reranker_identity_reports_quantisation_not_dimensions(manifest):
     identity = manifest.reranker_identity()
 
     assert identity["quantization"] == "nf4"
-    assert identity["prompt_version"] == "qwen3-reranker-yesno-v1"
+    assert identity["prompt_version"] == "qwen3-reranker-financial-chat-v2"
     assert "dimensions" not in identity
 
 
@@ -102,3 +102,17 @@ def test_the_manifest_on_disk_is_valid_json():
         "embedding",
         "reranker",
     }
+
+
+def test_reranker_uses_the_evaluated_chat_template():
+    from contracts import reranker_prompt
+
+    prompt = reranker_prompt("소송 위험", "회사: 삼성전자\n본문:\n소송이 진행 중입니다.")
+    assert prompt.startswith(
+        "<|im_start|>system\nJudge whether the Document meets the requirements"
+    )
+    assert (
+        "<Instruct>: Retrieve disclosure passages that answer the financial question.\n"
+        "<Query>: 소송 위험\n<Document>: 회사: 삼성전자" in prompt
+    )
+    assert prompt.endswith("<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n")

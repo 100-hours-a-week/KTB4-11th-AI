@@ -286,3 +286,200 @@ def test_no_distance_threshold_is_applied_unless_one_is_requested(client, engine
     ).json()
     assert filtered["latest_evidence"] == []
     assert (filtered["latest_searched"], filtered["latest_returned"]) == (1, 0)
+
+
+def test_modal_reranks_fifty_candidates_to_five_with_separate_scores(client, engine, monkeypatch):
+    from disclosure_retrieval.settings import Settings
+    from ktb_core.disclosure_models import model_identity
+
+    settings = Settings(
+        postgres_dsn="unused",
+        DISCLOSURE_INFERENCE_BACKEND="modal",
+        DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
+        DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,
+        DISCLOSURE_MODAL_QUERY_URL="https://query.modal.run",
+        DISCLOSURE_MODAL_RERANK_URL="https://rerank.modal.run",
+        DISCLOSURE_MODAL_KEY="key",
+        DISCLOSURE_MODAL_SECRET="secret",
+    )
+    client.app.state.settings = settings
+    seed(
+        engine,
+        "005930",
+        "modal-search",
+        date(2025, 12, 31),
+        date(2026, 3, 1),
+        "legacy",
+        [1.0] + [0.0] * 1999,
+    )
+    with engine.begin() as conn:
+        idx = conn.execute(
+            sa.text(
+                "INSERT INTO disclosure_indexes "
+                "(document_id,signature,model,dimensions,identity,status,active) "
+                "SELECT id,'modal',:model,1024,CAST(:identity AS jsonb),'ready',true "
+                "FROM disclosure_documents WHERE receipt_id='modal-search' RETURNING id"
+            ),
+            {"model": settings.index_model, "identity": json.dumps(model_identity("embedding"))},
+        ).scalar_one()
+        conn.execute(
+            sa.text(
+                "INSERT INTO disclosure_narrative_chunks "
+                "(index_id,ordinal,section,topic,document_name,start_offset,"
+                "end_offset,text,embedding_text,embedding) "
+                "SELECT :idx,n,'위험','risk','main.xml',n,n+1,'본문 '||n,'회사 공시 본문 "
+                "'||n,CAST(:v AS halfvec) "
+                "FROM generate_series(1,60) n"
+            ),
+            {"idx": idx, "v": json.dumps([1.0] + [0.0] * 1023)},
+        )
+    calls = []
+
+    def respond(request, timeout):
+        payload = json.loads(request.data)
+        calls.append(request.full_url)
+        if request.full_url == "https://query.modal.run":
+            result = {"identity": model_identity("embedding"), "vector": [1.0] + [0.0] * 1023}
+        else:
+            assert len(payload["candidates"]) == 50
+            assert payload["candidates"][0]["text"].startswith("회사 공시 본문")
+            result = {
+                "identity": model_identity("reranker"),
+                "scores": [
+                    {"chunk_id": c["chunk_id"], "score": n / 50, "logit_difference": n}
+                    for n, c in enumerate(payload["candidates"])
+                ],
+            }
+        return io.BytesIO(json.dumps(result).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", respond)
+    monkeypatch.setattr(
+        "urllib.request.OpenerDirector.open", lambda self, req, timeout: respond(req, timeout)
+    )
+    response = client.post(
+        "/stocks/005930/disclosures/search", json={"query": "위험", "as_of": "2026-06-01"}
+    )
+    assert response.status_code == 200, response.text
+    rows = response.json()["latest_evidence"]
+    assert [row["text"] for row in rows] == ["본문 50", "본문 49", "본문 48", "본문 47", "본문 46"]
+    assert rows[0]["score"] == 1
+    assert "embedding_text" not in rows[0]
+    assert rows[0]["reranker_score"] == 0.98
+    assert rows[0]["reranker_logit_difference"] == 49
+    assert calls == ["https://query.modal.run", "https://rerank.modal.run"]
+
+
+def test_ready_empty_narrative_index_returns_empty_without_modal(client, engine, monkeypatch):
+    from disclosure_retrieval.settings import Settings
+    from ktb_core.disclosure_models import model_identity
+
+    settings = Settings(
+        postgres_dsn="unused",
+        DISCLOSURE_INFERENCE_BACKEND="modal",
+        DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
+        DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,
+        DISCLOSURE_MODAL_QUERY_URL="https://query.modal.run",
+        DISCLOSURE_MODAL_RERANK_URL="https://rerank.modal.run",
+        DISCLOSURE_MODAL_KEY="key",
+        DISCLOSURE_MODAL_SECRET="secret",
+    )
+    client.app.state.settings = settings
+    seed(
+        engine,
+        "005930",
+        "empty-narrative",
+        date(2025, 12, 31),
+        date(2026, 3, 1),
+        "legacy",
+        [1.0] + [0.0] * 1999,
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO disclosure_indexes "
+                "(document_id,signature,model,dimensions,identity,status,active) "
+                "SELECT id,'modal',:model,1024,CAST(:identity AS jsonb),'ready',true "
+                "FROM disclosure_documents WHERE receipt_id='empty-narrative'"
+            ),
+            {"model": settings.index_model, "identity": json.dumps(model_identity("embedding"))},
+        )
+
+    def forbidden(*a, **kw):
+        pytest.fail("empty narrative search must not call Modal")
+
+    import pytest
+
+    monkeypatch.setattr("urllib.request.urlopen", forbidden)
+    monkeypatch.setattr(
+        "urllib.request.OpenerDirector.open", lambda self, req, timeout: forbidden(req, timeout)
+    )
+    response = client.post(
+        "/stocks/005930/disclosures/search", json={"query": "위험", "as_of": "2026-06-01"}
+    )
+    assert response.status_code == 200
+    assert response.json()["latest_evidence"] == []
+
+
+def test_legacy_rollback_can_use_same_source_before_parser_upgrade(client, engine, monkeypatch):
+    vector = [1.0] + [0.0] * 1999
+    seed(
+        engine,
+        "005930",
+        "parser-rollback",
+        date(2025, 12, 31),
+        date(2026, 3, 1),
+        "기존 파서의 근거",
+        vector,
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO disclosure_documents "
+                "(receipt_id,archive_key,source_hash,parser_version,documents) "
+                "VALUES ('parser-rollback','test','test','sections-v2-content-kind','[]')"
+            )
+        )
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        lambda *a, **kw: io.BytesIO(
+            json.dumps({"data": [{"index": 0, "embedding": vector}]}).encode()
+        ),
+    )
+    response = client.post(
+        "/stocks/005930/disclosures/search", json={"query": "위험", "as_of": "2026-06-01"}
+    )
+    assert response.status_code == 200
+    assert response.json()["reports"][0]["index_state"] == "ready"
+    assert response.json()["latest_evidence"][0]["text"] == "기존 파서의 근거"
+
+
+def test_legacy_rollback_never_reads_an_obsolete_source(client, engine, monkeypatch):
+    seed(
+        engine,
+        "005930",
+        "changed-source",
+        date(2025, 12, 31),
+        date(2026, 3, 1),
+        "변경 전 근거",
+        [1.0] + [0.0] * 1999,
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO disclosure_documents "
+                "(receipt_id,archive_key,source_hash,parser_version,documents) "
+                "VALUES ('changed-source','new-source','changed-hash',"
+                "'sections-v2-content-kind','[]')"
+            )
+        )
+
+    def forbidden(*a, **kw):
+        raise AssertionError("An obsolete source must not trigger GPU inference")
+
+    monkeypatch.setattr("urllib.request.urlopen", forbidden)
+    response = client.post(
+        "/stocks/005930/disclosures/search", json={"query": "위험", "as_of": "2026-06-01"}
+    )
+    assert response.status_code == 200
+    assert response.json()["reports"][0]["index_state"] == "pending"
+    assert response.json()["latest_evidence"] == []
