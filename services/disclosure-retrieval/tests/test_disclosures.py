@@ -290,7 +290,7 @@ def test_no_distance_threshold_is_applied_unless_one_is_requested(client, engine
 
 def test_modal_reranks_fifty_candidates_to_five_with_separate_scores(client, engine, monkeypatch):
     from disclosure_retrieval.settings import Settings
-    from ktb_core.disclosure_models import model_identity
+    from ktb_core.embedding.config import model_identity
 
     settings = Settings(
         postgres_dsn="unused",
@@ -371,7 +371,7 @@ def test_modal_reranks_fifty_candidates_to_five_with_separate_scores(client, eng
 
 def test_ready_empty_narrative_index_returns_empty_without_modal(client, engine, monkeypatch):
     from disclosure_retrieval.settings import Settings
-    from ktb_core.disclosure_models import model_identity
+    from ktb_core.embedding.config import model_identity
 
     settings = Settings(
         postgres_dsn="unused",

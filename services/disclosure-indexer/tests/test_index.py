@@ -284,7 +284,7 @@ def test_modal_grouping_keeps_attachment_boundaries_and_excludes_tables():
 
 
 def test_modal_index_preserves_legacy_vectors_and_is_idempotent(report_engine, monkeypatch):
-    from ktb_core.disclosure_models import model_identity
+    from ktb_core.embedding.config import model_identity
 
     settings = _settings(
         DISCLOSURE_INFERENCE_BACKEND="modal",

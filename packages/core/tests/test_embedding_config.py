@@ -52,3 +52,17 @@ def test_importing_the_config_pulls_in_no_third_party_package():
     result = subprocess.run([sys.executable, "-c", source], capture_output=True, text=True)
 
     assert result.stdout.strip() == "[]", result.stdout
+
+
+def test_disclosure_identity_keeps_the_selected_adapter_separate_from_news(reloaded):
+    module = reloaded(KTB_EMBEDDING_MODEL="news-model", KTB_EMBEDDING_DIMENSIONS="2000")
+    identity = module.model_identity("embedding")
+    assert identity["base_repo"] == "perplexity-ai/pplx-embed-v2-context-9b-preview"
+    assert (
+        identity["adapter_sha256"]
+        == "1f5d43671826dab233cc32942cedb31bd0f8564f42a4b8f359a4a100d66c60e2"
+    )
+    assert identity["dimensions"] == 1024
+    assert identity["max_tokens"] == 16384
+    identity["dimensions"] = 1
+    assert module.model_identity("embedding")["dimensions"] == 1024

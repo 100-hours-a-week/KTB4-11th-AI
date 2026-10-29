@@ -4,7 +4,7 @@ import json
 import pytest
 from disclosure_retrieval import inference
 from disclosure_retrieval.settings import Settings
-from ktb_core.disclosure_models import model_identity
+from ktb_core.embedding.config import model_identity
 
 
 def settings():
