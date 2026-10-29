@@ -23,7 +23,6 @@ beautifulsoup4==4.15.0 \
     --hash=sha256:288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7 \
     --hash=sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9
     # via
-    #   disclosure-indexer
     #   news-preprocessor
     #   opendartreader
 boto3==1.43.109 \
@@ -409,7 +408,6 @@ lxml==6.1.3 \
     --hash=sha256:f6b9d2aad499c769ee8287609ab0e6de99d8bcea99c6e6c2e64945259fd52fb2 \
     --hash=sha256:febd35ef45f603c2d74b74655efdbf45e14f55fc0aef4ac82b663ca829b283e0
     # via
-    #   disclosure-indexer
     #   news-preprocessor
     #   opendartreader
 mako==1.4.3 \

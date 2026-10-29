@@ -2,7 +2,7 @@ from datetime import date
 
 import httpx
 import pytest
-from disclosure_indexer.dart import DartClient, report_period
+from news_preprocessor.disclosures.dart import DartClient, report_period
 
 
 def test_fiscal_periods_are_not_receipt_dates():

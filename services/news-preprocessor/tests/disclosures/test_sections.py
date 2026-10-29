@@ -1,4 +1,4 @@
-from disclosure_indexer.sections import section_rows
+from news_preprocessor.disclosures.sections import section_rows
 
 DOCUMENTS = [
     {

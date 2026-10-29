@@ -14,12 +14,12 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import get_logger
 
-from disclosure_indexer.dart import DartClient, report_period
-from disclosure_indexer.database import disclosure_financial_facts, disclosure_sections
-from disclosure_indexer.documents import PARSER_VERSION, extract_documents
-from disclosure_indexer.financials import REPORT_CODES, SCOPES, financial_rows
-from disclosure_indexer.sections import section_rows
-from disclosure_indexer.settings import Settings
+from news_preprocessor.disclosures.dart import DartClient, report_period
+from news_preprocessor.disclosures.database import disclosure_financial_facts, disclosure_sections
+from news_preprocessor.disclosures.documents import PARSER_VERSION, extract_documents
+from news_preprocessor.disclosures.financials import REPORT_CODES, SCOPES, financial_rows
+from news_preprocessor.disclosures.sections import section_rows
+from news_preprocessor.disclosures.settings import Settings
 
 log = get_logger(__name__)
 

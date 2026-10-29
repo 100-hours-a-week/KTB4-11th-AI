@@ -2,7 +2,7 @@ import io
 import zipfile
 
 import pytest
-from disclosure_indexer.documents import extract_documents
+from news_preprocessor.disclosures.documents import extract_documents
 
 
 def archive(files):

@@ -17,6 +17,8 @@ RUN uv pip install --no-deps \
     ./packages/aws \
     ./packages/core \
     ./packages/telemetry \
+    ./services/disclosure-indexer \
+    ./services/disclosure-retrieval \
     ./services/market-collector \
     ./services/market-http \
     ./services/market-streamer \
@@ -39,6 +41,7 @@ COPY --chown=app:app alembic.ini ./
 COPY --chown=app:app infrastructure infrastructure
 ENV PATH="/app/.venv/bin:$PATH"
 
+RUN mkdir -p /app/archive && chown app:app /app/archive
 USER app
 EXPOSE 8000
 CMD ["portfolio-rebalancer"]
