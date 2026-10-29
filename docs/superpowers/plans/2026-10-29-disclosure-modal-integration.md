@@ -68,7 +68,8 @@ core has no HTTP transport or GPU dependencies.
   no KV cache and last-token logits for reranking.
 - [x] Bake weights into separate Modal images and load them offline. Warm up inside
   `@modal.enter(snap=True)` with GPU memory snapshots enabled.
-- [x] Use a 120-second idle window and at most two containers per model. Default GPU
+- [x] Use a five-second idle window, zero minimum/buffer containers and at most two
+  containers per model: two embedding plus two reranking workers, four in total. Default GPU
   preference is L4,A10 after an observed L4 capacity shortage; both are 24GB options.
 - [x] Complete Modal redeployment and authenticated live GPU checks. The validated deployment
   version is v7. Temporary validation credentials were revoked after measurement.
@@ -197,3 +198,53 @@ Existing deployment files must move any `DISCLOSURE_INDEXER_DART_API_KEY` value 
 `DISCLOSURE_INDEXER_*` to `NEWS_PREPROCESSOR_DISCLOSURE_*`. Keep indexing options such as
 chunk size, batch size, embedding timeout and lease duration under `DISCLOSURE_INDEXER_*`.
 The archive volume stays the same; its mount moves to news-preprocessor.
+
+## 9. Final hourly-batch settings and parallel measurements
+
+Apply two embedding workers plus two reranking workers as the app's combined maximum
+of four. Both pools have zero minimum/buffer containers and a five-second scaledown
+window. Each worker accepts one input at a time. This limit is independent of SQS
+publisher concurrency. Four is a limit, not a permanent allocation.
+
+The existing v7 deployment received these settings through Modal's supported autoscaler
+API. An unnecessary image rebuild was interrupted before publication; model images and
+weights were not replaced. Source settings now match the live overrides, so a future
+deployment preserves the same policy. A five-second idle setting is not an exact
+observable container-termination deadline.
+
+The CPU server owns 09:00 through 15:00 KST polling on operating days and should call
+inference only for nonempty batches that need narrative retrieval. Modal has no backend
+poller or hourly cron. The current hourly rebalancer polls account data; connecting a
+backend batch of narrative queries requires its own request contract and CPU caller.
+That integration is not implemented by these autoscaler changes. Existing account
+polling, order publication and the morning/indexing schedules are unchanged.
+
+The same query was submitted fourteen times per condition. Each reranking call received
+fifty synthetic financial passages, 1,016 characters each. SDK submission, queueing,
+inference and result transfer are timed; polling, pgvector, generation and post-result
+shutdown are excluded. Warm cases exclude preparing the second worker. Zero-worker
+cases confirm zero runners and running inputs before timing starts.
+
+| Model and state | Sequential seconds | Parallel seconds | Reduction |
+| --- | ---: | ---: | ---: |
+| Embedding, warm | 9.71 | 4.28 | 55.94% |
+| Embedding, zero workers | 17.21 | 12.07 | 29.86% |
+| Reranker, warm | 192.32 | 102.06 | 46.93% |
+| Reranker, zero workers | 201.94 | 122.75 | 39.22% |
+
+These are eight single-batch observations, not percentiles or an end-to-end RAG benchmark.
+All 112 timed calls matched provider history. Execution overlap was one for sequential
+calls and two for parallel calls, with distinct parallel containers. Some containers
+were replaced during a batch; this is a deployed-service comparison, not a fixed-card
+microbenchmark. An initial pilot that included tracing queries in the timed loop was
+excluded and retained only in raw evidence. Additional GPUs reduce latency without
+reducing cost by the same percentage.
+
+After the change, the targeted inference/client suite passed **37 tests**; Ruff lint,
+formatting, SDK app-definition loading and live autoscaler settings checks passed.
+Final verification found zero runners, zero running inputs and an empty container list.
+Temporary benchmark minimums and caps were restored to zero minimum, two maximum,
+zero buffer and five-second scaledown for both models. No accuracy scores were recomputed.
+
+[Current comparison and hourly cost assumptions](https://docs.google.com/document/d/1cKUcbLhc1Sn4ez6XCdgt6y82BnTneBzy_a9JDEf8h9c/edit)
+and [measurement inputs, raw timings and verification archive](https://drive.google.com/file/d/1jgeZQow5ZiD-v93Ix4ynj2wU_7oSFjHl/view).

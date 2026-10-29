@@ -24,7 +24,7 @@ if not MODEL_CONFIG_PATH.exists():
 MANIFEST = Manifest.load(MODEL_CONFIG_PATH)
 
 GPU = os.environ.get("DISCLOSURE_INFERENCE_GPU", "L4,A10").split(",")
-IDLE_TIMEOUT = 120
+IDLE_TIMEOUT = 5
 CACHE = "/cache"
 
 image = (
@@ -71,7 +71,9 @@ def _reject(error: Exception) -> dict[str, object]:
     scaledown_window=IDLE_TIMEOUT,
     timeout=180,
     startup_timeout=1800,
+    min_containers=0,
     max_containers=2,
+    buffer_containers=0,
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
 )
@@ -188,7 +190,9 @@ class Embedder:
     scaledown_window=IDLE_TIMEOUT,
     timeout=180,
     startup_timeout=1800,
+    min_containers=0,
     max_containers=2,
+    buffer_containers=0,
     enable_memory_snapshot=True,
     experimental_options={"enable_gpu_snapshot": True},
 )

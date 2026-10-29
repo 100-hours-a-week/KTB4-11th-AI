@@ -1,6 +1,7 @@
 # Disclosure inference on Modal
 
-CPU services call authenticated HTTPS endpoints. Modal runs two independent 24GB GPU containers (L4, with A10 as an availability fallback):
+CPU services call authenticated HTTPS endpoints. Modal serves two independently scaled
+models on 24GB GPUs (L4, with A10 as an availability fallback):
 Context-9B with score10 LoRA for documents/queries, and Qwen3-Reranker-4B with the verified
 last-7d43c4 adapter. Retrieval returns evidence; it never generates an answer.
 
@@ -8,9 +9,71 @@ last-7d43c4 adapter. Retrieval returns evidence; it never generates an answer.
 
 `app.py` enables `enable_memory_snapshot=True` and
 `experimental_options={"enable_gpu_snapshot": True}`. Both classes load the model and run
-a small forward pass in `@modal.enter(snap=True)`. Containers scale to zero after 120 idle
-seconds, handle one input at a time, and are capped at two containers per model. GPU memory
+a small forward pass in `@modal.enter(snap=True)`. Each model has zero minimum and buffer
+containers, accepts one input at a time, and is capped at two containers. After five idle
+seconds, its container becomes eligible to scale down. Scale-down is managed by Modal and
+is not an immediate shutdown command after an HTTP response. GPU memory
 snapshots remain an alpha feature; a restore hit is not guaranteed.
+
+At most four GPU containers can exist across the two models: two embedding workers and
+two reranking workers. The SQS publisher's concurrency of four is a separate setting;
+it does not configure or validate
+GPU concurrency. Four workers are a capacity limit, not four permanently allocated GPUs.
+
+## Server polling and hourly inference batches
+
+The existing CPU server owns backend polling at 09:00, 10:00, 11:00, 12:00, 13:00,
+14:00 and 15:00 KST on operating days. Modal has no backend poller or hourly cron.
+A poll is not an inference request: an empty poll must not call Modal, including its
+GPU-backed identity endpoints. Financial facts and identified sections are read from
+PostgreSQL without starting either model.
+
+When a poll yields narrative retrieval work, the server groups available queries for
+that hourly batch, obtains query vectors, reads candidates from pgvector, and submits
+the candidate lists for reranking. Complete the query-embedding stage together, then
+complete the reranking stage together. Each model can scale down after its own last
+call; do not keep the embedding GPU waiting for all reranking or answer generation.
+Do not deliberately leave gaps longer than five seconds within a model's batch, because
+a later call can start another container and repeat initialization. Grouping here means
+server-side scheduling; it does not raise the measured per-model input-token budget.
+
+The existing retrieval HTTP endpoint handles one search at a time and already avoids
+inference for missing reports and empty narrative indexes. The existing hourly
+`portfolio-rebalancer` polling endpoint returns accounts, not pending RAG queries.
+Connecting an hourly search-request batch therefore requires a backend request contract
+and a CPU caller; that integration is not implemented by the Modal scale settings.
+No account polling or order publication is changed by this deployment.
+
+At seven nonempty hourly batches per day, startup counts are 154 for 22 operating days
+or 210 for 30 days. Empty polls reduce these counts. One batch can contain several
+searches, so startup count and inference count are separate cost inputs. Retrieval
+costs exclude the independent daily indexing job and downstream answer generation.
+
+## Measured parallel inference
+
+On 2026-10-29, the deployed v7 models processed identical fourteen-call batches with
+client concurrency one and two. Each reranking call had fifty synthetic candidates,
+1,016 characters per candidate. Provider execution histories confirmed peak overlap one
+and two respectively. Settings were applied with the autoscaler API; weights and images
+were not replaced.
+
+| Model and initial state | Sequential seconds | Parallel seconds | Reduction |
+| --- | ---: | ---: | ---: |
+| Embedding, warm | 9.71 | 4.28 | 55.94% |
+| Embedding, zero workers | 17.21 | 12.07 | 29.86% |
+| Reranker, warm | 192.32 | 102.06 | 46.93% |
+| Reranker, zero workers | 201.94 | 122.75 | 39.22% |
+
+Each row is one batch, not a percentile or production SLA. Timings include SDK request,
+queueing, inference and result transfer, excluding backend polling, pgvector search,
+answer generation and container shutdown. Warm timings also exclude preparing the
+second worker. More workers reduce latency by using additional GPUs; cost does not fall
+by the same percentage. Final verification found zero running inputs, zero runners and
+an empty container list. All minimum/buffer settings were restored to zero.
+
+[Comparison and current hourly assumptions](https://docs.google.com/document/d/1cKUcbLhc1Sn4ez6XCdgt6y82BnTneBzy_a9JDEf8h9c/edit)
+and [measurement archive](https://drive.google.com/file/d/1jgeZQow5ZiD-v93Ix4ynj2wU_7oSFjHl/view)
+contain the inputs, model identities, raw observations and execution-history checks.
 
 `weights.py` downloads pinned base and adapter revisions during the image build, verifies
 the adapter hash and nonzero/finite LoRA tensors, and writes each model into its own image.
