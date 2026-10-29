@@ -141,6 +141,10 @@ The DB is local and temporary, so these SQL timings are not deployed DB latency 
    refusal to read a replaced source.
 
 Independent review found no remaining confirmed P0/P1/P2 blockers after those fixes.
+After merging current `dev` (`0f61ead`), the final dedicated-DB suite passed:
+**1,327 passed, 49 skipped, two subtests passed** in 37.08 seconds. Ruff lint/format,
+module/dependency boundaries and whitespace checks passed. Both CPU images were rebuilt
+and verified with networking disabled; no Modal SDK or torch dependency is installed.
 
 ## Evidence and reproduction
 

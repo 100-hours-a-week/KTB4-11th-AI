@@ -257,7 +257,7 @@ def main() -> None:
             "reranker_score",
             "reranker_logit_difference",
         ]
-        writer = csv.DictWriter(destination, fieldnames=columns)
+        writer = csv.DictWriter(destination, fieldnames=columns, lineterminator="\n")
         writer.writeheader()
         for result in results:
             writer.writerows(
