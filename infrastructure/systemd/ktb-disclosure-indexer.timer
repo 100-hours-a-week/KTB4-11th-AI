@@ -1,0 +1,11 @@
+[Unit]
+Description=Check new and corrected disclosures daily at 05:00 KST
+
+[Timer]
+OnCalendar=*-*-* 05:00:00 Asia/Seoul
+AccuracySec=1s
+Persistent=true
+Unit=ktb-disclosure-indexer.service
+
+[Install]
+WantedBy=timers.target

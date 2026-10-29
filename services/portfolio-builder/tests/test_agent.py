@@ -67,9 +67,36 @@ def analyze() -> str:
     )
 
 
+@tool("search_disclosures", description="Search periodic report evidence")
+def search_disclosures() -> str:
+    return json.dumps({"reports": [], "latest_evidence": [], "historical_evidence": []})
+
+
 def _run(engine, news_client, replies, max_turns=10, extra_tools=(analyze,)):
     log = Recorder()
-    tools = [submit_tool(engine, frozenset(), "m", news_client, log), *extra_tools]
+    tools = [
+        submit_tool(engine, frozenset(), "m", news_client, log),
+        *extra_tools,
+        search_disclosures,
+    ]
+    replies = [
+        message.model_copy(
+            update={
+                "tool_calls": [
+                    *message.tool_calls,
+                    {
+                        "name": "search_disclosures",
+                        "args": {},
+                        "id": f"rag-{message.id}",
+                        "type": "tool_call",
+                    },
+                ]
+            }
+        )
+        if any(call["name"] == "analyze_technicals" for call in message.tool_calls)
+        else message
+        for message in replies
+    ]
     result = run_agent(
         model=ScriptedModel(messages=iter(replies)),
         tools=tools,
@@ -158,7 +185,8 @@ def test_a_truncated_tool_call_is_answered_before_the_nudge(engine, news_client)
 
     assert result.outcome == "saved"
     requests = [f for e, _, f in log.events if e == "llm_request"]
-    assert requests[2]["message_count"] == 6
+    # The analysis turn also carries the required disclosure search, so it answers two tools.
+    assert requests[2]["message_count"] == 7
 
 
 def test_two_submissions_in_one_message_write_one_portfolio(engine, news_client):
@@ -250,14 +278,15 @@ def test_the_trace_records_reasoning_text_and_tool_results_in_order(engine, news
     assert [(e.turn, e.kind) for e in result.trace] == [
         (1, "model"),
         (1, "tool"),
+        (1, "tool"),
         (2, "model"),
         (2, "tool"),
     ]
     assert result.trace[0].reasoning == "HBM 수요가 핵심이다"
     assert result.trace[0].text == "살펴볼게요"
-    assert result.trace[3].name == "submit_portfolio"
-    assert result.trace[3].args["cash_weight"] == 1
-    assert result.trace[3].result.startswith("Saved portfolio")
+    assert result.trace[4].name == "submit_portfolio"
+    assert result.trace[4].args["cash_weight"] == 1
+    assert result.trace[4].result.startswith("Saved portfolio")
 
 
 def test_submission_without_analysis_does_not_write_to_the_database(engine, news_client):

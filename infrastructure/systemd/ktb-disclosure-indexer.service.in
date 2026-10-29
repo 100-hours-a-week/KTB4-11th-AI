@@ -1,0 +1,20 @@
+[Unit]
+Description=KTB daily disclosure indexing job
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+OnSuccess=ktb-scheduled-job-success@disclosure-indexer.service
+OnFailure=ktb-scheduled-job-failure@disclosure-indexer.service
+StartLimitIntervalSec=1h
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=@@DEPLOY_USER@@
+WorkingDirectory=@@DEPLOY_DIR@@
+ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.disclosure-indexer.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T disclosure-indexer
+TimeoutStartSec=50m
+Restart=on-failure
+RestartMode=direct
+RestartSec=5m
+KillMode=mixed

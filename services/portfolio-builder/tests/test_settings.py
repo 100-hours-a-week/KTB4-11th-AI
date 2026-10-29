@@ -3,6 +3,7 @@ from portfolio_builder.settings import Settings
 from pydantic import ValidationError
 
 REQUIRED = {
+    "PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_BASE_URI": "http://disclosure-retrieval:8000",
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI": "http://market-http:8000",
     "PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI": "http://news-http:8000",
@@ -27,6 +28,7 @@ def test_loads_required_values_and_defaults(monkeypatch):
     assert settings.llm_model == "openai/gpt-5.5"
     assert settings.thinking_level == "medium"
     assert settings.news_window_days == 7
+    assert settings.disclosure_retrieval_timeout == 40
     assert settings.max_turns == 150
     assert settings.log_level == "INFO"
 

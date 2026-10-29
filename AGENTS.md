@@ -109,6 +109,8 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `packages/telemetry` (`ktb_telemetry`) | OpenTelemetry tracing setup and log trace ids; keeps OpenTelemetry dependencies outside core |
 | `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
+| `services/disclosure-indexer` | Collect OpenDART periodic reports, archive the originals, and store sections, financial facts, and narrative embeddings in PostgreSQL |
+| `services/disclosure-retrieval` | Serve read-only disclosure evidence: exact cosine narrative search plus GPU-free financial and section reads |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
 | `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
 | `services/news-http` | Serve private, read-only news and graph HTTP queries |
@@ -118,6 +120,14 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent |
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
+
+The two disclosure services share `DISCLOSURE_EMBEDDING_*`; news keeps `KTB_EMBEDDING_*`.
+Documents and queries must use one checkpoint and one dimension, so the query prefix is
+part of the index signature and changing it forces a reindex. `disclosure_sections` and
+`disclosure_financial_facts` are readable with no embedding server configured, and a
+search reports each report's `index_state` rather than failing a whole stock when one
+index belongs to a retired embedding space. An empty result is not evidence that no risk
+exists; `latest_searched` says how many candidates were scored.
 
 Services communicate through datastores and explicit HTTP/queue contracts. Do not import
 another service's implementation. Keep module boundaries aligned with `tach.toml`.

@@ -23,6 +23,7 @@ beautifulsoup4==4.15.0 \
     --hash=sha256:288e3ca7d54b06f2ac191970bc275c1939cb46d450b255bf6718b04aa37ab4f7 \
     --hash=sha256:d6f88de62e1d4e38ecb1077eb9724cd0eff29d2a08ca16a401e9b9e93f117cf9
     # via
+    #   disclosure-indexer
     #   news-preprocessor
     #   opendartreader
 boto3==1.43.109 \
@@ -199,6 +200,7 @@ fastapi==0.142.2 \
     --hash=sha256:06366626f2e70576367714d9ab2fe8472e6c8456dba69b399f9f797ab5e92570 \
     --hash=sha256:bd5f4d81f1e93a88bcd77caf4dfe3c2dbffc3805407a0007e9a114c18b3a670b
     # via
+    #   disclosure-retrieval
     #   market-http
     #   news-http
     #   scalar-fastapi
@@ -227,6 +229,7 @@ httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
+    #   disclosure-indexer
     #   langchain-core
     #   langgraph-sdk
     #   news-graph-builder
@@ -406,6 +409,7 @@ lxml==6.1.3 \
     --hash=sha256:f6b9d2aad499c769ee8287609ab0e6de99d8bcea99c6e6c2e64945259fd52fb2 \
     --hash=sha256:febd35ef45f603c2d74b74655efdbf45e14f55fc0aef4ac82b663ca829b283e0
     # via
+    #   disclosure-indexer
     #   news-preprocessor
     #   opendartreader
 mako==1.4.3 \
@@ -679,6 +683,8 @@ psycopg==3.3.6 \
     --hash=sha256:a1db9f7148b06a28606767efaca51fa6f9398c5c0a3810519be69d7000bdb631 \
     --hash=sha256:c081f2250df751a943036e42db6df4571c66cd0aabe8291a7a506512b12007d2
     # via
+    #   disclosure-indexer
+    #   disclosure-retrieval
     #   market-collector
     #   market-http
     #   market-streamer
@@ -746,6 +752,8 @@ pydantic==2.13.5 \
     --hash=sha256:346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
     # via
+    #   disclosure-indexer
+    #   disclosure-retrieval
     #   fastapi
     #   langchain
     #   langchain-core
@@ -813,6 +821,8 @@ pydantic-settings==2.15.0 \
     --hash=sha256:0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42 \
     --hash=sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117
     # via
+    #   disclosure-indexer
+    #   disclosure-retrieval
     #   market-collector
     #   market-http
     #   market-streamer
@@ -978,6 +988,8 @@ sqlalchemy==2.1.1 \
     --hash=sha256:fdef70d59afce463bedef54580ba6a832f9f2313c1d0054e15cbb4ff46f37a97
     # via
     #   alembic
+    #   disclosure-indexer
+    #   disclosure-retrieval
     #   market-collector
     #   market-http
     #   market-streamer
@@ -1117,6 +1129,7 @@ uvicorn==0.54.0 \
     --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
     # via
+    #   disclosure-retrieval
     #   market-http
     #   news-http
 websockets==16.1.1 \
