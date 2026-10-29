@@ -216,16 +216,18 @@ def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url, ent
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         pubsub = valkey.pubsub()
-        await pubsub.subscribe("market:orderbooks")
+        await pubsub.subscribe("market:orderbooks", "orderbook:005930")
+        await pubsub.get_message(timeout=1)
         await pubsub.get_message(timeout=1)
         await publish_orderbooks(valkey, [parse_orderbook(entry, TODAY)])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+        symbol_message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
         stored = await valkey.get("orderbook:005930")
         await pubsub.aclose()
         await valkey.aclose()
-        return message, stored
+        return message, symbol_message, stored
 
-    message, stored = asyncio.run(scenario())
+    message, symbol_message, stored = asyncio.run(scenario())
     expected = asdict(parse_orderbook(entry, TODAY))
     assert all(level["price"] > 0 for side in ("asks", "bids") for level in expected[side])
 
@@ -233,6 +235,10 @@ def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url, ent
     assert message is not None
     assert message["channel"] == "market:orderbooks"
     assert json.loads(message["data"]) == expected
+
+    assert symbol_message is not None
+    assert symbol_message["channel"] == "orderbook:005930"
+    assert symbol_message["data"] == message["data"] == stored
 
 
 def test_frame_prices_skips_malformed_entries():
@@ -264,16 +270,18 @@ def test_publish_sets_and_publishes_each_price(valkey_url):
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         pubsub = valkey.pubsub()
-        await pubsub.subscribe("market:prices")
+        await pubsub.subscribe("market:prices", "price:005930")
+        await pubsub.get_message(timeout=1)
         await pubsub.get_message(timeout=1)
         await publish(valkey, [Price(**PRICE)])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+        symbol_message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
         stored = await valkey.get("price:005930")
         await pubsub.aclose()
         await valkey.aclose()
-        return message, stored
+        return message, symbol_message, stored
 
-    message, stored = asyncio.run(scenario())
+    message, symbol_message, stored = asyncio.run(scenario())
 
     assert json.loads(stored) == {
         key: value for key, value in PRICE.items() if key != "trade_value"
@@ -283,6 +291,10 @@ def test_publish_sets_and_publishes_each_price(valkey_url):
     assert json.loads(message["data"]) == {
         key: value for key, value in PRICE.items() if key != "trade_value"
     }
+
+    assert symbol_message is not None
+    assert symbol_message["channel"] == "price:005930"
+    assert symbol_message["data"] == message["data"] == stored
 
 
 def test_publish_uses_dated_keys_and_keeps_last_received_tick():
@@ -359,11 +371,15 @@ def test_publish_uses_dated_keys_and_keeps_last_received_tick():
         "ranking:change_rate:20261013": {"005930": -1.0},
     }
     assert set(valkey.expirations) == set(valkey.ranks)
-    assert [channel for channel, _ in valkey.publishes] == ["market:prices"] * 4
+    assert [channel for channel, _ in valkey.publishes] == ["market:prices", "price:005930"] * 4
     assert [json.loads(payload)["volume"] for _, payload in valkey.publishes] == [
+        300,
         300,
         100,
         100,
+        100,
+        100,
+        400,
         400,
     ]
     assert all(options == {"nx": True} for _, options in valkey.expirations.values())

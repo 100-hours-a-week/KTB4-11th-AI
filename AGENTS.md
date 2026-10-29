@@ -160,24 +160,6 @@ third-party dependencies.
 - Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing
   orderbook contracts.
 
-### Order queue
-
-- Fetch the Backend account snapshot once per rebalancer run through HTTP. Lookup
-  failures must exit before placing orders; do not add an account snapshot consumer.
-- Publish cancellations and replacements to the same Order FIFO queue, grouped by
-  account ID and deduplicated by `eventId`.
-- Successful cancellation publication means requested, not completed. Preserve
-  `order_cancel_requested` / `cancel_requested` terminology.
-- After successful cancellation sends, publish recalculated replacements immediately
-  in the same FIFO group. Do not refresh the snapshot or wait for pending orders to clear.
-  The Backend consumer must finish cancellation before processing the next command.
-- Failed or partial cancellation publication skips that account. Exit stocks produce
-  sells only; unconfirmed sell proceeds must not fund buys.
-- Preserve MessageId/eventId/correlationId/result logging and existing Backend JWT auth.
-  Use the AWS credential chain/IAM roles. Do not add an application failure queue or
-  directly publish to or normally consume DLQs.
-- Contract details: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
-
 ## Dependencies and images
 
 The shared development environment can hide undeclared imports. Declare dependencies in
