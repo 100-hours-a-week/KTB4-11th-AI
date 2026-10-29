@@ -16,7 +16,7 @@ snapshots remain an alpha feature; a restore hit is not guaranteed.
 the adapter hash and nonzero/finite LoRA tensors, and writes each model into its own image.
 Runtime model loading uses local paths and offline mode. A snapshot miss still has to load
 the model, but cannot re-download it from Hugging Face. Image downloads and deserialization
-still take time; startup and inference measurements are recorded in the October 29 validation report.
+still take time; startup and inference measurements are recorded in the final implementation plan.
 
 The immutable manifest is `packages/core/src/ktb_core/disclosure_models.json`. The runtime
 copies that file into its image; both CPU services read the same file from the core wheel.
@@ -120,7 +120,7 @@ refuses to delete 1024 indexes automatically; removing them is a separate destru
 Local tests cover transport identities, proxy authentication, invalid vectors/scores,
 physical-file boundaries, zero-GPU empty reads, DB activation and Top-50-to-Top-5 behavior.
 The core wheel includes the manifest. See
-[`2026-10-29-disclosure-modal-integration.md`](../../../docs/operations/2026-10-29-disclosure-modal-integration.md)
+[final implementation plan](../../../docs/superpowers/plans/2026-10-29-disclosure-modal-integration.md)
 for execution results and limits.
 
 Before production cutover, measure snapshot hit/miss startup at a larger sample size,
@@ -136,4 +136,4 @@ scores and startup numbers do not validate this implementation.
 - [Model storage: Volume and image tradeoffs](https://modal.com/docs/guide/model-weights)
 - [Modal App API](https://modal.com/docs/reference/modal.App)
 
-Live validation: [October 29 GPU results](../../../docs/operations/2026-10-29-disclosure-modal-gpu-validation.md).
+Live validation is summarized in the final implementation plan. Raw measurements are maintained outside Git.
