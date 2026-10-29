@@ -109,7 +109,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `packages/telemetry` (`ktb_telemetry`) | OpenTelemetry tracing setup and log trace ids; keeps OpenTelemetry dependencies outside core |
 | `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
-| `services/disclosure-indexer` | Collect OpenDART periodic reports, archive the originals, and store sections, financial facts, and narrative embeddings in PostgreSQL |
+| `services/disclosure-indexer` | Read collected disclosure documents from PostgreSQL, embed narrative sections, and store vectors in pgvector |
 | `services/disclosure-retrieval` | Serve read-only disclosure evidence: exact cosine narrative search plus GPU-free financial and section reads |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
 | `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
@@ -243,3 +243,10 @@ that combined image. Keep CI service/export lists in sync when adding a service.
 - Consult `.github/workflows/` for current publishing/deployment behavior. Both dev and
   main push workflows publish the application image to ECR Public; deployment paths
   are defined in the corresponding CD workflows.
+
+Periodic disclosure collection belongs to `news-preprocessor-disclosures`, a command in the
+news-preprocessor package. It archives sources and stores parsed documents, sections and
+financial facts without calling an embedding model. The daily indexer timer orders this
+collection job before the DB-only indexer; an unsuccessful collection does not block indexing
+previously stored documents. news-http remains read-only. Only the collection command uses
+`NEWS_PREPROCESSOR_DART_API_KEY` and `NEWS_PREPROCESSOR_DISCLOSURE_*` settings.

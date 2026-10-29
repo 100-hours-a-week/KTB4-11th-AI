@@ -10,7 +10,6 @@ from ktb_core.disclosure_models import model_identity
 def settings():
     return Settings(
         postgres_dsn="unused",
-        dart_api_key="test",
         DISCLOSURE_INFERENCE_BACKEND="modal",
         DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
         DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,

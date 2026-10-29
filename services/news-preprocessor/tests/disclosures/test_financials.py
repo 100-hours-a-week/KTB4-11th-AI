@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 import pytest
-from disclosure_indexer.financials import financial_rows
+from news_preprocessor.disclosures.financials import financial_rows
 
 ASSETS = {
     "sj_div": "BS",
