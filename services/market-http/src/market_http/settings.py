@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     valkey_cache_name: str | None = None
     valkey_tls: bool = False
     valkey_auth_mode: Literal["none", "iam"] = "none"
+    task_id: str | None = None
+    memory_profile_enabled: bool = False
+    memory_profile_start_mode: Literal["startup", "trigger"] = "startup"
+    memory_profile_burst_trigger: bool = False
+    memory_profile_dir: str = "/tmp/market-http-memory"
+    memory_profile_interval_seconds: float = Field(default=10, ge=1)
+    memory_profile_max_snapshots: int = Field(default=12, ge=1, le=120)
     aws_region: str = "ap-northeast-2"
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)
@@ -37,6 +44,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _metrics_need_dimensions(self) -> Self:
+        if self.memory_profile_burst_trigger and self.memory_profile_start_mode != "trigger":
+            raise ValueError("memory_profile_burst_trigger requires trigger start mode")
         if self.metrics_namespace and not (self.metrics_cluster_name and self.metrics_service_name):
             raise ValueError("metrics need metrics_cluster_name and metrics_service_name")
         return self
