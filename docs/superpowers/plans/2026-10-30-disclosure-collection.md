@@ -4,9 +4,10 @@ Issue: #440. This change is independent of disclosure indexing and GPU serving.
 
 ## Implementation
 
-1. Keep short filings in the existing OpenDART news publisher. Collect periodic
-   reports through `news-preprocessor-disclosures` under
-   `sources/publishers/opendart/disclosures/`.
+1. Keep short filings in the existing OpenDART news publisher. Discover periodic
+   reports through company RSS in `sources/publishers/opendart/rss.py`, following
+   the existing publishers' httpx, BeautifulSoup and FeedEntry pattern. Collection
+   and parsing stay under `sources/publishers/opendart/disclosures/` in news-preprocessor.
 2. Archive original ZIP/XML outside the repository. Store receipt metadata, parsed
    documents, sections, financial facts, retries, and collection progress in PostgreSQL.
 3. Create the collection schema through three linear migrations:
@@ -32,6 +33,31 @@ null amounts, parser identity, uniqueness, foreign keys, and checks are preserve
 This PR does not add a vector table, call an embedding model, rerank evidence, or
 generate answers. News-http remains read-only. News article embedding is unchanged.
 
+## Feed, parsing and storage
+
+The normal daily command reads each KOSPI200 company's RSS feed. Receipt numbers
+identify filings; the feed's timestamp is converted to the Korean publication date.
+Annual, half-year and quarterly reports are passed to the existing document parser.
+Original ZIP/XML comes from OpenDART's document API, and structured financial accounts
+come from its financial statement API. RSS provides discovery, not those account values.
+
+| Stored data | Location | Next reader |
+| --- | --- | --- |
+| Numeric accounts, scope, currency and original amounts | disclosure_financial_facts | Direct SQL tools |
+| Named sections, tables and source offsets | disclosure_sections | Direct section tools |
+| Parsed long documents with narrative/table classification | disclosure_documents | disclosure-indexer |
+
+The indexer reads stored documents, embeds eligible narrative passages and writes
+pgvector indexes. Collection does not import or call the indexer or an embedding model.
+Empty feeds do not download documents. Known failed documents retry from PostgreSQL,
+even after their entries leave the feed. Ready documents are not inserted twice.
+
+Company RSS covers only the last five business days. Set
+`NEWS_PREPROCESSOR_DISCLOSURE_BUSINESS_YEAR` explicitly to backfill older reports via
+the paginated listing API. Normal daily RSS collection does not scan historical years.
+
+Official source: [DART RSS guide](https://dart.fss.or.kr/introduction/content6.do).
+
 ## Dependencies
 
 - First merge the collection PR for #440 into dev.
@@ -45,8 +71,8 @@ their prerequisite has merged; then their target can be changed to dev.
 
 ## Verification
 
-- Standalone full suite with a new disposable PostgreSQL database:
-  **1,223 passed, 49 skipped, 2 subtests passed**.
+- Standalone full suite with a new disposable PostgreSQL database after RSS discovery:
+  **1,230 passed, 49 skipped, 2 subtests passed**.
 - Applied 0011 through 0014, checked the five collection tables, then checked each
   downgrade stage 0013, 0012, and 0011 before reapplying 0014.
 - Offline migration tests verify table ownership and reversed downgrade operations.
@@ -56,6 +82,11 @@ their prerequisite has merged; then their target can be changed to dev.
   removes this flag. Vector objects are absent until the indexing PR is applied.
 - Regression tests cover financial failure followed by recovery without downloading
   the document, backfill after disabled collection, and one-time empty results.
+- After adding RSS discovery, all news-preprocessor tests pass: **163 passed**.
+  Coverage includes actual RSS field shapes, corrected titles, empty/invalid feeds,
+  separate fact/section/document storage, duplicate detection and retries after a
+  failed receipt disappears from RSS.
 
-No application dependency versions changed. No production database, live DART calls,
-GPU inference, service deployment, or SQS publication is part of this split.
+No application dependency versions changed. One public company RSS response was read
+to verify its field format; automated tests use fixed inputs and a disposable database.
+No production database, GPU inference, service deployment or SQS publication was used.
