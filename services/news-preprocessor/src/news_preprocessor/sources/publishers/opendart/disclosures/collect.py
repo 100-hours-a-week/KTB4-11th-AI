@@ -139,6 +139,10 @@ def store_financial_facts(
         )
         if rows:
             conn.execute(sa.insert(disclosure_financial_facts), rows)
+        conn.execute(
+            sa.text("UPDATE disclosures SET financials_collected=true WHERE receipt_id=:receipt"),
+            {"receipt": report["receipt_id"]},
+        )
     return len(rows)
 
 
@@ -177,8 +181,6 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
         "replaced": 0,
         "facts": 0,
     }
-    # Reconcile what is already stored: a parser upgrade, an interrupted parse, or a lost
-    # archive file. Bounded like the indexing loop so one run cannot re-parse everything.
     with engine.connect() as conn:
         archived = (
             conn.execute(
@@ -250,7 +252,6 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                 error_type=type(error).__name__,
             )
             continue
-        # One window per try: a transient listing failure costs that window, not the rest.
         for begin, finish in windows:
             try:
                 with engine.connect() as conn:
@@ -275,8 +276,6 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                     try:
                         fiscal_year, kind, period = report_period(row["report_nm"], closing)
                     except ValueError:
-                        # The closing month is read fresh each run, so a company that changed
-                        # its fiscal year stops matching its own history. Never silent.
                         result["unclassified"] += 1
                         log.warning(
                             "disclosure_unclassified",
@@ -305,14 +304,6 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                             f"{row['rcept_dt'][:4]}-{row['rcept_dt'][4:6]}-{row['rcept_dt'][6:8]}"
                         ),
                         "payload": json.dumps(row, ensure_ascii=False),
-                    }
-                    params_row = {
-                        "receipt_id": receipt,
-                        "stock_code": company["stock_code"],
-                        "corp_code": company["corp_code"],
-                        "business_year": fiscal_year,
-                        "kind": kind,
-                        "period_end": period,
                     }
                     with engine.begin() as conn:
                         conn.execute(
@@ -353,17 +344,6 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                             content = dart.get("document.xml", {"rcept_no": receipt})
                         status = store_document(engine, settings, receipt, content)
                         result[status] += 1
-                        if status == "ready" and settings.collect_financials:
-                            try:
-                                stored = store_financial_facts(engine, dart, settings, params_row)
-                                result["facts"] += stored
-                            except Exception as error:
-                                result["failed"] += 1
-                                log.warning(
-                                    "disclosure_financials_failed",
-                                    receipt_id=receipt,
-                                    error_type=type(error).__name__,
-                                )
                     except Exception as error:
                         complete = False
                         result["failed"] += 1
@@ -414,6 +394,30 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                     error_type=type(error).__name__,
                 )
     refresh_sources(engine, dart, settings, today, result)
+    if settings.collect_financials:
+        with engine.connect() as conn:
+            pending = (
+                conn.execute(
+                    sa.text(
+                        "SELECT receipt_id, stock_code, corp_code, business_year, kind, period_end "
+                        "FROM disclosures WHERE status='ready' AND NOT financials_collected "
+                        "ORDER BY updated_at, receipt_id LIMIT :limit"
+                    ),
+                    {"limit": settings.document_limit},
+                )
+                .mappings()
+                .all()
+            )
+        for report in pending:
+            try:
+                result["facts"] += store_financial_facts(engine, dart, settings, report)
+            except Exception as error:
+                result["failed"] += 1
+                log.warning(
+                    "disclosure_financials_failed",
+                    receipt_id=report["receipt_id"],
+                    error_type=type(error).__name__,
+                )
     return result
 
 
@@ -458,8 +462,6 @@ def store_document(engine: sa.Engine, settings: Settings, receipt: str, content:
                 ),
                 {"docs": json.dumps(docs, ensure_ascii=False), "status": status, "id": document_id},
             )
-            # Sections are readable without embeddings, so they land with the parse and are
-            # replaced wholesale when this document version is parsed again.
             conn.execute(
                 sa.delete(disclosure_sections).where(
                     disclosure_sections.c.document_id == document_id
@@ -480,7 +482,7 @@ def store_document(engine: sa.Engine, settings: Settings, receipt: str, content:
                 )
             conn.execute(
                 sa.text(
-                    "UPDATE disclosures SET status=:status, "
+                    "UPDATE disclosures SET status=:status, financials_collected=false, "
                     "attempts=0,error=NULL,updated_at=now() WHERE "
                     "receipt_id=:receipt"
                 ),

@@ -46,7 +46,14 @@ def test_collection_revision_owns_its_tables_and_reverses_only_its_changes(
     upgrade = output.getvalue()
     assert re.findall(r"CREATE TABLE (\w+)", upgrade) == tables
     assert re.findall(r"CREATE INDEX (\w+)", upgrade) == indexes
-    assert "DROP " not in upgrade and "ALTER TABLE " not in upgrade
+    assert "DROP " not in upgrade
+    if revision == "0014":
+        assert (
+            "ALTER TABLE disclosures ADD COLUMN financials_collected BOOLEAN DEFAULT false NOT NULL"
+            in upgrade
+        )
+    else:
+        assert "ALTER TABLE " not in upgrade
     assert "halfvec" not in upgrade and "disclosure_indexes" not in upgrade
     assert "REFERENCES corporations (stock_code)" in upgrade or revision == "0013"
     if revision != "0012":
@@ -79,6 +86,10 @@ def test_collection_revision_owns_its_tables_and_reverses_only_its_changes(
     downgrade = output.getvalue()
     assert re.findall(r"DROP TABLE (\w+)", downgrade) == list(reversed(tables))
     assert re.findall(r"DROP INDEX (\w+)", downgrade) == list(reversed(indexes))
-    assert "CREATE " not in downgrade and "ALTER TABLE " not in downgrade
+    assert "CREATE " not in downgrade
+    if revision == "0014":
+        assert "ALTER TABLE disclosures DROP COLUMN financials_collected" in downgrade
+    else:
+        assert "ALTER TABLE " not in downgrade
     for name in indexes:
         assert downgrade.index(f"DROP INDEX {name}") < downgrade.index(f"DROP TABLE {tables[0]}")

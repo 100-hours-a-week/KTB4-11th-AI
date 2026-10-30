@@ -2,7 +2,6 @@ import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-# OpenDART report codes for the periodic reports we collect.
 REPORT_CODES = {"q1": "11013", "half": "11012", "q3": "11014", "annual": "11011"}
 SCOPES = ("CFS", "OFS")
 _NIL = {"", "-", "–"}

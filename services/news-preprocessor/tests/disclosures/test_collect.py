@@ -379,8 +379,6 @@ def test_a_completed_window_is_rechecked_until_the_recheck_window_closes(company
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         collect(company_engine, client, settings)
 
-    # The window holding the already-collected report closed months ago; a late correction
-    # filed into it is only found if that window is listed again.
     assert any(begin <= "20260315" <= end for begin, end in listed), (
         f"the closed window around 20260315 was not re-listed: {listed}"
     )
@@ -426,7 +424,6 @@ def test_a_failing_window_does_not_skip_the_remaining_windows(company_engine, tm
 
     def handle(req):
         if req.url.path.endswith("list.json"):
-            # The first window of the 2025 scope starts the day after the 2024 close.
             if req.url.params["bgn_de"] == "20250101":
                 return httpx.Response(500)
             return _dart(_zip(), [late])(req)
@@ -664,3 +661,66 @@ def test_temporary_api_error_is_not_archived_as_a_document(tmp_path):
         store_document(engine, settings, "retry-test", b"<result><status>020</status></result>")
     assert not list(tmp_path.iterdir())
     engine.begin.assert_not_called()
+
+
+def test_failed_financial_collection_retries_without_downloading_document(company_engine, tmp_path):
+    settings = Settings(
+        postgres_dsn="unused",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+        attempts=1,
+        refresh_days=0,
+    )
+    handle, requested = _dart_with_financials(_account)
+    failing = True
+    documents = []
+
+    def respond(req):
+        if req.url.path.endswith("document.xml"):
+            documents.append(req)
+        if failing and req.url.path.endswith("fnlttSinglAcntAll.json"):
+            return httpx.Response(500)
+        return handle(req)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        assert collect(company_engine, client, settings)["failed"] == 1
+        failing = False
+        assert collect(company_engine, client, settings)["facts"] == 2
+
+    assert len(documents) == 1
+    assert len(requested) == 2
+
+
+def test_financial_collection_backfills_previously_disabled_reports(company_engine, tmp_path):
+    settings = Settings(
+        postgres_dsn="unused",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+        refresh_days=0,
+        collect_financials=False,
+    )
+    handle, requested = _dart_with_financials(_account)
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert collect(company_engine, client, settings)["facts"] == 0
+        settings.collect_financials = True
+        assert collect(company_engine, client, settings)["facts"] == 2
+
+    assert len(requested) == 2
+
+
+def test_successful_empty_financial_collection_is_not_repeated(company_engine, tmp_path):
+    settings = Settings(
+        postgres_dsn="unused",
+        archive_root=tmp_path,
+        business_year=2025,
+        request_interval=0,
+        refresh_days=0,
+    )
+    handle, requested = _dart_with_financials(lambda scope: [])
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert collect(company_engine, client, settings)["facts"] == 0
+        assert collect(company_engine, client, settings)["facts"] == 0
+
+    assert len(requested) == 2

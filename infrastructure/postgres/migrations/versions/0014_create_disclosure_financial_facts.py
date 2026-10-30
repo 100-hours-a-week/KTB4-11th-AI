@@ -15,6 +15,10 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.add_column(
+        "disclosures",
+        sa.Column("financials_collected", sa.Boolean, nullable=False, server_default=sa.false()),
+    )
     op.create_table(
         "disclosure_financial_facts",
         sa.Column("id", sa.BigInteger, sa.Identity(always=True), primary_key=True),
@@ -56,3 +60,4 @@ def downgrade() -> None:
     op.drop_index("disclosure_financial_facts_period_idx", table_name="disclosure_financial_facts")
     op.drop_index("disclosure_financial_facts_company_idx", table_name="disclosure_financial_facts")
     op.drop_table("disclosure_financial_facts")
+    op.drop_column("disclosures", "financials_collected")

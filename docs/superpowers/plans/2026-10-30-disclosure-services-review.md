@@ -4,7 +4,7 @@ Date: 2026-10-30
 
 ## Scope and decisions
 
-This follow-up applies the review of PR #432 and separates collection issue #440
+This follow-up applies the review of PR #432 and separates collection issue #440 / PR #441
 from indexing/retrieval issue #346 and GPU serving issue #431. Collection has its own
 PR, #432 follows that branch, and #430 follows #432. Each PR closes its own issue.
 The root checkout and running services are not changed.
@@ -94,7 +94,7 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 
 - Added tests failed first for missing profile parsing, direct-read methods, and tools.
 - Final full suite against the disposable `ktb_test` PostgreSQL database:
-  **1,341 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+  **1,349 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
   account for the skips.
 - Ruff, formatting, Tach internal and external dependencies, and diff checks pass.
 - Local and production Compose configurations parse; all 10 model repository/revision/hash
@@ -103,6 +103,10 @@ or position sizing. The text is not inserted into a model prompt or logged by th
   import the relocated collection entrypoint and all three disclosure tools.
 - Read-only code review found no critical or important issues. Direct-read response checks
   currently validate the envelope and required fields; search responses retain typed validation.
+- The PR split exposed a financial-collection retry problem. Collection PR #441 fixes it
+  with an independent completion Boolean in migration 0014. Comparing the original and
+  split PostgreSQL schemas confirms that original columns, constraints, and indexes remain;
+  only this completion state and its NOT NULL constraint were added.
 
 No dependency versions changed. No production database, service deployment, GPU deployment,
 model inference, SQS publication, or backend repository modification was performed.
