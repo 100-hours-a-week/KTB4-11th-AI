@@ -2,7 +2,7 @@
 
 이슈 [#442](https://github.com/100-hours-a-week/KTB4-11th-AI/issues/442)의 독립 워크플로는
 `main` push 또는 `main`에서의 수동 실행으로 동작한다. 기존 CI Main/CD에 의존하거나
-그 결과를 변경하지 않는다. 기본 브랜치 `dev`에 병합한 뒤 **워크플로와 스크립트를
+그 결과를 변경하지 않는다. 기본 브랜치 `dev`에 병합한 뒤 **워크플로를
 `main`에도 반영해야** push 자동 실행이 시작된다.
 
 ## 관리자 사전 설정
@@ -66,6 +66,9 @@ tool calling을 지원해야 한다. `/v1/models` 성공만으로 tool calling�
 
 ## 실행과 산출물
 
+생성·검증 Python 코드는 워크플로의 `shell: python` / `run` 블록 안에서 관리한다.
+별도 실행 스크립트나 애플리케이션 의존성을 추가하지 않는다.
+
 - OpenCode `1.19.5`, Archify commit `f325d86230553e1dd15d3464324f1fcd01f02352`를 고정한다.
   Archify 패키지를 `.opencode/skills/archify`에 복사하는 지원 디렉터리 설치 방식을 사용한다.
   패키지는 자체 renderer/validator를 포함하므로 별도 npm install이 필요 없다.
@@ -107,7 +110,7 @@ tool calling을 지원해야 한다. `/v1/models` 성공만으로 tool calling�
    열고 `/KTB4-11th-AI/` 서브패스에서도 탐색·다운로드가 동작하는지 확인한다.
 3. `build.json`의 SHA가 최신 `main`인지 확인한다. 구성요소와 관계의 근거를 실제 코드와 대조한다.
    모델의 의미적 정확성은 validator만으로 보장되지 않는다.
-4. 공개 전 소스의 민감 값과 생성물의 공개 적합성을 점검한다. 스크립트는 API key/endpoint,
+4. 공개 전 소스의 민감 값과 생성물의 공개 적합성을 점검한다. 워크플로는 API key/endpoint,
    Tailnet 이름, private IPv4, AWS access key, private key 표식을 탐지하면 실패하지만 모든
    종류의 기밀정보를 자동 판정하지는 못한다. 실제 비밀값은 추적 소스에 두지 않는다.
 5. Tailscale 정책 테스트와 CI 태그 장치에서 LLM 허용 포트 연결 성공, SSH/다른 장치 포트 연결
@@ -118,13 +121,14 @@ tool calling을 지원해야 한다. `/v1/models` 성공만으로 tool calling�
    실패 단계를 표시한다. 디버깅 중에도 세션 로그/환경값을 공개 로그나 artifact에 올리지 않는다.
    유료 provider로 자동 전환하거나 검증 gate를 끄지 않는다.
 
-로컬 안전성 검사:
+로컬 워크플로 문법 검사:
 
 ```bash
-python3 -m unittest discover -s scripts -p test_archify_pages.py
-uv run ruff check scripts/archify_pages.py scripts/test_archify_pages.py
-uv run ruff format --check scripts/archify_pages.py scripts/test_archify_pages.py
+actionlint .github/workflows/archify-pages.yml
 ```
+
+인라인 Python을 변경할 때는 `run` 블록을 임시 파일로 추출해 Python 구문 검사와
+네트워크/도구 호출을 대체한 안전성 검증을 수행한다. 실제 연동 검증은 위 최초 배포 절차를 따른다.
 
 ## 확인한 공식 계약
 
