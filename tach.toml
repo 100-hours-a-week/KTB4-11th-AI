@@ -1,9 +1,9 @@
 source_roots = [
     "packages/aws/src",
     "packages/core/src",
-    "packages/disclosure-retrieval/src",
     "packages/telemetry/src",
     "services/disclosure-indexer/src",
+    "services/disclosure-retrieval/src",
     "services/market-syncer/src",
     "services/market-collector/src",
     "services/market-http/src",

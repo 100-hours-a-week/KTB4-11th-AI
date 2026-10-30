@@ -379,7 +379,7 @@ requires-dist = [
 [[package]]
 name = "disclosure-retrieval"
 version = "0.1.0"
-source = { editable = "packages/disclosure-retrieval" }
+source = { editable = "services/disclosure-retrieval" }
 dependencies = [
     { name = "ktb-core" },
     { name = "pydantic" },
@@ -1592,7 +1592,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "disclosure-retrieval", editable = "packages/disclosure-retrieval" },
+    { name = "disclosure-retrieval", editable = "services/disclosure-retrieval" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "langchain", specifier = ">=1.4.2" },
     { name = "langchain-core", specifier = ">=1.6.5" },

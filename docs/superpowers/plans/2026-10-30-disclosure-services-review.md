@@ -9,7 +9,7 @@ from indexing/retrieval issue #346 and GPU serving issue #431. Collection has it
 PR, #432 follows that branch, and #430 follows #432. Each PR closes its own issue.
 The root checkout and running services are not changed.
 
-Portfolio-builder calls the `packages/disclosure-retrieval` Python library directly.
+Portfolio-builder calls the `services/disclosure-retrieval` Python package directly.
 Its tools receive the builder's SQLAlchemy engine and component model settings.
 There is no separate retrieval HTTP server, controller, router, client, port,
 healthcheck, console command, or Docker container. The library declares no FastAPI

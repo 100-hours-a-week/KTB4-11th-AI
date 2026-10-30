@@ -110,7 +110,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
 | `services/disclosure-indexer` | Read collected disclosure documents from PostgreSQL, embed narrative sections, and store vectors in pgvector |
-| `packages/disclosure-retrieval` | Direct Python disclosure search and database reads called by portfolio-builder |
+| `services/disclosure-retrieval` | Direct Python disclosure search and database reads called by portfolio-builder |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
 | `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
 | `services/news-http` | Serve private, read-only news and graph HTTP queries |
@@ -121,7 +121,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
 
-The indexer and portfolio-builder's retrieval library share `DISCLOSURE_EMBEDDING_*`;
+The indexer and retrieval share `DISCLOSURE_EMBEDDING_*`;
 news keeps `KTB_EMBEDDING_*`.
 Documents and queries must use one checkpoint and one dimension, so the query prefix is
 part of the index signature and changing it forces a reindex. `disclosure_sections` and
@@ -270,7 +270,7 @@ OnSuccess and final OnFailure hooks. There is no separate collection or indexing
 
 Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
 search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.
-Retrieval is a Python library under `packages/disclosure-retrieval`; builder passes its own
+Retrieval lives under `services/disclosure-retrieval`; builder passes its own
 SQLAlchemy engine to the tools. There is no retrieval HTTP server, router, client, port, or
 container. Financial and section tools query PostgreSQL directly. Narrative search calls Modal
 over HTTPS for query embedding and reranking, returning DB connections before those calls.
