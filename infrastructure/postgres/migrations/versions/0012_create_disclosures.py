@@ -23,9 +23,10 @@ def upgrade() -> None:
         sa.Column("corp_code", sa.Text, nullable=False),
         sa.Column("company_name", sa.Text, nullable=False),
         sa.Column("title", sa.Text, nullable=False),
-        sa.Column("business_year", sa.Integer, nullable=False),
+        sa.Column("detail_type", sa.Text),
+        sa.Column("business_year", sa.Integer),
         sa.Column("kind", sa.Text, nullable=False),
-        sa.Column("period_end", sa.Date, nullable=False),
+        sa.Column("period_end", sa.Date),
         sa.Column("published_date", sa.Date, nullable=False),
         sa.Column("raw_payload", postgresql.JSONB, nullable=False),
         sa.Column("status", sa.Text, nullable=False, server_default="pending"),
@@ -34,7 +35,11 @@ def upgrade() -> None:
         sa.Column(
             "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
-        sa.CheckConstraint("kind IN ('q1','half','q3','annual')", name="disclosures_kind_check"),
+        sa.CheckConstraint(
+            "kind IN ('q1','half','q3','annual','A001','A002','A003','F001','F002','F003',"
+            "'C001','C002','C003','C004','C005','J004','H002')",
+            name="disclosures_kind_check",
+        ),
         sa.CheckConstraint(
             "status IN ('pending','ready','unavailable','failed','dead_letter')",
             name="disclosures_status_check",
@@ -69,24 +74,9 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("receipt_id", "source_hash", "parser_version"),
     )
-    op.create_table(
-        "disclosure_collection_progress",
-        sa.Column(
-            "stock_code", sa.Text, sa.ForeignKey("corporations.stock_code"), primary_key=True
-        ),
-        sa.Column("start_date", sa.Date, primary_key=True),
-        sa.Column("end_date", sa.Date, primary_key=True),
-        sa.Column("business_year", sa.Integer, primary_key=True),
-        sa.Column("include_current", sa.Boolean, primary_key=True),
-        sa.Column("complete", sa.Boolean, nullable=False, server_default=sa.false()),
-        sa.Column(
-            "checked_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
-        ),
-    )
 
 
 def downgrade() -> None:
-    op.drop_table("disclosure_collection_progress")
     op.drop_table("disclosure_documents")
     op.drop_index("disclosures_company_date_idx", table_name="disclosures")
     op.drop_table("disclosures")

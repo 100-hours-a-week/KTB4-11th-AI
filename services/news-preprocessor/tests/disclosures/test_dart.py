@@ -19,30 +19,18 @@ def test_fiscal_periods_are_not_receipt_dates():
         report_period("분기보고서 (2025.12)", 12)
 
 
-def test_list_reads_all_pages_and_only_requested_company():
-    def handle(req):
-        assert req.url.params["pblntf_ty"] == "A"
-        page = req.url.params["page_no"]
-        return httpx.Response(
-            200,
-            json={
-                "status": "000",
-                "total_page": 2,
-                "list": [
-                    {
-                        "corp_code": "00126380",
-                        "stock_code": "005930",
-                        "report_nm": "분기보고서 (2025.03)",
-                        "rcept_no": page,
-                        "rcept_dt": "20250515",
-                    }
-                ],
-            },
-        )
+def test_official_detail_type_selects_the_periodic_kind():
+    assert report_period("정기공시 (2025.12)", 12, "A001") == (2025, "annual", date(2025, 12, 31))
+    assert report_period("정기공시 (2025.06)", 12, "A002") == (2025, "half", date(2025, 6, 30))
+    assert report_period("정기공시 (2025.09)", 12, "A003") == (2025, "q3", date(2025, 9, 30))
+    with pytest.raises(ValueError):
+        report_period("반기보고서 (2025.06)", 12, "A001")
 
-    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
-        dart = DartClient(client, "test-key", interval=0)
-        assert len(dart.reports("00126380", date(2025, 1, 1), date(2026, 1, 1))) == 2
+
+def test_nonperiodic_types_do_not_fabricate_fiscal_dates():
+    assert report_period("감사보고서 (2025.12)", 12, "F001") == (2025, "F001", date(2025, 12, 31))
+    assert report_period("감사보고서", 12, "F001") == (None, "F001", None)
+    assert report_period("증권신고서", 12, "C001") == (None, "C001", None)
 
 
 def test_api_error_does_not_expose_key():
@@ -52,7 +40,5 @@ def test_api_error_does_not_expose_key():
         )
     ) as client:
         with pytest.raises(RuntimeError) as error:
-            DartClient(client, "test-key", interval=0, attempts=1).reports(
-                "00126380", date(2025, 1, 1), date(2026, 1, 1)
-            )
+            DartClient(client, "test-key", interval=0, attempts=1).closing_month("00126380")
         assert "test-key" not in str(error.value)

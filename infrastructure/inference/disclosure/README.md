@@ -28,11 +28,11 @@ A poll is not an inference request: an empty poll must not call Modal, including
 GPU-backed identity endpoints. Financial facts and identified sections are read from
 PostgreSQL without starting either model.
 
-News-preprocessor discovers periodic reports through company RSS, fetches source
-documents and financial accounts from OpenDART, and stores parsed source data in
-PostgreSQL. The indexer reads that database to embed narrative passages; it does not
-fetch RSS or OpenDART. Financial facts and named sections remain available for direct
-database reads without embedding.
+The existing OpenDART API publisher collects short and long filings in one intake.
+News-preprocessor stores official long filing codes in `disclosures.detail_type` and
+parses queued source documents during the same normal run. Supported periodic financial
+accounts and named sections remain available through SQL tools. The indexer reads the
+database to embed narrative passages; it never fetches OpenDART or source archives.
 
 When a poll yields narrative retrieval work, the server groups available queries for
 that hourly batch, obtains query vectors, reads candidates from pgvector, and submits
@@ -53,7 +53,7 @@ No account polling or order publication is changed by this deployment.
 At seven nonempty hourly batches per day, startup counts are 154 for 22 operating days
 or 210 for 30 days. Empty polls reduce these counts. One batch can contain several
 searches, so startup count and inference count are separate cost inputs. Retrieval
-costs exclude the independent daily indexing job and downstream answer generation.
+costs exclude the independent indexing job and downstream answer generation.
 
 ## Measured parallel inference
 
@@ -157,20 +157,17 @@ from PR #432 through the existing dedicated migration job. Migration `0015` crea
 model revisions, adapter hash and transform are recorded with every new index. Activation
 replaces only the same dimension, preserving the legacy index for rollback.
 
-At **05:00 KST**, the collector timer starts the collection unit, which runs
-`news-preprocessor-disclosures` in the existing news-preprocessor image. That command
-archives originals and stores parsed documents, sections and financial facts. The
-indexer then reads PostgreSQL and stores narrative embeddings in pgvector. The collector's
-`OnSuccess` and final `OnFailure` start the indexer, which never starts collection again.
-There is no second indexing timer. Collection failure does not block indexing of documents
-already stored in the DB. Only the collector
-uses the DART key and archive volume. The hourly news command, read-only news-http server
-and weekday 06:00 portfolio pipeline retain their roles. No eligible documents means zero
-inference calls. GPU serving PR #430 / issue #431 owns no database migration.
+The existing hourly news-preprocessor service archives originals and stores parsed
+documents, sections and supported financial accounts. Its `OnSuccess` and final
+`OnFailure` start the DB-only indexer. There is no separate collector command, RSS path
+or additional timer. A collection failure does not block indexing of documents already
+stored in the DB. Only news-preprocessor uses the DART key and archive volume. News-http
+and the weekday 06:00 portfolio pipeline keep their existing roles. No eligible
+documents means zero disclosure inference calls. GPU serving PR #430 owns no migration.
 
 Parsed sections retain whether they came from narrative or a table. Known narrative topics
 are embedded; tables and unclassified sections remain available through direct section
-reads. Financial facts keep their existing structured endpoint. Context windows never cross
+reads. Financial facts remain structured rows for direct SQL tools. Context windows never cross
 physical files inside a ZIP and retain source order. A conservative 12,000-byte group budget
 is followed by the checkpoint's exact tokenizer check at 16,384 tokens, with no truncation.
 This grouping/classification is a serving change and needs its own quality evaluation.

@@ -245,20 +245,29 @@ that combined image. Keep CI service/export lists in sync when adding a service.
   main push workflows publish the application image to ECR Public; deployment paths
   are defined in the corresponding CD workflows.
 
-Periodic-report collection lives under `news_preprocessor.sources.publishers.opendart.disclosures`
-and runs through `news-preprocessor-disclosures`. Its own collector timer runs daily at
-05:00 KST. Migrations 0012–0014 create original documents and collection progress, sections,
-and financial facts respectively. This command stores source data without embedding or
-answer generation. Only it uses `NEWS_PREPROCESSOR_DISCLOSURE_*` and the disclosure archive.
-Normal collection discovers reports through company RSS in `opendart/rss.py`, using
-the existing publishers' httpx/BeautifulSoup/FeedEntry pattern. RSS does not contain
-the report body or structured accounts; these come from OpenDART using the receipt ID.
-An explicit business year enables historical listing-API backfill instead of RSS.
-The downstream indexer reads parsed narrative documents from PostgreSQL and writes
-vectors to pgvector; the collector does not call an embedding model.
+Long-disclosure collection lives under
+`news_preprocessor.sources.publishers.opendart.disclosures`. The existing OpenDART API
+publisher is the single intake: it classifies `pblntf_detail_ty`, keeps short filings in
+the news path, and stores long filings in PostgreSQL. The ordinary `news-preprocessor`
+command processes these queued records after scraping, under the unchanged hourly
+`ktb-news-preprocessor.timer`. There is no RSS discovery or separate collector timer.
+The ordinary command also handles pending retries; there is no separate disclosure
+command.
 
-The indexing PR adds migration 0015 for vectors and starts the DB-only indexer after collection
-completes or finally fails. The indexer never starts collection, so there is only one daily timer.
+Long filing classes include A001 (annual), A002 (half-year), A003 (quarterly), F001
+(audit), F002 (consolidated audit), F003 (combined audit), C001–C005, J004, and H002.
+These classes describe filings; narrative, table, section, and financial-fact splitting
+is a separate parsing decision. `detail_type` is nullable for legacy rows, and fiscal
+year/period can be absent for nonperiodic filings without fiscal metadata.
+
+Migrations 0012–0014 create filing metadata and original documents, sections, and
+financial facts respectively. Collection uses `NEWS_PREPROCESSOR_DISCLOSURE_*` and a
+persistent archive outside the repository; document ZIP/XML and supported structured
+accounts come from OpenDART using the receipt ID. The downstream indexer reads parsed
+narrative documents from PostgreSQL and writes vectors to pgvector. Collection does
+not call an embedding model or generate answers. The indexing PR attaches indexing to the existing news-preprocessor service's
+OnSuccess and final OnFailure hooks. There is no separate collection or indexing timer.
+
 Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
 search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.
 Retrieval is a Python library under `packages/disclosure-retrieval`; builder passes its own

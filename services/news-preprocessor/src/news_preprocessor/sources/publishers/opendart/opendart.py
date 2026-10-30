@@ -18,7 +18,6 @@ KST = timezone(timedelta(hours=9))
 class OpenDart:
     source = "opendart"
     feed_url = f"{OPENDART_API}/list.json"
-    # Periodic, audit and registration filings are too long to embed; see #184 and #185.
     long_detail_types = (
         "A001", "A002", "A003", "F001", "F002", "F003",
         "C001", "C002", "C003", "C004", "C005", "J004", "H002",
@@ -40,7 +39,7 @@ class OpenDart:
         }
         rows = self._list(window)
         long = {
-            row["rcept_no"]
+            row["rcept_no"]: detail_type
             for detail_type in self.long_detail_types
             for row in self._list({**window, "pblntf_detail_ty": detail_type})
         }
@@ -51,13 +50,20 @@ class OpenDart:
                 url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={row['rcept_no']}",
                 title=" ".join(f"{row['corp_name']} {row['report_nm']}".split()),
                 published_at=datetime.strptime(row["rcept_dt"], "%Y%m%d").replace(tzinfo=KST),
-                raw_payload=json.dumps(row, ensure_ascii=False),
+                raw_payload=json.dumps(
+                    {**row, "pblntf_detail_ty": long[row["rcept_no"]]}
+                    if row["rcept_no"] in long
+                    else row,
+                    ensure_ascii=False,
+                ),
             )
             for row in rows
-            if row["rcept_no"] not in long and row["stock_code"] in self._stock_codes
+            if row["stock_code"] in self._stock_codes
         ]
 
     def article(self, entry: FeedEntry) -> NewsItem:
+        if json.loads(entry.raw_payload).get("pblntf_detail_ty") in self.long_detail_types:
+            return NewsItem(**asdict(entry), body="")
         response = self._client.get(
             f"{OPENDART_API}/document.xml",
             params={"crtfc_key": self._api_key, "rcept_no": entry.external_id},

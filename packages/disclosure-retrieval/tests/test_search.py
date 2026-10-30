@@ -169,3 +169,16 @@ def test_input_budget_error_remains_distinct(monkeypatch):
             controller.search(engine, "005930", SearchRequest(query="risk"), Settings())
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("detail_type", ["F001", "A003", "Z999"])
+def test_narrative_search_accepts_any_well_formed_detail_type(detail_type):
+    body = SearchRequest(query="risk", detail_type=detail_type)
+    assert body.detail_type == detail_type
+    assert body.search_params(Settings()).detail_type == detail_type
+
+
+@pytest.mark.parametrize("detail_type", ["f001", "F01", "FF001", "F001x", ["F001"]])
+def test_narrative_search_rejects_malformed_detail_type(detail_type):
+    with pytest.raises(ValidationError):
+        SearchRequest(query="risk", detail_type=detail_type)

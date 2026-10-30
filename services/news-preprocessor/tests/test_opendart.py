@@ -110,16 +110,30 @@ def test_entries_follow_every_page():
     assert all(r["corp_cls"] == "Y" and r["page_count"] == "100" for r in dart.list_requests())
 
 
-def test_long_detail_types_are_dropped():
+def test_long_detail_types_are_kept_with_their_official_type():
     dart = FakeDart(
         pages=[_page([_row("short"), _row("report")])],
         long_pages={"A001": _page([_row("report")])},
     )
 
-    assert _ids(dart.source().entries()) == ["short"]
+    entries = dart.source().entries()
+    assert _ids(entries) == ["short", "report"]
+    assert json.loads(entries[1].raw_payload)["pblntf_detail_ty"] == "A001"
     asked = {r["pblntf_detail_ty"] for r in dart.list_requests() if "pblntf_detail_ty" in r}
     assert asked == set(OpenDart.long_detail_types)
     assert len(OpenDart.long_detail_types) == 13
+
+
+def test_a_long_filing_is_queued_without_downloading_it_as_a_news_article():
+    dart = FakeDart(
+        pages=[_page([_row("report", report_nm="사업보고서 (2025.12)")])],
+        long_pages={"A001": _page([_row("report", report_nm="사업보고서 (2025.12)")])},
+    )
+    source = dart.source()
+    item = source.article(source.entries()[0])
+    assert item.body == ""
+    assert json.loads(item.raw_payload)["pblntf_detail_ty"] == "A001"
+    assert not any("rcept_no" in request for request in dart.requests)
 
 
 def test_rows_outside_the_stock_codes_are_dropped():

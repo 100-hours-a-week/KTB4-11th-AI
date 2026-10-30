@@ -24,12 +24,12 @@ def _trim_to_bytes(value: str, max_bytes: int) -> str:
 def embedding_inputs(
     report: Mapping[str, Any], chunks: list[dict[str, Any]], max_bytes: int
 ) -> list[str]:
-    # The company and period identify the passage and must survive; the heading and table
-    # context are parser output of unbounded length, so they take what room is left.
-    header = (
-        f"{report['company_name']} ({report['stock_code']}) "
-        f"{report['business_year']} {report['kind']} {report['period_end']}\n"
+    fiscal = " ".join(
+        str(report[key])
+        for key in ("business_year", "kind", "period_end")
+        if report[key] is not None
     )
+    header = f"{report['company_name']} ({report['stock_code']}) {fiscal}\n"
     inputs = []
     for chunk in chunks:
         body = "\n" + chunk["text"]

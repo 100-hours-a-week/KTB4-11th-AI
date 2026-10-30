@@ -5,7 +5,7 @@ Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and se
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The 2026-10-30 direct-library integration was verified with **1,384 passed, 49 skipped, 2 subtests passed**
+The 2026-10-30 direct-library integration was verified with **1,397 passed, 49 skipped, 2 subtests passed**
 on the combined serving branch using a disposable PostgreSQL database. This run checks
 CPU code and model contracts; it does not redeploy GPU workers or produce new inference timings.
 
@@ -13,20 +13,18 @@ CPU code and model contracts; it does not redeploy GPU workers or produce new in
 
 | Component | Responsibility |
 | --- | --- |
-| news-preprocessor-disclosures | Collect periodic OpenDART filings, archive originals and store parsed documents, sections and financial facts in PostgreSQL |
+| news-preprocessor | Collect short and long filings through the existing API publisher; archive originals and store parsed documents, sections and supported financial facts |
 | disclosure-indexer | Read stored documents from PostgreSQL, embed narrative passages and store vectors in pgvector |
 | disclosure-retrieval library (inside portfolio-builder) | Read financial facts and sections directly; return ranked narrative evidence without answer generation |
 | Modal Embedder | Encode ordered document context groups and queries with the same pinned Context checkpoint |
 | Modal Reranker | Score exact-search candidates with the trained Qwen model |
 | portfolio-builder | Use disclosure evidence and technical analysis before saving a new portfolio |
 
-The hourly news command and read-only news-http server retain their existing roles.
-The separate daily collection command belongs to the existing news-preprocessor package.
-Data flows from OpenDART through that command into PostgreSQL, then through the DB-only
-indexer into pgvector. The indexer does not call OpenDART or open source archive files.
-Daily collection discovers periodic reports through company RSS using the existing
-publisher-style module. OpenDART provides the original document and financial accounts
-for each receipt. Historical listing APIs run only with an explicit business year.
+The existing hourly news command uses `opendart/opendart.py` as its single API intake.
+Long filings retain official `detail_type` codes and are parsed after scraping during
+that same run. There is no RSS path, separate collector command/timer or historical
+window loop. The DB-only indexer embeds eligible stored narrative content. It never
+calls OpenDART or opens source archives. News-http remains read-only.
 
 The existing news pipeline keeps its own model and configuration. CPU services call Modal
 through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libraries.
@@ -41,7 +39,7 @@ through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libra
   and normalized NUMERIC values. Missing values remain null. Store named sections for direct reads.
 - [x] Embed recognized narrative sections. Tables and unclassified sections remain accessible
   through section storage. Context groups preserve source order and never cross physical files.
-- [x] Keep the three collection migrations in PR #441: 0012 originals/progress,
+- [x] Keep the three collection migrations in PR #441: 0012 filing metadata/originals,
   0013 sections, and 0014 financial facts plus independent financial completion state.
   PR #432 adds vector migration 0015. GPU serving owns no schema revision. Store narrative vectors in
   halfvec(1024), preserving legacy halfvec(2000) data. Enforce parent-index dimensions and identity.
@@ -132,12 +130,11 @@ DISCLOSURE_INDEXER_LEASE_SECONDS=600
 DISCLOSURE_RETRIEVAL_TIMEOUT=150
 ```
 
-- [x] The 05:00 KST collector timer starts `ktb-disclosure-collector.service`.
-  That unit runs `news-preprocessor-disclosures` using the existing news-preprocessor
-  image, then `OnSuccess` or final `OnFailure` starts the DB-only indexer. The indexer
-  never starts collection, and there is no second daily timer. Previously stored
-  documents can still be indexed after collection failure.
-  The hourly news command and weekday 06:00 portfolio pipeline retain their schedules.
+- [x] The existing hourly news-preprocessor service starts the DB-only indexer through
+  `OnSuccess` or final `OnFailure`. The indexer never starts collection. No separate
+  collection command, collector timer or indexing timer remains. Previously stored
+  documents can still be indexed after collection failure. News and the weekday
+  06:00 portfolio pipeline retain their schedules.
 - [x] Pass DART credentials through `NEWS_PREPROCESSOR_DART_API_KEY`; configure collection
   with `NEWS_PREPROCESSOR_DISCLOSURE_*`. Mount archives only in news-preprocessor.
   The indexer needs neither DART credentials nor filesystem access to originals.
@@ -147,15 +144,17 @@ DISCLOSURE_RETRIEVAL_TIMEOUT=150
 
 ## 6. Verification results
 
-- [x] Merge current dev (0f61ead) and run the dedicated-DB suite after ownership,
-  migration and model configuration changes: **1,331 passed, 49 skipped, two subtests passed**
-  in 44.61 seconds. The service-only branch passed 1,301 tests with 49 skips.
-  Ruff lint/format, module/dependency boundaries and whitespace checks passed.
-- [x] Compare all eight disclosure tables before and after migration consolidation:
-  columns, checks, unique constraints, foreign keys and indexes match. Downgrade to 0011
-  removes the feature tables; upgrading again recreates the same final schema.
-- [x] Verify migration upgrade/downgrade, both CPU images, packaged model identity, absence
-  of Modal/torch in CPU images and Compose propagation of model settings/timeouts.
+- [x] Unified API intake, typed retrieval and model-contract full suite on the disposable
+  `ktb_typed_disclosure_services_test` database: **1,397 passed, 49 skipped, two subtests passed**.
+  The collection branch passed 1,229 tests; the indexing/tools branch passed 1,367.
+  These CPU checks do not deploy GPU workers or recompute model quality scores.
+- [x] Upgrade fresh test databases through 0014 and 0015. Offline migration tests verify
+  object ownership and reversed downgrade operations. Type metadata and nullable fiscal
+  periods support nonperiodic filings; no collection-window table remains.
+- [x] Build news-preprocessor, portfolio-builder and shared application images, then import
+  them with networking disabled. Verify the RSS module, separate collector command and
+  retrieval HTTP server are absent. Compose passes the same model settings to indexer
+  and builder. Ruff lint/format, dependency boundaries and whitespace checks passed.
 - [x] The earlier implementation passed CI Dev, including Python 3.14 compatibility,
   requirements verification, dependency audit and image builds. The updated PR commits
   must complete their own CI checks before merge. PR CI does not deploy the CPU services.
@@ -197,20 +196,20 @@ Migrate with `KTB_POSTGRES_DSN` through the dedicated migration job, not service
 After market-syncer has stored the corporation universe, run collection and indexing:
 
 ```bash
-docker compose -f compose.local.yaml --profile jobs run --rm news-preprocessor news-preprocessor-disclosures
+docker compose -f compose.local.yaml run --rm news-preprocessor
 docker compose -f compose.local.yaml --profile jobs run --rm disclosure-indexer
 ```
 
-The first command stores source documents, sections and structured financial facts without
-calling an embedding model. The second reads stored documents and calls the configured
+The first command stores long-disclosure source documents, sections and supported
+structured accounts without embedding those disclosures. Existing news article embedding
+is unchanged. The second reads stored documents and calls the configured
 embedding endpoint only when eligible work exists. Retrieval returns evidence without
 generating an answer. SQL financial and section reads do not require GPU inference.
 
-Existing deployment files must move any `DISCLOSURE_INDEXER_DART_API_KEY` value to
-`NEWS_PREPROCESSOR_DART_API_KEY` and rename collection options from
-`DISCLOSURE_INDEXER_*` to `NEWS_PREPROCESSOR_DISCLOSURE_*`. Keep indexing options such as
+Configure `NEWS_PREPROCESSOR_DART_API_KEY` and the `NEWS_PREPROCESSOR_DISCLOSURE_*`
+parsing/archive limits on news-preprocessor. Keep indexing options such as
 chunk size, batch size, embedding timeout and lease duration under `DISCLOSURE_INDEXER_*`.
-The archive volume stays the same; its mount moves to news-preprocessor.
+Mount the archive volume only on news-preprocessor.
 
 ## 9. Final hourly-batch settings and parallel measurements
 

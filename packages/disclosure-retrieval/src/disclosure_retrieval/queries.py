@@ -6,17 +6,22 @@ import sqlalchemy as sa
 
 REPORTS_SQL = """
 WITH ranked AS (
-    SELECT r.receipt_id, r.stock_code, r.title, r.business_year, r.kind, r.period_end,
-        r.published_date, r.status,
+    SELECT r.receipt_id, r.stock_code, r.title, r.business_year, r.kind, r.detail_type,
+        r.period_end, r.published_date, r.status,
         row_number() OVER (
-            PARTITION BY r.stock_code, r.kind, r.period_end
+            PARTITION BY r.stock_code, r.kind,
+                COALESCE(r.detail_type, CASE r.kind
+                    WHEN 'annual' THEN 'A001' WHEN 'half' THEN 'A002'
+                    WHEN 'q1' THEN 'A003' WHEN 'q3' THEN 'A003' END),
+                r.period_end, CASE WHEN r.period_end IS NULL THEN r.receipt_id END
             ORDER BY r.published_date DESC, r.receipt_id DESC
         ) AS revision
     FROM disclosures r
     WHERE r.stock_code = :stock AND r.published_date <= :as_of
+        AND (CAST(:detail_type AS text) IS NULL OR r.detail_type = :detail_type)
 ), reports AS (
-    SELECT r.receipt_id, r.stock_code, r.title, r.business_year, r.kind, r.period_end,
-        r.published_date, r.status, i.id AS index_id,
+    SELECT r.receipt_id, r.stock_code, r.title, r.business_year, r.kind, r.detail_type,
+        r.period_end, r.published_date, r.status, i.id AS index_id,
         CASE
             WHEN i.id IS NULL THEN 'pending'
             WHEN i.model = :model AND i.dimensions = :dimensions THEN 'ready'
@@ -40,17 +45,17 @@ WITH ranked AS (
 
 SEARCH_SQL = """
 , filtered_chunks AS MATERIALIZED (
-    SELECT r.receipt_id, r.title, r.stock_code, r.business_year, r.kind, r.period_end,
-        r.published_date, c.id AS chunk_id, c.section, c.topic, c.document_name,
+    SELECT r.receipt_id, r.title, r.stock_code, r.business_year, r.kind, r.detail_type,
+        r.period_end, r.published_date, c.id AS chunk_id, c.section, c.topic, c.document_name,
         c.start_offset, c.end_offset, c.text, c.context,
         {embedding_text} AS embedding_text, c.embedding
     FROM reports r
     JOIN {chunk_table} c ON c.index_id = r.index_id
     WHERE r.index_state = 'ready' AND {scope}
 ), candidates AS MATERIALIZED (
-    SELECT receipt_id, title, stock_code, business_year, kind, period_end, published_date,
-        chunk_id, section, topic, document_name, start_offset, end_offset, text, context,
-        embedding_text,
+    SELECT receipt_id, title, stock_code, business_year, kind, detail_type, period_end,
+        published_date, chunk_id, section, topic, document_name, start_offset, end_offset,
+        text, context, embedding_text,
         embedding <=> CAST(:vector AS halfvec) AS distance
     FROM filtered_chunks
 ), eligible AS (
@@ -93,18 +98,20 @@ class SearchParams:
     model: str
     dimensions: int
     max_distance: float | None
+    detail_type: str | None = None
 
 
 @dataclass(frozen=True)
 class Report:
     title: str
     stock_code: str
-    business_year: int
+    business_year: int | None
     kind: str
-    period_end: date
+    period_end: date | None
     published_date: date
     status: str
     index_state: str
+    detail_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -113,9 +120,9 @@ class Evidence:
     chunk_id: int
     title: str
     stock_code: str
-    business_year: int
+    business_year: int | None
     kind: str
-    period_end: date
+    period_end: date | None
     published_date: date
     section: str
     topic: str
@@ -131,6 +138,7 @@ class Evidence:
     reranker_score: float | None = None
     reranker_logit_difference: float | None = None
     reranker_adapter_sha256: str | None = None
+    detail_type: str | None = None
 
 
 @dataclass
@@ -145,7 +153,13 @@ class SearchResult:
 
 
 def report_rows(
-    conn: sa.Connection, stock_code: str, limit: int, as_of: date, model: str, dimensions: int
+    conn: sa.Connection,
+    stock_code: str,
+    limit: int,
+    as_of: date,
+    model: str,
+    dimensions: int,
+    detail_type: str | None = None,
 ) -> list[dict[str, object]]:
     rows = conn.execute(
         sa.text(
@@ -158,6 +172,7 @@ def report_rows(
             "model": model,
             "dimensions": dimensions,
             "limit": limit,
+            "detail_type": detail_type,
         },
     ).mappings()
     return [dict(row) for row in rows]
@@ -208,6 +223,7 @@ def search_reports(
         "as_of": params.as_of,
         "model": params.model,
         "dimensions": params.dimensions,
+        "detail_type": params.detail_type,
         "vector": json.dumps(vector),
         "max_distance": params.max_distance,
         "top_k": params.top_k,
@@ -244,6 +260,7 @@ def search_counts(
         "as_of": params.as_of,
         "model": params.model,
         "dimensions": params.dimensions,
+        "detail_type": params.detail_type,
         "latest": [r["receipt_id"] for r in selected],
         "start": params.history_start or date.min,
     }

@@ -17,6 +17,9 @@ class SearchDisclosuresArgs(BaseModel):
     query: str = Field(min_length=1, max_length=4000, pattern=r"\S")
     as_of: date | None = Field(default=None, description="Only reports published by this date")
     include_history: bool = False
+    detail_type: str | None = Field(
+        default=None, pattern=r"^[A-Z][0-9]{3}$", description="OpenDART filing detail type"
+    )
 
 
 def search_disclosures(
@@ -24,12 +27,13 @@ def search_disclosures(
     query: str,
     as_of: date | None = None,
     include_history: bool = False,
+    detail_type: str | None = None,
     *,
     engine: sa.Engine,
     settings: Settings,
 ) -> str:
     try:
-        body = SearchRequest(query=query, include_history=include_history)
+        body = SearchRequest(query=query, include_history=include_history, detail_type=detail_type)
         if as_of is not None:
             body.as_of = as_of
         result = asdict(run_search(engine, stock_code, body, settings))

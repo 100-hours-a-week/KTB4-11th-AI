@@ -18,6 +18,7 @@ def env(monkeypatch):
     # The entry point reads corporation_indices before scraping; no database here.
     monkeypatch.setattr(entry.sa, "create_engine", lambda dsn: MagicMock())
     monkeypatch.setattr(entry, "kospi200_stock_codes", lambda conn: {"005930"})
+    monkeypatch.setattr(entry, "collect", lambda engine, client, settings: {"failed": 0})
     monkeypatch.setattr(
         entry, "publishers", lambda client, dart_api_key, stock_codes: ("first", "second")
     )
@@ -53,6 +54,27 @@ def test_a_failing_source_does_not_stop_the_others(env, monkeypatch):
         entry.main()
 
     assert scraped == ["first", "second"]
+
+
+def test_disclosure_processing_follows_scraping_in_the_same_run(env, monkeypatch):
+    steps = []
+    monkeypatch.setattr(entry, "scrape", lambda engine, source: steps.append(source) or OK)
+    monkeypatch.setattr(
+        entry,
+        "collect",
+        lambda engine, client, settings: steps.append("disclosures") or {"failed": 1},
+    )
+    monkeypatch.setattr(
+        entry,
+        "embed_pending",
+        lambda engine, embedder, limit: (
+            steps.append("news-embedding") or EmbedResult(succeed=[], failed=[])
+        ),
+    )
+    with pytest.raises(SystemExit) as error:
+        entry.main()
+    assert error.value.code == 1
+    assert steps == ["first", "second", "disclosures", "news-embedding"]
 
 
 def test_publishers_get_the_dart_key_and_kospi200_codes(env, monkeypatch):

@@ -29,24 +29,25 @@ is unchanged.
    normalization, and prompt-version fields remain constants because environment
    labels cannot change their implementation. Share model overrides between the
    indexer and builder containers through Compose environment mappings.
-2. Move periodic-report collection to
-   `news_preprocessor/sources/publishers/opendart/disclosures/`. Keep the
-   `news-preprocessor-disclosures` command. Short filings still use the news publisher;
-   periodic reports store originals, documents, sections, and financial facts without
-   embedding during collection. This code, its archive/Compose configuration, daily
-   collector timer, and migrations 0012–0014 belong to the collection PR. The indexing
-   PR contributes only migration 0015 for vectors. After collection completes or
-   finally fails, systemd starts the indexer; a second timer does not repeat collection.
-   Daily discovery uses company RSS through the existing publisher-style module.
-   Original documents and structured accounts come from OpenDART using the RSS receipt;
-   explicit business-year backfill alone uses historical listing APIs. The indexer
-   still reads PostgreSQL only and never fetches RSS, DART or source archives.
+2. Use the existing `opendart/opendart.py` API publisher for short and long filings.
+   Keep official long filing codes in `disclosures.detail_type`; the ordinary
+   news-preprocessor command parses queued long filings after scraping. It stores
+   originals, documents, sections and supported periodic financial accounts without
+   embedding them. A filing type is separate from the content split. Nonperiodic
+   filings retain unknown fiscal fields as null, and their tables remain sections.
+   The collection PR owns migrations 0012–0014; the indexing PR adds only 0015.
+   There is no RSS path, separate collector command/timer or historical window loop.
+   The existing hourly news-preprocessor service starts the DB-only indexer after
+   success or final failure. The indexer never fetches RSS, DART or source archives.
 3. Put portfolio-builder's disclosure tools in `tools/disclosure/search.py`,
    `get.py`, and `tool.py`. Expose `search_disclosures`, `get_disclosure_sections`,
    and `get_disclosure_financials`. Require an explicit year or period for financial
    reads. Execute parameterized SQL in-process using the existing engine. Search
    orchestrates DB reads and remote model calls through the library. Query and
    reranking inference run after the DB connection has returned to its pool.
+   Accept an optional `detail_type` search filter and return that code with evidence.
+   Unknown-period receipts stay separate; periodic corrections retain their existing
+   grouping. Existing periodic embedding inputs and model identity stay unchanged.
 4. Remove `portfolio_builder/disclosures.py` and `retrieval_client.py`. Reuse the
    library's typed `SearchResult` in the submission hook through Pydantic TypeAdapter;
    its three result lists are required, so malformed `{}` cannot count as a search.
@@ -101,7 +102,7 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 
 - Added tests failed first for missing profile parsing, direct-read methods, and tools.
 - Final full suite against the disposable `ktb_disclosure_split_test` PostgreSQL database:
-  **1,354 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+  **1,367 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
   account for the skips.
 - Ruff, formatting, Tach internal and external dependencies, and diff checks pass.
 - Retrieval's 48 tests call Python functions directly and retain PostgreSQL search,

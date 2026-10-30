@@ -175,3 +175,47 @@ def test_valid_passages_complete_the_check_without_an_empty_result():
         fields for event, _, fields in log.events if event == "disclosure_search_summary"
     )
     assert summary == {"calls": 1, "successes": 1, "failures": 0, "empty": 0}
+
+
+def test_typed_nonperiodic_evidence_with_unknown_fiscal_period_completes_the_requirement():
+    from dataclasses import asdict
+    from datetime import date
+
+    from disclosure_retrieval.queries import Evidence, Report, SearchResult
+    from pydantic import TypeAdapter
+
+    metadata = {
+        "title": "주요사항보고서",
+        "stock_code": "005930",
+        "business_year": None,
+        "kind": "F001",
+        "detail_type": "F001",
+        "period_end": None,
+        "published_date": date(2026, 3, 1),
+    }
+    report = Report(**metadata, status="ready", index_state="ready")
+    evidence = Evidence(
+        **metadata,
+        receipt_id="20260301000001",
+        chunk_id=7,
+        section="위험",
+        topic="risk",
+        document_name="main.xml",
+        start_offset=0,
+        end_offset=7,
+        text="소송 진행 중",
+        context="",
+        score=0.9,
+    )
+    payload = TypeAdapter(SearchResult).dump_json(SearchResult([report], [evidence], [])).decode()
+    saved = []
+    execute(
+        [
+            reply("", ("analyze_technicals", {}), ("search_disclosures", {})),
+            reply("", ("submit_portfolio", {})),
+        ],
+        payload,
+        saved,
+    )
+    assert saved == [42]
+    assert asdict(evidence)["business_year"] is None
