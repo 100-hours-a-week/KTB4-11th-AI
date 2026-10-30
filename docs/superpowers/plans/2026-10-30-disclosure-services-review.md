@@ -4,9 +4,10 @@ Date: 2026-10-30
 
 ## Scope and decisions
 
-This follow-up applies the review of PR #432. It keeps disclosure collection,
-indexing, retrieval, and portfolio generation separate. The root checkout and
-running services are not changed.
+This follow-up applies the review of PR #432 and separates collection issue #440
+from indexing/retrieval issue #346 and GPU serving issue #431. Collection has its own
+PR, #432 follows that branch, and #430 follows #432. Each PR closes its own issue.
+The root checkout and running services are not changed.
 
 The existing HTTP retrieval service remains in place. Portfolio-builder calls it
 through `RetrievalClient`. FastAPI receives those requests; it is not needed for
@@ -32,7 +33,10 @@ is unchanged.
    `news_preprocessor/sources/publishers/opendart/disclosures/`. Keep the
    `news-preprocessor-disclosures` command. Short filings still use the news publisher;
    periodic reports store originals, documents, sections, and financial facts without
-   embedding during collection.
+   embedding during collection. This code, its archive/Compose configuration, daily
+   collector timer, and migrations 0012–0014 belong to the collection PR. The indexing
+   PR contributes only migration 0015 for vectors. After collection completes or
+   finally fails, systemd starts the indexer; a second timer does not repeat collection.
 3. Put portfolio-builder's disclosure tools in `tools/disclosure/search.py`,
    `get.py`, and `tool.py`. Expose `search_disclosures`, `get_disclosure_sections`,
    and `get_disclosure_financials`. Require an explicit year or period for financial
@@ -42,6 +46,10 @@ is unchanged.
    The existing successful-narrative-search requirement before submission remains.
 5. Receive an optional investment profile in the existing backend polling response.
    Do not add an endpoint, polling loop, model call, or trading rule for this field.
+
+The proposed direct-DB tools and whole-service performance benchmark are subsequent
+work. This PR split does not replace the current HTTP retrieval boundary or claim a
+new performance result.
 
 Model overrides must match the GPU serving checkpoint and identity. Changing a CPU
 environment variable does not deploy different GPU weights. Incompatible serving
