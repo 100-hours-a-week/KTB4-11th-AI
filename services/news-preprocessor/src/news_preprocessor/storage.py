@@ -1,4 +1,3 @@
-import json
 from collections.abc import Sequence
 from dataclasses import asdict
 
@@ -8,6 +7,9 @@ from pgvector.sqlalchemy import VECTOR
 from sqlalchemy.dialects.postgresql import insert
 
 from news_preprocessor.sources import NewsItem
+from news_preprocessor.sources.publishers.opendart.opendart import DisclosureItem
+from news_preprocessor.sources.publishers.opendart.parser import PARSER_VERSION
+from news_preprocessor.sources.publishers.opendart.storage import insert_disclosure
 
 metadata = sa.MetaData()
 
@@ -79,8 +81,13 @@ def known_external_ids(conn: sa.Connection, source: str, external_ids: list[str]
     if source == "opendart":
         known.update(
             conn.execute(
-                sa.text("SELECT receipt_id FROM disclosures WHERE receipt_id = ANY(:ids)"),
-                {"ids": external_ids},
+                sa.text(
+                    "SELECT r.receipt_id FROM disclosures r WHERE r.receipt_id = ANY(:ids) "
+                    "AND r.status IN ('ready','unavailable') AND (SELECT parser_version "
+                    "FROM disclosure_documents WHERE receipt_id=r.receipt_id "
+                    "ORDER BY id DESC LIMIT 1)=:parser"
+                ),
+                {"ids": external_ids, "parser": PARSER_VERSION},
             ).scalars()
         )
     return known
@@ -94,32 +101,8 @@ def kospi200_stock_codes(conn: sa.Connection) -> set[str]:
 
 
 def insert_new(conn: sa.Connection, item: NewsItem) -> bool:
-    payload = json.loads(item.raw_payload) if item.source == "opendart" else {}
-    detail_type = payload.get("pblntf_detail_ty")
-    if detail_type:
-        statement = sa.text(
-            "INSERT INTO disclosures(receipt_id,stock_code,corp_code,company_name,title,"
-            "detail_type,kind,published_date,raw_payload) "
-            "VALUES (:receipt,:stock,:corp,:name,:title,:type,:type,:published,"
-            "CAST(:raw AS jsonb)) "
-            "ON CONFLICT(receipt_id) DO NOTHING RETURNING receipt_id"
-        )
-        return (
-            conn.execute(
-                statement,
-                {
-                    "receipt": item.external_id,
-                    "stock": payload["stock_code"],
-                    "corp": payload["corp_code"],
-                    "name": payload["corp_name"],
-                    "title": payload["report_nm"],
-                    "type": detail_type,
-                    "published": item.published_at.date(),
-                    "raw": item.raw_payload,
-                },
-            ).scalar_one_or_none()
-            is not None
-        )
+    if isinstance(item, DisclosureItem):
+        return insert_disclosure(conn, item)
     statement = (
         insert(articles)
         .values(**asdict(item))
