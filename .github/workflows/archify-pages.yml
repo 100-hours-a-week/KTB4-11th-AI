@@ -2,19 +2,19 @@ name: Architecture Pages
 
 on:
   push:
-    branches: [main]
+    branches: [docs/442/fix-tailscale-routes]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: archify-pages
+  group: archify-pages-branch-test
   cancel-in-progress: true
 
 jobs:
   generate:
-    if: github.repository == '100-hours-a-week/KTB4-11th-AI' && github.ref == 'refs/heads/main'
+    if: github.repository == '100-hours-a-week/KTB4-11th-AI' && github.ref == 'refs/heads/docs/442/fix-tailscale-routes'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -73,6 +73,17 @@ jobs:
           import urllib.parse
           import urllib.request
           from pathlib import Path
+
+
+          def report_failure(stage, path, sensitive):
+              details = path.read_text(errors="replace")[-6000:]
+              details = re.sub(r"\x1b\[[0-9;]*m", "", details)
+              for value in sensitive:
+                  if value:
+                      details = details.replace(value, "[redacted]")
+              details = re.sub(r"https?://[^\s\"'<>]+", "[redacted-url]", details)
+              details = re.sub(r"Bearer\s+[^\s\"'<>]+", "Bearer [redacted]", details)
+              print(f"{stage} failed (sanitized diagnostics):\n{details}", flush=True)
 
 
           def check_endpoint(base_url):
@@ -238,6 +249,7 @@ jobs:
                           timeout=1200,
                       )
                   if result.returncode:
+                      report_failure("OpenCode", private / "agent.log", [api_key, base_url, urllib.parse.urlsplit(base_url).hostname])
                       raise RuntimeError("OpenCode generation failed; private session logs are not published")
                   candidate = json.loads((work / "architecture.json").read_text())
                   candidate.setdefault("meta", {})["output"] = "index.html"
@@ -273,6 +285,7 @@ jobs:
                           timeout=600,
                       )
                   if result.returncode:
+                      report_failure("Archify", private / "finalize.log", [api_key, base_url, urllib.parse.urlsplit(base_url).hostname])
                       raise RuntimeError("Archify finalize failed; deployment stopped")
                   metadata = {
                       "commit": os.environ["GITHUB_SHA"],
@@ -314,6 +327,7 @@ jobs:
           path: _site/
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 10
