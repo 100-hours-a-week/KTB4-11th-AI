@@ -208,6 +208,7 @@ jobs:
                   private = Path(directory)
                   work = private / "project"
                   work.mkdir()
+                  subprocess.run(["git", "init", "--quiet", str(work)], check=True)
                   copy_sources(repo, work)
                   shutil.copytree(skill, work / ".opencode/skills/archify")
                   config = {
@@ -237,6 +238,9 @@ jobs:
                   config_path = private / "opencode.json"
                   config_path.write_text(json.dumps(config))
                   prompt = (
+                      f"The source snapshot is already on disk in your current directory: {work}. "
+                      "This is an unattended CI job: do not ask for files or clarification. "
+                      "Use glob and read tools to inspect the existing files now. "
                       "Use the installed Archify skill and read its architecture schema, authoring defaults, "
                       "repository-authoring reference and web-app example. Analyze the source snapshot: "
                       "services, packages, compose files, infrastructure and workflows. Write ONLY "
@@ -251,6 +255,8 @@ jobs:
                       "trusted runner performs all validation and rendering after you finish. "
                       "Set meta.repository.url to https://github.com/100-hours-a-week/KTB4-11th-AI.git "
                       "and meta.repository.revision to the source commit. "
+                      f"Use the write tool to save the completed JSON to {work / 'architecture.json'}. "
+                      "Do not finish with a request for input or JSON shown only in chat. "
                       f"Source commit: {os.environ['GITHUB_SHA']}."
                   )
                   agent_env = {
@@ -271,13 +277,13 @@ jobs:
                           stderr=log,
                           timeout=1200,
                       )
-                  if result.returncode:
+                  if result.returncode or not (work / "architecture.json").is_file():
                       report_failure(
                           "OpenCode",
                           private / "agent.log",
                           [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
                       )
-                      raise RuntimeError("OpenCode generation failed; private session logs are not published")
+                      raise RuntimeError("OpenCode did not produce architecture.json; see sanitized diagnostics")
                   candidate = json.loads((work / "architecture.json").read_text())
                   candidate.setdefault("meta", {})["output"] = "index.html"
                   candidate["meta"]["repository"] = {
