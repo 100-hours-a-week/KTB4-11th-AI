@@ -4,8 +4,8 @@ import httpx
 import sqlalchemy as sa
 from ktb_core.logging import get_logger, setup_logging, start_logging
 
-from news_preprocessor.disclosures.collect import collect
-from news_preprocessor.disclosures.settings import Settings
+from news_preprocessor.sources.publishers.opendart.disclosures.collect import collect
+from news_preprocessor.sources.publishers.opendart.disclosures.settings import Settings
 
 log = get_logger(__name__)
 

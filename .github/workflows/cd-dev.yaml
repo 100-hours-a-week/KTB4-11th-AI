@@ -255,7 +255,7 @@ jobs:
             ktb-market-collector.timer \
             ktb-market-streamer.timer \
             ktb-news-preprocessor.timer \
-            ktb-disclosure-indexer.timer \
+            ktb-disclosure-collector.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer
 
@@ -263,7 +263,7 @@ jobs:
             ktb-market-collector.timer \
             ktb-market-streamer.timer \
             ktb-news-preprocessor.timer \
-            ktb-disclosure-indexer.timer \
+            ktb-disclosure-collector.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer; do
             systemctl is-enabled --quiet "$timer"

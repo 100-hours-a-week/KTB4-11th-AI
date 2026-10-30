@@ -1,4 +1,4 @@
-from news_preprocessor.disclosures.settings import Settings
+from news_preprocessor.sources.publishers.opendart.disclosures.settings import Settings
 
 
 def test_collection_settings_use_news_credentials_and_ignore_embedding_settings(monkeypatch):

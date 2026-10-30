@@ -1,4 +1,4 @@
-from news_preprocessor.disclosures.sections import section_rows
+from news_preprocessor.sources.publishers.opendart.disclosures.sections import section_rows
 
 DOCUMENTS = [
     {
@@ -48,7 +48,6 @@ def test_section_rows_number_offsets_and_ordinals_per_document():
     second = [row for row in rows if row["document_name"] == "00002.xml"]
     assert [row["ordinal"] for row in first] == [0, 1]
     assert [row["ordinal"] for row in second] == [0]
-    # Offsets restart per document, which is why document_name has to travel with them.
     assert first[0]["start_offset"] == 0 and second[0]["start_offset"] == 0
 
 

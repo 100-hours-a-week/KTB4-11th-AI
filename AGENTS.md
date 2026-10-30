@@ -244,9 +244,17 @@ that combined image. Keep CI service/export lists in sync when adding a service.
   main push workflows publish the application image to ECR Public; deployment paths
   are defined in the corresponding CD workflows.
 
-Periodic disclosure collection belongs to `news-preprocessor-disclosures`, a command in the
-news-preprocessor package. It archives sources and stores parsed documents, sections and
-financial facts without calling an embedding model. The daily indexer timer orders this
-collection job before the DB-only indexer; an unsuccessful collection does not block indexing
-previously stored documents. news-http remains read-only. Only the collection command uses
-`NEWS_PREPROCESSOR_DART_API_KEY` and `NEWS_PREPROCESSOR_DISCLOSURE_*` settings.
+Periodic-report collection lives under `news_preprocessor.sources.publishers.opendart.disclosures`
+and runs through `news-preprocessor-disclosures`. Its own collector timer runs daily at
+05:00 KST. Migrations 0012–0014 create original documents and collection progress, sections,
+and financial facts respectively. This command stores source data without embedding or
+answer generation. Only it uses `NEWS_PREPROCESSOR_DISCLOSURE_*` and the disclosure archive.
+
+The indexing PR adds migration 0015 for vectors and starts the DB-only indexer after collection
+completes or finally fails. The indexer never starts collection, so there is only one daily timer.
+Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
+search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.
+Retrieval remains an HTTP service called by portfolio-builder; Modal is an outgoing inference
+dependency. Neither collection nor retrieval generates answers. Backend polling may include an
+optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
+receiving this field does not change trading behavior.

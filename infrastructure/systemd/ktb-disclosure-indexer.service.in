@@ -1,7 +1,7 @@
 [Unit]
 Description=KTB daily disclosure indexing job
-Wants=network-online.target ktb-disclosure-collector.service
-After=network-online.target docker.service ktb-disclosure-collector.service
+Wants=network-online.target
+After=network-online.target docker.service
 Requires=docker.service
 OnSuccess=ktb-scheduled-job-success@disclosure-indexer.service
 OnFailure=ktb-scheduled-job-failure@disclosure-indexer.service

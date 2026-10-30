@@ -1,9 +1,13 @@
 # Disclosure RAG: Final Implementation Plan
 
-Finalized: 2026-10-29, after implementation and validation.
-Scope: service issue #346 / PR #432 and Modal serving issue #431 / PR #430.
-Review and merge #432 before #430. This is the only implementation plan included in the PRs.
+Finalized: 2026-10-29; PR ownership and migration split updated 2026-10-30.
+Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and services #346 / #432.
+Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
+
+The 2026-10-30 split was verified with **1,379 passed, 49 skipped, 2 subtests passed**
+on the combined serving branch using a disposable PostgreSQL database. This run checks
+CPU code and model contracts; it does not redeploy GPU workers or produce new inference timings.
 
 ## 1. Service boundaries
 
@@ -34,16 +38,18 @@ through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libra
   and normalized NUMERIC values. Missing values remain null. Store named sections for direct reads.
 - [x] Embed recognized narrative sections. Tables and unclassified sections remain accessible
   through section storage. Context groups preserve source order and never cross physical files.
-- [x] Create the final disclosure schema in migration 0012 after revision 0011.
-  The five unreleased revisions were consolidated after confirming no shared DB had applied them. Store new narrative vectors in
+- [x] Keep the three collection migrations in PR #441: 0012 originals/progress,
+  0013 sections, and 0014 financial facts plus independent financial completion state.
+  PR #432 adds vector migration 0015. GPU serving owns no schema revision. Store narrative vectors in
   halfvec(1024), preserving legacy halfvec(2000) data. Enforce parent-index dimensions and identity.
 - [x] Activate indexes atomically. During rollback, accept an older parser's index only when
   its source hash matches the latest document. Never serve an index from a replaced source.
 
 Run migrations through the existing dedicated migration job, then build the new index before
 switching callers. To roll back, restore the previous provider/model/prefix and 2000 dimensions;
-no schema downgrade is required. Downgrading 0012 to 0011 removes the disclosure tables,
-including their stored documents and vectors; provider rollback does not require this operation.
+no schema downgrade is required. Downgrading 0015 to 0014 removes vector indexes and chunks
+while retaining collected sources. Downgrading the collection revisions to 0011 removes
+stored documents and financial facts; provider rollback does not require either operation.
 
 ## 3. Model contracts and Modal deployment
 
@@ -120,10 +126,11 @@ DISCLOSURE_RETRIEVAL_TIMEOUT=150
 PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_TIMEOUT=480
 ```
 
-- [x] The 05:00 KST indexer timer starts `ktb-disclosure-collector.service` first.
+- [x] The 05:00 KST collector timer starts `ktb-disclosure-collector.service`.
   That unit runs `news-preprocessor-disclosures` using the existing news-preprocessor
-  image, then the indexer reads PostgreSQL. `Wants` plus `After` preserves this order
-  while allowing indexing of previously stored documents after collection failure.
+  image, then `OnSuccess` or final `OnFailure` starts the DB-only indexer. The indexer
+  never starts collection, and there is no second daily timer. Previously stored
+  documents can still be indexed after collection failure.
   The hourly news command and weekday 06:00 portfolio pipeline retain their schedules.
 - [x] Pass DART credentials through `NEWS_PREPROCESSOR_DART_API_KEY`; configure collection
   with `NEWS_PREPROCESSOR_DISCLOSURE_*`. Mount archives only in news-preprocessor.

@@ -19,7 +19,7 @@ from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
 from portfolio_builder.retrieval_client import RetrievalClient
 from portfolio_builder.settings import Settings
-from portfolio_builder.tools.disclosures import disclosure_tools
+from portfolio_builder.tools.disclosure.tool import disclosure_tools
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
 from portfolio_builder.tools.submit import submit_tool

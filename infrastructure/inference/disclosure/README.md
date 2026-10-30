@@ -146,20 +146,23 @@ historical restore measurements do not establish an availability guarantee.
 
 ## Storage, scheduling and cutover
 
-Run migration `0012` through the existing dedicated migration job. It creates
+Apply collection migrations `0012`–`0014` from PR #441, then vector migration `0015`
+from PR #432 through the existing dedicated migration job. Migration `0015` creates
 `disclosure_narrative_chunks` with `halfvec(1024)` and keeps the legacy
 `disclosure_chunks` with `halfvec(2000)`. Dimensions are checked against the parent index;
 model revisions, adapter hash and transform are recorded with every new index. Activation
 replaces only the same dimension, preserving the legacy index for rollback.
 
-At **05:00 KST**, the indexer timer first starts the collection unit, which runs
+At **05:00 KST**, the collector timer starts the collection unit, which runs
 `news-preprocessor-disclosures` in the existing news-preprocessor image. That command
 archives originals and stores parsed documents, sections and financial facts. The
-indexer then reads PostgreSQL and stores narrative embeddings in pgvector. Collection
-failure does not block retries for documents already stored in the DB. Only the collector
+indexer then reads PostgreSQL and stores narrative embeddings in pgvector. The collector's
+`OnSuccess` and final `OnFailure` start the indexer, which never starts collection again.
+There is no second indexing timer. Collection failure does not block indexing of documents
+already stored in the DB. Only the collector
 uses the DART key and archive volume. The hourly news command, read-only news-http server
 and weekday 06:00 portfolio pipeline retain their roles. No eligible documents means zero
-inference calls. Migration 0012 creates the complete disclosure schema.
+inference calls. GPU serving PR #430 / issue #431 owns no database migration.
 
 Parsed sections retain whether they came from narrative or a table. Known narrative topics
 are embedded; tables and unclassified sections remain available through direct section
