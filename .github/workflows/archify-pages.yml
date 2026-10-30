@@ -2,19 +2,18 @@ name: Architecture Pages
 
 on:
   push:
-    branches: [docs/442/fix-tailscale-routes]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: archify-pages-branch-test
+  group: archify-pages-branch
   cancel-in-progress: true
 
 jobs:
   generate:
-    if: github.repository == '100-hours-a-week/KTB4-11th-AI' && github.ref == 'refs/heads/docs/442/fix-tailscale-routes'
     runs-on: ubuntu-latest
     timeout-minutes: 100
     permissions:
