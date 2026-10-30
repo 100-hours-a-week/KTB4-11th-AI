@@ -459,7 +459,6 @@ jobs:
           path: _site/
 
   deploy:
-    if: github.ref == 'refs/heads/main'
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 10
