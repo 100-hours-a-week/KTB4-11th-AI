@@ -1,0 +1,94 @@
+name: Architecture Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archify-pages
+  cancel-in-progress: true
+
+jobs:
+  generate:
+    if: github.repository == '100-hours-a-week/KTB4-11th-AI' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARCHIFY_REV: f325d86230553e1dd15d3464324f1fcd01f02352
+      OPENCODE_VERSION: 1.19.5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Check generation safety helpers
+        run: python3 -m unittest discover -s scripts -p test_archify_pages.py
+      - name: Install pinned tools
+        run: |
+          set -euo pipefail
+          npm install --global "opencode-ai@$OPENCODE_VERSION"
+          git init "$RUNNER_TEMP/archify"
+          git -C "$RUNNER_TEMP/archify" remote add origin https://github.com/tt-a1i/archify.git
+          git -C "$RUNNER_TEMP/archify" fetch --depth 1 origin "$ARCHIFY_REV"
+          git -C "$RUNNER_TEMP/archify" checkout --detach FETCH_HEAD
+      - name: Join Tailnet using GitHub OIDC
+        uses: tailscale/github-action@v4
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:archify-ci
+          args: --accept-routes=false
+          timeout: 2m
+          retry: '2'
+          log-mode: quiet
+      - name: Generate and validate public architecture
+        env:
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_CONTEXT: ${{ vars.LLM_CONTEXT }}
+          LLM_OUTPUT: ${{ vars.LLM_OUTPUT }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          ARCHIFY_UPDATE_CHECK_DISABLED: '1'
+        run: python3 scripts/archify_pages.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: architecture-${{ github.sha }}-${{ github.run_attempt }}
+          path: _site/
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site/
+
+  deploy:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Require current main revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          test "$latest" = "$GITHUB_SHA" || { echo '::error::Superseded main revision'; exit 1; }
+      - uses: actions/configure-pages@v5
+      - name: Deploy validated artifact
+        id: deployment
+        uses: actions/deploy-pages@v4

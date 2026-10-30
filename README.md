@@ -4,6 +4,9 @@
 
 ## 전체 아키텍처
 
+`main` 기준 자동 아키텍처의 설정·배포·다운로드 절차는
+[Architecture Pages 운영](docs/architecture-pages.md)을 참고하세요.
+
 ```mermaid
 flowchart LR
     subgraph EXT["External"]
