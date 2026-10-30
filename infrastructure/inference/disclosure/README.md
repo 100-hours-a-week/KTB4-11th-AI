@@ -29,8 +29,8 @@ GPU-backed identity endpoints. Financial facts and identified sections are read 
 PostgreSQL without starting either model.
 
 The existing OpenDART API publisher collects short and long filings in one intake.
-News-preprocessor stores official long filing codes in `disclosures.detail_type` and
-parses queued source documents during the same normal run. Supported periodic financial
+News-preprocessor fetches and parses each long filing in `OpenDart.article`, then
+standard scraping stores its type, documents, sections and accounts in one transaction. Supported periodic financial
 accounts and named sections remain available through SQL tools. The indexer reads the
 database to embed narrative passages; it never fetches OpenDART or source archives.
 
@@ -185,7 +185,7 @@ refuses to delete 1024 indexes automatically; removing them is a separate destru
 ## Verification and remaining measurements
 
 ```bash
-./scripts/run-tests.sh infrastructure/inference services/disclosure-indexer packages/disclosure-retrieval
+./scripts/run-tests.sh infrastructure/inference services/disclosure-indexer services/disclosure-retrieval
 ```
 
 Local tests cover transport identities, proxy authentication, invalid vectors/scores,

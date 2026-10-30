@@ -5,7 +5,7 @@ Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and se
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The 2026-10-30 direct-library integration was verified with **1,397 passed, 49 skipped, 2 subtests passed**
+The 2026-10-30 direct-ingestion integration was verified with **1,394 passed, 49 skipped, 2 subtests passed**
 on the combined serving branch using a disposable PostgreSQL database. This run checks
 CPU code and model contracts; it does not redeploy GPU workers or produce new inference timings.
 
@@ -21,8 +21,9 @@ CPU code and model contracts; it does not redeploy GPU workers or produce new in
 | portfolio-builder | Use disclosure evidence and technical analysis before saving a new portfolio |
 
 The existing hourly news command uses `opendart/opendart.py` as its single API intake.
-Long filings retain official `detail_type` codes and are parsed after scraping during
-that same run. There is no RSS path, separate collector command/timer or historical
+Long filings retain official `detail_type` codes. `OpenDart.article` fetches and parses
+them before standard scraping stores metadata, documents, sections and accounts in one
+transaction. OpenDART modules are flat, and there is no pending-record readback. There is no RSS path, separate collector command/timer or historical
 window loop. The DB-only indexer embeds eligible stored narrative content. It never
 calls OpenDART or opens source archives. News-http remains read-only.
 
@@ -40,7 +41,7 @@ through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libra
 - [x] Embed recognized narrative sections. Tables and unclassified sections remain accessible
   through section storage. Context groups preserve source order and never cross physical files.
 - [x] Keep the three collection migrations in PR #441: 0012 filing metadata/originals,
-  0013 sections, and 0014 financial facts plus independent financial completion state.
+  0013 sections, and 0014 financial facts plus completion metadata.
   PR #432 adds vector migration 0015. GPU serving owns no schema revision. Store narrative vectors in
   halfvec(1024), preserving legacy halfvec(2000) data. Enforce parent-index dimensions and identity.
 - [x] Activate indexes atomically. During rollback, accept an older parser's index only when
@@ -92,7 +93,7 @@ a restore hit. The observed initial L4 wait must not be treated as model compute
 
 ## 4. Retrieval and builder integration
 
-Retrieval is a Python workspace library under `packages/disclosure-retrieval`. Builder
+Retrieval code is under `services/disclosure-retrieval`. Builder
 tools pass their existing database engine directly. There is no retrieval FastAPI app,
 router, HTTP client, port or container. Only external model inference uses HTTPS.
 
@@ -145,8 +146,8 @@ DISCLOSURE_RETRIEVAL_TIMEOUT=150
 ## 6. Verification results
 
 - [x] Unified API intake, typed retrieval and model-contract full suite on the disposable
-  `ktb_typed_disclosure_services_test` database: **1,397 passed, 49 skipped, two subtests passed**.
-  The collection branch passed 1,229 tests; the indexing/tools branch passed 1,367.
+  `ktb_typed_disclosure_services_test` database: **1,394 passed, 49 skipped, two subtests passed**.
+  The collection branch passed 1,226 tests; the indexing/tools branch passed 1,364.
   These CPU checks do not deploy GPU workers or recompute model quality scores.
 - [x] Upgrade fresh test databases through 0014 and 0015. Offline migration tests verify
   object ownership and reversed downgrade operations. Type metadata and nullable fiscal

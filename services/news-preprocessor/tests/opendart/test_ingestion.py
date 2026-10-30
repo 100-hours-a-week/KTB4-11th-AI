@@ -8,9 +8,8 @@ import pytest
 import sqlalchemy as sa
 from news_preprocessor.scrape import scrape
 from news_preprocessor.sources.publishers.opendart import OpenDart
-from news_preprocessor.sources.publishers.opendart.disclosures import collect as collection
-from news_preprocessor.sources.publishers.opendart.disclosures.collect import collect
-from news_preprocessor.sources.publishers.opendart.disclosures.settings import Settings
+from news_preprocessor.sources.publishers.opendart.parser import PARSER_VERSION
+from news_preprocessor.sources.publishers.opendart.settings import Settings
 
 STOCK = "990002"
 RECEIPT = "typed-report"
@@ -115,18 +114,11 @@ def company_engine(pg_engine):
 
 @pytest.fixture
 def settings(tmp_path):
-    return Settings(
-        postgres_dsn="unused",
-        dart_api_key="test",
-        archive_root=tmp_path,
-        request_interval=0,
-        attempts=1,
-        refresh_days=0,
-    )
+    return Settings(archive_root=tmp_path, request_interval=0, attempts=1)
 
 
-def enqueue(engine, client):
-    return scrape(engine, OpenDart(client, "test", {STOCK}))
+def ingest(engine, client, settings):
+    return scrape(engine, OpenDart(client, "test", {STOCK}, settings=settings))
 
 
 def stored(engine):
@@ -138,6 +130,23 @@ def stored(engine):
             .mappings()
             .one()
         )
+
+
+def assert_no_rows(engine):
+    with engine.connect() as conn:
+        for table in (
+            "disclosures",
+            "disclosure_documents",
+            "disclosure_sections",
+            "disclosure_financial_facts",
+        ):
+            assert (
+                conn.execute(
+                    sa.text(f"SELECT count(*) FROM {table} WHERE receipt_id=:receipt"),
+                    {"receipt": RECEIPT},
+                ).scalar_one()
+                == 0
+            )
 
 
 @pytest.mark.parametrize(
@@ -154,23 +163,18 @@ def stored(engine):
         ("H002", "사업보고서 (2025.12)", "H002", date(2025, 12, 31)),
     ],
 )
-def test_existing_feed_stores_each_long_type_and_parses_it_without_news_embedding(
+def test_existing_feed_parses_each_long_type_before_its_first_save(
     company_engine, settings, detail_type, title, kind, period
 ):
     api = DartAPI(detail_type, title)
     with api.client() as client:
-        result = enqueue(company_engine, client)
-        assert result.succeed == [RECEIPT]
-        assert api.count("document.xml") == 0
-        queued = stored(company_engine)
-        assert queued["detail_type"] == detail_type
-        assert queued["business_year"] is None and queued["period_end"] is None
-        completed = collect(company_engine, client, settings)
-        assert completed["ready"] == 1 and completed["failed"] == 0
-        assert enqueue(company_engine, client).succeed == []
-        assert collect(company_engine, client, settings)["ready"] == 0
+        result = ingest(company_engine, client, settings)
+        assert result.succeed == [RECEIPT] and result.failed == []
+        assert stored(company_engine)["status"] == "ready"
+        assert ingest(company_engine, client, settings).succeed == []
     report = stored(company_engine)
     assert report["kind"] == kind and report["period_end"] == period
+    assert report["detail_type"] == detail_type
     assert report["raw_payload"]["pblntf_detail_ty"] == detail_type
     assert api.count("document.xml") == 1
     assert api.count("fnlttSinglAcntAll.json") == (2 if detail_type.startswith("A") else 0)
@@ -187,7 +191,10 @@ def test_existing_feed_stores_each_long_type_and_parses_it_without_news_embeddin
             {"receipt": RECEIPT},
         ).scalar_one()
         assert len(docs) == 2
-        assert {s["content_kind"] for s in docs[0]["sections"]} == {"table", "narrative"}
+        assert {section["content_kind"] for section in docs[0]["sections"]} == {
+            "table",
+            "narrative",
+        }
         assert (
             conn.execute(
                 sa.text("SELECT count(*) FROM disclosure_sections WHERE receipt_id=:receipt"),
@@ -197,13 +204,22 @@ def test_existing_feed_stores_each_long_type_and_parses_it_without_news_embeddin
         )
 
 
-def test_short_and_long_filings_use_the_same_feed_with_different_storage(company_engine, settings):
+def test_default_source_configuration_stores_a_parsed_item(company_engine, settings, monkeypatch):
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_ARCHIVE_ROOT", str(settings.archive_root))
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_REQUEST_INTERVAL", "0")
+    api = DartAPI()
+    with api.client() as client:
+        result = scrape(company_engine, OpenDart(client, "test", {STOCK}))
+    assert result.succeed == [RECEIPT]
+    assert stored(company_engine)["status"] == "ready"
+    assert api.count("document.xml") == 1
+
+
+def test_short_and_long_filings_share_the_standard_scrape_flow(company_engine, settings):
     api = DartAPI()
     api.rows.append((None, "typed-short", "단일판매ㆍ공급계약체결"))
     with api.client() as client:
-        assert enqueue(company_engine, client).succeed == [RECEIPT, "typed-short"]
-        assert api.count("document.xml") == 1
-        assert collect(company_engine, client, settings)["ready"] == 1
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT, "typed-short"]
     with company_engine.connect() as conn:
         row = conn.execute(
             sa.text("SELECT body,embedding_status FROM articles WHERE external_id='typed-short'")
@@ -211,153 +227,126 @@ def test_short_and_long_filings_use_the_same_feed_with_different_storage(company
         assert "제품을 생산합니다" in row.body
         assert row.embedding_status == "pending"
     assert api.count("document.xml") == 2
+    assert stored(company_engine)["status"] == "ready"
 
 
-def test_failed_document_retries_from_database_without_listing_again(company_engine, settings):
+def test_document_request_failure_saves_nothing_and_retries_on_next_scrape(
+    company_engine, settings
+):
     api = DartAPI()
     api.document_error = True
     with api.client() as client:
-        enqueue(company_engine, client)
-        assert collect(company_engine, client, settings)["failed"] == 1
-        assert stored(company_engine)["status"] == "failed"
-        listings = api.count("list.json")
-        api.rows = []
+        result = ingest(company_engine, client, settings)
+        assert result.failed == [RECEIPT]
+        assert_no_rows(company_engine)
         api.document_error = False
-        assert collect(company_engine, client, settings)["ready"] == 1
-        assert api.count("list.json") == listings
-    assert stored(company_engine)["attempts"] == 0
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+    assert stored(company_engine)["status"] == "ready"
 
 
-def test_failed_document_stops_at_the_configured_attempt_limit(company_engine, settings):
-    api = DartAPI()
-    api.document_error = True
-    settings.max_attempts = 2
-    with api.client() as client:
-        enqueue(company_engine, client)
-        assert collect(company_engine, client, settings)["failed"] == 1
-        assert collect(company_engine, client, settings)["failed"] == 1
-        assert collect(company_engine, client, settings)["failed"] == 0
-    assert stored(company_engine)["status"] == "dead_letter"
-    assert stored(company_engine)["attempts"] == 2
-    assert api.count("document.xml") == 2
-
-
-def test_financial_failure_retries_without_downloading_the_document(company_engine, settings):
+def test_financial_api_failure_does_not_leave_partial_document_rows(company_engine, settings):
     api = DartAPI()
     api.financial_error = True
     with api.client() as client:
-        enqueue(company_engine, client)
-        result = collect(company_engine, client, settings)
-        assert result["ready"] == result["failed"] == 1
-        assert stored(company_engine)["status"] == "ready"
-        assert not stored(company_engine)["financials_collected"]
+        result = ingest(company_engine, client, settings)
+        assert result.failed == [RECEIPT]
+        assert_no_rows(company_engine)
         api.financial_error = False
-        result = collect(company_engine, client, settings)
-    assert result["ready"] == 0 and result["facts"] == 2
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
     assert stored(company_engine)["financials_collected"]
-    assert api.count("document.xml") == 1
+    assert api.count("document.xml") == 2
 
 
-def test_enabling_financial_collection_backfills_ready_reports(company_engine, settings):
-    api = DartAPI()
-    settings.collect_financials = False
-    with api.client() as client:
-        enqueue(company_engine, client)
-        assert collect(company_engine, client, settings)["facts"] == 0
-        settings.collect_financials = True
-        assert collect(company_engine, client, settings)["facts"] == 2
-    assert api.count("document.xml") == 1
-
-
-def test_empty_financial_results_are_not_repeated(company_engine, settings):
+def test_empty_financial_api_results_are_complete_and_not_repeated(company_engine, settings):
     api = DartAPI()
     api.empty_financials = True
     with api.client() as client:
-        enqueue(company_engine, client)
-        assert collect(company_engine, client, settings)["facts"] == 0
-        assert collect(company_engine, client, settings)["facts"] == 0
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+        assert ingest(company_engine, client, settings).succeed == []
     assert stored(company_engine)["financials_collected"]
     assert api.count("fnlttSinglAcntAll.json") == 2
 
 
-def test_no_pending_documents_does_not_call_opendart(company_engine, settings):
-    api = DartAPI()
-    with api.client() as client:
-        result = collect(company_engine, client, settings)
-    assert result["ready"] == result["failed"] == result["facts"] == 0
-    assert api.requests == []
-
-
-def test_nonperiodic_filing_without_period_keeps_it_unknown(company_engine, settings):
+def test_nonperiodic_filing_keeps_unknown_fiscal_fields(company_engine, settings):
     api = DartAPI("F001", "감사보고서")
     with api.client() as client:
-        enqueue(company_engine, client)
-        assert collect(company_engine, client, settings)["ready"] == 1
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
     report = stored(company_engine)
     assert report["business_year"] is None and report["period_end"] is None
     assert api.count("company.json") == api.count("fnlttSinglAcntAll.json") == 0
 
 
-def test_parser_upgrade_reuses_verified_original_archive(company_engine, settings, monkeypatch):
+def test_old_parser_version_is_replaced_through_the_same_api_flow(company_engine, settings):
     api = DartAPI()
     with api.client() as client:
-        enqueue(company_engine, client)
-        collect(company_engine, client, settings)
-        monkeypatch.setattr(collection, "PARSER_VERSION", "test-parser-next")
-        assert collect(company_engine, client, settings)["ready"] == 1
-    assert api.count("document.xml") == 1
-
-
-def test_corrupt_archive_is_rejected_before_reparsing(company_engine, settings, monkeypatch):
-    api = DartAPI()
-    with api.client() as client:
-        enqueue(company_engine, client)
-        collect(company_engine, client, settings)
-        with company_engine.connect() as conn:
-            key = conn.execute(
-                sa.text("SELECT archive_key FROM disclosure_documents WHERE receipt_id=:receipt"),
-                {"receipt": RECEIPT},
-            ).scalar_one()
-        (settings.archive_root / key).write_bytes(b"corrupt")
-        monkeypatch.setattr(collection, "PARSER_VERSION", "test-parser-next")
-        assert collect(company_engine, client, settings)["failed"] == 1
-    assert api.count("document.xml") == 1
-    assert stored(company_engine)["attempts"] == 1
-
-
-def test_replaced_source_is_archived_as_a_new_version(company_engine, settings):
-    api = DartAPI()
-    with api.client() as client:
-        enqueue(company_engine, client)
-        collect(company_engine, client, settings)
-        api.document = archive("변경된 사업 내용입니다.")
-        settings.refresh_days = 400
-        assert collect(company_engine, client, settings)["replaced"] == 1
-    with company_engine.connect() as conn:
-        hashes = (
+        ingest(company_engine, client, settings)
+        with company_engine.begin() as conn:
             conn.execute(
                 sa.text(
-                    "SELECT source_hash FROM disclosure_documents "
-                    "WHERE receipt_id=:receipt ORDER BY id"
+                    "UPDATE disclosure_documents SET parser_version='previous-parser' "
+                    "WHERE receipt_id=:receipt"
                 ),
                 {"receipt": RECEIPT},
             )
-            .scalars()
-            .all()
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+    assert api.count("document.xml") == 2
+    with company_engine.connect() as conn:
+        assert (
+            conn.execute(
+                sa.text(
+                    "SELECT parser_version FROM disclosure_documents WHERE receipt_id=:receipt "
+                    "ORDER BY id DESC LIMIT 1"
+                ),
+                {"receipt": RECEIPT},
+            ).scalar_one()
+            == PARSER_VERSION
         )
-    assert len(hashes) == 2 and hashes[-1] == hashlib.sha256(api.document).hexdigest()
 
 
-@pytest.mark.parametrize(("status", "expected"), [("014", "unavailable"), ("020", "failed")])
-def test_missing_document_and_api_error_do_not_create_fake_content(
-    company_engine, settings, status, expected
-):
+def test_failure_during_database_save_rolls_back_all_related_rows(company_engine, settings):
+    api = DartAPI()
+
+    def fail_facts(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("INSERT INTO disclosure_financial_facts"):
+            raise RuntimeError("simulated database failure")
+
+    sa.event.listen(company_engine, "before_cursor_execute", fail_facts)
+    try:
+        with (
+            api.client() as client,
+            pytest.raises(RuntimeError, match="simulated database failure"),
+        ):
+            ingest(company_engine, client, settings)
+    finally:
+        sa.event.remove(company_engine, "before_cursor_execute", fail_facts)
+    assert_no_rows(company_engine)
+
+
+def test_archive_bytes_match_the_stored_identity(company_engine, settings):
+    api = DartAPI()
+    with api.client() as client:
+        ingest(company_engine, client, settings)
+    with company_engine.connect() as conn:
+        row = conn.execute(
+            sa.text(
+                "SELECT archive_key,source_hash FROM disclosure_documents WHERE receipt_id=:receipt"
+            ),
+            {"receipt": RECEIPT},
+        ).one()
+    assert (settings.archive_root / row.archive_key).read_bytes() == api.document
+    assert row.source_hash == hashlib.sha256(api.document).hexdigest()
+
+
+@pytest.mark.parametrize(("status", "saved"), [("014", True), ("020", False)])
+def test_missing_document_is_distinct_from_api_failure(company_engine, settings, status, saved):
     api = DartAPI()
     api.document = f"<result><status>{status}</status></result>".encode()
     with api.client() as client:
-        enqueue(company_engine, client)
-        collect(company_engine, client, settings)
-    assert stored(company_engine)["status"] == expected
+        result = ingest(company_engine, client, settings)
+    if saved:
+        assert result.succeed == [RECEIPT]
+        assert stored(company_engine)["status"] == "unavailable"
+    else:
+        assert result.failed == [RECEIPT]
+        assert_no_rows(company_engine)
     assert api.count("fnlttSinglAcntAll.json") == 0
-    if status == "020":
-        assert list(settings.archive_root.rglob("*.xml")) == []
