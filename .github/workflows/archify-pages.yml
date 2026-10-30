@@ -262,6 +262,7 @@ jobs:
                       "Every component requires id, type, label, sources and pos or grid row/col. "
                       "Allowed component types: frontend, backend, database, cloud, security, "
                       "messagebus, external. Boundary kind must be region or security-group. "
+                      "Connection variant may ONLY be default, emphasis, security or dashed. "
                       "Read schemas/architecture.schema.json and schemas/common.schema.json in the "
                       "Archify directory for allowed connection variants and field names. "
                       "Do not load the full SKILL.md or other diagram modes into context. "
@@ -323,7 +324,21 @@ jobs:
                           raise RuntimeError(
                               "OpenCode did not produce architecture.json; see sanitized diagnostics"
                           )
-                      candidate = json.loads((work / "architecture.json").read_text())
+                      try:
+                          candidate = json.loads((work / "architecture.json").read_text())
+                      except json.JSONDecodeError as error:
+                          if attempt == 2:
+                              raise ValueError(
+                                  "Architecture JSON remains invalid after two repairs"
+                              ) from error
+                          prompt = (
+                              "Repair JSON syntax in architecture.json in your current directory. "
+                              f"Parser error: {error.msg}, line {error.lineno}, column {error.colno}. "
+                              "Read the file and use the edit tool for a small targeted correction. "
+                              "Preserve all architecture data and citations. Do not ask questions."
+                          )
+                          print(f"Attempt {attempt + 1}: repairing JSON syntax", flush=True)
+                          continue
                       missing = [
                           component.get("id", "unnamed")
                           for component in candidate.get("components", [])
@@ -337,7 +352,7 @@ jobs:
                               "repository files to add a nonempty sources array to EVERY component. "
                               "Citations contain path, line and optional end_line, using actual files "
                               "and inspected line numbers. Preserve semantics and layout. "
-                              "Write the complete corrected file; do not ask questions. "
+                              "Use the edit tool to add missing sources; do not ask questions. "
                               f"Components missing citations: {json.dumps(missing)}."
                           )
                           print(f"Attempt {attempt + 1}: repairing missing source citations", flush=True)
@@ -390,7 +405,8 @@ jobs:
                           ".opencode/skills/archify. Apply the diagnostics below to ALL affected objects, "
                           "including unlisted objects with the same missing field or invalid enum. "
                           "Preserve source citations, unaffected semantics and geometry. "
-                          "Write the corrected file using the write tool. "
+                          "Use the edit tool for small targeted corrections in architecture.json. "
+                          "Avoid rewriting the whole file. "
                           "Do not run commands or ask questions. "
                           f"Validator output: {diagnostics}"
                       )
