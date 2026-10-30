@@ -28,6 +28,12 @@ A poll is not an inference request: an empty poll must not call Modal, including
 GPU-backed identity endpoints. Financial facts and identified sections are read from
 PostgreSQL without starting either model.
 
+News-preprocessor discovers periodic reports through company RSS, fetches source
+documents and financial accounts from OpenDART, and stores parsed source data in
+PostgreSQL. The indexer reads that database to embed narrative passages; it does not
+fetch RSS or OpenDART. Financial facts and named sections remain available for direct
+database reads without embedding.
+
 When a poll yields narrative retrieval work, the server groups available queries for
 that hourly batch, obtains query vectors, reads candidates from pgvector, and submits
 the candidate lists for reranking. Complete the query-embedding stage together, then

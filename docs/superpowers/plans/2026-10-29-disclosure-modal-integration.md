@@ -5,7 +5,7 @@ Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and se
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The 2026-10-30 direct-library integration was verified with **1,377 passed, 49 skipped, 2 subtests passed**
+The 2026-10-30 direct-library integration was verified with **1,384 passed, 49 skipped, 2 subtests passed**
 on the combined serving branch using a disposable PostgreSQL database. This run checks
 CPU code and model contracts; it does not redeploy GPU workers or produce new inference timings.
 
@@ -24,6 +24,9 @@ The hourly news command and read-only news-http server retain their existing rol
 The separate daily collection command belongs to the existing news-preprocessor package.
 Data flows from OpenDART through that command into PostgreSQL, then through the DB-only
 indexer into pgvector. The indexer does not call OpenDART or open source archive files.
+Daily collection discovers periodic reports through company RSS using the existing
+publisher-style module. OpenDART provides the original document and financial accounts
+for each receipt. Historical listing APIs run only with an explicit business year.
 
 The existing news pipeline keeps its own model and configuration. CPU services call Modal
 through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libraries.

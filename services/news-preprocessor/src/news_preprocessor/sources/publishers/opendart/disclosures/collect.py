@@ -3,12 +3,14 @@ import hashlib
 import io
 import json
 import os
+import re
 import tempfile
 import zipfile
 from collections.abc import Mapping
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import sqlalchemy as sa
@@ -30,6 +32,7 @@ from news_preprocessor.sources.publishers.opendart.disclosures.financials import
 )
 from news_preprocessor.sources.publishers.opendart.disclosures.sections import section_rows
 from news_preprocessor.sources.publishers.opendart.disclosures.settings import Settings
+from news_preprocessor.sources.publishers.opendart.rss import OpenDartRSS
 
 log = get_logger(__name__)
 
@@ -148,7 +151,6 @@ def store_financial_facts(
 
 def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict[str, int]:
     from datetime import datetime
-    from zoneinfo import ZoneInfo
 
     today = datetime.now(ZoneInfo("Asia/Seoul")).date()
     dart = DartClient(
@@ -242,8 +244,44 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
             )
     for company in companies:
         try:
+            feed_rows = None
+            if settings.business_year is None:
+                feed_rows = [
+                    {
+                        "rcept_no": entry.external_id,
+                        "report_nm": entry.title.split(" - ", 1)[-1],
+                        "rcept_dt": entry.published_at.astimezone(ZoneInfo("Asia/Seoul")).strftime(
+                            "%Y%m%d"
+                        ),
+                        "rss": entry.raw_payload,
+                    }
+                    for entry in OpenDartRSS(client, company["corp_code"]).entries()
+                    if re.search(r"(?:사업|반기|분기)보고서\s*\(", entry.title)
+                ]
+                with engine.connect() as conn:
+                    pending = (
+                        conn.execute(
+                            sa.text(
+                                "SELECT receipt_id AS rcept_no, title AS report_nm, "
+                                "to_char(published_date,'YYYYMMDD') AS rcept_dt "
+                                "FROM disclosures WHERE stock_code=:stock "
+                                "AND status IN ('pending','failed') "
+                                "ORDER BY updated_at LIMIT :limit"
+                            ),
+                            {"stock": company["stock_code"], "limit": settings.document_limit},
+                        )
+                        .mappings()
+                        .all()
+                    )
+                feed_rows = list(
+                    {row["rcept_no"]: dict(row) for row in [*pending, *feed_rows]}.values()
+                )
+                if not feed_rows:
+                    continue
             closing = dart.closing_month(company["corp_code"])
             year, windows = collection_windows(today, closing, settings)
+            if feed_rows is not None:
+                windows = [(today, today)]
         except Exception as error:
             result["failed"] += 1
             log.warning(
@@ -269,10 +307,19 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                             "current": settings.business_year is None,
                         },
                     ).scalar()
-                if done and finish < today - timedelta(days=settings.recheck_days):
+                if (
+                    feed_rows is None
+                    and done
+                    and finish < today - timedelta(days=settings.recheck_days)
+                ):
                     continue
                 complete = True
-                for row in dart.reports(company["corp_code"], begin, finish):
+                rows = (
+                    feed_rows
+                    if feed_rows is not None
+                    else dart.reports(company["corp_code"], begin, finish)
+                )
+                for row in rows:
                     try:
                         fiscal_year, kind, period = report_period(row["report_nm"], closing)
                     except ValueError:
@@ -284,11 +331,7 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                             closing_month=closing,
                         )
                         continue
-                    if (
-                        fiscal_year < year
-                        or settings.business_year is not None
-                        and fiscal_year != year
-                    ):
+                    if settings.business_year is not None and fiscal_year != year:
                         continue
                     receipt = row["rcept_no"]
                     params = {
@@ -364,6 +407,8 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                         log.warning(
                             "disclosure_failed", receipt_id=receipt, error_type=type(error).__name__
                         )
+                if feed_rows is not None:
+                    continue
                 with engine.begin() as conn:
                     conn.execute(
                         sa.text(

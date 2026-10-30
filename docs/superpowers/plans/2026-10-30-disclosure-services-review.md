@@ -37,6 +37,10 @@ is unchanged.
    collector timer, and migrations 0012–0014 belong to the collection PR. The indexing
    PR contributes only migration 0015 for vectors. After collection completes or
    finally fails, systemd starts the indexer; a second timer does not repeat collection.
+   Daily discovery uses company RSS through the existing publisher-style module.
+   Original documents and structured accounts come from OpenDART using the RSS receipt;
+   explicit business-year backfill alone uses historical listing APIs. The indexer
+   still reads PostgreSQL only and never fetches RSS, DART or source archives.
 3. Put portfolio-builder's disclosure tools in `tools/disclosure/search.py`,
    `get.py`, and `tool.py`. Expose `search_disclosures`, `get_disclosure_sections`,
    and `get_disclosure_financials`. Require an explicit year or period for financial
@@ -97,7 +101,7 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 
 - Added tests failed first for missing profile parsing, direct-read methods, and tools.
 - Final full suite against the disposable `ktb_disclosure_split_test` PostgreSQL database:
-  **1,347 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+  **1,354 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
   account for the skips.
 - Ruff, formatting, Tach internal and external dependencies, and diff checks pass.
 - Retrieval's 48 tests call Python functions directly and retain PostgreSQL search,
