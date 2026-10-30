@@ -227,6 +227,7 @@ httpx==0.28.1 \
     --hash=sha256:75e98c5f16b0f35b567856f597f06ff2270a374470a5c2392242528e3e3e42fc \
     --hash=sha256:d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad
     # via
+    #   disclosure-indexer
     #   langchain-core
     #   langgraph-sdk
     #   news-graph-builder
@@ -679,6 +680,7 @@ psycopg==3.3.6 \
     --hash=sha256:a1db9f7148b06a28606767efaca51fa6f9398c5c0a3810519be69d7000bdb631 \
     --hash=sha256:c081f2250df751a943036e42db6df4571c66cd0aabe8291a7a506512b12007d2
     # via
+    #   disclosure-indexer
     #   market-collector
     #   market-http
     #   market-streamer
@@ -746,6 +748,8 @@ pydantic==2.13.5 \
     --hash=sha256:346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
     # via
+    #   disclosure-indexer
+    #   disclosure-retrieval
     #   fastapi
     #   langchain
     #   langchain-core
@@ -813,6 +817,8 @@ pydantic-settings==2.15.0 \
     --hash=sha256:0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42 \
     --hash=sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117
     # via
+    #   disclosure-indexer
+    #   disclosure-retrieval
     #   market-collector
     #   market-http
     #   market-streamer
@@ -978,6 +984,8 @@ sqlalchemy==2.1.1 \
     --hash=sha256:fdef70d59afce463bedef54580ba6a832f9f2313c1d0054e15cbb4ff46f37a97
     # via
     #   alembic
+    #   disclosure-indexer
+    #   disclosure-retrieval
     #   market-collector
     #   market-http
     #   market-streamer

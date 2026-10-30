@@ -26,6 +26,8 @@ def test_ta_lib_is_importable():
 def env(monkeypatch):
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://unused/v1")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "test-model")
     monkeypatch.setattr(entry, "NewsClient", lambda uri: object())
     monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: BRIEFING)
     calls = {}
@@ -69,6 +71,9 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
     assert {t.name for t in captured["tools"]} == {
         "get_news_cluster",
         "search_news_cluster",
+        "search_disclosures",
+        "get_disclosure_sections",
+        "get_disclosure_financials",
         "search_graph",
         "find_graph_paths",
         "analyze_technicals",

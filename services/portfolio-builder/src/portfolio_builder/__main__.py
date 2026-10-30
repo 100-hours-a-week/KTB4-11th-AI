@@ -1,6 +1,7 @@
 import uuid
 
 import sqlalchemy as sa
+from disclosure_retrieval.settings import Settings as DisclosureSettings
 from ktb_core.logging import get_logger, setup_logging, start_logging
 from langchain_openrouter import ChatOpenRouter
 
@@ -18,6 +19,7 @@ from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
 from portfolio_builder.settings import Settings
+from portfolio_builder.tools.disclosure.tool import disclosure_tools
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
 from portfolio_builder.tools.submit import submit_tool
@@ -61,6 +63,7 @@ def main() -> None:
                 )
                 tools = [
                     *news_tools(news_client),
+                    *disclosure_tools(engine, DisclosureSettings()),
                     *graph_tools(news_client),
                     technicals_tool(engine, HttpMarket(settings.market_http_base_uri, engine)),
                     submit_tool(

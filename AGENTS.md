@@ -109,6 +109,8 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `packages/telemetry` (`ktb_telemetry`) | OpenTelemetry tracing setup and log trace ids; keeps OpenTelemetry dependencies outside core |
 | `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
+| `services/disclosure-indexer` | Read collected disclosure documents from PostgreSQL, embed narrative sections, and store vectors in pgvector |
+| `services/disclosure-retrieval` | Direct Python disclosure search and database reads called by portfolio-builder |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
 | `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
 | `services/news-http` | Serve private, read-only news and graph HTTP queries |
@@ -118,6 +120,15 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent |
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
+
+The indexer and retrieval share `DISCLOSURE_EMBEDDING_*`;
+news keeps `KTB_EMBEDDING_*`.
+Documents and queries must use one checkpoint and one dimension, so the query prefix is
+part of the index signature and changing it forces a reindex. `disclosure_sections` and
+`disclosure_financial_facts` are readable with no embedding server configured, and a
+search reports each report's `index_state` rather than failing a whole stock when one
+index belongs to a retired embedding space. An empty result is not evidence that no risk
+exists; `latest_searched` says how many candidates were scored.
 
 Services communicate through datastores and explicit HTTP/queue contracts. Do not import
 another service's implementation. Keep module boundaries aligned with `tach.toml`.
@@ -260,3 +271,16 @@ financial collection as informational metadata; it is not a queue marker. Collec
 uses `NEWS_PREPROCESSOR_DISCLOSURE_*` for archive location, HTTP request pacing and
 retry attempts, and archive download/extraction limits. Original archives live outside
 the repository. Collection does not call an embedding model or generate answers.
+
+The existing news-preprocessor service starts the DB-only indexer after success or
+final failure. There is no separate collection or indexing timer.
+
+Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
+search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.
+Retrieval lives under `services/disclosure-retrieval`; builder passes its own
+SQLAlchemy engine to the tools. There is no retrieval HTTP server, router, client, port, or
+container. Financial and section tools query PostgreSQL directly. Narrative search calls Modal
+over HTTPS for query embedding and reranking, returning DB connections before those calls.
+Neither collection nor retrieval generates answers. Backend polling may include an
+optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
+receiving this field does not change trading behavior.
