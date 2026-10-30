@@ -24,12 +24,12 @@ jobs:
       ARCHIFY_REV: f325d86230553e1dd15d3464324f1fcd01f02352
       OPENCODE_VERSION: 1.19.5
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7.1.0
         with:
-          node-version: '22'
+          node-version: '26'
       - name: Install pinned tools
         run: |
           set -euo pipefail
@@ -39,7 +39,7 @@ jobs:
           git -C "$RUNNER_TEMP/archify" fetch --depth 1 origin "$ARCHIFY_REV"
           git -C "$RUNNER_TEMP/archify" checkout --detach FETCH_HEAD
       - name: Join Tailnet using GitHub OIDC
-        uses: tailscale/github-action@v4
+        uses: tailscale/github-action@v4.4.0
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
@@ -300,13 +300,13 @@ jobs:
 
           if __name__ == "__main__":
               main()
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: architecture-${{ github.sha }}-${{ github.run_attempt }}
           path: _site/
           if-no-files-found: error
           retention-days: 14
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: _site/
 
@@ -329,7 +329,7 @@ jobs:
           set -euo pipefail
           latest=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
           test "$latest" = "$GITHUB_SHA" || { echo '::error::Superseded main revision'; exit 1; }
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6.0.0
       - name: Deploy validated artifact
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5.0.1
