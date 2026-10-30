@@ -21,8 +21,8 @@ jobs:
       contents: read
       id-token: write
     env:
-      ARCHIFY_REV: f325d86230553e1dd15d3464324f1fcd01f02352
-      OPENCODE_VERSION: 1.19.5
+      ARCHIFY_REV: ${{ vars.ARCHIFY_REV }}
+      OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -33,6 +33,8 @@ jobs:
       - name: Install pinned tools
         run: |
           set -euo pipefail
+          : "${ARCHIFY_REV:?Set repository variable ARCHIFY_REV}"
+          : "${OPENCODE_VERSION:?Set repository variable OPENCODE_VERSION}"
           npm install --global "opencode-ai@$OPENCODE_VERSION"
           git init "$RUNNER_TEMP/archify"
           git -C "$RUNNER_TEMP/archify" remote add origin https://github.com/tt-a1i/archify.git
