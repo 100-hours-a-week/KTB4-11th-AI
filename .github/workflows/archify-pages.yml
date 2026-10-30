@@ -40,6 +40,29 @@ jobs:
           git -C "$RUNNER_TEMP/archify" remote add origin https://github.com/tt-a1i/archify.git
           git -C "$RUNNER_TEMP/archify" fetch --depth 1 origin "$ARCHIFY_REV"
           git -C "$RUNNER_TEMP/archify" checkout --detach FETCH_HEAD
+      - name: Inspect OIDC trust claims
+        env:
+          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
+        shell: python
+        run: |
+          import base64
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          url += "&audience=" + urllib.parse.quote(os.environ["TS_AUDIENCE"], safe="")
+          request = urllib.request.Request(url, headers={
+              "Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+          })
+          with urllib.request.urlopen(request, timeout=15) as response:
+              token = json.load(response)["value"]
+          payload = token.split(".")[1]
+          claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+          for name in ("iss", "sub", "repository", "ref", "workflow_ref"):
+              print(f"{name}: {claims.get(name)}")
+          print("audience_matches: " + str(claims.get("aud") == os.environ["TS_AUDIENCE"]))
       - name: Join Tailnet using GitHub OIDC
         uses: tailscale/github-action@v4.4.0
         with:
@@ -249,7 +272,11 @@ jobs:
                           timeout=1200,
                       )
                   if result.returncode:
-                      report_failure("OpenCode", private / "agent.log", [api_key, base_url, urllib.parse.urlsplit(base_url).hostname])
+                      report_failure(
+                          "OpenCode",
+                          private / "agent.log",
+                          [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
+                      )
                       raise RuntimeError("OpenCode generation failed; private session logs are not published")
                   candidate = json.loads((work / "architecture.json").read_text())
                   candidate.setdefault("meta", {})["output"] = "index.html"
@@ -285,7 +312,11 @@ jobs:
                           timeout=600,
                       )
                   if result.returncode:
-                      report_failure("Archify", private / "finalize.log", [api_key, base_url, urllib.parse.urlsplit(base_url).hostname])
+                      report_failure(
+                          "Archify",
+                          private / "finalize.log",
+                          [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
+                      )
                       raise RuntimeError("Archify finalize failed; deployment stopped")
                   metadata = {
                       "commit": os.environ["GITHUB_SHA"],
