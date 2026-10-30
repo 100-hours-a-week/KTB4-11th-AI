@@ -116,6 +116,13 @@ def test_changing_business_year_scope_does_not_hide_current_reports(company_engi
         z.writestr("main.xml", "<DOCUMENT><P>사업 내용</P></DOCUMENT>")
 
     def handle(req):
+        if req.url.path.endswith("companyRSS.xml"):
+            return httpx.Response(
+                200,
+                text="<rss><channel><item><title>수집시험 - 분기보고서 (2026.03)</title>"
+                "<link>https://dart.fss.or.kr/api/link.jsp?rcpNo=20260515000001</link>"
+                "<pubDate>Fri, 15 May 2026 08:00:00 GMT</pubDate></item></channel></rss>",
+            )
         if req.url.path.endswith("company.json"):
             return httpx.Response(200, json={"status": "000", "acc_mt": "12"})
         if req.url.path.endswith("list.json"):
@@ -286,6 +293,8 @@ def _seed_ready(engine, receipt: str, published, content: bytes, archive_root):
 
 def _dart(document: bytes, reports=(), acc_mt="12"):
     def handle(req):
+        if req.url.path.endswith("companyRSS.xml"):
+            return httpx.Response(200, text="<rss><channel/></rss>")
         if req.url.path.endswith("company.json"):
             return httpx.Response(200, json={"status": "000", "acc_mt": acc_mt})
         if req.url.path.endswith("list.json"):
@@ -520,6 +529,127 @@ FINANCIAL_REPORT = {
     "rcept_no": "facts-test",
     "rcept_dt": "20260315",
 }
+
+
+def test_daily_collection_uses_company_rss_and_stores_facts_sections_and_documents(
+    company_engine, tmp_path
+):
+    requested = []
+    receipt = "20261030000001"
+    document = _zip(
+        "<DOCUMENT><TITLE>사업의 내용</TITLE><P>제품을 생산합니다.</P>"
+        "<TITLE>재무제표</TITLE><TABLE><TR><TD>자산</TD><TD>1000</TD></TR></TABLE>"
+        "</DOCUMENT>"
+    )
+
+    def handle(req):
+        requested.append(req.url.path)
+        if req.url.path.endswith("companyRSS.xml"):
+            assert req.url.params["crpCd"] == "00990002"
+            assert "crtfc_key" not in req.url.params
+            return httpx.Response(
+                200,
+                text=f"<rss><channel><item><title>(유가)수집시험 - 사업보고서 (2025.12)</title>"
+                f"<link>https://dart.fss.or.kr/api/link.jsp?rcpNo={receipt}</link>"
+                "<pubDate>Fri, 30 Oct 2026 08:24:00 GMT</pubDate></item></channel></rss>",
+            )
+        if req.url.path.endswith("company.json"):
+            return httpx.Response(200, json={"status": "000", "acc_mt": "12"})
+        if req.url.path.endswith("document.xml"):
+            return httpx.Response(200, content=document)
+        if req.url.path.endswith("fnlttSinglAcntAll.json"):
+            return httpx.Response(
+                200, json={"status": "000", "list": _account(req.url.params["fs_div"])}
+            )
+        raise AssertionError(f"unexpected endpoint: {req.url.path}")
+
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        request_interval=0,
+        refresh_days=0,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        result = collect(company_engine, client, settings)
+        second = collect(company_engine, client, settings)
+    assert result["ready"] == 1
+    assert result["failed"] == 0
+    assert result["facts"] == 2
+    assert second["ready"] == second["facts"] == 0
+    assert requested.count("/api/document.xml") == 1
+    assert "/api/list.json" not in requested
+    with company_engine.connect() as conn:
+        docs = conn.execute(
+            sa.text("SELECT documents FROM disclosure_documents WHERE receipt_id=:receipt"),
+            {"receipt": receipt},
+        ).scalar_one()
+        assert {s["content_kind"] for s in docs[0]["sections"]} == {"table", "narrative"}
+        assert (
+            conn.execute(
+                sa.text("SELECT count(*) FROM disclosure_sections WHERE receipt_id=:receipt"),
+                {"receipt": receipt},
+            ).scalar_one()
+            == 2
+        )
+
+
+def test_failed_rss_document_retries_after_it_leaves_the_feed(company_engine, tmp_path):
+    first = True
+    requested = []
+
+    def handle(req):
+        requested.append(req.url.path)
+        if req.url.path.endswith("companyRSS.xml"):
+            item = (
+                "<item><title>수집시험 - 사업보고서 (2025.12)</title>"
+                "<link>https://dart.fss.or.kr/api/link.jsp?rcpNo=20261030000003</link>"
+                "<pubDate>Fri, 30 Oct 2026 08:24:00 GMT</pubDate></item>"
+                if first
+                else ""
+            )
+            return httpx.Response(200, text=f"<rss><channel>{item}</channel></rss>")
+        if req.url.path.endswith("company.json"):
+            return httpx.Response(200, json={"status": "000", "acc_mt": "12"})
+        if req.url.path.endswith("document.xml"):
+            return httpx.Response(500) if first else httpx.Response(200, content=_zip())
+        raise AssertionError(f"unexpected endpoint: {req.url.path}")
+
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        request_interval=0,
+        attempts=1,
+        refresh_days=0,
+        collect_financials=False,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert collect(company_engine, client, settings)["failed"] == 1
+        first = False
+        assert collect(company_engine, client, settings)["ready"] == 1
+    assert requested.count("/api/document.xml") == 2
+    assert "/api/list.json" not in requested
+
+
+def test_empty_rss_does_not_fetch_a_company_or_document(company_engine, tmp_path):
+    requested = []
+
+    def handle(req):
+        requested.append(req.url.path)
+        assert req.url.path.endswith("companyRSS.xml")
+        return httpx.Response(200, text="<rss><channel/></rss>")
+
+    settings = Settings(
+        postgres_dsn="unused",
+        dart_api_key="fake",
+        archive_root=tmp_path,
+        request_interval=0,
+    )
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        result = collect(company_engine, client, settings)
+    assert result["ready"] == result["failed"] == result["facts"] == 0
+    assert requested == ["/api/companyRSS.xml"]
 
 
 def _dart_with_financials(accounts, document=None):

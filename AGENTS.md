@@ -250,6 +250,12 @@ and runs through `news-preprocessor-disclosures`. Its own collector timer runs d
 05:00 KST. Migrations 0012–0014 create original documents and collection progress, sections,
 and financial facts respectively. This command stores source data without embedding or
 answer generation. Only it uses `NEWS_PREPROCESSOR_DISCLOSURE_*` and the disclosure archive.
+Normal collection discovers reports through company RSS in `opendart/rss.py`, using
+the existing publishers' httpx/BeautifulSoup/FeedEntry pattern. RSS does not contain
+the report body or structured accounts; these come from OpenDART using the receipt ID.
+An explicit business year enables historical listing-API backfill instead of RSS.
+The downstream indexer reads parsed narrative documents from PostgreSQL and writes
+vectors to pgvector; the collector does not call an embedding model.
 
 The indexing PR adds migration 0015 for vectors and starts the DB-only indexer after collection
 completes or finally fails. The indexer never starts collection, so there is only one daily timer.
