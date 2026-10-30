@@ -16,7 +16,7 @@ jobs:
   generate:
     if: github.repository == '100-hours-a-week/KTB4-11th-AI' && github.ref == 'refs/heads/docs/442/fix-tailscale-routes'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 100
     permissions:
       contents: read
       id-token: write
@@ -259,7 +259,11 @@ jobs:
                       "Start by reading compose.local.yaml and the Archify JSON example at "
                       ".opencode/skills/archify/examples/web-app.architecture.json. "
                       "That example teaches field shape only; replace its facts using repository source. "
-                      "Read the architecture schema only when unsure about a field. "
+                      "Every component requires id, type, label, sources and pos or grid row/col. "
+                      "Allowed component types: frontend, backend, database, cloud, security, "
+                      "messagebus, external. Boundary kind must be region or security-group. "
+                      "Read schemas/architecture.schema.json and schemas/common.schema.json in the "
+                      "Archify directory for allowed connection variants and field names. "
                       "Do not load the full SKILL.md or other diagram modes into context. "
                       "Analyze the source snapshot: "
                       "services, packages, compose files, infrastructure and workflows. Write ONLY "
@@ -291,7 +295,7 @@ jobs:
                       "OPENCODE_DISABLE_SHARE": "true",
                       "ARCHIFY_UPDATE_CHECK_DISABLED": "1",
                   }
-                  for attempt in range(2):
+                  for attempt in range(3):
                       with (private / "agent.log").open("w") as log:
                           result = subprocess.run(
                               [
@@ -325,58 +329,71 @@ jobs:
                           for component in candidate.get("components", [])
                           if not component.get("sources")
                       ]
-                      if candidate.get("components") and not missing:
-                          break
-                      print(f"Source validation attempt {attempt + 1}: {len(missing)} missing citations")
-                      if attempt == 1:
-                          raise ValueError(
-                              "Every architecture component must cite repository source evidence"
+                      if not candidate.get("components") or missing:
+                          if attempt == 2:
+                              raise ValueError("Architecture source citations remain incomplete")
+                          prompt = (
+                              "Repair architecture.json in your current directory. Read it, then inspect "
+                              "repository files to add a nonempty sources array to EVERY component. "
+                              "Citations contain path, line and optional end_line, using actual files "
+                              "and inspected line numbers. Preserve semantics and layout. "
+                              "Write the complete corrected file; do not ask questions. "
+                              f"Components missing citations: {json.dumps(missing)}."
                           )
-                      prompt = (
-                          "Repair the existing architecture.json in your current directory. "
-                          "Read it, then read repository files to add a nonempty sources array to EVERY "
-                          "component. Each citation has path, line and optional end_line. "
-                          "Use actual repository-relative paths and inspected line numbers. "
-                          "Preserve the architecture and layout. Do not ask questions. "
-                          "Write the complete corrected file using the write tool. "
-                          f"Components missing citations: {json.dumps(missing)}. "
-                          f"File: {work / 'architecture.json'}."
+                          print(f"Attempt {attempt + 1}: repairing missing source citations", flush=True)
+                          continue
+                      candidate.setdefault("meta", {})["output"] = "index.html"
+                      candidate["meta"]["repository"] = {
+                          "url": "https://github.com/100-hours-a-week/KTB4-11th-AI.git",
+                          "revision": os.environ["GITHUB_SHA"],
+                      }
+                      (site / "architecture.json").write_text(
+                          json.dumps(candidate, ensure_ascii=False, indent=2)
                       )
-                  candidate.setdefault("meta", {})["output"] = "index.html"
-                  candidate["meta"]["repository"] = {
-                      "url": "https://github.com/100-hours-a-week/KTB4-11th-AI.git",
-                      "revision": os.environ["GITHUB_SHA"],
-                  }
-                  (site / "architecture.json").write_text(json.dumps(candidate, ensure_ascii=False, indent=2))
-                  with (private / "finalize.log").open("w") as log:
-                      result = subprocess.run(
-                          [
-                              "node",
-                              str(skill / "bin/archify.mjs"),
-                              "finalize",
-                              "architecture",
-                              str(site / "architecture.json"),
-                              str(site / "index.html"),
-                              "--repo-root",
-                              str(repo),
-                              "--quality",
-                              "showcase",
-                              "--json",
-                              "--out-dir",
-                              str(work / "review"),
-                          ],
-                          cwd=site,
-                          stdout=log,
-                          stderr=log,
-                          timeout=600,
-                      )
-                  if result.returncode:
+                      with (private / "finalize.log").open("w") as log:
+                          result = subprocess.run(
+                              [
+                                  "node",
+                                  str(skill / "bin/archify.mjs"),
+                                  "finalize",
+                                  "architecture",
+                                  str(site / "architecture.json"),
+                                  str(site / "index.html"),
+                                  "--repo-root",
+                                  str(repo),
+                                  "--quality",
+                                  "showcase",
+                                  "--json",
+                                  "--out-dir",
+                                  str(work / "review"),
+                              ],
+                              cwd=site,
+                              stdout=log,
+                              stderr=log,
+                              timeout=600,
+                          )
+                      if not result.returncode:
+                          break
                       report_failure(
                           "Archify",
                           private / "finalize.log",
                           [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
                       )
-                      raise RuntimeError("Archify finalize failed; deployment stopped")
+                      if attempt == 2:
+                          raise RuntimeError("Archify finalize failed after two repairs; deployment stopped")
+                      (work / "architecture.json").write_text(json.dumps(candidate, ensure_ascii=False))
+                      diagnostics = (private / "finalize.log").read_text()[-8000:]
+                      prompt = (
+                          "Repair the existing architecture.json in your current directory. "
+                          "The trusted Archify validator rejected it. Read the candidate and the bundled "
+                          "schemas/architecture.schema.json and schemas/common.schema.json under "
+                          ".opencode/skills/archify. Apply the diagnostics below to ALL affected objects, "
+                          "including unlisted objects with the same missing field or invalid enum. "
+                          "Preserve source citations, unaffected semantics and geometry. "
+                          "Write the corrected file using the write tool. "
+                          "Do not run commands or ask questions. "
+                          f"Validator output: {diagnostics}"
+                      )
                   metadata = {
                       "commit": os.environ["GITHUB_SHA"],
                       "model": model,
