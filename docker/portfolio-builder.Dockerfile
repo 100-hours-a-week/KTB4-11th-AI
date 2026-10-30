@@ -12,8 +12,9 @@ RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
 COPY packages/core packages/core
+COPY packages/disclosure-retrieval packages/disclosure-retrieval
 COPY services/portfolio-builder services/portfolio-builder
-RUN uv pip install --no-deps ./packages/core ./services/portfolio-builder
+RUN uv pip install --no-deps ./packages/core ./packages/disclosure-retrieval ./services/portfolio-builder
 
 FROM python:3.13-slim-bookworm AS runtime
 

@@ -1,10 +1,6 @@
 import pytest
 import sqlalchemy as sa
-from disclosure_retrieval.app import create_app
-from disclosure_retrieval.settings import Settings
-from fastapi.testclient import TestClient
-
-URL = "/stocks/005930/disclosures/sections"
+from disclosure_retrieval.sections import read_sections
 
 
 @pytest.fixture
@@ -49,50 +45,41 @@ def sectioned(engine):
 def test_sections_are_readable_with_no_embedding_configuration(sectioned, monkeypatch):
     monkeypatch.delenv("DISCLOSURE_EMBEDDING_BASE_URI", raising=False)
     monkeypatch.delenv("DISCLOSURE_EMBEDDING_MODEL", raising=False)
-    monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://model/v1")
-    monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "test-model")
-
-    with TestClient(create_app(sectioned, Settings())) as client:
-        body = client.get(URL, params={"receipt_id": "sec-1"}).json()
-
-    assert [section["heading"] for section in body["sections"]] == [
+    with sectioned.connect() as conn:
+        rows = read_sections(conn, "005930", "sec-1")
+    assert [row.heading for row in rows] == [
         "I. 회사의 개요",
         "II. 사업의 내용",
         "첨부. 감사보고서",
     ]
-    first = body["sections"][0]
-    assert first["receipt_id"] == "sec-1"
-    assert first["document_name"] == "00001.xml"
-    assert (first["start_offset"], first["end_offset"]) == (0, 2)
-    assert first["parser_version"] == "sections-v1"
+    first = rows[0]
+    assert first.receipt_id == "sec-1" and first.document_name == "00001.xml"
+    assert (first.start_offset, first.end_offset) == (0, 2)
+    assert first.parser_version == "sections-v1"
 
 
-def test_sections_require_an_explicit_receipt(client):
-    assert client.get(URL).status_code == 422
+def test_sections_require_an_explicit_receipt(sectioned):
+    with sectioned.connect() as conn, pytest.raises(TypeError):
+        read_sections(conn, "005930")
 
 
-def test_sections_can_be_narrowed_by_document_and_topic(client, sectioned):
-    by_document = client.get(
-        URL, params={"receipt_id": "sec-1", "document_name": "00002.xml"}
-    ).json()
-    assert [section["heading"] for section in by_document["sections"]] == ["첨부. 감사보고서"]
-
-    by_topic = client.get(URL, params={"receipt_id": "sec-1", "topic": "business"}).json()
-    assert [section["heading"] for section in by_topic["sections"]] == ["II. 사업의 내용"]
+def test_sections_can_be_narrowed_by_document_and_topic(sectioned):
+    with sectioned.connect() as conn:
+        rows = read_sections(conn, "005930", "sec-1", document_name="00002.xml")
+        assert [row.heading for row in rows] == ["첨부. 감사보고서"]
+        rows = read_sections(conn, "005930", "sec-1", topic="business")
+        assert [row.heading for row in rows] == ["II. 사업의 내용"]
 
 
-def test_sections_of_another_company_are_not_returned(client, sectioned):
-    assert client.get(
-        "/stocks/000660/disclosures/sections", params={"receipt_id": "sec-1"}
-    ).json() == {"sections": []}
+def test_sections_of_another_company_are_not_returned(sectioned):
+    with sectioned.connect() as conn:
+        assert read_sections(conn, "000660", "sec-1") == []
 
 
-def test_a_section_read_makes_no_embedding_call(client, sectioned, monkeypatch):
+def test_a_section_read_makes_no_embedding_call(sectioned, monkeypatch):
     def forbidden(*args, **kwargs):
-        raise AssertionError("a direct section read must not call the embedding server")
+        raise AssertionError("unexpected embedding")
 
     monkeypatch.setattr("urllib.request.urlopen", forbidden)
-    monkeypatch.setattr(
-        "urllib.request.OpenerDirector.open", lambda self, req, timeout: forbidden(req, timeout)
-    )
-    assert client.get(URL, params={"receipt_id": "sec-1"}).status_code == 200
+    with sectioned.connect() as conn:
+        assert read_sections(conn, "005930", "sec-1")

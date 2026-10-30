@@ -110,7 +110,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
 | `services/disclosure-indexer` | Read collected disclosure documents from PostgreSQL, embed narrative sections, and store vectors in pgvector |
-| `services/disclosure-retrieval` | Serve read-only disclosure evidence: exact cosine narrative search plus GPU-free financial and section reads |
+| `packages/disclosure-retrieval` | Direct Python disclosure search and database reads called by portfolio-builder |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
 | `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
 | `services/news-http` | Serve private, read-only news and graph HTTP queries |
@@ -121,7 +121,8 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
 
-The two disclosure services share `DISCLOSURE_EMBEDDING_*`; news keeps `KTB_EMBEDDING_*`.
+The indexer and portfolio-builder's retrieval library share `DISCLOSURE_EMBEDDING_*`;
+news keeps `KTB_EMBEDDING_*`.
 Documents and queries must use one checkpoint and one dimension, so the query prefix is
 part of the index signature and changing it forces a reindex. `disclosure_sections` and
 `disclosure_financial_facts` are readable with no embedding server configured, and a
@@ -254,7 +255,10 @@ The indexing PR adds migration 0015 for vectors and starts the DB-only indexer a
 completes or finally fails. The indexer never starts collection, so there is only one daily timer.
 Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
 search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.
-Retrieval remains an HTTP service called by portfolio-builder; Modal is an outgoing inference
-dependency. Neither collection nor retrieval generates answers. Backend polling may include an
+Retrieval is a Python library under `packages/disclosure-retrieval`; builder passes its own
+SQLAlchemy engine to the tools. There is no retrieval HTTP server, router, client, port, or
+container. Financial and section tools query PostgreSQL directly. Narrative search calls Modal
+over HTTPS for query embedding and reranking, returning DB connections before those calls.
+Neither collection nor retrieval generates answers. Backend polling may include an
 optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
 receiving this field does not change trading behavior.

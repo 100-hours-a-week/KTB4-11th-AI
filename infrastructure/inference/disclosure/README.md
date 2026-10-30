@@ -37,7 +37,7 @@ Do not deliberately leave gaps longer than five seconds within a model's batch, 
 a later call can start another container and repeat initialization. Grouping here means
 server-side scheduling; it does not raise the measured per-model input-token budget.
 
-The existing retrieval HTTP endpoint handles one search at a time and already avoids
+The retrieval library runs inside portfolio-builder and avoids
 inference for missing reports and empty narrative indexes. The existing hourly
 `portfolio-rebalancer` polling endpoint returns accounts, not pending RAG queries.
 Connecting an hourly search-request batch therefore requires a backend request contract
@@ -84,8 +84,7 @@ still take time; startup and inference measurements are recorded in the final im
 The model settings live in `packages/core/src/ktb_core/embedding/config.py`, alongside
 the existing news configuration. Modal copies that file into its image as
 `/root/model_config.py`; CPU services import the same disclosure identity values.
-The separate disclosure model files were removed. HTTP calls belong to each service's
-inference client; core contains no HTTP transport or GPU dependencies.
+The separate disclosure model files were removed. External inference HTTP calls belong to the indexer and retrieval library; core contains no HTTP transport or GPU dependencies.
 
 The reranker uses the evaluated financial chat template, NF4 with double quantization,
 float32 preparation of non-quantized layers, no KV cache and last-token logits only. Its
@@ -129,7 +128,6 @@ DISCLOSURE_MODAL_SECRET=<workspace-proxy-token-secret>
 DISCLOSURE_INDEXER_TIMEOUT=150
 DISCLOSURE_INDEXER_LEASE_SECONDS=600
 DISCLOSURE_RETRIEVAL_TIMEOUT=150
-PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_TIMEOUT=480
 ```
 
 Both Compose files pass the settings into the appropriate services. They do not install
@@ -184,7 +182,7 @@ refuses to delete 1024 indexes automatically; removing them is a separate destru
 ## Verification and remaining measurements
 
 ```bash
-./scripts/run-tests.sh infrastructure/inference services/disclosure-indexer services/disclosure-retrieval
+./scripts/run-tests.sh infrastructure/inference services/disclosure-indexer packages/disclosure-retrieval
 ```
 
 Local tests cover transport identities, proxy authentication, invalid vectors/scores,

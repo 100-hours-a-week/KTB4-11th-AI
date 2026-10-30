@@ -1,48 +1,171 @@
 import json
-from unittest.mock import Mock
+from datetime import date
+from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
-from portfolio_builder.retrieval_client import RetrievalClient
+import sqlalchemy as sa
+from disclosure_retrieval.queries import Evidence, SearchResult
+from disclosure_retrieval.settings import Settings
+from disclosure_retrieval.tables import (
+    disclosure_financial_facts,
+    disclosure_sections,
+    disclosures,
+    metadata,
+)
+from portfolio_builder.errors import ToolError
 from portfolio_builder.tools.disclosure.tool import disclosure_tools
 from pydantic import ValidationError
 
 
-def test_disclosure_tools_separate_search_from_direct_reads():
-    client = Mock(spec=RetrievalClient)
-    client.search_disclosures.return_value = {"reports": [], "latest_evidence": []}
-    client.get_sections.return_value = {"sections": [{"text": "사업 내용"}]}
-    client.get_financials.return_value = {"facts": [{"source_value": "1,000"}]}
-    tools = {tool.name: tool for tool in disclosure_tools(client)}
-
-    search = tools["search_disclosures"].invoke({"stock_code": "005930", "query": "사업 위험"})
-    sections = tools["get_disclosure_sections"].invoke(
-        {"stock_code": "005930", "receipt_id": "20260301000001", "heading": "사업"}
+@pytest.fixture
+def tools():
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    period = date(2025, 12, 31)
+    with engine.begin() as conn:
+        conn.execute(
+            disclosures.insert(),
+            {
+                "receipt_id": "receipt-1",
+                "stock_code": "005930",
+                "business_year": 2025,
+                "kind": "annual",
+                "period_end": period,
+                "published_date": date(2026, 3, 1),
+                "status": "ready",
+            },
+        )
+        conn.execute(
+            disclosure_sections.insert(),
+            {
+                "id": 1,
+                "receipt_id": "receipt-1",
+                "document_name": "main.xml",
+                "document_order": 0,
+                "ordinal": 0,
+                "heading": "사업 & 위험",
+                "topic": "risk",
+                "text": "사업 위험 설명",
+                "start_offset": 0,
+                "end_offset": 8,
+                "parser_version": "v1",
+            },
+        )
+        conn.execute(
+            disclosure_financial_facts.insert(),
+            {
+                "id": 1,
+                "receipt_id": "receipt-1",
+                "stock_code": "005930",
+                "business_year": 2025,
+                "kind": "annual",
+                "period_end": period,
+                "scope": "CFS",
+                "statement_type": "BS",
+                "account_id": "ifrs-full_Assets",
+                "account_name": "자산총계",
+                "currency": "KRW",
+                "ordinal": 0,
+                "source_value": "1,000",
+                "value": Decimal("1000"),
+                "normalized": True,
+            },
+        )
+    settings = Settings(
+        DISCLOSURE_EMBEDDING_BASE_URI="http://unused/v1", DISCLOSURE_EMBEDDING_MODEL="test-model"
     )
-    facts = tools["get_disclosure_financials"].invoke(
-        {"stock_code": "005930", "business_year": 2025, "scope": "CFS"}
-    )
-
-    assert json.loads(search)["reports"] == []
-    assert json.loads(sections)["sections"][0]["text"] == "사업 내용"
-    assert json.loads(facts)["facts"][0]["source_value"] == "1,000"
-    assert client.search_disclosures.call_count == 1
-    assert client.get_sections.call_args.kwargs["heading"] == "사업"
-    assert client.get_financials.call_args.kwargs["scope"] == "CFS"
+    yield {tool.name: tool for tool in disclosure_tools(engine, settings)}
+    engine.dispose()
 
 
-def test_financial_tool_requires_an_explicit_period_before_calling_upstream():
-    client = Mock(spec=RetrievalClient)
-    tools = {tool.name: tool for tool in disclosure_tools(client)}
+def test_direct_reads_use_database_without_http_or_gpu(tools):
+    with patch("urllib.request.urlopen", side_effect=AssertionError("HTTP must not be called")):
+        sections = json.loads(
+            tools["get_disclosure_sections"].invoke(
+                {
+                    "stock_code": "005930",
+                    "receipt_id": "receipt-1",
+                    "heading": "사업 & 위험",
+                }
+            )
+        )
+        facts = json.loads(
+            tools["get_disclosure_financials"].invoke(
+                {
+                    "stock_code": "005930",
+                    "business_year": 2025,
+                    "scope": "CFS",
+                }
+            )
+        )
 
+    assert sections["sections"][0]["text"] == "사업 위험 설명"
+    assert facts["facts"][0]["source_value"] == "1,000"
+    assert Decimal(facts["facts"][0]["value"]) == 1000
+    assert json.loads(
+        tools["get_disclosure_financials"].invoke(
+            {
+                "stock_code": "005930",
+                "business_year": 2024,
+            }
+        )
+    ) == {"facts": []}
+
+
+def test_financial_tool_requires_explicit_period(tools):
     with pytest.raises(ValidationError):
         tools["get_disclosure_financials"].invoke({"stock_code": "005930"})
 
-    client.get_financials.assert_not_called()
+
+def test_oversized_multibyte_query_returns_a_recoverable_tool_error(tools):
+    with pytest.raises(ToolError, match="12000-byte"):
+        tools["search_disclosures"].invoke({"stock_code": "005930", "query": "😀" * 3001})
+
+
+def test_search_preserves_reranker_scores_without_exposing_embedding_input(tools):
+    evidence = Evidence(
+        receipt_id="receipt-1",
+        chunk_id=7,
+        title="사업보고서",
+        stock_code="005930",
+        business_year=2025,
+        kind="annual",
+        period_end=date(2025, 12, 31),
+        published_date=date(2026, 3, 1),
+        section="사업",
+        topic="risk",
+        document_name="main.xml",
+        start_offset=0,
+        end_offset=8,
+        text="사업 위험 설명",
+        context="",
+        score=0.83,
+        method="cosine+qwen3-reranker",
+        reranker_score=0.95,
+        reranker_logit_difference=2.94,
+        embedding_text="internal embedding input",
+    )
+    result = SearchResult(reports=[], latest_evidence=[evidence], historical_evidence=[])
+    with patch("portfolio_builder.tools.disclosure.search.run_search", return_value=result) as run:
+        payload = json.loads(
+            tools["search_disclosures"].invoke(
+                {
+                    "stock_code": "005930",
+                    "query": "사업 위험",
+                    "as_of": "2026-03-31",
+                }
+            )
+        )
+
+    row = payload["latest_evidence"][0]
+    assert row["score"] == 0.83 and row["reranker_score"] == 0.95
+    assert row["reranker_logit_difference"] == 2.94
+    assert "embedding_text" not in row
+    assert run.call_args.args[2].as_of == date(2026, 3, 31)
 
 
 @pytest.mark.parametrize("name", ["get_disclosure_sections", "get_disclosure_financials"])
-def test_direct_read_tools_reject_invalid_stock_codes(name):
-    tools = {tool.name: tool for tool in disclosure_tools(Mock(spec=RetrievalClient))}
-
+def test_direct_read_tools_reject_invalid_stock_codes(tools, name):
     with pytest.raises(ValidationError):
         tools[name].invoke({"stock_code": "../005930"})

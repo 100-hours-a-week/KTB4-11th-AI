@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 import sqlalchemy as sa
 
-from disclosure_retrieval.repositories.tables import disclosure_sections, disclosures
+from disclosure_retrieval.tables import disclosure_sections, disclosures
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,6 @@ class Section:
     heading: str
     topic: str
     text: str
-    # Half-open Unicode character range within document_name's parsed text.
     start_offset: int
     end_offset: int
     parser_version: str

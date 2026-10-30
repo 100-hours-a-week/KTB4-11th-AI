@@ -107,7 +107,7 @@ def test_parallel_search_and_submission_waits_for_a_later_turn():
 
 
 def test_failed_search_can_be_retried_and_only_successful_completion_counts():
-    from portfolio_builder.retrieval_client import RetrievalUpstreamError
+    from portfolio_builder.errors import ToolError
 
     saved = []
     log = Recorder()
@@ -119,7 +119,7 @@ def test_failed_search_can_be_retried_and_only_successful_completion_counts():
             reply("", ("search_disclosures", {})),
             reply("", ("submit_portfolio", {})),
         ],
-        [RetrievalUpstreamError("timeout"), valid],
+        [ToolError("timeout"), valid],
         saved,
         log,
     )

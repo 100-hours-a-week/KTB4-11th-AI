@@ -9,7 +9,6 @@ from ktb_core.embedding.config import model_identity
 
 def settings():
     return Settings(
-        postgres_dsn="unused",
         DISCLOSURE_INFERENCE_BACKEND="modal",
         DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
         DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,

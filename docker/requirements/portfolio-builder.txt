@@ -331,6 +331,7 @@ pydantic==2.13.5 \
     --hash=sha256:346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
     # via
+    #   disclosure-retrieval
     #   langchain
     #   langchain-core
     #   langgraph
@@ -389,7 +390,9 @@ pydantic-core==2.46.5 \
 pydantic-settings==2.15.0 \
     --hash=sha256:0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42 \
     --hash=sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117
-    # via portfolio-builder
+    # via
+    #   disclosure-retrieval
+    #   portfolio-builder
 python-dotenv==1.2.3 \
     --hash=sha256:904552145e8bfed22162c09dab1c2b9b54fefa7b23ba780f4f26ca0316b0f0d9 \
     --hash=sha256:a20a594dabeaa385725aa239d5244871c143ecb356add8a20fcf23773a6c3a35
@@ -472,7 +475,9 @@ sqlalchemy==2.1.1 \
     --hash=sha256:eef01acb10295adfac8a960f716687052fe16f14a3f5955b56c24eefa9df7851 \
     --hash=sha256:fcf3cbb33bb23bad75d2150157c21804618745731e9931ab27e61879a9f6123b \
     --hash=sha256:fdef70d59afce463bedef54580ba6a832f9f2313c1d0054e15cbb4ff46f37a97
-    # via portfolio-builder
+    # via
+    #   disclosure-retrieval
+    #   portfolio-builder
 ta-lib==0.8.1 \
     --hash=sha256:0077e475193e62a184b503a51813cb7e5dab4b4259d2242dfe57fdaadb64c323 \
     --hash=sha256:1e1c8752759e243d69a476f576b3eedbaaa49f79d71b512da6f61409cdd9e60b \

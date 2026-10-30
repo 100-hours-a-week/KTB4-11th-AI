@@ -5,7 +5,7 @@ Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and se
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The 2026-10-30 split was verified with **1,379 passed, 49 skipped, 2 subtests passed**
+The 2026-10-30 direct-library integration was verified with **1,377 passed, 49 skipped, 2 subtests passed**
 on the combined serving branch using a disposable PostgreSQL database. This run checks
 CPU code and model contracts; it does not redeploy GPU workers or produce new inference timings.
 
@@ -15,7 +15,7 @@ CPU code and model contracts; it does not redeploy GPU workers or produce new in
 | --- | --- |
 | news-preprocessor-disclosures | Collect periodic OpenDART filings, archive originals and store parsed documents, sections and financial facts in PostgreSQL |
 | disclosure-indexer | Read stored documents from PostgreSQL, embed narrative passages and store vectors in pgvector |
-| disclosure-retrieval | Read financial facts and sections directly; return ranked narrative evidence without answer generation |
+| disclosure-retrieval library (inside portfolio-builder) | Read financial facts and sections directly; return ranked narrative evidence without answer generation |
 | Modal Embedder | Encode ordered document context groups and queries with the same pinned Context checkpoint |
 | Modal Reranker | Score exact-search candidates with the trained Qwen model |
 | portfolio-builder | Use disclosure evidence and technical analysis before saving a new portfolio |
@@ -57,7 +57,7 @@ The model configuration is `packages/core/src/ktb_core/embedding/config.py`. It 
 the existing news settings and the pinned disclosure model configuration. Modal copies
 this same Python file into its images as `/root/model_config.py`; CPU services import
 its identity functions. Separate disclosure model JSON/Python files are unnecessary.
-HTTP request and 303 result polling code stays inside each service's inference client;
+External inference HTTP requests and 303 result polling stay in the indexer and retrieval library;
 core has no HTTP transport or GPU dependencies.
 
 | Role | Model and selected adapter |
@@ -91,12 +91,16 @@ a restore hit. The observed initial L4 wait must not be treated as model compute
 
 ## 4. Retrieval and builder integration
 
+Retrieval is a Python workspace library under `packages/disclosure-retrieval`. Builder
+tools pass their existing database engine directly. There is no retrieval FastAPI app,
+router, HTTP client, port or container. Only external model inference uses HTTPS.
+
 - [x] Apply company/report/date filters and compute exact cosine distance across every
   eligible chunk. Do not use HNSW or IVFFlat candidate pruning.
 - [x] Select 50 candidates per latest/history scope, rerank and return five by default.
   Keep cosine, reranker score and logit margin separate; include source IDs, URL and offsets.
 - [x] Return valid empty results without GPU calls when no searchable chunks exist. Keep
-  upstream failure (503), input-budget rejection (422) and successful empty search distinct.
+  model failures, input-budget rejections and successful empty searches distinct through tool errors.
 - [x] Require successful technical analysis and disclosure search before new portfolio
   submission. A valid empty search completes the tool call but does not prove risk is absent.
 - [x] Follow same-origin HTTP 303 result URLs with GET without resubmitting inference.
@@ -123,7 +127,6 @@ DISCLOSURE_MODAL_SECRET=<workspace-proxy-token-secret>
 DISCLOSURE_INDEXER_TIMEOUT=150
 DISCLOSURE_INDEXER_LEASE_SECONDS=600
 DISCLOSURE_RETRIEVAL_TIMEOUT=150
-PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_TIMEOUT=480
 ```
 
 - [x] The 05:00 KST collector timer starts `ktb-disclosure-collector.service`.
@@ -136,7 +139,7 @@ PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_TIMEOUT=480
   with `NEWS_PREPROCESSOR_DISCLOSURE_*`. Mount archives only in news-preprocessor.
   The indexer needs neither DART credentials nor filesystem access to originals.
 - [x] Run no inference when there is no eligible work; retain retries when no new filing appears.
-- [x] Build separate CPU service images and include both services in the shared app image.
+- [x] Build indexer and portfolio-builder CPU images; install the retrieval library in builder and the shared app image.
   Keep GPU dependencies only in Modal images.
 
 ## 6. Verification results
