@@ -46,10 +46,11 @@ jobs:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
           audience: ${{ secrets.TS_AUDIENCE }}
           tags: tag:archify-ci
-          args: --accept-routes=false
           timeout: 2m
           retry: '2'
           log-mode: quiet
+      - name: Disable subnet routes
+        run: sudo tailscale set --accept-routes=false
       - name: Generate and validate public architecture
         env:
           LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
