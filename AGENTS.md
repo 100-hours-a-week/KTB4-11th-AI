@@ -233,3 +233,9 @@ that combined image. Keep CI service/export lists in sync when adding a service.
 - Consult `.github/workflows/` for current publishing/deployment behavior. Both dev and
   main push workflows publish the application image to ECR Public; deployment paths
   are defined in the corresponding CD workflows.
+
+Periodic-report collection lives under `news_preprocessor.sources.publishers.opendart.disclosures`
+and runs through `news-preprocessor-disclosures`. Its own collector timer runs daily at
+05:00 KST. Migrations 0012–0014 create original documents and collection progress, sections,
+and financial facts respectively. This command stores source data without embedding or
+answer generation. Only it uses `NEWS_PREPROCESSOR_DISCLOSURE_*` and the disclosure archive.

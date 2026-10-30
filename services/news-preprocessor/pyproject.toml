@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 news-preprocessor = "news_preprocessor.__main__:main"
+news-preprocessor-disclosures = "news_preprocessor.sources.publishers.opendart.disclosures.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }

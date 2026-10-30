@@ -273,12 +273,14 @@ jobs:
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
             ktb-news-preprocessor.timer \
+            ktb-disclosure-collector.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer
 
           for timer in \
             ktb-market-collector.timer \
             ktb-news-preprocessor.timer \
+            ktb-disclosure-collector.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer; do
             systemctl is-enabled --quiet "$timer"

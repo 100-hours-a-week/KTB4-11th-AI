@@ -23,5 +23,6 @@ WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
 ENV PATH="/app/.venv/bin:$PATH"
 
+RUN mkdir -p /app/archive && chown app:app /app/archive
 USER app
 CMD ["news-preprocessor"]
