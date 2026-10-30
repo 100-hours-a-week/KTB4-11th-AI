@@ -16,7 +16,7 @@ jobs:
   generate:
     if: github.repository == '100-hours-a-week/KTB4-11th-AI' && github.ref == 'refs/heads/docs/442/fix-tailscale-routes'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     permissions:
       contents: read
       id-token: write
@@ -265,7 +265,11 @@ jobs:
                       "services, packages, compose files, infrastructure and workflows. Write ONLY "
                       "architecture.json, a complete architecture JSON IR with showcase quality. "
                       "Cite each relationship's evidence on its owner component using component.sources "
-                      "(connections have no sources field); mark uncertainty instead of inventing "
+                      "(connections have no sources field). EVERY component, including external services and "
+                      "datastores, MUST include sources: [{\"path\": \"compose.local.yaml\", \"line\": 1}]. "
+                      "Use real paths and line numbers you inspected, not that placeholder. "
+                      "The bundled example omits sources; do not copy that omission. "
+                      "Mark uncertainty instead of inventing "
                       "relationships. Show news, market, portfolio, reporting, datastores, queues, external "
                       "integrations and deployment boundaries. This will be PUBLIC: include no credentials, "
                       "internal hostnames, IPs, account IDs, environment values or verbatim source excerpts. "
@@ -287,43 +291,62 @@ jobs:
                       "OPENCODE_DISABLE_SHARE": "true",
                       "ARCHIFY_UPDATE_CHECK_DISABLED": "1",
                   }
-                  with (private / "agent.log").open("w") as log:
-                      result = subprocess.run(
-                          [
-                              "opencode",
-                              "run",
-                              "--pure",
-                              "--agent",
-                              "architecture",
-                              "--model",
-                              f"local/{model}",
-                              prompt,
-                          ],
-                          cwd=work,
-                          env=agent_env,
-                          stdout=log,
-                          stderr=log,
-                          timeout=1200,
+                  for attempt in range(2):
+                      with (private / "agent.log").open("w") as log:
+                          result = subprocess.run(
+                              [
+                                  "opencode",
+                                  "run",
+                                  "--pure",
+                                  "--agent",
+                                  "architecture",
+                                  "--model",
+                                  f"local/{model}",
+                                  prompt,
+                              ],
+                              cwd=work,
+                              env=agent_env,
+                              stdout=log,
+                              stderr=log,
+                              timeout=1200,
+                          )
+                      if result.returncode or not (work / "architecture.json").is_file():
+                          report_failure(
+                              "OpenCode",
+                              private / "agent.log",
+                              [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
+                          )
+                          raise RuntimeError(
+                              "OpenCode did not produce architecture.json; see sanitized diagnostics"
+                          )
+                      candidate = json.loads((work / "architecture.json").read_text())
+                      missing = [
+                          component.get("id", "unnamed")
+                          for component in candidate.get("components", [])
+                          if not component.get("sources")
+                      ]
+                      if candidate.get("components") and not missing:
+                          break
+                      print(f"Source validation attempt {attempt + 1}: {len(missing)} missing citations")
+                      if attempt == 1:
+                          raise ValueError(
+                              "Every architecture component must cite repository source evidence"
+                          )
+                      prompt = (
+                          "Repair the existing architecture.json in your current directory. "
+                          "Read it, then read repository files to add a nonempty sources array to EVERY "
+                          "component. Each citation has path, line and optional end_line. "
+                          "Use actual repository-relative paths and inspected line numbers. "
+                          "Preserve the architecture and layout. Do not ask questions. "
+                          "Write the complete corrected file using the write tool. "
+                          f"Components missing citations: {json.dumps(missing)}. "
+                          f"File: {work / 'architecture.json'}."
                       )
-                  if result.returncode or not (work / "architecture.json").is_file():
-                      report_failure(
-                          "OpenCode",
-                          private / "agent.log",
-                          [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
-                      )
-                      raise RuntimeError(
-                          "OpenCode did not produce architecture.json; see sanitized diagnostics"
-                      )
-                  candidate = json.loads((work / "architecture.json").read_text())
                   candidate.setdefault("meta", {})["output"] = "index.html"
                   candidate["meta"]["repository"] = {
                       "url": "https://github.com/100-hours-a-week/KTB4-11th-AI.git",
                       "revision": os.environ["GITHUB_SHA"],
                   }
-                  if not candidate.get("components") or any(
-                      not component.get("sources") for component in candidate["components"]
-                  ):
-                      raise ValueError("Every architecture component must cite repository source evidence")
                   (site / "architecture.json").write_text(json.dumps(candidate, ensure_ascii=False, indent=2))
                   with (private / "finalize.log").open("w") as log:
                       result = subprocess.run(
