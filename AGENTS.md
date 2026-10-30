@@ -245,14 +245,19 @@ that combined image. Keep CI service/export lists in sync when adding a service.
   main push workflows publish the application image to ECR Public; deployment paths
   are defined in the corresponding CD workflows.
 
-Long-disclosure collection lives under
-`news_preprocessor.sources.publishers.opendart.disclosures`. The existing OpenDART API
-publisher is the single intake: it classifies `pblntf_detail_ty`, keeps short filings in
-the news path, and stores long filings in PostgreSQL. The ordinary `news-preprocessor`
-command processes these queued records after scraping, under the unchanged hourly
-`ktb-news-preprocessor.timer`. There is no RSS discovery or separate collector timer.
-The ordinary command also handles pending retries; there is no separate disclosure
-command.
+OpenDART collection lives under `news_preprocessor.sources.publishers.opendart`, with
+flat `opendart.py`, `parser.py`, `dart.py`, `financials.py`, `storage.py`, and
+`settings.py` modules. The existing API publisher is the single intake: it classifies
+`pblntf_detail_ty`, keeps short filings in the news path, and fetches long filings'
+document and financial API data in `OpenDart.article`. It parses that data in memory
+and returns a `DisclosureItem`. The standard scrape stores filing metadata, documents,
+sections, and financial facts together in one PostgreSQL transaction.
+
+The ordinary `news-preprocessor` command runs under the unchanged hourly
+`ktb-news-preprocessor.timer`. There is no separate collection pass, staged database
+queue, persisted item-failure loop, RSS discovery, disclosure command, or collector
+timer. HTTP requests retain bounded retries. A failed item is not saved and follows
+the normal news ingestion retry behavior on a subsequent feed pass.
 
 Long filing classes include A001 (annual), A002 (half-year), A003 (quarterly), F001
 (audit), F002 (consolidated audit), F003 (combined audit), C001–C005, J004, and H002.
@@ -261,12 +266,14 @@ is a separate parsing decision. `detail_type` is nullable for legacy rows, and f
 year/period can be absent for nonperiodic filings without fiscal metadata.
 
 Migrations 0012–0014 create filing metadata and original documents, sections, and
-financial facts respectively. Collection uses `NEWS_PREPROCESSOR_DISCLOSURE_*` and a
-persistent archive outside the repository; document ZIP/XML and supported structured
-accounts come from OpenDART using the receipt ID. The downstream indexer reads parsed
-narrative documents from PostgreSQL and writes vectors to pgvector. Collection does
-not call an embedding model or generate answers. The indexing PR attaches indexing to the existing news-preprocessor service's
-OnSuccess and final OnFailure hooks. There is no separate collection or indexing timer.
+financial facts respectively. `financials_collected` records completed periodic
+financial collection as informational metadata; it is not a queue marker. Collection
+uses `NEWS_PREPROCESSOR_DISCLOSURE_*` for archive location, HTTP request pacing and
+retry attempts, and archive download/extraction limits. Original archives live outside
+the repository. Collection does not call an embedding model or generate answers.
+
+The existing news-preprocessor service starts the DB-only indexer after success or
+final failure. There is no separate collection or indexing timer.
 
 Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
 search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.

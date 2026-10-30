@@ -12,7 +12,7 @@ The root checkout and running services are not changed.
 Portfolio-builder calls the `services/disclosure-retrieval` Python package directly.
 Its tools receive the builder's SQLAlchemy engine and component model settings.
 There is no separate retrieval HTTP server, controller, router, client, port,
-healthcheck, console command, or Docker container. The library declares no FastAPI
+healthcheck, console command, or Docker container. The retrieval package declares no FastAPI
 or uvicorn dependency. Existing news/market HTTP and backend polling are unchanged.
 
 Retrieval returns source evidence, never a generated answer. Financial and section
@@ -31,9 +31,10 @@ is unchanged.
    indexer and builder containers through Compose environment mappings.
 2. Use the existing `opendart/opendart.py` API publisher for short and long filings.
    Keep official long filing codes in `disclosures.detail_type`; the ordinary
-   news-preprocessor command parses queued long filings after scraping. It stores
-   originals, documents, sections and supported periodic financial accounts without
-   embedding them. A filing type is separate from the content split. Nonperiodic
+   publisher fetches and parses each long filing before standard scraping stores its
+   metadata, documents, sections and financial accounts in one transaction. The modules
+   are flat under `opendart/`; no staged queue or second collection pass remains.
+   Long filings are not embedded during ingestion. A filing type is separate from the content split. Nonperiodic
    filings retain unknown fiscal fields as null, and their tables remain sections.
    The collection PR owns migrations 0012–0014; the indexing PR adds only 0015.
    There is no RSS path, separate collector command/timer or historical window loop.
@@ -43,13 +44,13 @@ is unchanged.
    `get.py`, and `tool.py`. Expose `search_disclosures`, `get_disclosure_sections`,
    and `get_disclosure_financials`. Require an explicit year or period for financial
    reads. Execute parameterized SQL in-process using the existing engine. Search
-   orchestrates DB reads and remote model calls through the library. Query and
+   orchestrates DB reads and remote model calls through the retrieval functions. Query and
    reranking inference run after the DB connection has returned to its pool.
    Accept an optional `detail_type` search filter and return that code with evidence.
    Unknown-period receipts stay separate; periodic corrections retain their existing
    grouping. Existing periodic embedding inputs and model identity stay unchanged.
 4. Remove `portfolio_builder/disclosures.py` and `retrieval_client.py`. Reuse the
-   library's typed `SearchResult` in the submission hook through Pydantic TypeAdapter;
+   retrieval code's typed `SearchResult` in the submission hook through Pydantic TypeAdapter;
    its three result lists are required, so malformed `{}` cannot count as a search.
    The existing successful-narrative-search requirement before submission remains.
 5. Receive an optional investment profile in the existing backend polling response.
@@ -101,11 +102,11 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 ## Verification
 
 - Added tests failed first for missing profile parsing, direct-read methods, and tools.
-- Final full suite against the disposable `ktb_disclosure_split_test` PostgreSQL database:
-  **1,367 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+- Final full suite against the disposable `ktb_typed_disclosure_services_test` PostgreSQL database:
+  **1,364 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
   account for the skips.
 - Ruff, formatting, Tach internal and external dependencies, and diff checks pass.
-- Retrieval's 48 tests call Python functions directly and retain PostgreSQL search,
+- Retrieval tests call Python functions directly and retain PostgreSQL search,
   correction, source-identity, history, candidate-50, and reranking cases. HTTP endpoint
   tests were replaced with direct-call tests; server healthcheck tests were removed.
 - Tool tests read real SQLite financial/section rows while HTTP is forbidden, preserve
@@ -113,15 +114,17 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 - A single-connection pool test proves embedding and reranking do not retain a DB connection.
 - Local and production Compose configurations contain no retrieval service; model
   settings are passed to indexer and builder. Service secret files are not read for checks.
-- Builder and shared-image packaging includes the library and regenerated hash-pinned
-  requirements. The library does not construct engines or declare a redundant DB driver.
+- Builder and shared-image packaging includes retrieval code and regenerated hash-pinned
+  requirements. Retrieval code does not construct engines or declare a redundant DB driver.
 - Builder and shared Docker images build; network-disabled imports find no retrieval
   API or client. The builder image also has no FastAPI installation.
 - Oversized UTF-8 queries remain recoverable tool errors rather than aborting the agent.
-- The PR split exposed a financial-collection retry problem. Collection PR #441 fixes it
-  with an independent completion Boolean in migration 0014. Comparing the original and
-  split PostgreSQL schemas confirms that original columns, constraints, and indexes remain;
-  only this completion state and its NOT NULL constraint were added.
+- Collection PR #441 parses API responses before storing filing metadata, documents,
+  sections and financial accounts in the same transaction. API failures save no partial
+  record; database failures roll back every related row. `financials_collected` records
+  completed financial data and is not used as a queue marker. No pending-row readback
+  or separate processing pass remains.
+
 
 No dependency versions changed. No production database, service deployment, GPU deployment,
 model inference, SQS publication, or backend repository modification was performed.
