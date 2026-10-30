@@ -250,3 +250,11 @@ financial facts without calling an embedding model. The daily indexer timer orde
 collection job before the DB-only indexer; an unsuccessful collection does not block indexing
 previously stored documents. news-http remains read-only. Only the collection command uses
 `NEWS_PREPROCESSOR_DART_API_KEY` and `NEWS_PREPROCESSOR_DISCLOSURE_*` settings.
+
+The periodic collector lives under `news_preprocessor.sources.publishers.opendart.disclosures`.
+Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
+search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.
+Retrieval remains an HTTP service called by portfolio-builder; Modal is an outgoing inference
+dependency. Neither collection nor retrieval generates answers. Backend polling may include an
+optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
+receiving this field does not change trading behavior.

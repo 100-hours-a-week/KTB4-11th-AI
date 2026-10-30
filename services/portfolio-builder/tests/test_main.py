@@ -71,6 +71,8 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
         "get_news_cluster",
         "search_news_cluster",
         "search_disclosures",
+        "get_disclosure_sections",
+        "get_disclosure_financials",
         "search_graph",
         "find_graph_paths",
         "analyze_technicals",

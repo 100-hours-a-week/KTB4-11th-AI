@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 import pytest
-from news_preprocessor.disclosures.financials import financial_rows
+from news_preprocessor.sources.publishers.opendart.disclosures.financials import financial_rows
 
 ASSETS = {
     "sj_div": "BS",

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from portfolio_builder.agent.hooks.run_log import tool_messages
 from portfolio_builder.agent.state import PortfolioState
-from portfolio_builder.disclosures import DisclosureSearchResult
+from portfolio_builder.retrieval_client import DisclosureSearchResult
 
 
 class RequireDisclosures(AgentMiddleware[PortfolioState]):

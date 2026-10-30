@@ -1,10 +1,8 @@
 from datetime import date
 
-from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field
 
 from portfolio_builder.retrieval_client import RetrievalClient
-from portfolio_builder.tools.binding import bind
 from portfolio_builder.tools.result import json_result
 
 
@@ -31,19 +29,3 @@ def search_disclosures(
             include_history=include_history,
         )
     )
-
-
-def disclosure_tools(retrieval_client: RetrievalClient) -> list[BaseTool]:
-    return [
-        StructuredTool.from_function(
-            bind(search_disclosures, retrieval_client=retrieval_client),
-            name="search_disclosures",
-            description=(
-                "Search a stock's periodic OpenDART reports for business, financial, and risk "
-                "evidence. Returns relevant passages from the latest three reports. "
-                "Enable include_history for older reports; as_of limits publication dates. "
-                "Empty evidence means unavailable evidence, not absence of risk."
-            ),
-            args_schema=SearchDisclosuresArgs,
-        )
-    ]

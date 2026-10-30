@@ -2,7 +2,7 @@ import io
 import zipfile
 
 import pytest
-from news_preprocessor.disclosures.documents import extract_documents
+from news_preprocessor.sources.publishers.opendart.disclosures.documents import extract_documents
 
 
 def archive(files):

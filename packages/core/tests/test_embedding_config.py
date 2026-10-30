@@ -5,7 +5,32 @@ import sys
 import pytest
 from ktb_core.embedding import config
 
-NAMES = ("KTB_EMBEDDING_MODEL", "KTB_EMBEDDING_DIMENSIONS", "KTB_EMBEDDING_MAX_TOKENS")
+DISCLOSURE_OVERRIDES = (
+    ("DISCLOSURE_EMBEDDING_BASE_REPO", "embedding", "base_repo", "other/base", "other/base"),
+    ("DISCLOSURE_EMBEDDING_BASE_REVISION", "embedding", "base_revision", "base-v2", "base-v2"),
+    ("DISCLOSURE_EMBEDDING_ADAPTER_REPO", "embedding", "adapter_repo", "other/lora", "other/lora"),
+    (
+        "DISCLOSURE_EMBEDDING_ADAPTER_REVISION",
+        "embedding",
+        "adapter_revision",
+        "lora-v2",
+        "lora-v2",
+    ),
+    ("DISCLOSURE_EMBEDDING_ADAPTER_SHA256", "embedding", "adapter_sha256", "a" * 64, "a" * 64),
+    ("DISCLOSURE_EMBEDDING_DIMENSIONS", "embedding", "dimensions", "512", 512),
+    ("DISCLOSURE_EMBEDDING_MAX_TOKENS", "embedding", "max_tokens", "8192", 8192),
+    ("DISCLOSURE_RERANKER_BASE_REPO", "reranker", "base_repo", "other/ranker", "other/ranker"),
+    ("DISCLOSURE_RERANKER_BASE_REVISION", "reranker", "base_revision", "base-v2", "base-v2"),
+    ("DISCLOSURE_RERANKER_ADAPTER_REPO", "reranker", "adapter_repo", "other/lora", "other/lora"),
+    ("DISCLOSURE_RERANKER_ADAPTER_REVISION", "reranker", "adapter_revision", "lora-v2", "lora-v2"),
+    ("DISCLOSURE_RERANKER_ADAPTER_SHA256", "reranker", "adapter_sha256", "b" * 64, "b" * 64),
+)
+NAMES = (
+    "KTB_EMBEDDING_MODEL",
+    "KTB_EMBEDDING_DIMENSIONS",
+    "KTB_EMBEDDING_MAX_TOKENS",
+    *(item[0] for item in DISCLOSURE_OVERRIDES),
+)
 
 
 @pytest.fixture
@@ -66,3 +91,41 @@ def test_disclosure_identity_keeps_the_selected_adapter_separate_from_news(reloa
     assert identity["max_tokens"] == 16384
     identity["dimensions"] = 1
     assert module.model_identity("embedding")["dimensions"] == 1024
+
+
+@pytest.mark.parametrize(("name", "kind", "field", "value", "expected"), DISCLOSURE_OVERRIDES)
+def test_disclosure_environment_overrides_the_inference_identity(
+    reloaded, name, kind, field, value, expected
+):
+    module = reloaded(**{name: value})
+
+    assert module.model_identity(kind)[field] == expected
+    assert module.EMBEDDING_DIMENSIONS == 2000
+    assert module.EMBEDDING_MAX_TOKENS == 16384
+
+
+@pytest.mark.parametrize(
+    ("name", "kind", "field", "value", "expected"),
+    [item for item in DISCLOSURE_OVERRIDES if item[1] == "embedding"],
+)
+def test_changing_embedding_metadata_retires_the_previous_index_space(
+    reloaded, name, kind, field, value, expected
+):
+    previous_space = reloaded().embedding_space()
+
+    changed_space = reloaded(**{name: value}).embedding_space()
+
+    assert changed_space != previous_space
+    assert reloaded(**{name: value}).embedding_space() == changed_space
+
+
+def test_news_and_reranker_changes_keep_the_embedding_index_space(reloaded):
+    previous_space = reloaded().embedding_space()
+
+    module = reloaded(
+        KTB_EMBEDDING_MODEL="other-news-model",
+        KTB_EMBEDDING_DIMENSIONS="512",
+        DISCLOSURE_RERANKER_ADAPTER_SHA256="b" * 64,
+    )
+
+    assert module.embedding_space() == previous_space

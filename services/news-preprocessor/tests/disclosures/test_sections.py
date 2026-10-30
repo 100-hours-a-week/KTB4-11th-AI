@@ -1,4 +1,4 @@
-from news_preprocessor.disclosures.sections import section_rows
+from news_preprocessor.sources.publishers.opendart.disclosures.sections import section_rows
 
 DOCUMENTS = [
     {

@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from news_preprocessor.disclosures import __main__ as entry
+from news_preprocessor.sources.publishers.opendart.disclosures import __main__ as entry
 
 
 @pytest.mark.parametrize("failed", [0, 1])

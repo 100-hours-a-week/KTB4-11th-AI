@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 import sqlalchemy as sa
-from news_preprocessor.disclosures.collect import collect
-from news_preprocessor.disclosures.documents import PARSER_VERSION
-from news_preprocessor.disclosures.settings import Settings
+from news_preprocessor.sources.publishers.opendart.disclosures.collect import collect
+from news_preprocessor.sources.publishers.opendart.disclosures.documents import PARSER_VERSION
+from news_preprocessor.sources.publishers.opendart.disclosures.settings import Settings
 
 
 @pytest.fixture
@@ -656,7 +656,7 @@ def test_refetching_facts_replaces_them_instead_of_duplicating(company_engine, t
 def test_temporary_api_error_is_not_archived_as_a_document(tmp_path):
     from unittest.mock import MagicMock
 
-    from news_preprocessor.disclosures.collect import store_document
+    from news_preprocessor.sources.publishers.opendart.disclosures.collect import store_document
 
     engine = MagicMock()
     settings = Settings(postgres_dsn="unused", archive_root=tmp_path)
