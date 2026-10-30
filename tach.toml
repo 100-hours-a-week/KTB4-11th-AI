@@ -1,9 +1,9 @@
 source_roots = [
     "packages/aws/src",
     "packages/core/src",
+    "packages/disclosure-retrieval/src",
     "packages/telemetry/src",
     "services/disclosure-indexer/src",
-    "services/disclosure-retrieval/src",
     "services/market-syncer/src",
     "services/market-collector/src",
     "services/market-http/src",
@@ -93,7 +93,7 @@ from = ["news_graph_builder.graph"]
 
 [[modules]]
 path = "portfolio_builder"
-depends_on = ["ktb_core"]
+depends_on = ["disclosure_retrieval", "ktb_core"]
 
 [[modules]]
 path = "market_syncer"

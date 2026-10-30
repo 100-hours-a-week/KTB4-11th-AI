@@ -1,15 +1,17 @@
 from collections.abc import Callable
 from threading import Lock
 
+from disclosure_retrieval.queries import SearchResult
 from ktb_core.logging import StructuredLogger
 from langchain.agents.middleware import AgentMiddleware, ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from portfolio_builder.agent.hooks.run_log import tool_messages
 from portfolio_builder.agent.state import PortfolioState
-from portfolio_builder.retrieval_client import DisclosureSearchResult
+
+SEARCH_RESULT = TypeAdapter(SearchResult)
 
 
 class RequireDisclosures(AgentMiddleware[PortfolioState]):
@@ -44,7 +46,7 @@ class RequireDisclosures(AgentMiddleware[PortfolioState]):
             messages = tool_messages(result)
             if len(messages) == 1 and messages[0].status != "error":
                 try:
-                    data = DisclosureSearchResult.model_validate_json(messages[0].text)
+                    data = SEARCH_RESULT.validate_json(messages[0].text)
                 except ValidationError:
                     data = None
                 if data is not None:

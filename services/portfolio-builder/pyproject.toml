@@ -5,6 +5,7 @@ description = "Cron-triggered model portfolio agent"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "ktb-core",
+    "disclosure-retrieval",
     "langchain>=1.4.2",
     "langchain-openrouter>=0.2.9",
     "langgraph>=1.2.12",
@@ -22,6 +23,7 @@ portfolio-builder = "portfolio_builder.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }
+disclosure-retrieval = { workspace = true }
 
 [tool.deptry.per_rule_ignores]
 # psycopg is the SQLAlchemy driver for PostgreSQL connections.

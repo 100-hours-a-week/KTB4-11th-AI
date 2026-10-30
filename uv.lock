@@ -379,26 +379,20 @@ requires-dist = [
 [[package]]
 name = "disclosure-retrieval"
 version = "0.1.0"
-source = { editable = "services/disclosure-retrieval" }
+source = { editable = "packages/disclosure-retrieval" }
 dependencies = [
-    { name = "fastapi" },
     { name = "ktb-core" },
-    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "sqlalchemy" },
-    { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.142" },
     { name = "ktb-core", editable = "packages/core" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "sqlalchemy", specifier = ">=2.0.54" },
-    { name = "uvicorn", specifier = ">=0.54" },
 ]
 
 [[package]]
@@ -1582,6 +1576,7 @@ name = "portfolio-builder"
 version = "0.1.0"
 source = { editable = "services/portfolio-builder" }
 dependencies = [
+    { name = "disclosure-retrieval" },
     { name = "ktb-core" },
     { name = "langchain" },
     { name = "langchain-core" },
@@ -1597,6 +1592,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "disclosure-retrieval", editable = "packages/disclosure-retrieval" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "langchain", specifier = ">=1.4.2" },
     { name = "langchain-core", specifier = ">=1.6.5" },

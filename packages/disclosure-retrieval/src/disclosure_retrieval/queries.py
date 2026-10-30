@@ -1,12 +1,9 @@
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 
 import sqlalchemy as sa
 
-# One definition of "the reports in scope", shared by the direct listing and the search.
-# Kept as SQL because the search needs PostgreSQL's MATERIALIZED hint (see SEARCH_SQL), and
-# expressing the correction-dedup rule twice would be worse than expressing it here once.
 REPORTS_SQL = """
 WITH ranked AS (
     SELECT r.receipt_id, r.stock_code, r.title, r.business_year, r.kind, r.period_end,
@@ -41,8 +38,6 @@ WITH ranked AS (
 )
 """
 
-# filtered_chunks and candidates are MATERIALIZED so every chunk passing the report filters is
-# scored exactly; without the hint the planner is free to reduce the candidate set.
 SEARCH_SQL = """
 , filtered_chunks AS MATERIALIZED (
     SELECT r.receipt_id, r.title, r.stock_code, r.business_year, r.kind, r.period_end,
@@ -89,8 +84,6 @@ HISTORY_SCOPE = "NOT (r.receipt_id = ANY(CAST(:latest AS text[]))) AND r.publish
 
 @dataclass(frozen=True)
 class SearchParams:
-    """What the repository needs to run a search, independent of the HTTP request model."""
-
     as_of: date
     top_k: int
     latest_limit: int
@@ -142,9 +135,9 @@ class Evidence:
 
 @dataclass
 class SearchResult:
-    reports: list[Report] = field(default_factory=list)
-    latest_evidence: list[Evidence] = field(default_factory=list)
-    historical_evidence: list[Evidence] = field(default_factory=list)
+    reports: list[Report]
+    latest_evidence: list[Evidence]
+    historical_evidence: list[Evidence]
     latest_searched: int = 0
     latest_returned: int = 0
     history_searched: int = 0
@@ -205,7 +198,9 @@ def search_reports(
     modal = params.dimensions == 1024
     table = "disclosure_narrative_chunks" if modal else "disclosure_chunks"
     embedding_text = "c.embedding_text" if modal else "c.text"
-    result = SearchResult(reports=[to_report(row) for row in selected])
+    result = SearchResult(
+        reports=[to_report(row) for row in selected], latest_evidence=[], historical_evidence=[]
+    )
     if not selected:
         return result
     bound = {

@@ -13,10 +13,6 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
     )
 
-    postgres_dsn: str
-    host: str = "0.0.0.0"
-    port: int = Field(default=8000, gt=0, lt=65536)
-    log_level: str = "INFO"
     embedding_base_uri: str = Field(default="", validation_alias="DISCLOSURE_EMBEDDING_BASE_URI")
     embedding_model: str = Field(default="", validation_alias="DISCLOSURE_EMBEDDING_MODEL")
     embedding_api_key: SecretStr | None = Field(
@@ -35,7 +31,6 @@ class Settings(BaseSettings):
         default=4096, ge=1, le=16384, validation_alias="DISCLOSURE_EMBEDDING_MAX_TOKENS"
     )
     timeout: float = Field(default=30, gt=0, le=180)
-    # No default cutoff: an empty result must mean "nothing relevant", not "filtered out".
     max_distance: float | None = Field(default=None, ge=0, le=2)
 
     inference_backend: Literal["openai", "modal"] = Field(

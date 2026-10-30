@@ -9,7 +9,6 @@ from portfolio_builder.briefing import Briefing
 from portfolio_builder.explain import ExplanationRejected, Explanations
 
 REQUIRED = {
-    "PORTFOLIO_BUILDER_DISCLOSURE_RETRIEVAL_BASE_URI": "http://disclosure-retrieval:8000",
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
     "PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI": "http://market-http:8000",
     "PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI": "http://news-http:8000",
@@ -27,6 +26,8 @@ def test_ta_lib_is_importable():
 def env(monkeypatch):
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://unused/v1")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "test-model")
     monkeypatch.setattr(entry, "NewsClient", lambda uri: object())
     monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: BRIEFING)
     calls = {}

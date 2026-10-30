@@ -16,9 +16,9 @@ COPY services services
 RUN uv pip install --no-deps \
     ./packages/aws \
     ./packages/core \
+    ./packages/disclosure-retrieval \
     ./packages/telemetry \
     ./services/disclosure-indexer \
-    ./services/disclosure-retrieval \
     ./services/market-collector \
     ./services/market-http \
     ./services/market-streamer \

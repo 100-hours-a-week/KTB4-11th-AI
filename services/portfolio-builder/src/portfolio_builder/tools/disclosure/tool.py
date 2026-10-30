@@ -1,6 +1,7 @@
+import sqlalchemy as sa
+from disclosure_retrieval.settings import Settings
 from langchain_core.tools import BaseTool, StructuredTool
 
-from portfolio_builder.retrieval_client import RetrievalClient
 from portfolio_builder.tools.binding import bind
 from portfolio_builder.tools.disclosure.get import (
     GetFinancialsArgs,
@@ -11,10 +12,10 @@ from portfolio_builder.tools.disclosure.get import (
 from portfolio_builder.tools.disclosure.search import SearchDisclosuresArgs, search_disclosures
 
 
-def disclosure_tools(retrieval_client: RetrievalClient) -> list[BaseTool]:
+def disclosure_tools(engine: sa.Engine, settings: Settings) -> list[BaseTool]:
     return [
         StructuredTool.from_function(
-            bind(search_disclosures, retrieval_client=retrieval_client),
+            bind(search_disclosures, engine=engine, settings=settings),
             name="search_disclosures",
             description=(
                 "Search narrative passages in the latest three periodic OpenDART reports. "
@@ -26,7 +27,7 @@ def disclosure_tools(retrieval_client: RetrievalClient) -> list[BaseTool]:
             args_schema=SearchDisclosuresArgs,
         ),
         StructuredTool.from_function(
-            bind(get_disclosure_sections, retrieval_client=retrieval_client),
+            bind(get_disclosure_sections, engine=engine),
             name="get_disclosure_sections",
             description=(
                 "Read sections of an identified filing directly from the database, without GPU. "
@@ -35,7 +36,7 @@ def disclosure_tools(retrieval_client: RetrievalClient) -> list[BaseTool]:
             args_schema=GetSectionsArgs,
         ),
         StructuredTool.from_function(
-            bind(get_disclosure_financials, retrieval_client=retrieval_client),
+            bind(get_disclosure_financials, engine=engine),
             name="get_disclosure_financials",
             description=(
                 "Read exact financial facts directly from the database, without GPU. "

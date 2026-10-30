@@ -1,9 +1,13 @@
+from dataclasses import asdict
 from datetime import date
 from typing import Literal, Self
 
+import sqlalchemy as sa
+from disclosure_retrieval.financials import read_financials
+from disclosure_retrieval.sections import read_sections
 from pydantic import BaseModel, Field, model_validator
 
-from portfolio_builder.retrieval_client import RetrievalClient
+from portfolio_builder.errors import ToolError
 from portfolio_builder.tools.result import json_result
 
 
@@ -40,18 +44,22 @@ def get_disclosure_sections(
     heading: str | None = None,
     limit: int = 50,
     *,
-    retrieval_client: RetrievalClient,
+    engine: sa.Engine,
 ) -> str:
-    return json_result(
-        retrieval_client.get_sections(
-            stock_code,
-            receipt_id,
-            document_name=document_name,
-            topic=topic,
-            heading=heading,
-            limit=limit,
-        )
-    )
+    try:
+        with engine.connect() as conn:
+            sections = read_sections(
+                conn,
+                stock_code,
+                receipt_id,
+                document_name=document_name,
+                topic=topic,
+                heading=heading,
+                limit=limit,
+            )
+    except sa.exc.SQLAlchemyError:
+        raise ToolError("Disclosure sections are unavailable") from None
+    return json_result({"sections": [asdict(section) for section in sections]})
 
 
 def get_disclosure_financials(
@@ -63,16 +71,20 @@ def get_disclosure_financials(
     account_id: str | None = None,
     limit: int = 200,
     *,
-    retrieval_client: RetrievalClient,
+    engine: sa.Engine,
 ) -> str:
-    return json_result(
-        retrieval_client.get_financials(
-            stock_code,
-            period_end=period_end.isoformat() if period_end else None,
-            business_year=business_year,
-            scope=scope,
-            statement_type=statement_type,
-            account_id=account_id,
-            limit=limit,
-        )
-    )
+    try:
+        with engine.connect() as conn:
+            facts = read_financials(
+                conn,
+                stock_code,
+                period_end=period_end,
+                business_year=business_year,
+                scope=scope,
+                statement_type=statement_type,
+                account_id=account_id,
+                limit=limit,
+            )
+    except sa.exc.SQLAlchemyError:
+        raise ToolError("Disclosure financial facts are unavailable") from None
+    return json_result({"facts": [asdict(fact) for fact in facts]})

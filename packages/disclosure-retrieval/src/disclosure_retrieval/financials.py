@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import sqlalchemy as sa
 
-from disclosure_retrieval.repositories.tables import disclosure_financial_facts
+from disclosure_retrieval.tables import disclosure_financial_facts
 
 
 @dataclass(frozen=True)
@@ -13,15 +13,12 @@ class FinancialFact:
     business_year: int
     kind: str
     period_end: date
-    # CFS is consolidated, OFS separate. They are different facts and never merged.
     scope: str
     statement_type: str
     account_id: str
     account_name: str
     currency: str
-    # Exactly what DART returned, kept so a normalization failure loses nothing.
     source_value: str
-    # None means the filing reported no amount. It never means zero.
     value: Decimal | None
     normalized: bool
 
@@ -37,6 +34,8 @@ def read_financials(
     account_id: str | None = None,
     limit: int = 200,
 ) -> list[FinancialFact]:
+    if period_end is None and business_year is None:
+        raise ValueError("period_end or business_year is required")
     facts = disclosure_financial_facts
     query = (
         sa.select(
