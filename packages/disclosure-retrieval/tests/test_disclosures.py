@@ -21,6 +21,7 @@ def seed(
     kind="annual",
     indexed=True,
     model="test-model",
+    detail_type=None,
 ):
     with engine.begin() as conn:
         conn.execute(
@@ -34,8 +35,8 @@ def seed(
             sa.text(
                 "INSERT INTO "
                 "disclosures(receipt_id,stock_code,corp_code,company_name,title,business_yea"
-                "r,kind,period_end,published_date,raw_payload,status) VALUES "
-                "(:receipt,:stock,:corp,:name,'보고서',:year,:kind,:period,:published,'{}','rea"
+                "r,kind,detail_type,period_end,published_date,raw_payload,status) VALUES "
+                "(:receipt,:stock,:corp,:name,'보고서',:year,:kind,:detail_type,:period,:published,'{}','rea"
                 "dy')"
             ),
             {
@@ -43,8 +44,9 @@ def seed(
                 "stock": stock,
                 "corp": f"00{stock}",
                 "name": f"회사{stock}",
-                "year": period.year,
+                "year": period.year if period else None,
                 "kind": kind,
+                "detail_type": detail_type,
                 "period": period,
                 "published": published,
             },
@@ -528,3 +530,78 @@ def test_legacy_rollback_never_reads_an_obsolete_source(engine, monkeypatch):
     )
     assert response["reports"][0]["index_state"] == "pending"
     assert response["latest_evidence"] == []
+
+
+def test_unrelated_nonperiodic_receipts_with_unknown_period_are_not_revisions(engine):
+    vector = [1.0] + [0.0] * 1999
+    for day in (1, 2, 3):
+        seed(
+            engine,
+            "005930",
+            f"filing-{day}",
+            None,
+            date(2026, 3, day),
+            "중요 사건",
+            vector,
+            kind="F001",
+            detail_type="F001",
+        )
+    reports = disclosures(engine, "005930", Settings(), as_of=date(2026, 4, 1))
+    assert len(reports) == 3
+    assert all(
+        r.detail_type == "F001" and r.period_end is None and r.business_year is None
+        for r in reports
+    )
+
+
+def test_detail_type_filter_applies_to_latest_history_counts_and_evidence(engine, monkeypatch):
+    vector = [1.0] + [0.0] * 1999
+    for day, detail_type in ((1, "F001"), (2, "F002"), (3, "F001"), (4, "F002")):
+        seed(
+            engine,
+            "005930",
+            f"typed-{day}",
+            None,
+            date(2026, 3, day),
+            detail_type,
+            vector,
+            kind=detail_type,
+            detail_type=detail_type,
+        )
+    monkeypatch.setattr("urllib.request.urlopen", _answer(vector))
+    result = search(
+        engine,
+        "005930",
+        SearchRequest(
+            query="위험",
+            detail_type="F001",
+            latest_limit=1,
+            include_history=True,
+            as_of=date(2026, 4, 1),
+        ),
+        Settings(),
+    )
+    assert len(result.reports) == 1 and result.reports[0].published_date == date(2026, 3, 3)
+    assert result.latest_searched == 1 and result.history_searched == 1
+    assert [e.receipt_id for e in result.latest_evidence] == ["typed-3"]
+    assert [e.receipt_id for e in result.historical_evidence] == ["typed-1"]
+    for evidence in result.latest_evidence + result.historical_evidence:
+        assert evidence.detail_type == "F001"
+        assert evidence.business_year is None and evidence.period_end is None
+
+
+def test_typed_periodic_correction_supersedes_legacy_filing(engine):
+    vector = [1.0] + [0.0] * 1999
+    seed(engine, "005930", "legacy", date(2025, 12, 31), date(2026, 3, 1), "원본", vector)
+    seed(
+        engine,
+        "005930",
+        "typed",
+        date(2025, 12, 31),
+        date(2026, 3, 2),
+        "정정",
+        vector,
+        detail_type="A001",
+    )
+    reports = disclosures(engine, "005930", Settings(), as_of=date(2026, 4, 1))
+    assert len(reports) == 1 and reports[0].published_date == date(2026, 3, 2)

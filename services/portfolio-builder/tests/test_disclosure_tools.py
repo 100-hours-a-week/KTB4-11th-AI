@@ -169,3 +169,12 @@ def test_search_preserves_reranker_scores_without_exposing_embedding_input(tools
 def test_direct_read_tools_reject_invalid_stock_codes(tools, name):
     with pytest.raises(ValidationError):
         tools[name].invoke({"stock_code": "../005930"})
+
+
+def test_search_passes_detail_type_filter_to_direct_retrieval(tools):
+    result = SearchResult(reports=[], latest_evidence=[], historical_evidence=[])
+    with patch("portfolio_builder.tools.disclosure.search.run_search", return_value=result) as run:
+        tools["search_disclosures"].invoke(
+            {"stock_code": "005930", "query": "합병 위험", "detail_type": "F002"}
+        )
+    assert run.call_args.args[2].detail_type == "F002"

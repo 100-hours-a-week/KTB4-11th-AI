@@ -18,8 +18,9 @@ def disclosure_tools(engine: sa.Engine, settings: Settings) -> list[BaseTool]:
             bind(search_disclosures, engine=engine, settings=settings),
             name="search_disclosures",
             description=(
-                "Search narrative passages in the latest three periodic OpenDART reports. "
-                "Use include_history for older reports and as_of to limit publication dates. "
+                "Search narrative passages in the latest three OpenDART filings. "
+                "Use detail_type to select a filing type, include_history for older filings, "
+                "and as_of to limit publication dates. "
                 "Returns evidence only; empty evidence does not mean absence of risk. "
                 "For exact financial amounts use get_disclosure_financials; "
                 "for a known report section use get_disclosure_sections."

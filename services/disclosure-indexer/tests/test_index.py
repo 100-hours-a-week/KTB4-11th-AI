@@ -339,3 +339,16 @@ def test_modal_index_preserves_legacy_vectors_and_is_idempotent(report_engine, m
             )
         ).scalar_one()
         assert identity["adapter_sha256"].startswith("1f5d4367")
+
+
+def test_nonperiodic_embedding_metadata_preserves_type_without_inventing_a_fiscal_period():
+    report = {
+        **REPORT,
+        "business_year": None,
+        "period_end": None,
+        "kind": "F001",
+        "detail_type": "F001",
+    }
+    value = embedding_inputs(report, [_chunk("본문")], 2000)[0]
+    assert value.startswith("삼성전자 (005930) F001\n")
+    assert "None" not in value

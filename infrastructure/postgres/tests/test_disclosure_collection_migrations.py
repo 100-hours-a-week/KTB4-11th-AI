@@ -15,7 +15,7 @@ VERSIONS = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "version
     [
         (
             "0012",
-            ["disclosures", "disclosure_documents", "disclosure_collection_progress"],
+            ["disclosures", "disclosure_documents"],
             ["disclosures_company_date_idx"],
         ),
         ("0013", ["disclosure_sections"], ["disclosure_sections_receipt_idx"]),
@@ -60,10 +60,9 @@ def test_collection_revision_owns_its_tables_and_reverses_only_its_changes(
         assert "REFERENCES disclosures (receipt_id) ON DELETE CASCADE" in upgrade
     if revision == "0012":
         assert "UNIQUE (receipt_id, source_hash, parser_version)" in upgrade
-        assert (
-            "PRIMARY KEY (stock_code, start_date, end_date, business_year, include_current)"
-            in upgrade
-        )
+        assert "detail_type TEXT" in upgrade
+        assert "business_year INTEGER," in upgrade
+        assert "period_end DATE," in upgrade
         assert "CONSTRAINT disclosures_attempts_check CHECK (attempts BETWEEN 0 AND 5)" in upgrade
     if revision == "0013":
         assert "REFERENCES disclosure_documents (id) ON DELETE CASCADE" in upgrade

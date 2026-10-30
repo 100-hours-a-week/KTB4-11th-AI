@@ -15,15 +15,11 @@ class Settings(BaseSettings):
 
     dart_api_key: SecretStr = Field(min_length=1, validation_alias="NEWS_PREPROCESSOR_DART_API_KEY")
     archive_root: Path = Path.home() / ".local/share/ktb/disclosure-rag/archive"
-    business_year: int | None = Field(default=None, ge=2015, le=2100)
     request_interval: float = Field(default=1, ge=0)
     attempts: int = Field(default=3, ge=1, le=10)
     max_archive_bytes: int = Field(default=32_000_000, gt=0)
     max_uncompressed_bytes: int = Field(default=64_000_000, gt=0)
     max_attempts: int = Field(default=5, ge=1, le=5)
-    recheck_days: int = Field(default=400, ge=1)
     refresh_days: int = Field(default=30, ge=0)
     collect_financials: bool = True
-    postgres_dsn: str = Field(validation_alias="NEWS_PREPROCESSOR_POSTGRES_DSN")
     document_limit: int = Field(default=100, ge=1)
-    log_level: str = "INFO"

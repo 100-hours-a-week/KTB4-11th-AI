@@ -9,19 +9,28 @@ import httpx
 API = "https://opendart.fss.or.kr/api"
 
 
-def report_period(title: str, closing_month: int) -> tuple[int, str, date]:
+def report_period(
+    title: str, closing_month: int, detail_type: str | None = None
+) -> tuple[int | None, str, date | None]:
     match = re.search(r"\((\d{4})\.(\d{2})\)", title)
+    if match is None and detail_type not in (None, "A001", "A002", "A003"):
+        return None, detail_type, None
     if not match or not 1 <= closing_month <= 12:
         raise ValueError("missing or invalid report period")
     year, month = map(int, match.groups())
     end = date(year, month, calendar.monthrange(year, month)[1])
     fiscal_year = year if month <= closing_month else year + 1
     elapsed = (month - closing_month) % 12
-    if "사업보고서" in title and elapsed == 0:
+    if detail_type not in (None, "A001", "A002", "A003"):
+        kind = detail_type
+    elif (detail_type == "A001" or detail_type is None and "사업보고서" in title) and elapsed == 0:
         kind = "annual"
-    elif "반기보고서" in title and elapsed == 6:
+    elif (detail_type == "A002" or detail_type is None and "반기보고서" in title) and elapsed == 6:
         kind = "half"
-    elif "분기보고서" in title and elapsed in (3, 9):
+    elif (detail_type == "A003" or detail_type is None and "분기보고서" in title) and elapsed in (
+        3,
+        9,
+    ):
         kind = "q1" if elapsed == 3 else "q3"
     else:
         raise ValueError("unsupported reporting period")
@@ -96,31 +105,3 @@ class DartClient:
             },
         )
         return [] if data["status"] == "013" else data.get("list", [])
-
-    def reports(self, corp_code: str, start: date, end: date) -> list[dict[str, Any]]:
-        rows = []
-        for page in range(1, 100_001):
-            data = self.json(
-                "list.json",
-                {
-                    "corp_code": corp_code,
-                    "bgn_de": start.strftime("%Y%m%d"),
-                    "end_de": end.strftime("%Y%m%d"),
-                    "pblntf_ty": "A",
-                    "last_reprt_at": "N",
-                    "page_count": "100",
-                    "page_no": str(page),
-                },
-            )
-            if data["status"] == "013":
-                break
-            for row in data.get("list", []):
-                if row.get("corp_code") != corp_code:
-                    raise ValueError("DART returned another company")
-                if re.search(r"(?:사업|반기|분기)보고서\s*\(", row["report_nm"]):
-                    rows.append(row)
-            if page >= int(data["total_page"]):
-                break
-        else:
-            raise RuntimeError("DART pagination limit exceeded")
-        return rows

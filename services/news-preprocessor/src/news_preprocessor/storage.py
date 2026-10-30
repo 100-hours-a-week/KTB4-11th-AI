@@ -1,3 +1,4 @@
+import json
 from collections.abc import Sequence
 from dataclasses import asdict
 
@@ -74,7 +75,15 @@ def known_external_ids(conn: sa.Connection, source: str, external_ids: list[str]
     query = sa.select(articles.c.external_id).where(
         articles.c.source == source, articles.c.external_id.in_(external_ids)
     )
-    return set(conn.execute(query).scalars())
+    known = set(conn.execute(query).scalars())
+    if source == "opendart":
+        known.update(
+            conn.execute(
+                sa.text("SELECT receipt_id FROM disclosures WHERE receipt_id = ANY(:ids)"),
+                {"ids": external_ids},
+            ).scalars()
+        )
+    return known
 
 
 def kospi200_stock_codes(conn: sa.Connection) -> set[str]:
@@ -85,6 +94,32 @@ def kospi200_stock_codes(conn: sa.Connection) -> set[str]:
 
 
 def insert_new(conn: sa.Connection, item: NewsItem) -> bool:
+    payload = json.loads(item.raw_payload) if item.source == "opendart" else {}
+    detail_type = payload.get("pblntf_detail_ty")
+    if detail_type:
+        statement = sa.text(
+            "INSERT INTO disclosures(receipt_id,stock_code,corp_code,company_name,title,"
+            "detail_type,kind,published_date,raw_payload) "
+            "VALUES (:receipt,:stock,:corp,:name,:title,:type,:type,:published,"
+            "CAST(:raw AS jsonb)) "
+            "ON CONFLICT(receipt_id) DO NOTHING RETURNING receipt_id"
+        )
+        return (
+            conn.execute(
+                statement,
+                {
+                    "receipt": item.external_id,
+                    "stock": payload["stock_code"],
+                    "corp": payload["corp_code"],
+                    "name": payload["corp_name"],
+                    "title": payload["report_nm"],
+                    "type": detail_type,
+                    "published": item.published_at.date(),
+                    "raw": item.raw_payload,
+                },
+            ).scalar_one_or_none()
+            is not None
+        )
     statement = (
         insert(articles)
         .values(**asdict(item))

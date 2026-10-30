@@ -26,6 +26,7 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
     latest_limit: int = Field(default=3, ge=1, le=3)
     include_history: bool = False
+    detail_type: str | None = Field(default=None, pattern=r"^[A-Z][0-9]{3}$")
     as_of: date = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).date())
     history_start: date | None = None
     top_k: int = Field(default=5, ge=1, le=20)
@@ -56,6 +57,7 @@ class SearchRequest(BaseModel):
             include_history=self.include_history,
             history_start=self.history_start,
             history_limit=self.history_limit,
+            detail_type=self.detail_type,
             model=settings.index_model,
             dimensions=settings.dimensions,
             max_distance=self.max_distance
@@ -97,6 +99,7 @@ def search(
             body.as_of,
             settings.index_model,
             settings.dimensions,
+            body.detail_type,
         )
         counts = search_counts(conn, stock_code, selected, params) if selected else (0, 0)
     if counts == (0, 0):
