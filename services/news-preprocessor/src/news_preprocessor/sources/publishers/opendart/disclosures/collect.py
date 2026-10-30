@@ -1,4 +1,3 @@
-import calendar
 import hashlib
 import io
 import json
@@ -32,31 +31,8 @@ from news_preprocessor.sources.publishers.opendart.disclosures.financials import
 )
 from news_preprocessor.sources.publishers.opendart.disclosures.sections import section_rows
 from news_preprocessor.sources.publishers.opendart.disclosures.settings import Settings
-from news_preprocessor.sources.publishers.opendart.rss import OpenDartRSS
 
 log = get_logger(__name__)
-
-
-def collection_windows(
-    today: date, closing: int, settings: Settings
-) -> tuple[int, list[tuple[date, date]]]:
-    """The 90-day DART listing windows covering the business year under collection."""
-    last_close = date(today.year, closing, calendar.monthrange(today.year, closing)[1])
-    completed = today.year if last_close < today else today.year - 1
-    year = settings.business_year or completed
-    previous_close = date(year - 1, closing, calendar.monthrange(year - 1, closing)[1])
-    start = previous_close + timedelta(days=1)
-    end = (
-        today
-        if settings.business_year is None
-        else min(today, date(year + 1, closing, calendar.monthrange(year + 1, closing)[1]))
-    )
-    windows = []
-    while start <= end:
-        finish = min(end, start + timedelta(days=89))
-        windows.append((start, finish))
-        start = finish + timedelta(days=1)
-    return year, windows
 
 
 def refresh_sources(
@@ -149,6 +125,19 @@ def store_financial_facts(
     return len(rows)
 
 
+def record_failure(engine: sa.Engine, receipt: str, error: Exception, max_attempts: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "UPDATE disclosures SET attempts=LEAST(attempts+1,:max), "
+                "status=CASE WHEN attempts+1>=:max THEN 'dead_letter' ELSE 'failed' END, "
+                "error=:error,updated_at=now() WHERE receipt_id=:receipt"
+            ),
+            {"receipt": receipt, "error": type(error).__name__, "max": max_attempts},
+        )
+    log.warning("disclosure_failed", receipt_id=receipt, error_type=type(error).__name__)
+
+
 def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict[str, int]:
     from datetime import datetime
 
@@ -160,55 +149,36 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
         settings.attempts,
         settings.max_archive_bytes,
     )
-    with engine.connect() as conn:
-        companies = (
-            conn.execute(
-                sa.text(
-                    "SELECT c.stock_code, c.corp_code, c.name FROM corporations c JOIN"
-                    " corporation_indices i USING(stock_code) WHERE i.index_name = "
-                    "'KOSPI200' ORDER BY c.stock_code"
-                )
-            )
-            .mappings()
-            .all()
-        )
-    if not companies:
-        raise RuntimeError("no KOSPI200 companies; run market-syncer")
     result = {
         "ready": 0,
         "failed": 0,
-        "skipped": 0,
         "unavailable": 0,
-        "unclassified": 0,
         "replaced": 0,
         "facts": 0,
     }
+    refresh_sources(engine, dart, settings, today, result)
     with engine.connect() as conn:
         archived = (
             conn.execute(
-                sa.text("""
-                    SELECT r.receipt_id, d.archive_key, d.source_hash, d.parser_version,
-                        d.extraction_status
-                    FROM disclosures r
-                    JOIN LATERAL (
-                        SELECT id, archive_key, source_hash, parser_version, extraction_status
-                        FROM disclosure_documents
-                        WHERE receipt_id = r.receipt_id ORDER BY id DESC LIMIT 1
-                    ) d ON true
-                    WHERE r.status IN ('pending', 'failed', 'ready', 'unavailable')
-                        AND NOT (
-                            d.parser_version = :parser
-                            AND d.extraction_status IN ('ready', 'unavailable')
-                        )
-                    ORDER BY r.updated_at
-                    LIMIT :limit
-                """),
+                sa.text(
+                    "SELECT r.receipt_id, d.archive_key, d.source_hash FROM disclosures r "
+                    "JOIN LATERAL (SELECT archive_key, source_hash, parser_version, "
+                    "extraction_status "
+                    "FROM disclosure_documents WHERE receipt_id=r.receipt_id "
+                    "ORDER BY id DESC LIMIT 1) d ON true "
+                    "WHERE r.status IN ('pending','failed','ready','unavailable') "
+                    "AND NOT (d.parser_version=:parser "
+                    "AND d.extraction_status IN ('ready','unavailable')) "
+                    "ORDER BY r.updated_at LIMIT :limit"
+                ),
                 {"parser": PARSER_VERSION, "limit": settings.document_limit},
             )
             .mappings()
             .all()
         )
+    handled = set()
     for entry in archived:
+        handled.add(entry["receipt_id"])
         try:
             archive = settings.archive_root / entry["archive_key"]
             content = (
@@ -216,229 +186,48 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                 if archive.is_file()
                 else dart.get("document.xml", {"rcept_no": entry["receipt_id"]})
             )
-            if len(content) > settings.max_archive_bytes:
-                raise ValueError("archive exceeds configured limit")
-            if hashlib.sha256(content).hexdigest() != entry["source_hash"]:
-                if archive.is_file():
-                    raise ValueError("archive hash mismatch")
+            if archive.is_file() and hashlib.sha256(content).hexdigest() != entry["source_hash"]:
+                raise ValueError("archive hash mismatch")
             result[store_document(engine, settings, entry["receipt_id"], content)] += 1
         except Exception as error:
             result["failed"] += 1
+            record_failure(engine, entry["receipt_id"], error, settings.max_attempts)
+    with engine.connect() as conn:
+        pending = (
+            conn.execute(
+                sa.text(
+                    "SELECT receipt_id, corp_code, title, detail_type FROM disclosures "
+                    "WHERE status IN ('pending','failed') ORDER BY updated_at LIMIT :limit"
+                ),
+                {"limit": settings.document_limit},
+            )
+            .mappings()
+            .all()
+        )
+    closing_months = {}
+    for report in pending:
+        if report["receipt_id"] in handled:
+            continue
+        try:
+            closing = 12
+            if re.search(r"\(\d{4}\.\d{2}\)", report["title"]):
+                if report["corp_code"] not in closing_months:
+                    closing_months[report["corp_code"]] = dart.closing_month(report["corp_code"])
+                closing = closing_months[report["corp_code"]]
+            year, kind, period = report_period(report["title"], closing, report["detail_type"])
             with engine.begin() as conn:
                 conn.execute(
                     sa.text(
-                        "UPDATE disclosures SET attempts=LEAST(attempts+1,:max),"
-                        "status=CASE WHEN attempts+1>=:max THEN 'dead_letter' ELSE 'failed' END,"
-                        "error=:error,updated_at=now() WHERE receipt_id=:receipt"
+                        "UPDATE disclosures SET business_year=:year,kind=:kind,period_end=:period "
+                        "WHERE receipt_id=:receipt"
                     ),
-                    {
-                        "receipt": entry["receipt_id"],
-                        "error": type(error).__name__,
-                        "max": settings.max_attempts,
-                    },
+                    {"receipt": report["receipt_id"], "year": year, "kind": kind, "period": period},
                 )
-            log.warning(
-                "disclosure_reparse_failed",
-                receipt_id=entry["receipt_id"],
-                error_type=type(error).__name__,
-            )
-    for company in companies:
-        try:
-            feed_rows = None
-            if settings.business_year is None:
-                feed_rows = [
-                    {
-                        "rcept_no": entry.external_id,
-                        "report_nm": entry.title.split(" - ", 1)[-1],
-                        "rcept_dt": entry.published_at.astimezone(ZoneInfo("Asia/Seoul")).strftime(
-                            "%Y%m%d"
-                        ),
-                        "rss": entry.raw_payload,
-                    }
-                    for entry in OpenDartRSS(client, company["corp_code"]).entries()
-                    if re.search(r"(?:사업|반기|분기)보고서\s*\(", entry.title)
-                ]
-                with engine.connect() as conn:
-                    pending = (
-                        conn.execute(
-                            sa.text(
-                                "SELECT receipt_id AS rcept_no, title AS report_nm, "
-                                "to_char(published_date,'YYYYMMDD') AS rcept_dt "
-                                "FROM disclosures WHERE stock_code=:stock "
-                                "AND status IN ('pending','failed') "
-                                "ORDER BY updated_at LIMIT :limit"
-                            ),
-                            {"stock": company["stock_code"], "limit": settings.document_limit},
-                        )
-                        .mappings()
-                        .all()
-                    )
-                feed_rows = list(
-                    {row["rcept_no"]: dict(row) for row in [*pending, *feed_rows]}.values()
-                )
-                if not feed_rows:
-                    continue
-            closing = dart.closing_month(company["corp_code"])
-            year, windows = collection_windows(today, closing, settings)
-            if feed_rows is not None:
-                windows = [(today, today)]
+            content = dart.get("document.xml", {"rcept_no": report["receipt_id"]})
+            result[store_document(engine, settings, report["receipt_id"], content)] += 1
         except Exception as error:
             result["failed"] += 1
-            log.warning(
-                "disclosure_company_failed",
-                stock_code=company["stock_code"],
-                error_type=type(error).__name__,
-            )
-            continue
-        for begin, finish in windows:
-            try:
-                with engine.connect() as conn:
-                    done = conn.execute(
-                        sa.text(
-                            "SELECT complete FROM disclosure_collection_progress WHERE "
-                            "stock_code=:stock AND start_date=:start AND end_date=:end "
-                            "AND business_year=:year AND include_current=:current"
-                        ),
-                        {
-                            "stock": company["stock_code"],
-                            "start": begin,
-                            "end": finish,
-                            "year": year,
-                            "current": settings.business_year is None,
-                        },
-                    ).scalar()
-                if (
-                    feed_rows is None
-                    and done
-                    and finish < today - timedelta(days=settings.recheck_days)
-                ):
-                    continue
-                complete = True
-                rows = (
-                    feed_rows
-                    if feed_rows is not None
-                    else dart.reports(company["corp_code"], begin, finish)
-                )
-                for row in rows:
-                    try:
-                        fiscal_year, kind, period = report_period(row["report_nm"], closing)
-                    except ValueError:
-                        result["unclassified"] += 1
-                        log.warning(
-                            "disclosure_unclassified",
-                            stock_code=company["stock_code"],
-                            title=row["report_nm"],
-                            closing_month=closing,
-                        )
-                        continue
-                    if settings.business_year is not None and fiscal_year != year:
-                        continue
-                    receipt = row["rcept_no"]
-                    params = {
-                        "receipt": receipt,
-                        "stock": company["stock_code"],
-                        "corp": company["corp_code"],
-                        "name": company["name"],
-                        "title": row["report_nm"],
-                        "year": fiscal_year,
-                        "kind": kind,
-                        "period": period,
-                        "date": date.fromisoformat(
-                            f"{row['rcept_dt'][:4]}-{row['rcept_dt'][4:6]}-{row['rcept_dt'][6:8]}"
-                        ),
-                        "payload": json.dumps(row, ensure_ascii=False),
-                    }
-                    with engine.begin() as conn:
-                        conn.execute(
-                            sa.text(
-                                "INSERT INTO "
-                                "disclosures(receipt_id,stock_code,corp_code,company_name,tit"
-                                "le,business_year,kind,period_end,published_date,raw_payload)"
-                                " VALUES "
-                                "(:receipt,:stock,:corp,:name,:title,:year,:kind,:period,:date,CAST(:payload"
-                                " AS jsonb)) ON CONFLICT(receipt_id) DO NOTHING"
-                            ),
-                            params,
-                        )
-                        status = conn.execute(
-                            sa.text("SELECT status FROM disclosures WHERE receipt_id=:receipt"),
-                            params,
-                        ).scalar_one()
-                    if status in ("ready", "unavailable", "dead_letter"):
-                        result["skipped"] += 1
-                        continue
-                    try:
-                        with engine.connect() as conn:
-                            archived = conn.execute(
-                                sa.text(
-                                    "SELECT archive_key FROM disclosure_documents WHERE "
-                                    "receipt_id=:receipt ORDER BY id DESC LIMIT 1"
-                                ),
-                                {"receipt": receipt},
-                            ).scalar()
-                        if archived:
-                            content = (settings.archive_root / archived).read_bytes()
-                            if not zipfile.is_zipfile(io.BytesIO(content)):
-                                try:
-                                    extract_documents(content, settings.max_uncompressed_bytes)
-                                except ValueError:
-                                    content = dart.get("document.xml", {"rcept_no": receipt})
-                        else:
-                            content = dart.get("document.xml", {"rcept_no": receipt})
-                        status = store_document(engine, settings, receipt, content)
-                        result[status] += 1
-                    except Exception as error:
-                        complete = False
-                        result["failed"] += 1
-                        with engine.begin() as conn:
-                            conn.execute(
-                                sa.text(
-                                    "UPDATE disclosures SET attempts=LEAST(attempts+1,:max), "
-                                    "status=CASE WHEN attempts+1>=:max THEN 'dead_letter' "
-                                    "ELSE 'failed' END,error=:error,updated_at=now() "
-                                    "WHERE receipt_id=:receipt"
-                                ),
-                                {
-                                    "receipt": receipt,
-                                    "error": type(error).__name__,
-                                    "max": settings.max_attempts,
-                                },
-                            )
-                        log.warning(
-                            "disclosure_failed", receipt_id=receipt, error_type=type(error).__name__
-                        )
-                if feed_rows is not None:
-                    continue
-                with engine.begin() as conn:
-                    conn.execute(
-                        sa.text(
-                            "INSERT INTO "
-                            "disclosure_collection_progress(stock_code,start_date,end_dat"
-                            "e,business_year,include_current,complete)"
-                            " VALUES (:stock,:start,:end,:year,:current,:complete) ON "
-                            "CONFLICT(stock_code,start_date,end_date,business_year,includ"
-                            "e_current) DO UPDATE SET "
-                            "complete=excluded.complete, checked_at=now()"
-                        ),
-                        {
-                            "stock": company["stock_code"],
-                            "start": begin,
-                            "end": finish,
-                            "year": year,
-                            "current": settings.business_year is None,
-                            "complete": complete,
-                        },
-                    )
-            except Exception as error:
-                result["failed"] += 1
-                log.warning(
-                    "disclosure_window_failed",
-                    stock_code=company["stock_code"],
-                    start_date=begin.isoformat(),
-                    end_date=finish.isoformat(),
-                    error_type=type(error).__name__,
-                )
-    refresh_sources(engine, dart, settings, today, result)
+            record_failure(engine, report["receipt_id"], error, settings.max_attempts)
     if settings.collect_financials:
         with engine.connect() as conn:
             pending = (
@@ -446,6 +235,8 @@ def collect(engine: sa.Engine, client: httpx.Client, settings: Settings) -> dict
                     sa.text(
                         "SELECT receipt_id, stock_code, corp_code, business_year, kind, period_end "
                         "FROM disclosures WHERE status='ready' AND NOT financials_collected "
+                        "AND kind IN ('annual','half','q1','q3') "
+                        "AND (detail_type IN ('A001','A002','A003') OR detail_type IS NULL) "
                         "ORDER BY updated_at, receipt_id LIMIT :limit"
                     ),
                     {"limit": settings.document_limit},

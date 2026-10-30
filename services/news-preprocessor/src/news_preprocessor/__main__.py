@@ -10,6 +10,10 @@ from news_preprocessor.embed_pending import embed_pending
 from news_preprocessor.scrape import scrape
 from news_preprocessor.settings import Settings
 from news_preprocessor.sources.publishers import publishers
+from news_preprocessor.sources.publishers.opendart.disclosures.collect import collect
+from news_preprocessor.sources.publishers.opendart.disclosures.settings import (
+    Settings as DisclosureSettings,
+)
 from news_preprocessor.storage import kospi200_stock_codes
 
 log = get_logger(__name__)
@@ -31,6 +35,8 @@ def main() -> None:
             dart_api_key = settings.dart_api_key.get_secret_value()
             sources = publishers(client, dart_api_key, stock_codes)
             scraped = [scrape(engine, source) for source in sources]
+            collected = collect(engine, client, DisclosureSettings())
+            log.info("disclosure_collection_complete", **collected)
             embedded = embed_pending(
                 engine,
                 partial(embed, api_key=settings.embedding_api_key, timeout=settings.embed_timeout),
@@ -39,7 +45,11 @@ def main() -> None:
         finally:
             client.close()
             engine.dispose()
-        failed = [result for result in scraped if result.failed] or embedded.failed
+        failed = (
+            [result for result in scraped if result.failed]
+            or embedded.failed
+            or collected["failed"]
+        )
         sys.exit(1 if failed else 0)
 
 
