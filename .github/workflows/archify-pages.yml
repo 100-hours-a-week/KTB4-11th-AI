@@ -218,6 +218,21 @@ jobs:
                       "enabled_providers": ["local"],
                       "share": "disabled",
                       "autoupdate": False,
+                      "agent": {
+                          "architecture": {
+                              "mode": "primary",
+                              "temperature": 0.1,
+                              "steps": 40,
+                              "prompt": (
+                                  "You author code-backed architecture JSON in an unattended CI job. "
+                                  "Act using glob, grep, read and write tools; never ask questions. "
+                                  "The Archify package contains documentation and renderers, not an "
+                                  "analysis service. You must inspect source and author the JSON yourself. "
+                                  "Use repository-relative source citations with exact line numbers. "
+                                  "Write the requested JSON file before ending. Keep reasoning brief."
+                              ),
+                          }
+                      },
                       "provider": {
                           "local": {
                               "npm": "@ai-sdk/openai-compatible",
@@ -231,18 +246,22 @@ jobs:
                           "read": {"*": "allow", "opencode.json": "deny", "**/opencode.json": "deny"},
                           "glob": "allow",
                           "grep": "allow",
-                          "skill": "allow",
                           "edit": {"*": "deny", "architecture.json": "allow"},
                       },
                   }
                   config_path = private / "opencode.json"
                   config_path.write_text(json.dumps(config))
                   prompt = (
+                      "Create architecture.json for this repository now. "
                       f"The source snapshot is already on disk in your current directory: {work}. "
                       "This is an unattended CI job: do not ask for files or clarification. "
                       "Use glob and read tools to inspect the existing files now. "
-                      "Use the installed Archify skill and read its architecture schema, authoring defaults, "
-                      "repository-authoring reference and web-app example. Analyze the source snapshot: "
+                      "Start by reading compose.local.yaml and the Archify JSON example at "
+                      ".opencode/skills/archify/examples/web-app.architecture.json. "
+                      "That example teaches field shape only; replace its facts using repository source. "
+                      "Read the architecture schema only when unsure about a field. "
+                      "Do not load the full SKILL.md or other diagram modes into context. "
+                      "Analyze the source snapshot: "
                       "services, packages, compose files, infrastructure and workflows. Write ONLY "
                       "architecture.json, a complete architecture JSON IR with showcase quality. "
                       "Cite each relationship's evidence on its owner component using component.sources "
@@ -270,7 +289,16 @@ jobs:
                   }
                   with (private / "agent.log").open("w") as log:
                       result = subprocess.run(
-                          ["opencode", "run", "--pure", "--model", f"local/{model}", prompt],
+                          [
+                              "opencode",
+                              "run",
+                              "--pure",
+                              "--agent",
+                              "architecture",
+                              "--model",
+                              f"local/{model}",
+                              prompt,
+                          ],
                           cwd=work,
                           env=agent_env,
                           stdout=log,
@@ -283,7 +311,9 @@ jobs:
                           private / "agent.log",
                           [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
                       )
-                      raise RuntimeError("OpenCode did not produce architecture.json; see sanitized diagnostics")
+                      raise RuntimeError(
+                          "OpenCode did not produce architecture.json; see sanitized diagnostics"
+                      )
                   candidate = json.loads((work / "architecture.json").read_text())
                   candidate.setdefault("meta", {})["output"] = "index.html"
                   candidate["meta"]["repository"] = {
