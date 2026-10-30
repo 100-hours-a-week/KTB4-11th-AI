@@ -82,6 +82,10 @@ class FakeDart:
         params = dict(request.url.params)
         self.requests.append(params)
         assert params.pop("crtfc_key") == KEY
+        if request.url.path == "/api/company.json":
+            return httpx.Response(200, json={"status": "000", "acc_mt": "12"})
+        if request.url.path == "/api/fnlttSinglAcntAll.json":
+            return httpx.Response(200, json=NO_DATA)
         if request.url.path == "/api/document.xml":
             return httpx.Response(200, content=self.documents[params["rcept_no"]])
         detail_type = params.get("pblntf_detail_ty")
@@ -110,16 +114,44 @@ def test_entries_follow_every_page():
     assert all(r["corp_cls"] == "Y" and r["page_count"] == "100" for r in dart.list_requests())
 
 
-def test_long_detail_types_are_dropped():
+def test_long_detail_types_are_kept_with_their_official_type():
     dart = FakeDart(
         pages=[_page([_row("short"), _row("report")])],
         long_pages={"A001": _page([_row("report")])},
     )
 
-    assert _ids(dart.source().entries()) == ["short"]
+    entries = dart.source().entries()
+    assert _ids(entries) == ["short", "report"]
+    assert json.loads(entries[1].raw_payload)["pblntf_detail_ty"] == "A001"
     asked = {r["pblntf_detail_ty"] for r in dart.list_requests() if "pblntf_detail_ty" in r}
     assert asked == set(OpenDart.long_detail_types)
     assert len(OpenDart.long_detail_types) == 13
+
+
+def test_long_filing_article_contains_parsed_content(tmp_path):
+    from news_preprocessor.sources.publishers.opendart.opendart import DisclosureItem
+    from news_preprocessor.sources.publishers.opendart.settings import Settings
+
+    dart = FakeDart(
+        pages=[_page([_row("report", report_nm="사업보고서 (2025.12)")])],
+        long_pages={"A001": _page([_row("report", report_nm="사업보고서 (2025.12)")])},
+        documents={
+            "report": _zip(
+                {"main.xml": "<DOCUMENT><TITLE>사업의 내용</TITLE><P>제품</P></DOCUMENT>"}
+            )
+        },
+    )
+    source = OpenDart(
+        httpx.Client(transport=httpx.MockTransport(dart.handler)),
+        KEY,
+        {SAMSUNG},
+        settings=Settings(archive_root=tmp_path, request_interval=0, attempts=1),
+    )
+    item = source.article(source.entries()[0])
+    assert isinstance(item, DisclosureItem)
+    assert item.detail_type == "A001" and item.documents[0]["sections"][0]["text"] == "제품"
+    assert item.business_year == 2025
+    assert any("rcept_no" in request for request in dart.requests)
 
 
 def test_rows_outside_the_stock_codes_are_dropped():
