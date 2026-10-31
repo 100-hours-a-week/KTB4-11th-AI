@@ -1,7 +1,7 @@
 # Investment harness loop and execution simulator
 
 Date: 2026-10-31
-Status: Approved pending review
+Status: Draft
 Issue: https://github.com/100-hours-a-week/KTB4-11th-AI/issues/434 (parent #433)
 
 ## Purpose
@@ -23,8 +23,9 @@ it is being evaluated.
 
 | Order | Issue | Scope |
 | --- | --- | --- |
+| 0 | #435 design gate | Market data contract in [`2026-10-31-evaluation-market-data-contract-design.md`](2026-10-31-evaluation-market-data-contract-design.md); no server change |
 | 1 | #434 (this design) | Loop, `PortfolioState`, ExecutionSimulator, `Clock` and `PriceSource` contracts, Equal-Weight, tests |
-| 2 | #435 | Clock file; evaluation-mode market-http and news-http |
+| 2 | #435 implementation | Clock file; evaluation-mode market-http and news-http; information provider variants |
 | 3 | #436 | HTTP `submit_portfolio` and holdings contract served by the harness; Docker Agent workflow |
 | 4 | New issue outside #433 | portfolio-builder becomes the production `submit_portfolio` HTTP provider; its LangChain agent is retired |
 
@@ -33,6 +34,11 @@ into `dev`. CI runs only on pull requests into `dev`; adding `feat/**` to the `c
 pull-request trigger is left to whoever opens the first sub-issue pull request.
 
 ## Decisions already made
+
+- The market data contract (responsibilities, time semantics, daily bar contract, missing and
+  error handling, reproducibility premises, access boundary) is defined in
+  [`2026-10-31-evaluation-market-data-contract-design.md`](2026-10-31-evaluation-market-data-contract-design.md). This design follows it; where they
+  differ, the contract wins.
 
 - Location: `evaluations/harness`, module `harness`. A new top-level `evaluations/` directory
   because the harness is not a deployed service.
@@ -67,18 +73,23 @@ class DecisionSystem(Protocol):
     def decide(self, context: DecisionContext) -> PortfolioProposal: ...
 ```
 
-- `DailyBar`: trading date, open, high, low, close, volume.
+- `DailyBar` and `PriceSource`: as defined in the market data contract.
 - `DecisionContext`: `as_of`, current `PortfolioState` (cash, share quantities, pending
   orders; no prices), and the universe. It is what the holdings endpoint will return in #436.
   Fee and tax rates are harness rules and are not exposed (our call; add constraints when a
   decision system needs them).
-- `PortfolioProposal`: relative target weights per symbol plus a relative cash weight. It
-  matches the existing production submission semantics in
-  `services/portfolio-builder/src/portfolio_builder/portfolio.py`: weights are relative,
+- `PortfolioProposal`: relative target weights per symbol plus a relative cash weight, keyed
+  by 6-character stock code (the market-http identifier). Weights follow the production
+  semantics in `services/portfolio-builder/src/portfolio_builder/portfolio.py`: relative,
   non-negative, and normalized by the harness to sum to 1. Exits are implied by symbols held
-  now but absent from the proposal. Reasons, commentary, and cited clusters are not part of the
-  evaluation contract.
+  now but absent from the proposal. Production keys holdings by `company_id`
+  (`corporations.corp_code`) and requires explicit exits with reasons; reconciling the
+  identifier and the exit, reason, and commentary fields into one HTTP contract is #436 and
+  the portfolio-builder refactor's job, not #434's (our call).
 - `PortfolioState`: cash, share quantity per symbol, pending orders.
+- A **pending order** is a target value per symbol in currency, fixed at Submit from the
+  sizing value (see Order sizing). It has no share quantity until the fill date's open is
+  known. `DecisionContext` shows pending orders in this form.
 - `PortfolioSnapshot`: date, cash, holdings with quantity and closing price, total value.
 - `Episode` result: initial capital, every validation outcome, every order and fill or
   rejection with its reason, the snapshot series, and the final state.
@@ -101,7 +112,29 @@ For each decision time `t`:
    are cancelled and recorded before the new orders are placed (our call; #434 only runs one
    decision, so #439 may revisit this).
 
-## Time semantics (our call)
+After the last decision, advance through the episode end, recording a snapshot for each
+trading date, then stop.
+
+### Calendar and availability failures (our call)
+
+Each of these fails the episode with the reason, date, and symbol where relevant recorded,
+consistent with the missing-close rule:
+
+- no close at or before `t` exists for the sizing value (including a held symbol with no
+  close on the last market trading date at or before `t`);
+- no fill date exists at or before the episode end;
+- the price data's last market trading date is before the episode end's date, so the episode
+  cannot be marked through its end (checked when the episode end has passed `MARKET_CLOSE` on
+  a weekday);
+- orders still pending at the episode end, which can only happen through the previous case.
+
+A weekday inside the episode with no bar for any universe symbol is not a failure, since it
+cannot be told apart from a holiday, but it is listed in the episode result as a calendar gap
+so a reader can check it.
+
+## Time semantics
+
+These apply the market data contract's time semantics to the loop.
 
 - Decision times and the episode end are timezone-aware datetimes; market times are KST
   (`ktb_core.krx.KST`, `MARKET_OPEN`, `MARKET_CLOSE`).
@@ -112,9 +145,6 @@ For each decision time `t`:
   open.
 - Sizing uses the account value at the last close at or before `t`.
 
-After the last decision, advance through the episode end, recording a snapshot for each
-trading date, then stop.
-
 ## Execution rules
 
 - **Trading dates** come from the price data: a market trading date is any date on which at
@@ -123,9 +153,10 @@ trading date, then stop.
   `ktb_core.krx.KRX_HOLIDAYS` does not cover July–September 2026, so it is not the calendar.
 - **Fill price** is the open of the fill date. A price observed at or before the decision time
   is never used as a fill price.
-- **Order sizing**: target value = normalized weight × account value at the last close at or
-  before `t`. Target quantity = floor(target value / fill price). Orders are the
-  difference from current quantities. Whole shares only.
+- **Order sizing**: at Submit, the sizing value is the account value at the last close at or
+  before `t`, and each symbol's target value = normalized weight × sizing value. At the fill
+  date's open, target quantity = floor(target value / fill price); the order is the difference
+  from the quantity held then. Whole shares only.
 - **Order of processing**: sells first, then buys in symbol order. A buy that the remaining
   cash cannot cover after fees is reduced to the largest affordable whole quantity; if that is
   zero the order is rejected with a reason.
@@ -150,19 +181,24 @@ Splits weight evenly across the universe with zero cash weight. It reads only th
 ## Price source implementations
 
 - In-memory, for tests.
-- HTTP against market-http `GET /bars/{code}?timeframe=1d`, paging backward with the
-  `before` cursor until the requested start date. Uses `httpx`.
+- HTTP client adapter against market-http `GET /bars/{code}?timeframe=1d`, following the
+  market data contract's paging, empty-result, and error rules. Uses `httpx`. Adapter tests
+  use `httpx.MockTransport`; no server is needed.
+- A `PriceSource` error during an episode fails the episode with the error recorded.
 
 ## Tests (completion criteria from #434)
 
 - Running Equal-Weight twice with the same prices and spec produces identical orders, fills,
   and final state.
-- Fills use the open of the first trading date after the decision date, never a price from
-  the decision date or earlier. A decision system that inspects its `DecisionContext` finds no
+- Fills use the open of the first market trading date whose `MARKET_OPEN` is strictly after
+  the decision time: an 08:00 decision fills at that day's open, a 16:00 decision at the next
+  trading date's open. A decision system that inspects its `DecisionContext` finds no
   price data.
 - Validation and execution constraint tests for success and failure: cash shortfall, weight
   sum, symbol outside the universe, whole-share sizing, missing bar on the fill date, and a
   held symbol missing a close, which fails the episode.
+- Each calendar and availability failure fails the episode with its reason, and a bar-less
+  weekday appears as a calendar gap.
 - Initial capital, cash and holdings changes, fill history, and the snapshot series are
   inspectable on the episode result.
 - The loop is constructed with contracts only; a test supplies a different decision system
