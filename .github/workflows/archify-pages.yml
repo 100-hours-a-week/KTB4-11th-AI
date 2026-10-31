@@ -9,22 +9,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: archify-gemma-diagnostics
+  group: archify-pages-branch
   cancel-in-progress: true
 
 jobs:
   generate:
-    if: github.repository == '100-hours-a-week/KTB4-11th-AI' && github.ref == 'refs/heads/docs/442/fix-tailscale-routes'
-    name: generate (${{ matrix.label }})
-    strategy:
-      fail-fast: false
-      max-parallel: 2
-      matrix:
-        include:
-          - label: gemma-31b
-            model: google/gemma-4-31b-it:free
-          - label: gemma-26b-a4b
-            model: google/gemma-4-26b-a4b-it:free
     runs-on: ubuntu-latest
     timeout-minutes: 100
     permissions:
@@ -51,7 +40,7 @@ jobs:
           git -C "$RUNNER_TEMP/archify" checkout --detach FETCH_HEAD
       - name: Generate and validate public architecture
         env:
-          OPENROUTER_MODEL: ${{ matrix.model }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ARCHIFY_UPDATE_CHECK_DISABLED: '1'
         shell: python
@@ -248,9 +237,6 @@ jobs:
                           result = subprocess.run(
                               [
                                   "opencode",
-                                  "--print-logs",
-                                  "--log-level",
-                                  "ERROR",
                                   "run",
                                   "--pure",
                                   "--agent",
@@ -404,14 +390,13 @@ jobs:
               main()
       - uses: actions/upload-artifact@v7.0.2
         with:
-          name: architecture-${{ matrix.label }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: architecture-${{ github.sha }}-${{ github.run_attempt }}
           path: _site/
           if-no-files-found: error
           retention-days: 14
       - uses: actions/upload-pages-artifact@v5.0.0
         with:
           path: _site/
-          name: github-pages-${{ matrix.label }}
 
   deploy:
     if: github.ref == 'refs/heads/main'
