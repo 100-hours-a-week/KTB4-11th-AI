@@ -35,7 +35,8 @@ jobs:
           tool_versions: |
             node 26
             opencode ${{ vars.OPENCODE_VERSION }}
-      - name: Generate architecture HTML and JSON
+      - name: Generate and verify architecture HTML and JSON
+        uses: nick-fields/retry@v4.0.0
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
@@ -93,14 +94,15 @@ jobs:
             Use review-2 or review-3 for subsequent review passes.
             Follow the skill's repair guidance in this same session if validation fails.
             Do not edit repository source, commit, push, or create a pull request.
-        run: opencode run --pure --model "openrouter/$OPENROUTER_MODEL" "$ARCHIFY_PROMPT"
-      - name: Verify generated architecture with Archify
-        env:
-          ARCHIFY_UPDATE_CHECK_DISABLED: '1'
-        run: >-
-          node .opencode/skills/archify/archify/bin/archify.mjs finalize architecture
-          _site/architecture.json _site/index.html --repo-root . --quality showcase --json
-          --out-dir "$RUNNER_TEMP/archify-verification"
+        with:
+          timeout_minutes: 20
+          max_attempts: 2
+          command: |
+            opencode run --pure --model "openrouter/$OPENROUTER_MODEL" "$ARCHIFY_PROMPT"
+            node .opencode/skills/archify/archify/bin/archify.mjs finalize architecture _site/architecture.json _site/index.html --repo-root . --quality showcase --json --out-dir "$RUNNER_TEMP/archify-verification"
+          new_command_on_retry: |
+            opencode run --continue --pure --model "openrouter/$OPENROUTER_MODEL" "Continue the existing Archify candidate. Run the original finalize command, repair its reported issues in place, and finish only after every gate passes. Preserve repository evidence and do not restart the diagram."
+            node .opencode/skills/archify/archify/bin/archify.mjs finalize architecture _site/architecture.json _site/index.html --repo-root . --quality showcase --json --out-dir "$RUNNER_TEMP/archify-verification"
       - name: Upload HTML and JSON
         uses: actions/upload-artifact@v7.0.2
         with:
