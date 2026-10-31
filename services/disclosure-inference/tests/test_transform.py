@@ -1,7 +1,7 @@
 import math
 
 import pytest
-from transform import (
+from disclosure_inference.transform import (
     INT8_MAX,
     INT8_MIN,
     int8_embedding,

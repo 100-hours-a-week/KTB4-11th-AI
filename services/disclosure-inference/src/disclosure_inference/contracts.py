@@ -1,12 +1,3 @@
-"""Request shapes and the identity check shared by the disclosure inference endpoints.
-
-A vector produced by the wrong adapter is indistinguishable from a correct one once it is
-stored, so every request states the identity it expects and a mismatch is refused rather
-than served.
-
-Pure Python and no GPU, so these rules are provable on CPU.
-"""
-
 import runpy
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,13 +5,11 @@ from typing import Any
 
 
 class IdentityMismatch(Exception):
-    """The caller expected a different model than the one loaded."""
+    pass
 
 
 @dataclass(frozen=True)
 class DocumentGroup:
-    """One document's chunks, in source order, encoded as a single context group."""
-
     document_id: str
     chunks: tuple[tuple[int, str], ...]
 
@@ -57,7 +46,7 @@ def require_identity(claimed: dict[str, Any] | None, loaded: dict[str, Any]) -> 
     if claimed is None:
         raise IdentityMismatch("identity is required on every inference request")
     differing = sorted(
-        field for field, value in loaded.items() if claimed.get(field, _MISSING) != value
+        (field for field, value in loaded.items() if claimed.get(field, _MISSING) != value)
     )
     if differing:
         raise IdentityMismatch(f"identity does not match the loaded model: {', '.join(differing)}")
@@ -67,11 +56,6 @@ _MISSING = object()
 
 
 def document_groups(documents: list[dict[str, Any]]) -> list[DocumentGroup]:
-    """Validate the request and keep every document its own context group.
-
-    Grouping across documents would mix one filing's attachments into another's context and
-    change the vectors, so the boundary is enforced here rather than trusted.
-    """
     groups = []
     seen: set[int] = set()
     for document in documents:

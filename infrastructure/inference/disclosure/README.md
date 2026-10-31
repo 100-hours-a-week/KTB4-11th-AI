@@ -7,6 +7,13 @@ last-7d43c4 adapter. Retrieval returns evidence; it never generates an answer.
 
 ## Runtime and snapshots
 
+Model loading, embedding, reranking, request validation and adapter verification live in
+[`services/disclosure-inference`](../../../services/disclosure-inference/README.md).
+This directory owns the Modal image, GPU selection, snapshot lifecycle, scaling,
+HTTP adapters and image-build weight downloads. The image installs the GPU service's
+dependencies from its own `pyproject.toml` and copies its Python package before building
+the model layers. The GPU project is excluded from the CPU uv workspace.
+
 `app.py` enables `enable_memory_snapshot=True` and
 `experimental_options={"enable_gpu_snapshot": True}`. Both classes load the model and run
 a small forward pass in `@modal.enter(snap=True)`. Each model has zero minimum and buffer
@@ -105,7 +112,8 @@ Run from the repository root after reviewing the deployment and expected costs:
 python3 -m venv /tmp/disclosure-modal
 /tmp/disclosure-modal/bin/pip install modal==1.6.3
 /tmp/disclosure-modal/bin/modal setup
-/tmp/disclosure-modal/bin/modal deploy infrastructure/inference/disclosure/app.py
+PYTHONPATH=services/disclosure-inference/src \
+  /tmp/disclosure-modal/bin/modal deploy infrastructure/inference/disclosure/app.py
 ```
 
 `modal deploy` builds large model images and can create GPU snapshots. Deployment and actual GPU measurements were completed after the local integration;
@@ -185,7 +193,7 @@ refuses to delete 1024 indexes automatically; removing them is a separate destru
 ## Verification and remaining measurements
 
 ```bash
-./scripts/run-tests.sh infrastructure/inference services/disclosure-indexer services/disclosure-retrieval
+./scripts/run-tests.sh infrastructure/inference services/disclosure-inference services/disclosure-indexer services/disclosure-retrieval
 ```
 
 Local tests cover transport identities, proxy authentication, invalid vectors/scores,

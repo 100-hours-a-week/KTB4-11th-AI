@@ -1,13 +1,19 @@
 # Disclosure RAG: Final Implementation Plan
 
-Finalized: 2026-10-29; PR ownership and migration split updated 2026-10-30.
+Finalized: 2026-10-29; runtime and Modal deployment split updated 2026-10-31.
 Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and services #346 / #432.
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The 2026-10-30 direct-ingestion integration was verified with **1,394 passed, 49 skipped, 2 subtests passed**
-on the combined serving branch using a disposable PostgreSQL database. This run checks
-CPU code and model contracts; it does not redeploy GPU workers or produce new inference timings.
+The 2026-10-31 runtime/deployment split was verified with **1,401 passed, 49 skipped,
+2 subtests passed** on the combined serving branch using a disposable PostgreSQL database.
+This run checks CPU code and model contracts; it does not redeploy GPU workers or
+produce new inference timings. The 37 inference and deployment tests pass separately.
+Ruff lint/format, Tach boundaries and dependency checks, GPU project dependency audit,
+standalone wheel/sdist builds and local Modal SDK 1.6.3 app loading pass. Both Modal
+classes register without importing GPU libraries locally. CPU `uv.lock` and regenerated
+production image requirements have no changes. An independent code review found no
+actionable issue in the extraction or image/import setup.
 
 ## 1. Service boundaries
 
@@ -16,8 +22,8 @@ CPU code and model contracts; it does not redeploy GPU workers or produce new in
 | news-preprocessor | Collect short and long filings through the existing API publisher; archive originals and store parsed documents, sections and supported financial facts |
 | disclosure-indexer | Read stored documents from PostgreSQL, embed narrative passages and store vectors in pgvector |
 | disclosure-retrieval library (inside portfolio-builder) | Read financial facts and sections directly; return ranked narrative evidence without answer generation |
-| Modal Embedder | Encode ordered document context groups and queries with the same pinned Context checkpoint |
-| Modal Reranker | Score exact-search candidates with the trained Qwen model |
+| disclosure-inference | Load and warm up the selected models, embed ordered document groups and queries, score candidates and validate requests and adapters |
+| Modal deployment | Build model images, configure GPUs, snapshots and scaling, and expose authenticated inference endpoints |
 | portfolio-builder | Use disclosure evidence and technical analysis before saving a new portfolio |
 
 The existing hourly news command uses `opendart/opendart.py` as its single API intake.
@@ -62,6 +68,24 @@ its identity functions. Separate disclosure model JSON/Python files are unnecess
 External inference HTTP requests and 303 result polling stay in the indexer and retrieval library;
 core has no HTTP transport or GPU dependencies.
 
+Inference implementation lives in `services/disclosure-inference/src/disclosure_inference`.
+Its `runtime.py` owns Context and Qwen loading, warmup, embedding, reranking, token limits
+and measurement methods. `contracts.py`, `transform.py` and `verification.py` own request
+validation, prompts, embedding transforms and adapter checks. None imports Modal or FastAPI.
+
+`infrastructure/inference/disclosure/app.py` owns Modal images, GPU preferences,
+snapshot lifecycle, scale settings, proxy authentication and HTTP error mapping.
+The Modal lifecycle hook constructs the service runtime before taking a snapshot;
+endpoint and measurement methods delegate to that runtime. `weights.py` downloads the
+pinned revisions during image build and uses the service's adapter verification.
+
+The GPU project's own `pyproject.toml` declares its dependencies and Python 3.12–3.14
+support. It is explicitly excluded from the CPU uv workspace. The Modal image installs
+these dependencies, copies the package with `add_local_python_source(copy=True)`, and
+includes the project metadata before building either model layer. The CPU lockfile and
+production image requirements remain unchanged. Root pytest includes the service source
+for CPU tests; it does not install or load GPU libraries.
+
 | Role | Model and selected adapter |
 | --- | --- |
 | Embedding | perplexity-ai/pplx-embed-v2-context-9b-preview; score10 adapter SHA256 starts 1f5d4367 |
@@ -85,7 +109,8 @@ core has no HTTP transport or GPU dependencies.
 Deployment command from the repository root:
 
 ```bash
-modal deploy infrastructure/inference/disclosure/app.py
+PYTHONPATH=services/disclosure-inference/src \
+  modal deploy infrastructure/inference/disclosure/app.py
 ```
 
 GPU snapshots reduce repeated initialization but do not guarantee allocation availability or

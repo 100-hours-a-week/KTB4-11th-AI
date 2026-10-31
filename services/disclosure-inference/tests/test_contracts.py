@@ -1,9 +1,14 @@
 from pathlib import Path
 
 import pytest
-from contracts import IdentityMismatch, Manifest, document_groups, require_identity
+from disclosure_inference.contracts import (
+    IdentityMismatch,
+    Manifest,
+    document_groups,
+    require_identity,
+)
 
-MANIFEST = Path(__file__).resolve().parents[4] / "packages/core/src/ktb_core/embedding/config.py"
+MANIFEST = Path(__file__).resolve().parents[3] / "packages/core/src/ktb_core/embedding/config.py"
 
 
 @pytest.fixture
@@ -102,7 +107,7 @@ def test_serving_and_services_use_the_same_model_configuration(manifest):
 
 
 def test_reranker_uses_the_evaluated_chat_template():
-    from contracts import reranker_prompt
+    from disclosure_inference.contracts import reranker_prompt
 
     prompt = reranker_prompt("소송 위험", "회사: 삼성전자\n본문:\n소송이 진행 중입니다.")
     assert prompt.startswith(

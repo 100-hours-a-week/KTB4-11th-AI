@@ -284,3 +284,10 @@ over HTTPS for query embedding and reranking, returning DB connections before th
 Neither collection nor retrieval generates answers. Backend polling may include an
 optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
 receiving this field does not change trading behavior.
+
+Disclosure GPU inference belongs to `services/disclosure-inference`: model loading,
+warmup, embedding, reranking, input validation and adapter checks. Modal images, GPU
+selection, snapshot lifecycle, scaling, HTTP adapters and image-build weight downloads
+belong to `infrastructure/inference/disclosure`. The GPU project is excluded from the
+CPU uv workspace; Modal installs its own declared dependencies and copies its source
+package into the model images. It is not installed in the shared production Docker image.
