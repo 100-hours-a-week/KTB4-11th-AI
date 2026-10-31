@@ -278,8 +278,9 @@ jobs:
                       "row/col per component and no pos copied from the example. Avoid redundant edges. "
                       "Cite each relationship's evidence on its owner component using component.sources "
                       "(connections have no sources field). EVERY component, including external services and "
-                      "datastores, MUST include sources: [{\"path\": \"compose.local.yaml\", \"line\": 1}]. "
-                      "Use real paths and line numbers you inspected, not that placeholder. "
+                      "datastores, MUST include a nonempty sources array of objects containing path "
+                      "and line (optionally end_line). Inspect actual implementation files and cite "
+                      "the lines supporting each claim. Never use a placeholder citation. "
                       "The bundled example omits sources; do not copy that omission. "
                       "Mark uncertainty instead of inventing "
                       "relationships. Show news, market, portfolio, reporting, datastores, queues, external "
@@ -351,12 +352,23 @@ jobs:
                           for component in candidate.get("components", [])
                           if not component.get("sources")
                       ]
-                      if not candidate.get("components") or missing:
+                      references = {
+                          (source.get("path"), source.get("line"), source.get("end_line"))
+                          for component in candidate.get("components", [])
+                          for source in component.get("sources", [])
+                      }
+                      has_implementation = len(references) > 1 and any(
+                          path and "/src/" in path and path.endswith(".py")
+                          for path, _, _ in references
+                      )
+                      if not candidate.get("components") or missing or not has_implementation:
                           if attempt == 2:
                               raise ValueError("Architecture source citations remain incomplete")
                           prompt = (
                               "Repair architecture.json in your current directory. Read it, then inspect "
-                              "repository files to add a nonempty sources array to EVERY component. "
+                              "repository implementation files under services/*/src to cite actual "
+                              "datastore operations and HTTP/queue calls. Each component needs sources; "
+                              "an overview citing only Compose configuration is insufficient. "
                               "Citations contain path, line and optional end_line, using actual files "
                               "and inspected line numbers. Preserve semantics and layout. "
                               "Use the edit tool to add missing sources; do not ask questions. "
