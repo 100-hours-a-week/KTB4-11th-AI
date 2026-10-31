@@ -18,7 +18,6 @@ jobs:
     timeout-minutes: 100
     permissions:
       contents: read
-      id-token: write
     env:
       ARCHIFY_REV: ${{ vars.ARCHIFY_REV }}
       OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION }}
@@ -39,51 +38,13 @@ jobs:
           git -C "$RUNNER_TEMP/archify" remote add origin https://github.com/tt-a1i/archify.git
           git -C "$RUNNER_TEMP/archify" fetch --depth 1 origin "$ARCHIFY_REV"
           git -C "$RUNNER_TEMP/archify" checkout --detach FETCH_HEAD
-      - name: Inspect OIDC trust claims
-        env:
-          TS_AUDIENCE: ${{ secrets.TS_AUDIENCE }}
-        shell: python
-        run: |
-          import base64
-          import json
-          import os
-          import urllib.parse
-          import urllib.request
-
-          url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
-          url += "&audience=" + urllib.parse.quote(os.environ["TS_AUDIENCE"], safe="")
-          request = urllib.request.Request(url, headers={
-              "Authorization": "Bearer " + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
-          })
-          with urllib.request.urlopen(request, timeout=15) as response:
-              token = json.load(response)["value"]
-          payload = token.split(".")[1]
-          claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-          for name in ("iss", "sub", "repository", "ref", "workflow_ref"):
-              print(f"{name}: {claims.get(name)}")
-          print("audience_matches: " + str(claims.get("aud") == os.environ["TS_AUDIENCE"]))
-      - name: Join Tailnet using GitHub OIDC
-        uses: tailscale/github-action@v4.4.0
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          audience: ${{ secrets.TS_AUDIENCE }}
-          tags: tag:archify-ci
-          timeout: 2m
-          retry: '2'
-          log-mode: quiet
-      - name: Disable subnet routes
-        run: sudo tailscale set --accept-routes=false
       - name: Generate and validate public architecture
         env:
-          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
-          LLM_MODEL: ${{ vars.LLM_MODEL }}
-          LLM_CONTEXT: ${{ vars.LLM_CONTEXT }}
-          LLM_OUTPUT: ${{ vars.LLM_OUTPUT }}
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ARCHIFY_UPDATE_CHECK_DISABLED: '1'
         shell: python
         run: |
-          import ipaddress
           import json
           import os
           import re
@@ -92,7 +53,6 @@ jobs:
           import tempfile
           import time
           import urllib.error
-          import urllib.parse
           import urllib.request
           from pathlib import Path
 
@@ -108,44 +68,33 @@ jobs:
               print(f"{stage} failed (sanitized diagnostics):\n{details}", flush=True)
 
 
-          def check_endpoint(base_url):
-              parsed = urllib.parse.urlsplit(base_url)
-              host = parsed.hostname or ""
-              try:
-                  tailnet = ipaddress.ip_address(host) in ipaddress.ip_network("100.64.0.0/10")
-              except ValueError:
-                  tailnet = host.endswith(".ts.net")
-              if (
-                  parsed.scheme not in {"http", "https"}
-                  or not tailnet
-                  or parsed.username
-                  or parsed.password
-                  or parsed.query
-                  or parsed.fragment
-                  or not parsed.path.endswith("/v1")
-              ):
-                  raise ValueError("LLM_BASE_URL must be a Tailnet IP or .ts.net URL ending in /v1")
-
-
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self, req, fp, code, msg, headers, newurl):
                   return None
 
 
           def check_model(base_url, model, api_key):
-              headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+              headers = {"Authorization": f"Bearer {api_key}"}
               request = urllib.request.Request(f"{base_url}/models", headers=headers)
               opener = urllib.request.build_opener(NoRedirect)
               for attempt in range(3):
                   try:
                       with opener.open(request, timeout=15) as response:
                           models = json.load(response)
-                      if model not in {item["id"] for item in models["data"]}:
-                          raise ValueError("LLM_MODEL is absent from /v1/models")
-                      return
+                      selected = next((item for item in models["data"] if item["id"] == model), None)
+                      if selected is None:
+                          raise ValueError("OPENROUTER_MODEL is absent from OpenRouter /models")
+                      if "tools" not in selected.get("supported_parameters", []):
+                          raise ValueError("OPENROUTER_MODEL must support tool calling")
+                      context = int(selected["context_length"])
+                      maximum = selected.get("top_provider", {}).get("max_completion_tokens")
+                      output = min(16384, int(maximum or 16384), context // 2)
+                      if not 0 < output < context:
+                          raise ValueError("Invalid OpenRouter model context/output limits")
+                      return context, output
                   except (urllib.error.URLError, TimeoutError):
                       if attempt == 2:
-                          raise RuntimeError("LLM /v1/models unreachable after three attempts") from None
+                          raise RuntimeError("OpenRouter /models unreachable after three attempts") from None
                       time.sleep(5)
 
 
@@ -192,14 +141,12 @@ jobs:
 
           def main():
               repo = Path.cwd()
-              base_url = os.environ["LLM_BASE_URL"].rstrip("/")
-              model = os.environ["LLM_MODEL"]
-              context, output = int(os.environ["LLM_CONTEXT"]), int(os.environ["LLM_OUTPUT"])
-              if not model or not 0 < output < context:
-                  raise ValueError("Set LLM_MODEL and actual model limits: 0 < LLM_OUTPUT < LLM_CONTEXT")
-              check_endpoint(base_url)
-              api_key = os.environ.get("LLM_API_KEY", "")
-              check_model(base_url, model, api_key)
+              base_url = "https://openrouter.ai/api/v1"
+              model = os.environ["OPENROUTER_MODEL"]
+              api_key = os.environ["OPENROUTER_API_KEY"]
+              if not model or not api_key:
+                  raise ValueError("Set OPENROUTER_MODEL variable and OPENROUTER_API_KEY secret")
+              context, output = check_model(base_url, model, api_key)
               skill = Path(os.environ["RUNNER_TEMP"]) / "archify/archify"
               site = repo / "_site"
               site.mkdir(exist_ok=False)
@@ -212,9 +159,9 @@ jobs:
                   shutil.copytree(skill, work / ".opencode/skills/archify")
                   config = {
                       "$schema": "https://opencode.ai/config.json",
-                      "model": f"local/{model}",
-                      "small_model": f"local/{model}",
-                      "enabled_providers": ["local"],
+                      "model": f"openrouter/{model}",
+                      "small_model": f"openrouter/{model}",
+                      "enabled_providers": ["openrouter"],
                       "share": "disabled",
                       "autoupdate": False,
                       "agent": {
@@ -233,10 +180,10 @@ jobs:
                           }
                       },
                       "provider": {
-                          "local": {
+                          "openrouter": {
                               "npm": "@ai-sdk/openai-compatible",
-                              "name": "Private Tailnet LLM",
-                              "options": {"baseURL": base_url, "apiKey": "{env:LLM_API_KEY}"},
+                              "name": "OpenRouter",
+                              "options": {"baseURL": base_url, "apiKey": "{env:OPENROUTER_API_KEY}"},
                               "models": {model: {"limit": {"context": context, "output": output}}},
                           }
                       },
@@ -268,7 +215,7 @@ jobs:
                       "Analyze the source snapshot: "
                       "services, packages, compose files, infrastructure and workflows. Write ONLY "
                       "architecture.json, a source-backed architecture overview with showcase quality. "
-                      "Keep the overview small: at most 10 components and 12 connections. Group related "
+                      "Keep the overview readable. Group related "
                       "services into news, market, portfolio and reporting pipeline components rather than "
                       "drawing every service. Describe group members in cards. Keep databases and queues "
                       "visible and cite compose/source evidence for every group. Only draw relationships "
@@ -298,7 +245,7 @@ jobs:
                   agent_env = {
                       "PATH": os.environ["PATH"],
                       "HOME": str(private / "home"),
-                      "LLM_API_KEY": api_key,
+                      "OPENROUTER_API_KEY": api_key,
                       "OPENCODE_CONFIG": str(config_path),
                       "OPENCODE_DISABLE_DEFAULT_PLUGINS": "true",
                       "OPENCODE_DISABLE_SHARE": "true",
@@ -314,7 +261,7 @@ jobs:
                                   "--agent",
                                   "architecture",
                                   "--model",
-                                  f"local/{model}",
+                                  f"openrouter/{model}",
                                   prompt,
                               ],
                               cwd=work,
@@ -327,7 +274,7 @@ jobs:
                           report_failure(
                               "OpenCode",
                               private / "agent.log",
-                              [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
+                              [api_key],
                           )
                           raise RuntimeError(
                               "OpenCode did not produce architecture.json; see sanitized diagnostics"
@@ -411,7 +358,7 @@ jobs:
                       report_failure(
                           "Archify",
                           private / "finalize.log",
-                          [api_key, base_url, urllib.parse.urlsplit(base_url).hostname],
+                          [api_key],
                       )
                       if attempt == 2:
                           raise RuntimeError("Archify finalize failed after two repairs; deployment stopped")
@@ -446,7 +393,7 @@ jobs:
                               shutil.rmtree(path)
                           else:
                               path.unlink()
-                  public_files(site, [api_key, base_url, urllib.parse.urlsplit(base_url).hostname])
+                  public_files(site, [api_key])
                   (site / "downloads.html").write_text(
                       '<!doctype html><html lang="ko"><meta charset="utf-8">'
                       "<title>Architecture downloads</title><h1>Architecture</h1>"
