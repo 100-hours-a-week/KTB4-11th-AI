@@ -1,0 +1,16 @@
+[project]
+name = "harness"
+version = "0.1.0"
+description = "Investment evaluation harness loop and execution simulator"
+requires-python = ">=3.14,<3.16"
+dependencies = [
+    "ktb-core",
+    "httpx>=0.28",
+]
+
+[tool.uv.sources]
+ktb-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
