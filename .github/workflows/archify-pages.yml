@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: archify-model-comparison
+  group: archify-gemma-diagnostics
   cancel-in-progress: true
 
 jobs:
@@ -25,10 +25,6 @@ jobs:
             model: google/gemma-4-31b-it:free
           - label: gemma-26b-a4b
             model: google/gemma-4-26b-a4b-it:free
-          - label: nemotron-ultra
-            model: nvidia/nemotron-3-ultra-550b-a55b:free
-          - label: nemotron-super-vl
-            model: nvidia/nemotron-3.5-super-vl:free
     runs-on: ubuntu-latest
     timeout-minutes: 100
     permissions:
@@ -252,6 +248,9 @@ jobs:
                           result = subprocess.run(
                               [
                                   "opencode",
+                                  "--print-logs",
+                                  "--log-level",
+                                  "ERROR",
                                   "run",
                                   "--pure",
                                   "--agent",
