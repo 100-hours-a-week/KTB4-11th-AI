@@ -99,10 +99,10 @@ jobs:
           retry_on: error
           max_attempts: 2
           command: |
-            opencode run --pure --model "openrouter/$OPENROUTER_MODEL" "$ARCHIFY_PROMPT" </dev/null
+            opencode run --pure --model "openrouter/$OPENROUTER_MODEL" "$ARCHIFY_PROMPT" </dev/null &&
             node .opencode/skills/archify/archify/bin/archify.mjs finalize architecture _site/architecture.json _site/index.html --repo-root . --quality showcase --json --out-dir "$RUNNER_TEMP/archify-verification-1"
           new_command_on_retry: |
-            opencode run --continue --pure --model "openrouter/$OPENROUTER_MODEL" "Continue the existing Archify candidate. Run the original finalize command, repair its reported issues in place, and finish only after every gate passes. Preserve repository evidence and do not restart the diagram." </dev/null
+            opencode run --continue --pure --model "openrouter/$OPENROUTER_MODEL" "Continue the existing Archify candidate. Run the original finalize command, repair its reported issues in place, and finish only after every gate passes. Preserve repository evidence and do not restart the diagram." </dev/null &&
             node .opencode/skills/archify/archify/bin/archify.mjs finalize architecture _site/architecture.json _site/index.html --repo-root . --quality showcase --json --out-dir "$RUNNER_TEMP/archify-verification-2"
       - name: Upload HTML and JSON
         uses: actions/upload-artifact@v7.0.2
