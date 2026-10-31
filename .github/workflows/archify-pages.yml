@@ -226,7 +226,9 @@ jobs:
                       "Cite each relationship's evidence on its owner component using component.sources "
                       "(connections have no sources field). EVERY component, including external services and "
                       "datastores, MUST include a nonempty sources array of objects containing path "
-                      "and line (optionally end_line). Inspect actual implementation files and cite "
+                      "and line (optionally end_line). Each component.sources MUST contain 1 to 3 "
+                      "citations, never more than 3. Choose the strongest implementation evidence. "
+                      "Inspect actual implementation files and cite "
                       "the lines supporting each claim. Never use a placeholder citation. "
                       "The bundled example omits sources; do not copy that omission. "
                       "Mark uncertainty instead of inventing "
@@ -361,6 +363,7 @@ jobs:
                           [api_key],
                       )
                       if attempt == 2:
+                          report_failure("OpenCode", private / "agent.log", [api_key])
                           raise RuntimeError("Archify finalize failed after two repairs; deployment stopped")
                       (work / "architecture.json").write_text(json.dumps(candidate, ensure_ascii=False))
                       diagnostics = (private / "finalize.log").read_text()[-8000:]
