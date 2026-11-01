@@ -2,9 +2,27 @@ import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 from market_http.app import create_app
+from redis.exceptions import RedisError
 from sqlalchemy.pool import StaticPool
 
 from .test_market_subscription import FakeValkey
+
+TRADE_VALUES = {"005930": 900.0, "000660": 500.0, "035420": 300.0, "373220": 0.0}
+
+
+class Valkey(FakeValkey):
+    def __init__(self, values=TRADE_VALUES, *, fail=False):
+        super().__init__()
+        self.values = values
+        self.fail = fail
+
+    async def exists(self, key):
+        if self.fail:
+            raise RedisError("down")
+        return int(key.startswith("ranking:trade_value:"))
+
+    async def zmscore(self, key, codes):
+        return [self.values.get(code) for code in codes]
 
 
 @pytest.fixture
@@ -57,11 +75,11 @@ def engine():
 
 @pytest.fixture
 def client(engine):
-    with TestClient(create_app(FakeValkey(), "unused", postgres_engine=engine)) as client:
+    with TestClient(create_app(Valkey(), "unused", postgres_engine=engine)) as client:
         yield client
 
 
-def test_themes_are_ordered_by_member_count_then_code(client):
+def test_themes_are_ordered_by_member_trade_value(client):
     response = client.get("/themes")
 
     assert response.status_code == 200
@@ -78,37 +96,36 @@ def test_themes_ignores_search_and_pagination_parameters(client):
     assert client.get("/themes?limit=1&q=반도체").json() == client.get("/themes").json()
 
 
-def test_theme_stocks_put_major_then_kospi200_then_code(client):
-    response = client.get("/themes/T001/stocks")
+def test_theme_stocks_are_ordered_by_trade_value_with_missing_values_last(client):
+    response = client.get("/themes/T001/stocks?limit=1&offset=1")
 
     assert response.status_code == 200
     assert response.json() == [
-        {"code": "111111", "name": "소형주", "is_major": True},
-        {"code": "000660", "name": "SK하이닉스", "is_major": False},
         {"code": "005930", "name": "삼성전자", "is_major": False},
+        {"code": "000660", "name": "SK하이닉스", "is_major": False},
         {"code": "373220", "name": "LG에너지솔루션", "is_major": False},
+        {"code": "111111", "name": "소형주", "is_major": True},
     ]
 
 
-def test_theme_stocks_pages_without_duplicates_or_gaps(client):
-    full = client.get("/themes/T001/stocks").json()
-    pages = [
-        client.get(f"/themes/T001/stocks?limit=3&offset={offset}").json() for offset in (0, 3, 6)
-    ]
-
-    assert [len(page) for page in pages] == [3, 1, 0]
-    assert pages[0] + pages[1] == full
-
-
-def test_stock_themes_put_major_then_member_count_then_code(client):
-    response = client.get("/stocks/005930/themes")
+def test_stock_themes_are_ordered_by_member_trade_value(client):
+    response = client.get("/stocks/035420/themes")
 
     assert response.status_code == 200
     assert response.json() == [
-        {"code": "T002", "name": "인공지능", "is_major": True},
-        {"code": "T001", "name": "반도체", "is_major": False},
-        {"code": "T004", "name": "스마트폰", "is_major": False},
+        {"code": "T002", "name": "인공지능", "is_major": False},
+        {"code": "T005", "name": "플랫폼", "is_major": False},
     ]
+
+
+@pytest.mark.parametrize("valkey", [Valkey({}), Valkey(fail=True)], ids=["empty", "failing"])
+def test_orders_fall_back_to_major_member_count_and_code_without_trade_values(engine, valkey):
+    with TestClient(create_app(valkey, "unused", postgres_engine=engine)) as client:
+        themes = [theme["code"] for theme in client.get("/themes").json()]
+        stocks = [stock["code"] for stock in client.get("/themes/T001/stocks").json()]
+
+    assert themes == ["T001", "T002", "T004", "T005", "T003"]
+    assert stocks == ["111111", "000660", "005930", "373220"]
 
 
 def test_relation_is_identical_in_both_directions(client):
@@ -142,9 +159,6 @@ def test_theme_detail_route_is_not_provided(client):
 @pytest.mark.parametrize(
     "path",
     [
-        "/themes/T001/stocks?limit=0",
-        "/themes/T001/stocks?limit=1001",
-        "/themes/T001/stocks?offset=-1",
         "/themes/T-01/stocks",
         "/stocks/00593/themes",
         "/stocks/005930A/themes",
@@ -157,7 +171,7 @@ def test_invalid_parameters_return_422(client, path):
 @pytest.mark.parametrize("path", ["/themes", "/themes/T001/stocks", "/stocks/005930/themes"])
 def test_database_failures_return_503(path):
     engine = sa.create_engine("sqlite://", poolclass=StaticPool)
-    with TestClient(create_app(FakeValkey(), "unused", postgres_engine=engine)) as client:
+    with TestClient(create_app(Valkey(), "unused", postgres_engine=engine)) as client:
         response = client.get(path)
 
     assert (response.status_code, response.json()) == (503, {"detail": "theme data unavailable"})
@@ -168,7 +182,7 @@ def test_missing_engine_returns_503():
         assert client.get("/themes").status_code == 503
 
 
-def test_openapi_documents_ordering_pagination_and_snapshot_boundary(client):
+def test_openapi_documents_ordering_and_snapshot_boundary(client):
     paths = client.get("/openapi.json").json()["paths"]
 
     assert set(paths) >= {"/themes", "/themes/{code}/stocks", "/stocks/{code}/themes"}
@@ -181,8 +195,8 @@ def test_openapi_documents_ordering_pagination_and_snapshot_boundary(client):
             "array"
         )
     stocks = paths["/themes/{code}/stocks"]["get"]
-    assert {parameter["name"] for parameter in stocks["parameters"]} == {"code", "limit", "offset"}
-    assert "no next page" in stocks["description"]
+    assert {parameter["name"] for parameter in stocks["parameters"]} == {"code"}
+    assert "trade value descending" in stocks["description"]
     assert {
         parameter["name"] for parameter in paths["/themes"]["get"].get("parameters", [])
     } == set()
