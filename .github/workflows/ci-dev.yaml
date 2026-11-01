@@ -223,7 +223,7 @@ jobs:
           path: ecs-release.json
           retention-days: 90
 
-  python-314-compatibility:
+  python-315-compatibility:
     runs-on: ubuntu-24.04
     continue-on-error: true
 
@@ -250,12 +250,12 @@ jobs:
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv sync --all-packages --locked --group migrations --python 3.14
-      - run: uv run --python 3.14 alembic upgrade head
-      - run: uv run --python 3.14 pytest
+      - run: uv sync --all-packages --locked --group migrations --python 3.15
+      - run: uv run --python 3.15 alembic upgrade head
+      - run: uv run --python 3.15 pytest
 
   deploy-dev:
-    needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-314-compatibility]
+    needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     permissions:
       contents: read

@@ -1,8 +1,8 @@
 # Working in this repository
 
 This is the AI services monorepo for 척척개미단. Run commands from the repository root.
-Python 3.13 is the primary runtime; workspace packages support Python 3.13–3.14.
-The Python 3.14 compatibility job in CI is advisory.
+Python 3.14 is the primary runtime; workspace packages support Python 3.14–3.15.
+The Python 3.15 compatibility job in CI is advisory.
 
 ## Start here
 

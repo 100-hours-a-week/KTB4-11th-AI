@@ -2,7 +2,7 @@
 name = "report-builder"
 version = "0.1.0"
 description = "Competition report generator"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
     "boto3>=1.35",
