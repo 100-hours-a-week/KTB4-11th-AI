@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from ktb_core.krx import KST
@@ -69,9 +69,11 @@ def run_episode(
             clock.set(t)
             proposal = decision_system.decide(DecisionContext(t, sim.state, spec.universe))
             errors = tuple(validate(proposal, spec.universe))
-            submissions.append(Submission(t, errors, dict(proposal.weights)))
+            weights = {} if errors else normalize(proposal)
+            submissions.append(Submission(t, errors, weights, {}))
             if not errors:
-                sim.submit(normalize(proposal), t)
+                sim.submit(weights, t)
+                submissions[-1] = replace(submissions[-1], targets=sim.state.pending)
         sim.advance(spec.end)
         last = market.dates[-1] if market.dates else None
         if end_kst.weekday() < 5 and closed_day == end_day and (last is None or last < end_day):

@@ -168,3 +168,55 @@ def test_weekend_end_lists_missing_friday_without_failing():
     episode = run_episode(replace(SPEC, end=at(11, 12)), EqualWeight(), prices, MemoryClock())
     assert episode.calendar_gaps == (date(2026, 7, 10),)
     assert episode.failure is None
+
+
+def test_valid_submission_records_normalized_weights_and_targets():
+    spec = replace(SPEC, decision_times=(at(6), at(8)))
+    system = Fixed(PortfolioProposal({"000660": 1.0}, 1.0), PortfolioProposal({"999999": 1.0}, 0))
+    episode = run_episode(spec, system, PRICES, MemoryClock())
+    valid, invalid = episode.submissions
+    assert valid.weights == {"000660": 0.5}
+    assert valid.targets == {"000660": 500_000}
+    assert invalid.errors
+    assert invalid.weights == {}
+    assert invalid.targets == {}
+
+
+def test_exit_target_is_recorded():
+    spec = replace(SPEC, decision_times=(at(6), at(8)))
+    system = Fixed(PortfolioProposal({"000660": 1.0}, 1.0), PortfolioProposal({}, 1.0))
+    episode = run_episode(spec, system, PRICES, MemoryClock())
+    assert episode.submissions[1].weights == {}
+    assert episode.submissions[1].targets == {"000660": 0.0}
+
+
+def test_zero_open_on_fill_date_is_rejected():
+    broken = [*bars((3, 6), 70_000), DailyBar(date(2026, 7, 7), 0.0, 70_000, 70_000, 70_000, 1)]
+    broken += bars((8, 9, 10), 70_000)
+    prices = InMemoryPriceSource({"000660": bars(WEEK, 200_000), "005930": broken})
+    episode = run_episode(SPEC, EqualWeight(), prices, MemoryClock())
+    assert episode.failure is None
+    assert [(r.day, r.symbol) for r in episode.rejections] == [(date(2026, 7, 7), "005930")]
+    assert {f.symbol for f in episode.fills} == {"000660"}
+
+
+def test_nan_close_on_held_symbol_fails_and_keeps_records():
+    nan = float("nan")
+    broken = [*bars((3, 6, 7, 8), 200_000), DailyBar(date(2026, 7, 9), 1, 1, 1, nan, 1)]
+    prices = InMemoryPriceSource({"000660": broken, "005930": bars(WEEK, 70_000)})
+    episode = run_episode(SPEC, EqualWeight(), prices, MemoryClock())
+    assert episode.failure == Failure("missing close", date(2026, 7, 9), "000660")
+    assert {f.symbol for f in episode.fills} == set(UNIVERSE)
+    assert [s.day for s in episode.snapshots] == [date(2026, 7, 7), date(2026, 7, 8)]
+
+
+def test_held_symbol_without_fill_bar_is_rejected_then_fails():
+    missing = (3, 6, 7, 8, 10)
+    prices = InMemoryPriceSource({"000660": bars(missing, 200_000), "005930": bars(WEEK, 70_000)})
+    spec = replace(SPEC, decision_times=(at(6), at(8)))
+    episode = run_episode(spec, EqualWeight(), prices, MemoryClock())
+    assert (date(2026, 7, 9), "000660", "no bar on fill date") in {
+        (r.day, r.symbol, r.reason) for r in episode.rejections
+    }
+    assert episode.failure == Failure("missing close", date(2026, 7, 9), "000660")
+    assert [s.day for s in episode.snapshots] == [date(2026, 7, 7), date(2026, 7, 8)]

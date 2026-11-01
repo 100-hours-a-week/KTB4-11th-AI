@@ -26,6 +26,7 @@ class Submission:
     as_of: datetime
     errors: tuple[str, ...]
     weights: Mapping[str, float]
+    targets: Mapping[str, float]
 
 
 @dataclass(frozen=True)
