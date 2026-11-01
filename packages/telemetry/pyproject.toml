@@ -2,7 +2,7 @@
 name = "ktb-telemetry"
 version = "0.1.0"
 description = "Shared OpenTelemetry tracing setup for AI services"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "opentelemetry-api>=1.45",
     "opentelemetry-sdk>=1.45",

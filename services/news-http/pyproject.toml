@@ -2,7 +2,7 @@
 name = "news-http"
 version = "0.1.0"
 description = "Read-only HTTP API over news clusters for the Backend"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
     "fastapi>=0.142",
