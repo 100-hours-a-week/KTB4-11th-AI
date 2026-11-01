@@ -28,7 +28,12 @@ class StockTheme(BaseModel):
 
 
 def list_themes(engine: sa.Engine) -> list[Theme]:
-    statement = sa.text("SELECT theme_code AS code, name FROM themes ORDER BY theme_code")
+    statement = sa.text(
+        "SELECT t.theme_code AS code, t.name FROM themes t"
+        " LEFT JOIN theme_companies tc ON tc.theme_code = t.theme_code"
+        " GROUP BY t.theme_code, t.name"
+        " ORDER BY COUNT(tc.stock_code) DESC, t.theme_code"
+    )
     with engine.connect() as conn:
         return [Theme.model_validate(row) for row in conn.execute(statement).mappings()]
 
@@ -47,8 +52,11 @@ def find_theme_stocks(
                 "SELECT tc.stock_code AS code, c.name, tc.is_major"
                 " FROM theme_companies tc"
                 " JOIN corporations c ON c.stock_code = tc.stock_code"
+                " LEFT JOIN corporation_indices ci"
+                " ON ci.stock_code = tc.stock_code AND ci.index_name = 'KOSPI200'"
                 " WHERE tc.theme_code = :code"
-                " ORDER BY tc.stock_code LIMIT :limit OFFSET :offset"
+                " ORDER BY tc.is_major DESC, ci.stock_code IS NULL, tc.stock_code"
+                " LIMIT :limit OFFSET :offset"
             ),
             {"code": theme_code, "limit": limit, "offset": offset},
         ).mappings()
@@ -68,7 +76,9 @@ def find_stock_themes(engine: sa.Engine, stock_code: str) -> list[StockTheme] | 
                 " FROM theme_companies tc"
                 " JOIN themes t ON t.theme_code = tc.theme_code"
                 " WHERE tc.stock_code = :code"
-                " ORDER BY t.theme_code"
+                " ORDER BY tc.is_major DESC,"
+                " (SELECT COUNT(*) FROM theme_companies m WHERE m.theme_code = tc.theme_code) DESC,"
+                " t.theme_code"
             ),
             {"code": stock_code},
         ).mappings()

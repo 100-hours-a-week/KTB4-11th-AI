@@ -38,7 +38,10 @@ def _read[T](request: Request, query: Callable[[sa.Engine], T]) -> T:
 
 @router.get(
     "/themes",
-    description=f"Returns every theme ordered by `code` ascending. {SNAPSHOT_NOTICE}",
+    description=(
+        "Returns every theme ordered by member stock count descending, then `code` ascending."
+        f" {SNAPSHOT_NOTICE}"
+    ),
     responses=ERRORS,
 )
 def get_themes(request: Request) -> list[Theme]:
@@ -48,8 +51,9 @@ def get_themes(request: Request) -> list[Theme]:
 @router.get(
     "/themes/{code}/stocks",
     description=(
-        "Returns KOSPI stocks in the theme ordered by stock `code` ascending. Fewer than"
-        f" `limit` results means there is no next page. {SNAPSHOT_NOTICE}"
+        "Returns KOSPI stocks in the theme: major stocks first, then KOSPI 200 constituents,"
+        " then stock `code` ascending. The order is stable between syncs; fewer than `limit`"
+        f" results means there is no next page. {SNAPSHOT_NOTICE}"
     ),
     responses={404: {"description": "Theme not found"}, **ERRORS},
 )
@@ -68,7 +72,8 @@ def get_theme_stocks(
 @router.get(
     "/stocks/{code}/themes",
     description=(
-        f"Returns themes containing the stock ordered by theme `code` ascending. {SNAPSHOT_NOTICE}"
+        "Returns themes containing the stock: themes where it is a major stock first, then"
+        f" by member stock count descending, then theme `code` ascending. {SNAPSHOT_NOTICE}"
     ),
     responses={404: {"description": "Stock not found"}, **ERRORS},
 )

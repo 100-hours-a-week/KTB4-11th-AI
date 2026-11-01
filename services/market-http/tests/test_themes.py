@@ -14,6 +14,7 @@ def engine():
     )
     with engine.begin() as conn:
         conn.execute(sa.text("CREATE TABLE corporations (stock_code TEXT PRIMARY KEY, name TEXT)"))
+        conn.execute(sa.text("CREATE TABLE corporation_indices (stock_code TEXT, index_name TEXT)"))
         conn.execute(
             sa.text("CREATE TABLE themes (theme_code TEXT PRIMARY KEY, name TEXT, synced_at TEXT)")
         )
@@ -26,19 +27,28 @@ def engine():
         conn.execute(
             sa.text(
                 "INSERT INTO corporations VALUES ('005930', '삼성전자'), ('000660', 'SK하이닉스'),"
-                " ('035420', 'NAVER'), ('373220', 'LG에너지솔루션')"
+                " ('035420', 'NAVER'), ('373220', 'LG에너지솔루션'), ('111111', '소형주'),"
+                " ('222222', '무테마')"
             )
         )
         conn.execute(
             sa.text(
-                "INSERT INTO themes VALUES ('T002', '인공지능', '2026-11-01'),"
-                " ('T001', '반도체', '2026-11-01'), ('T003', '빈테마', '2026-11-01')"
+                "INSERT INTO corporation_indices VALUES ('005930', 'KOSPI200'),"
+                " ('000660', 'KOSPI200'), ('035420', 'KOSPI200'), ('373220', 'OTHER')"
             )
         )
         conn.execute(
             sa.text(
-                "INSERT INTO theme_companies VALUES ('T001', '005930', 1), ('T001', '000660', 1),"
-                " ('T002', '005930', 0), ('T002', '035420', 1)"
+                "INSERT INTO themes VALUES ('T005', '플랫폼', '2026-11-01'),"
+                " ('T002', '인공지능', '2026-11-01'), ('T001', '반도체', '2026-11-01'),"
+                " ('T003', '빈테마', '2026-11-01'), ('T004', '스마트폰', '2026-11-01')"
+            )
+        )
+        conn.execute(
+            sa.text(
+                "INSERT INTO theme_companies VALUES ('T001', '373220', 0), ('T001', '005930', 0),"
+                " ('T001', '111111', 1), ('T001', '000660', 0), ('T002', '035420', 0),"
+                " ('T002', '005930', 1), ('T004', '005930', 0), ('T005', '035420', 0)"
             )
         )
     yield engine
@@ -51,13 +61,15 @@ def client(engine):
         yield client
 
 
-def test_themes_returns_every_theme_as_array_ordered_by_code(client):
+def test_themes_are_ordered_by_member_count_then_code(client):
     response = client.get("/themes")
 
     assert response.status_code == 200
     assert response.json() == [
         {"code": "T001", "name": "반도체"},
         {"code": "T002", "name": "인공지능"},
+        {"code": "T004", "name": "스마트폰"},
+        {"code": "T005", "name": "플랫폼"},
         {"code": "T003", "name": "빈테마"},
     ]
 
@@ -66,40 +78,53 @@ def test_themes_ignores_search_and_pagination_parameters(client):
     assert client.get("/themes?limit=1&q=반도체").json() == client.get("/themes").json()
 
 
-def test_theme_stocks_returns_relation_ordered_by_stock_code(client):
+def test_theme_stocks_put_major_then_kospi200_then_code(client):
     response = client.get("/themes/T001/stocks")
 
     assert response.status_code == 200
     assert response.json() == [
-        {"code": "000660", "name": "SK하이닉스", "is_major": True},
-        {"code": "005930", "name": "삼성전자", "is_major": True},
+        {"code": "111111", "name": "소형주", "is_major": True},
+        {"code": "000660", "name": "SK하이닉스", "is_major": False},
+        {"code": "005930", "name": "삼성전자", "is_major": False},
+        {"code": "373220", "name": "LG에너지솔루션", "is_major": False},
     ]
 
 
 def test_theme_stocks_pages_without_duplicates_or_gaps(client):
-    pages = [client.get(f"/themes/T002/stocks?limit=1&offset={offset}").json() for offset in (0, 1)]
-    last = client.get("/themes/T002/stocks?limit=1&offset=2").json()
-
-    assert pages == [
-        [{"code": "005930", "name": "삼성전자", "is_major": False}],
-        [{"code": "035420", "name": "NAVER", "is_major": True}],
+    full = client.get("/themes/T001/stocks").json()
+    pages = [
+        client.get(f"/themes/T001/stocks?limit=3&offset={offset}").json() for offset in (0, 3, 6)
     ]
-    assert last == []
+
+    assert [len(page) for page in pages] == [3, 1, 0]
+    assert pages[0] + pages[1] == full
 
 
-def test_stock_themes_returns_same_relation_ordered_by_theme_code(client):
+def test_stock_themes_put_major_then_member_count_then_code(client):
     response = client.get("/stocks/005930/themes")
 
     assert response.status_code == 200
     assert response.json() == [
-        {"code": "T001", "name": "반도체", "is_major": True},
-        {"code": "T002", "name": "인공지능", "is_major": False},
+        {"code": "T002", "name": "인공지능", "is_major": True},
+        {"code": "T001", "name": "반도체", "is_major": False},
+        {"code": "T004", "name": "스마트폰", "is_major": False},
     ]
+
+
+def test_relation_is_identical_in_both_directions(client):
+    for theme in client.get("/themes").json():
+        for stock in client.get(f"/themes/{theme['code']}/stocks").json():
+            reverse = client.get(f"/stocks/{stock['code']}/themes").json()
+            assert {
+                "code": theme["code"],
+                "name": theme["name"],
+                "is_major": stock["is_major"],
+            } in (reverse)
 
 
 def test_existing_identifiers_without_relations_return_empty_arrays(client):
     assert client.get("/themes/T003/stocks").json() == []
-    assert client.get("/stocks/373220/themes").json() == []
+    assert client.get("/stocks/222222/themes").json() == []
 
 
 def test_missing_identifiers_return_404(client):
@@ -150,7 +175,7 @@ def test_openapi_documents_ordering_pagination_and_snapshot_boundary(client):
     assert "/themes/{code}" not in paths
     for path in ("/themes", "/themes/{code}/stocks", "/stocks/{code}/themes"):
         operation = paths[path]["get"]
-        assert "ascending" in operation["description"]
+        assert "`code` ascending" in operation["description"]
         assert "point-in-time" in operation["description"]
         assert operation["responses"]["200"]["content"]["application/json"]["schema"]["type"] == (
             "array"
