@@ -157,6 +157,9 @@ third-party dependencies.
   ranking and timestamp. An empty or failed calculation retains the previous ranking.
 - Daily rankings use the previous trading day before 09:10 KST or when today's ranking
   is absent.
+- Market HTTP theme endpoints read market-syncer's current PostgreSQL snapshot and return
+  bare arrays keyed by `code`. Never expose them as point-in-time data in historical
+  evaluations; see `docs/superpowers/specs/2026-11-01-market-http-themes-design.md`.
 - Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing
   orderbook contracts.
 
