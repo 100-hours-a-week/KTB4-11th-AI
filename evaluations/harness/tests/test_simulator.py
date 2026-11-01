@@ -153,3 +153,68 @@ def test_snapshot_values_at_close():
     sim.advance(at(7))
     assert len(sim.snapshots) == 1
     assert sim.snapshots[0].value == 110_000 + 2 * 201_000 + 7 * 71_000
+
+
+def one_day(price):
+    return {"005930": [bar(D[6], 1, 1), bar(D[7], price, price)]}
+
+
+AWKWARD = [
+    (price, fee)
+    for price in (33_333.3, 70_123.7, 9_999.99, 123_456.789, 61_700.0, 189_900.0)
+    for fee in (0.00015, 0.000147, 0.0033, 0.1)
+]
+
+
+def test_exactly_affordable_buy_fills_whole_quantity():
+    for price, fee in AWKWARD:
+        for quantity in (1, 3, 7, 13):
+            gross = quantity * price
+            capital = gross + gross * fee
+            sim = make_sim(one_day(price), capital, fee)
+            sim.submit({"005930": 2.0}, START)
+            sim.advance(at(7))
+            assert sim.state.holdings == {"005930": quantity}, (price, fee, quantity)
+            assert sim.state.cash >= 0
+
+
+def test_cash_never_goes_negative():
+    for price, fee in AWKWARD:
+        for quantity in range(1, 40):
+            sim = make_sim(one_day(price), quantity * (price * (1 + fee)), fee)
+            sim.submit({"005930": 2.0}, START)
+            sim.advance(at(7))
+            assert sim.state.cash >= 0, (price, fee, quantity)
+
+
+def test_failed_submit_records_no_cancellation():
+    sim = make_sim(BARS)
+    sim.submit(HALF, START)
+    with pytest.raises(EpisodeFailed):
+        sim.submit(HALF, at(8))
+    assert sim.cancellations == []
+
+
+def test_sell_proceeds_fund_buy_in_same_fill():
+    bars = {
+        "000660": [bar(D[6], 1, 1), bar(D[7], 100_000, 100_000), bar(D[8], 100_000, 100_000)],
+        "005930": [bar(D[6], 1, 1), bar(D[7], 50_000, 50_000), bar(D[8], 50_000, 50_000)],
+    }
+    sim = make_sim(bars, 100_000)
+    sim.submit({"000660": 1.0}, START)
+    sim.advance(at(7))
+    sim.submit({"005930": 1.0}, at(7))
+    sim.advance(at(8))
+    assert sim.state.holdings == {"005930": 2}
+    assert [(f.symbol, f.side) for f in sim.fills[1:]] == [("000660", "sell"), ("005930", "buy")]
+
+
+def test_short_cash_reduces_later_symbol():
+    bars = {
+        "000660": [bar(D[6], 1, 1), bar(D[7], 30_000, 30_000)],
+        "005930": [bar(D[6], 1, 1), bar(D[7], 10_000, 10_000)],
+    }
+    sim = make_sim(bars, 100_000)
+    sim.submit({"000660": 1.0, "005930": 1.0}, START)
+    sim.advance(at(7))
+    assert sim.state.holdings == {"000660": 3, "005930": 1}
