@@ -47,10 +47,6 @@ class ExecutionSimulator:
         return PortfolioState(self._cash, dict(self._holdings), dict(self._pending))
 
     def submit(self, weights: Mapping[str, float], as_of: datetime) -> None:
-        if self._pending:
-            self.cancellations.append(Cancellation(as_of, self._pending))
-            self._pending = {}
-            self._fill_day = None
         sizing_value = self._cash
         if self._holdings:
             day = self._market.last_close_date(as_of)
@@ -60,6 +56,8 @@ class ExecutionSimulator:
         fill_day = self._market.fill_date(as_of)
         if fill_day is None or open_at(fill_day) > self._end:
             raise EpisodeFailed("no fill date before episode end")
+        if self._pending:
+            self.cancellations.append(Cancellation(as_of, self._pending))
         self._pending = {symbol: 0.0 for symbol in self._holdings}
         self._pending.update({symbol: w * sizing_value for symbol, w in weights.items()})
         self._fill_day = fill_day
@@ -123,14 +121,19 @@ class ExecutionSimulator:
         self.fills.append(Fill(day, symbol, "sell", quantity, price, fee, tax))
 
     def _buy(self, day: date, symbol: str, quantity: int, price: float) -> None:
-        unit_cost = price * (1 + self._fee_rate)
-        if quantity * unit_cost > self._cash:
-            quantity = math.floor(self._cash / unit_cost)
+        def cost(q: int) -> float:
+            return q * price + q * price * self._fee_rate
+
+        if cost(quantity) > self._cash:
+            quantity = math.floor(self._cash / (price * (1 + self._fee_rate)))
+            while quantity and cost(quantity) > self._cash:
+                quantity -= 1
+            while cost(quantity + 1) <= self._cash:
+                quantity += 1
         if quantity == 0:
             self.rejections.append(Rejection(day, symbol, "insufficient cash"))
             return
-        gross = quantity * price
-        fee = gross * self._fee_rate
-        self._cash -= gross + fee
+        fee = quantity * price * self._fee_rate
+        self._cash -= cost(quantity)
         self._holdings[symbol] = self._holdings.get(symbol, 0) + quantity
         self.fills.append(Fill(day, symbol, "buy", quantity, price, fee, 0.0))
