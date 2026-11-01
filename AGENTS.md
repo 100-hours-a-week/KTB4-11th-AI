@@ -159,7 +159,7 @@ third-party dependencies.
   is absent.
 - Market HTTP theme endpoints read market-syncer's current PostgreSQL snapshot and return
   bare arrays keyed by `code`. Never expose them as point-in-time data in historical
-  evaluations; see `docs/superpowers/specs/2026-11-01-market-http-themes-design.md`.
+  evaluations.
 - Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing
   orderbook contracts.
 
