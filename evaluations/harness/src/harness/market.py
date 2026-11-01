@@ -1,3 +1,4 @@
+import math
 from bisect import bisect_right
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta
@@ -24,7 +25,11 @@ class MarketData:
                 bars = prices.daily_bars(symbol, start, end)
             except Exception as error:
                 raise EpisodeFailed(f"price source error: {error}", symbol=symbol) from error
-            self._bars[symbol] = {bar.trading_date: bar for bar in bars}
+            self._bars[symbol] = {
+                bar.trading_date: bar
+                for bar in bars
+                if all(math.isfinite(p) and p > 0 for p in (bar.open, bar.close))
+            }
         self.dates = tuple(sorted({day for bars in self._bars.values() for day in bars}))
 
     def bar(self, symbol: str, day: date) -> DailyBar | None:
