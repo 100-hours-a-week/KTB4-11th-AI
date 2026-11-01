@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from ktb_core.krx import KST
+
 from harness.contracts import (
     Clock,
     DecisionContext,
@@ -37,7 +39,10 @@ def run_episode(
     if times[-1] >= spec.end:
         raise ValueError("the last decision must be before the episode end")
 
-    first_day, end_day = times[0].date(), spec.end.date()
+    first_day = times[0].astimezone(KST).date()
+    end_kst = spec.end.astimezone(KST)
+    end_day = end_kst.date()
+    closed_day = end_day if spec.end >= close_at(end_day) else end_day - timedelta(days=1)
     try:
         market = MarketData(prices, spec.universe, first_day - SIZING_LOOKBACK, end_day)
     except EpisodeFailed as error:
@@ -69,11 +74,7 @@ def run_episode(
                 sim.submit(normalize(proposal), t)
         sim.advance(spec.end)
         last = market.dates[-1] if market.dates else None
-        if (
-            spec.end.weekday() < 5
-            and spec.end >= close_at(end_day)
-            and (last is None or last < end_day)
-        ):
+        if end_kst.weekday() < 5 and closed_day == end_day and (last is None or last < end_day):
             raise EpisodeFailed("price data ends before episode end")
         if sim.state.pending:
             raise EpisodeFailed("orders pending at episode end")
@@ -87,7 +88,7 @@ def run_episode(
         tuple(sim.fills),
         tuple(sim.rejections),
         tuple(sim.snapshots),
-        market.calendar_gaps(first_day, end_day),
+        market.calendar_gaps(first_day, closed_day),
         sim.state,
         failure,
     )

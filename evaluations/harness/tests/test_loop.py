@@ -1,5 +1,5 @@
 from dataclasses import fields, replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from harness.contracts import DailyBar, DecisionContext, PortfolioProposal, PortfolioState
@@ -143,3 +143,28 @@ def test_missing_close_fails_and_keeps_records():
     assert episode.failure == Failure("missing close", date(2026, 7, 9), "000660")
     assert {f.symbol for f in episode.fills} == set(UNIVERSE)
     assert [s.day for s in episode.snapshots] == [date(2026, 7, 7), date(2026, 7, 8)]
+
+
+def test_non_kst_end_uses_kst_calendar():
+    end = datetime(2026, 7, 9, 20, tzinfo=timezone(timedelta(hours=-4)))
+    spec = replace(SPEC, decision_times=(at(9),), end=end)
+    episode = run_episode(spec, EqualWeight(), PRICES, MemoryClock())
+    assert episode.failure is None
+    assert {f.day for f in episode.fills} == {date(2026, 7, 10)}
+    assert episode.calendar_gaps == ()
+
+
+def test_weekday_end_before_close_is_not_a_gap():
+    early = (3, 6, 7, 8, 9)
+    prices = InMemoryPriceSource({"000660": bars(early, 200_000), "005930": bars(early, 70_000)})
+    episode = run_episode(replace(SPEC, end=at(10, 12)), EqualWeight(), prices, MemoryClock())
+    assert episode.calendar_gaps == ()
+    assert episode.failure is None
+
+
+def test_weekend_end_lists_missing_friday_without_failing():
+    early = (3, 6, 7, 8, 9)
+    prices = InMemoryPriceSource({"000660": bars(early, 200_000), "005930": bars(early, 70_000)})
+    episode = run_episode(replace(SPEC, end=at(11, 12)), EqualWeight(), prices, MemoryClock())
+    assert episode.calendar_gaps == (date(2026, 7, 10),)
+    assert episode.failure is None
