@@ -2,7 +2,7 @@
 name = "market-http"
 version = "0.1.0"
 description = "Public HTTP API for current prices and OHLCV history"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
     "ktb-aws",
@@ -14,7 +14,7 @@ dependencies = [
     "prometheus-client>=0.21.1,<1",
     "pydantic-settings>=2.7",
     "questdb>=5.0",
-    "redis>=6.4",
+    "redis==8.0.0",
     "scalar-fastapi>=1.0",
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",

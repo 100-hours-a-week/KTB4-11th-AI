@@ -2,7 +2,7 @@
 name = "market-collector"
 version = "0.1.0"
 description = "Kiwoom OHLCV and theme ingestion into QuestDB"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
     "ktb-aws",
@@ -12,7 +12,7 @@ dependencies = [
     "questdb>=5.0",
     "sqlalchemy>=2.0.54",
     "psycopg[binary]>=3.3.6",
-    "redis>=6.4",
+    "redis==8.0.0",
 ]
 
 [project.scripts]

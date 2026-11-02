@@ -76,4 +76,10 @@ RANKING_EXAMPLE = {
     ],
 }
 
+THEME_EXAMPLE = {"code": "T001", "name": "반도체"}
+
+THEME_STOCK_EXAMPLE = {"code": "005930", "name": "삼성전자", "is_major": True}
+
+STOCK_THEME_EXAMPLE = {"code": "T001", "name": "반도체", "is_major": True}
+
 HEALTH_EXAMPLE = {"status": "ok"}
