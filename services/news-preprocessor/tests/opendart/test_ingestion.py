@@ -264,6 +264,24 @@ def test_document_request_failure_saves_nothing_and_retries_on_next_scrape(
     assert stored(company_engine)["status"] == "ready"
 
 
+def test_parse_failure_logs_the_filing_and_preserves_failure_result(
+    company_engine, settings, caplog
+):
+    api = DartAPI()
+    api.document = b"<result><status>020</status></result>"
+    with api.client() as client:
+        result = ingest(company_engine, client, settings)
+    assert result.failed == [RECEIPT]
+    assert_no_rows(company_engine)
+    records = [r for r in caplog.records if r.message == "article_failed"]
+    assert len(records) == 1
+    assert records[0].fields["source"] == "opendart"
+    assert records[0].fields["article_id"] == RECEIPT
+    assert records[0].fields["stage"] == "fetch_parse"
+    assert records[0].fields["error_type"] == "ValueError"
+    assert records[0].exc_info is not None
+
+
 def test_financial_api_failure_does_not_leave_partial_document_rows(company_engine, settings):
     api = DartAPI()
     api.financial_error = True
@@ -377,7 +395,7 @@ def test_old_parser_version_is_replaced_through_the_same_api_flow(company_engine
         )
 
 
-def test_failure_during_database_save_rolls_back_all_related_rows(company_engine, settings):
+def test_failure_during_database_save_rolls_back_all_related_rows(company_engine, settings, caplog):
     api = DartAPI()
 
     def fail_facts(conn, cursor, statement, parameters, context, executemany):
@@ -394,6 +412,11 @@ def test_failure_during_database_save_rolls_back_all_related_rows(company_engine
     finally:
         sa.event.remove(company_engine, "before_cursor_execute", fail_facts)
     assert_no_rows(company_engine)
+    failures = [r for r in caplog.records if r.message == "article_save_failed"]
+    assert len(failures) == 1
+    assert failures[0].fields["article_id"] == RECEIPT
+    assert failures[0].fields["stage"] == "storage"
+    assert failures[0].fields["error_type"] == "RuntimeError"
 
 
 def test_archive_bytes_match_the_stored_identity(company_engine, settings):

@@ -17,8 +17,14 @@ class ScrapeResult(NamedTuple):
 def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
     try:
         entries = source.entries()
-    except Exception:
-        log.exception("feed_failed", source=source.source)
+    except Exception as error:
+        log.exception(
+            "feed_failed",
+            source=source.source,
+            feed_url=source.feed_url,
+            stage="listing",
+            error_type=type(error).__name__,
+        )
         return ScrapeResult(succeed=[], failed=[source.feed_url])
 
     with engine.connect() as conn:
@@ -39,13 +45,31 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
                 article_id=entry.external_id,
             )
             continue
-        except Exception:
-            log.exception("article_failed", source=source.source, url=entry.url)
+        except Exception as error:
+            log.exception(
+                "article_failed",
+                source=source.source,
+                url=entry.url,
+                article_id=entry.external_id,
+                stage="fetch_parse",
+                error_type=type(error).__name__,
+            )
             failed.append(entry.external_id)
             continue
-        with engine.begin() as conn:
-            if insert_new(conn, item):
-                succeed.append(entry.external_id)
+        try:
+            with engine.begin() as conn:
+                if insert_new(conn, item):
+                    succeed.append(entry.external_id)
+        except Exception as error:
+            log.exception(
+                "article_save_failed",
+                source=source.source,
+                url=entry.url,
+                article_id=entry.external_id,
+                stage="storage",
+                error_type=type(error).__name__,
+            )
+            raise
     log.info(
         "scrape_complete",
         source=source.source,

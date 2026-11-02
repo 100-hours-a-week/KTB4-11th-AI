@@ -239,6 +239,20 @@ def test_a_row_maps_to_a_feed_entry():
     assert "SGC에너지" in entry.raw_payload
 
 
+def test_listing_failure_logs_the_failed_window_and_api_status(caplog):
+    dart = FakeDart(pages=[{"status": "020", "message": KEY}])
+    with pytest.raises(RuntimeError, match="020"):
+        dart.source().entries()
+    records = [r for r in caplog.records if r.message == "opendart_listing_failed"]
+    assert len(records) == 1
+    fields = records[0].fields
+    assert fields["endpoint"] == "list.json"
+    assert fields["dart_status"] == "020"
+    assert fields["page_no"] == 1
+    assert fields["start_date"] and fields["end_date"]
+    assert KEY not in str(fields)
+
+
 @pytest.mark.parametrize(("document", "body"), [(KRX_HTML, KRX_BODY), (DART4_XML, DART4_BODY)])
 def test_parse_document_body(document, body):
     assert parse_document_body(document.encode("utf-8")) == body

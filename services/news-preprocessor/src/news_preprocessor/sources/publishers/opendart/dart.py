@@ -5,8 +5,17 @@ from datetime import date
 from typing import Any
 
 import httpx
+from ktb_core.logging import get_logger
 
 API = "https://opendart.fss.or.kr/api"
+log = get_logger(__name__)
+REQUEST_FIELDS = {
+    "rcept_no": "receipt_id",
+    "corp_code": "corp_code",
+    "bsns_year": "business_year",
+    "reprt_code": "report_code",
+    "fs_div": "scope",
+}
 
 
 def report_period(
@@ -54,6 +63,12 @@ class DartClient:
         self.last_request = 0.0
 
     def get(self, endpoint: str, params: dict[str, str]) -> bytes:
+        request_log = log.bind(
+            endpoint=endpoint,
+            **{
+                REQUEST_FIELDS[key]: value for key, value in params.items() if key in REQUEST_FIELDS
+            },
+        )
         for attempt in range(self.attempts):
             time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
             self.last_request = time.monotonic()
@@ -71,8 +86,21 @@ class DartClient:
                         if len(data) > self.max_bytes:
                             raise ValueError("DART response exceeds archive limit")
                     return bytes(data)
-            except (httpx.HTTPError, ValueError):
-                if attempt + 1 == self.attempts:
+            except (httpx.HTTPError, ValueError) as error:
+                exhausted = attempt + 1 == self.attempts
+                (request_log.error if exhausted else request_log.warning)(
+                    "dart_request_failed" if exhausted else "dart_request_retry",
+                    attempt=attempt + 1,
+                    max_attempts=self.attempts,
+                    error_type=type(error).__name__,
+                    http_status=(
+                        error.response.status_code
+                        if isinstance(error, httpx.HTTPStatusError)
+                        else None
+                    ),
+                    reason="response_limit" if isinstance(error, ValueError) else "http_error",
+                )
+                if exhausted:
                     raise RuntimeError("DART request failed") from None
                 time.sleep(min(2**attempt, 8))
         raise RuntimeError("DART request failed")
@@ -82,6 +110,16 @@ class DartClient:
 
         data = json.loads(self.get(endpoint, params))
         if data.get("status") not in ("000", "013"):
+            log.error(
+                "dart_api_failed",
+                endpoint=endpoint,
+                dart_status=data.get("status", "unknown"),
+                **{
+                    REQUEST_FIELDS[key]: value
+                    for key, value in params.items()
+                    if key in REQUEST_FIELDS
+                },
+            )
             raise RuntimeError(f"DART API status {data.get('status', 'unknown')}")
         return data
 

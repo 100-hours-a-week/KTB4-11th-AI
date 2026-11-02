@@ -147,9 +147,40 @@ collection, not a queue marker. Numeric accounts preserve scope, currency, origi
 amounts, and null values. Sections preserve names, tables, and source offsets.
 Documents preserve narrative/table classification and parser identity.
 
+## Failure logs
+
+Failures emit structured JSON on stdout through the existing service logger. The
+production Compose logging driver forwards stdout to the configured CloudWatch group.
+
+| Event | Level | Context |
+| --- | --- | --- |
+| `opendart_listing_failed` | ERROR | Requested start/end dates, page, detail type, HTTP/DART status and exception type |
+| `feed_failed` | ERROR | Source, feed URL, `listing` stage and traceback |
+| `dart_request_retry` | WARNING | Endpoint, attempt/max attempts, HTTP status and exception type |
+| `dart_request_failed` | ERROR | Same fields when HTTP/size-limit retries are exhausted |
+| `dart_api_failed` | ERROR | Endpoint, DART status and financial statement identifiers |
+| `article_failed` | ERROR | Source, filing receipt in `article_id`, URL, `fetch_parse` stage, exception type and traceback |
+| `article_save_failed` | ERROR | Source, receipt, URL, `storage` stage, exception type and traceback |
+
+Request logs include `receipt_id` for document requests, or `corp_code`,
+`business_year`, `report_code` and `scope` for financial requests. Only these allowed
+parameters are logged. API keys and raw API error messages are not copied into log
+fields. The existing `crtfc_key` query-parameter masking also covers HTTP URLs and
+tracebacks formatted by the service logger.
+
+Database save failures still roll back and raise; logging does not turn them into a
+successful scrape. Listing and article failures retain their existing failed results.
+One failure can produce an API event and an enclosing article event; do not add all
+ERROR records together as a count of unique failed filings. Use receipt IDs and the
+final article events when tracing a filing for replay.
+
+Tests inspect emitted log records for HTTP retry order, status, financial context,
+receipt IDs, parse and storage stages, tracebacks and key exclusion. No real failure
+was injected into production to test logging.
+
 ## Verification
 
-- Full suite against a dedicated PostgreSQL test database: **1,261 passed, 49 skipped,
+- Full suite against a dedicated PostgreSQL test database: **1,265 passed, 49 skipped,
   2 subtests passed**.
 - Tests cover all thirteen filing types,
   short/long routing through normal scraping, API failure without partial rows,

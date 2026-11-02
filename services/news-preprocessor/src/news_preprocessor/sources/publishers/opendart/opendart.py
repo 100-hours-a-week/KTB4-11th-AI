@@ -208,21 +208,41 @@ class OpenDart:
         rows: dict[str, dict[str, Any]] = {}
         page_no = 1
         while True:
-            response = self._client.get(
-                self.feed_url,
-                params={
-                    "crtfc_key": self._api_key,
-                    "page_count": "100",
-                    "page_no": str(page_no),
-                    **params,
-                },
-                timeout=30,
-            )
-            data = response.raise_for_status().json()
+            data: dict[str, Any] = {}
+            try:
+                response = self._client.get(
+                    self.feed_url,
+                    params={
+                        "crtfc_key": self._api_key,
+                        "page_count": "100",
+                        "page_no": str(page_no),
+                        **params,
+                    },
+                    timeout=30,
+                )
+                data = response.raise_for_status().json()
+                if data["status"] not in ("000", "013"):
+                    raise RuntimeError(f"DART list.json status {data['status']}")
+            except Exception as error:
+                log.error(
+                    "opendart_listing_failed",
+                    source=self.source,
+                    endpoint="list.json",
+                    start_date=params["bgn_de"],
+                    end_date=params["end_de"],
+                    detail_type=params.get("pblntf_detail_ty"),
+                    page_no=page_no,
+                    error_type=type(error).__name__,
+                    http_status=(
+                        error.response.status_code
+                        if isinstance(error, httpx.HTTPStatusError)
+                        else None
+                    ),
+                    dart_status=data.get("status") if isinstance(data, dict) else None,
+                )
+                raise
             if data["status"] == "013":  # 013: No data
                 return list(rows.values())
-            if data["status"] != "000":
-                raise RuntimeError(f"DART list.json status {data['status']}: {data['message']}")
             for row in data["list"]:
                 if row["stock_code"] not in self._stock_codes:
                     continue
