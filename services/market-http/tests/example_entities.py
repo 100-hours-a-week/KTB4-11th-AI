@@ -11,6 +11,7 @@ from market_http.controllers.rankings import RankingItem, RankingResponse
 from market_http.repositories.bars import Bar
 from market_http.repositories.orderbooks import Orderbook, OrderbookLevel
 from market_http.repositories.prices import Price
+from market_http.repositories.themes import StockTheme, Theme, ThemeStock
 
 PRICE = Price(
     code="005930",
@@ -63,6 +64,9 @@ RANKING = RankingResponse(
         )
     ],
 )
+THEME = Theme(code="T001", name="반도체")
+THEME_STOCK = ThemeStock(code="005930", name="삼성전자", is_major=True)
+STOCK_THEME = StockTheme(code="T001", name="반도체", is_major=True)
 HEALTH = HealthResponse(status="ok")
 
 ENTITIES = {
@@ -71,6 +75,9 @@ ENTITIES = {
     "PAGE_EXAMPLE": PAGE,
     "INDEX_EXAMPLE": INDEX,
     "RANKING_EXAMPLE": RANKING,
+    "THEME_EXAMPLE": THEME,
+    "THEME_STOCK_EXAMPLE": THEME_STOCK,
+    "STOCK_THEME_EXAMPLE": STOCK_THEME,
     "HEALTH_EXAMPLE": HEALTH,
 }
 
