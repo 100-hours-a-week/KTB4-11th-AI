@@ -41,8 +41,8 @@ collection toggle are removed.
 ## Daily collection and historical recovery
 
 `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR` selects the daily KST hour (default 5).
-The existing job checks today's and yesterday's filings once at that scheduled hour;
-its configured failure retries can repeat an attempt. An empty KOSPI200 filing list
+The existing job checks today's and yesterday's filings once at that scheduled hour.
+Individual API requests retry within that run. An empty KOSPI200 filing list
 causes no classification, document or financial API requests after the listing check.
 New daily filings are not capped at 1000. Already-stored receipts with the current
 parser version are skipped before fetching a document.
@@ -147,6 +147,31 @@ collection, not a queue marker. Numeric accounts preserve scope, currency, origi
 amounts, and null values. Sections preserve names, tables, and source offsets.
 Documents preserve narrative/table classification and parser identity.
 
+## Request retries and job completion
+
+Listing, short-document, long-document, company and financial requests use the same
+`DartClient` instance for request pacing and retries. The default is three total attempts,
+including the first request. Configuration may lower that limit but cannot exceed three.
+HTTP errors, invalid responses and DART error statuses follow that bounded retry loop.
+Backoff is one then two seconds with the default attempt count, in addition to the
+configured minimum request interval. JSON status `013` and document status `014` keep
+their normal no-data handling and do not cause retries.
+
+The first two failed attempts produce WARNING records. A failed third attempt produces
+an ERROR and marks that listing or filing as failed. Other filings can still complete;
+the job exits with code 1 if any source or news embedding step failed. Parsing failures
+are recorded immediately. Database save failures roll back, log context and propagate.
+They are not wrapped in an additional three-attempt transaction loop.
+
+The news-preprocessor systemd unit sets `Restart=no` and `StartLimitIntervalSec=0`.
+There is no one-hour start-rate rule and no service-wide automatic rerun multiplying
+the request retry count. Final job failure triggers the existing failure handler.
+The next scheduled run can retry a still-visible filing; older failures use historical
+replay. Attempts are per request within a run, not a permanent lifetime counter.
+
+[systemd start-rate settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#StartLimitIntervalSec=interval)
+document that zero disables start-rate limiting. The other job units are unchanged.
+
 ## Failure logs
 
 Failures emit structured JSON on stdout through the existing service logger. The
@@ -157,14 +182,14 @@ production Compose logging driver forwards stdout to the configured CloudWatch g
 | `opendart_listing_failed` | ERROR | Requested start/end dates, page, detail type, HTTP/DART status and exception type |
 | `feed_failed` | ERROR | Source, feed URL, `listing` stage and traceback |
 | `dart_request_retry` | WARNING | Endpoint, attempt/max attempts, HTTP status and exception type |
-| `dart_request_failed` | ERROR | Same fields when HTTP/size-limit retries are exhausted |
+| `dart_request_failed` | ERROR | Same fields when HTTP, invalid-response or DART-status retries are exhausted |
 | `dart_api_failed` | ERROR | Endpoint, DART status and financial statement identifiers |
 | `article_failed` | ERROR | Source, filing receipt in `article_id`, URL, `fetch_parse` stage, exception type and traceback |
 | `article_save_failed` | ERROR | Source, receipt, URL, `storage` stage, exception type and traceback |
 
 Request logs include `receipt_id` for document requests, or `corp_code`,
 `business_year`, `report_code` and `scope` for financial requests. Only these allowed
-parameters are logged. API keys and raw API error messages are not copied into log
+parameters and listing dates, page and detail type are logged. API keys and raw API error messages are not copied into log
 fields. The existing `crtfc_key` query-parameter masking also covers HTTP URLs and
 tracebacks formatted by the service logger.
 
@@ -180,7 +205,7 @@ was injected into production to test logging.
 
 ## Verification
 
-- Full suite against a dedicated PostgreSQL test database: **1,265 passed, 49 skipped,
+- Full suite against a dedicated PostgreSQL test database: **1,271 passed, 49 skipped,
   2 subtests passed**.
 - Tests cover all thirteen filing types,
   short/long routing through normal scraping, API failure without partial rows,
@@ -190,6 +215,9 @@ was injected into production to test logging.
   scheduling hours, date bounds, empty listings and explicit replay outside the daily
   hour. Three database tests verify document/financial failures recovering after a
   three-day gap without duplicate rows, and historical parser-version replacement.
+- Listing and short-document failures are verified to stop at exactly three HTTP
+  requests. DART status failures also stop at three; a third-attempt success returns
+  without logging a final failure. Settings reject attempt limits above three.
 - Ruff lint, formatting and whitespace checks passed. Code review found no actionable
   issues in the direct-ingestion changes.
 - The news image builds and imports with networking disabled; the old subfolder and

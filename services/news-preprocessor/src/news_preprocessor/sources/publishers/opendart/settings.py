@@ -16,7 +16,7 @@ class Settings(BaseSettings):
 
     archive_root: Path = Path.home() / ".local/share/ktb/disclosure-rag/archive"
     request_interval: float = Field(default=1, ge=0)
-    attempts: int = Field(default=3, ge=1, le=10)
+    attempts: int = Field(default=3, ge=1, le=3)
     max_archive_bytes: int = Field(default=32_000_000, gt=0)
     max_uncompressed_bytes: int = Field(default=64_000_000, gt=0)
     start_date: date | None = None

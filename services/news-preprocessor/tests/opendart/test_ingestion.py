@@ -268,7 +268,10 @@ def test_parse_failure_logs_the_filing_and_preserves_failure_result(
     company_engine, settings, caplog
 ):
     api = DartAPI()
-    api.document = b"<result><status>020</status></result>"
+    content = io.BytesIO()
+    with zipfile.ZipFile(content, "w") as archive_file:
+        archive_file.writestr("../escape.xml", "<DOCUMENT><P>unsafe</P></DOCUMENT>")
+    api.document = content.getvalue()
     with api.client() as client:
         result = ingest(company_engine, client, settings)
     assert result.failed == [RECEIPT]

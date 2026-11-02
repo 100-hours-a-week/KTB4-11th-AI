@@ -92,3 +92,28 @@ def test_api_status_failure_logs_financial_context_without_response_message(capl
     assert fields["report_code"] == "11012"
     assert fields["scope"] == "CFS"
     assert "private-dart-key" not in JsonFormatter("test").format(records[0])
+
+
+@pytest.mark.parametrize("endpoint", ["list.json", "document.xml"])
+def test_request_recovers_on_third_attempt_without_logging_final_failure(
+    monkeypatch, caplog, endpoint
+):
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    requests = []
+
+    def recover(request):
+        requests.append(request)
+        if len(requests) < 3:
+            return httpx.Response(503)
+        if endpoint.endswith(".json"):
+            return httpx.Response(200, json={"status": "013"})
+        return httpx.Response(200, content=b"<result><status>014</status></result>")
+
+    with httpx.Client(transport=httpx.MockTransport(recover)) as client:
+        content = DartClient(client, "test-key", interval=0).get(endpoint, {})
+    assert content
+    assert len(requests) == 3
+    assert [r.message for r in caplog.records].count("dart_request_retry") == 2
+    assert not any(r.message in ("dart_request_failed", "dart_api_failed") for r in caplog.records)

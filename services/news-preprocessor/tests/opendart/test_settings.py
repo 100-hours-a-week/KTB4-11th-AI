@@ -33,3 +33,9 @@ def test_historical_dates_load_from_environment(monkeypatch):
 def test_historical_dates_require_a_complete_ordered_range(dates):
     with pytest.raises(ValidationError):
         Settings(**dates)
+
+
+def test_request_attempts_cannot_exceed_three():
+    assert Settings().attempts == 3
+    with pytest.raises(ValidationError):
+        Settings(attempts=4)

@@ -94,8 +94,10 @@ class FakeDart:
         return httpx.Response(200, json=self.pages[int(params["page_no"]) - 1])
 
     def source(self, stock_codes=frozenset({SAMSUNG, HYNIX})) -> OpenDart:
+        from news_preprocessor.sources.publishers.opendart.settings import Settings
+
         client = httpx.Client(transport=httpx.MockTransport(self.handler))
-        return OpenDart(client, KEY, set(stock_codes))
+        return OpenDart(client, KEY, set(stock_codes), Settings(request_interval=0))
 
     def list_requests(self) -> list[dict[str, str]]:
         return [request for request in self.requests if "rcept_no" not in request]
@@ -251,6 +253,53 @@ def test_listing_failure_logs_the_failed_window_and_api_status(caplog):
     assert fields["page_no"] == 1
     assert fields["start_date"] and fields["end_date"]
     assert KEY not in str(fields)
+
+
+@pytest.mark.parametrize("endpoint", ["list.json", "document.xml"])
+def test_listing_and_short_document_requests_stop_after_three_failures(monkeypatch, endpoint):
+    from news_preprocessor.sources import FeedEntry
+    from news_preprocessor.sources.publishers.opendart.settings import Settings
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    requests = []
+
+    def fail(request):
+        requests.append(request)
+        return httpx.Response(503)
+
+    with httpx.Client(transport=httpx.MockTransport(fail)) as client:
+        source = OpenDart(client, KEY, {SAMSUNG}, Settings(request_interval=0))
+        with pytest.raises(RuntimeError, match="DART request failed"):
+            if endpoint == "list.json":
+                source.entries()
+            else:
+                source.article(
+                    FeedEntry(
+                        source="opendart",
+                        external_id="20261030000001",
+                        url="https://dart.fss.or.kr/test",
+                        title="short filing",
+                        published_at=datetime.now(KST),
+                        raw_payload="{}",
+                    )
+                )
+    assert len(requests) == 3
+    assert all(r.url.path.endswith(endpoint) for r in requests)
+
+
+def test_listing_api_status_failure_is_retried_three_times(monkeypatch):
+    from news_preprocessor.sources.publishers.opendart.settings import Settings
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    dart = FakeDart(pages=[{"status": "020", "message": "request limit"}])
+    with httpx.Client(transport=httpx.MockTransport(dart.handler)) as client:
+        with pytest.raises(RuntimeError, match="020"):
+            OpenDart(client, KEY, {SAMSUNG}, Settings(request_interval=0)).entries()
+    assert len(dart.list_requests()) == 3
 
 
 @pytest.mark.parametrize(("document", "body"), [(KRX_HTML, KRX_BODY), (DART4_XML, DART4_BODY)])

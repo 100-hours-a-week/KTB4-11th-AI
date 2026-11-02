@@ -247,6 +247,10 @@ The ordinary `news-preprocessor` command runs under the unchanged hourly
 queue, persisted item-failure loop, RSS discovery, disclosure command, or collector
 timer. HTTP requests retain bounded retries. A failed item is not saved and is retried
 only while it remains in the listing window; older failures require explicit historical replay.
+Listing, short/long document and financial requests share `DartClient`, with three
+attempts by default and a maximum of three. The news-preprocessor unit uses `Restart=no`
+and `StartLimitIntervalSec=0`: request retries are not multiplied by service restarts.
+Parsing and DB transaction failures retain immediate error/rollback behavior.
 
 Long filing classes include A001 (annual), A002 (half-year), A003 (quarterly), F001
 (audit), F002 (consolidated audit), F003 (combined audit), C001–C005, J004, and H002.

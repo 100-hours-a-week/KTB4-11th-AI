@@ -1,10 +1,12 @@
 import calendar
+import json
 import re
 import time
 from datetime import date
 from typing import Any
 
 import httpx
+from bs4 import BeautifulSoup
 from ktb_core.logging import get_logger
 
 API = "https://opendart.fss.or.kr/api"
@@ -15,7 +17,17 @@ REQUEST_FIELDS = {
     "bsns_year": "business_year",
     "reprt_code": "report_code",
     "fs_div": "scope",
+    "bgn_de": "start_date",
+    "end_de": "end_date",
+    "page_no": "page_no",
+    "pblntf_detail_ty": "detail_type",
 }
+
+
+class DartAPIError(RuntimeError):
+    def __init__(self, status: str):
+        self.status = status
+        super().__init__(f"DART API status {status}")
 
 
 def report_period(
@@ -77,7 +89,7 @@ class DartClient:
                     "GET",
                     f"{API}/{endpoint}",
                     params={"crtfc_key": self.api_key, **params},
-                    timeout=60,
+                    timeout=30 if endpoint == "list.json" else 60,
                 ) as response:
                     response.raise_for_status()
                     data = bytearray()
@@ -85,8 +97,21 @@ class DartClient:
                         data.extend(part)
                         if len(data) > self.max_bytes:
                             raise ValueError("DART response exceeds archive limit")
-                    return bytes(data)
-            except (httpx.HTTPError, ValueError) as error:
+                    content = bytes(data)
+                if endpoint.endswith(".json"):
+                    payload = json.loads(content)
+                    if not isinstance(payload, dict):
+                        raise ValueError("DART JSON response must be an object")
+                    status = payload.get("status", "unknown")
+                    if status not in ("000", "013"):
+                        raise DartAPIError(str(status))
+                elif endpoint == "document.xml" and not content.startswith(b"PK"):
+                    result = BeautifulSoup(content, "xml").find("result")
+                    status = result.find("status") if result is not None else None
+                    if status is not None and status.get_text(strip=True) not in ("000", "014"):
+                        raise DartAPIError(status.get_text(strip=True))
+                return content
+            except (httpx.HTTPError, ValueError, DartAPIError) as error:
                 exhausted = attempt + 1 == self.attempts
                 (request_log.error if exhausted else request_log.warning)(
                     "dart_request_failed" if exhausted else "dart_request_retry",
@@ -98,30 +123,25 @@ class DartClient:
                         if isinstance(error, httpx.HTTPStatusError)
                         else None
                     ),
-                    reason="response_limit" if isinstance(error, ValueError) else "http_error",
+                    dart_status=error.status if isinstance(error, DartAPIError) else None,
+                    reason=(
+                        "api_status"
+                        if isinstance(error, DartAPIError)
+                        else "invalid_response"
+                        if isinstance(error, ValueError)
+                        else "http_error"
+                    ),
                 )
                 if exhausted:
+                    if isinstance(error, DartAPIError):
+                        request_log.error("dart_api_failed", dart_status=error.status)
+                        raise error from None
                     raise RuntimeError("DART request failed") from None
                 time.sleep(min(2**attempt, 8))
         raise RuntimeError("DART request failed")
 
     def json(self, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
-        import json
-
-        data = json.loads(self.get(endpoint, params))
-        if data.get("status") not in ("000", "013"):
-            log.error(
-                "dart_api_failed",
-                endpoint=endpoint,
-                dart_status=data.get("status", "unknown"),
-                **{
-                    REQUEST_FIELDS[key]: value
-                    for key, value in params.items()
-                    if key in REQUEST_FIELDS
-                },
-            )
-            raise RuntimeError(f"DART API status {data.get('status', 'unknown')}")
-        return data
+        return json.loads(self.get(endpoint, params))
 
     def closing_month(self, corp_code: str) -> int:
         month = int(self.json("company.json", {"corp_code": corp_code})["acc_mt"])

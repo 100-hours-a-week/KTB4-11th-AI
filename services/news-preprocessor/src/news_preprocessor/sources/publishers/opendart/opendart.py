@@ -15,7 +15,11 @@ from bs4 import BeautifulSoup
 from ktb_core.logging import get_logger
 
 from news_preprocessor.sources import FeedEntry, NewsItem
-from news_preprocessor.sources.publishers.opendart.dart import DartClient, report_period
+from news_preprocessor.sources.publishers.opendart.dart import (
+    DartAPIError,
+    DartClient,
+    report_period,
+)
 from news_preprocessor.sources.publishers.opendart.financials import (
     REPORT_CODES,
     SCOPES,
@@ -61,10 +65,15 @@ class OpenDart:
         stock_codes: set[str],
         settings: Settings | None = None,
     ) -> None:
-        self._client = client
-        self._api_key = api_key
         self._stock_codes = stock_codes
         self._settings = settings or Settings()
+        self._dart = DartClient(
+            client,
+            api_key,
+            self._settings.request_interval,
+            self._settings.attempts,
+            self._settings.max_archive_bytes,
+        )
 
     def entries(self) -> list[FeedEntry]:
         if not self._stock_codes:
@@ -133,13 +142,7 @@ class OpenDart:
         detail_type = payload.get("pblntf_detail_ty")
         if detail_type in self.long_detail_types:
             settings = self._settings
-            dart = DartClient(
-                self._client,
-                self._api_key,
-                settings.request_interval,
-                settings.attempts,
-                settings.max_archive_bytes,
-            )
+            dart = self._dart
             content = dart.get("document.xml", {"rcept_no": entry.external_id})
             documents = extract_documents(content, settings.max_uncompressed_bytes)
             closing = (
@@ -185,12 +188,7 @@ class OpenDart:
                 ],
                 financial_facts=facts,
             )
-        response = self._client.get(
-            f"{OPENDART_API}/document.xml",
-            params={"crtfc_key": self._api_key, "rcept_no": entry.external_id},
-            timeout=60,
-        )
-        content = io.BytesIO(response.raise_for_status().content)
+        content = io.BytesIO(self._dart.get("document.xml", {"rcept_no": entry.external_id}))
         if not zipfile.is_zipfile(content):
             status = BeautifulSoup(content.getvalue(), "xml").find("status")
             status = status.get_text(strip=True) if status else "unknown"
@@ -210,19 +208,9 @@ class OpenDart:
         while True:
             data: dict[str, Any] = {}
             try:
-                response = self._client.get(
-                    self.feed_url,
-                    params={
-                        "crtfc_key": self._api_key,
-                        "page_count": "100",
-                        "page_no": str(page_no),
-                        **params,
-                    },
-                    timeout=30,
+                data = self._dart.json(
+                    "list.json", {"page_count": "100", "page_no": str(page_no), **params}
                 )
-                data = response.raise_for_status().json()
-                if data["status"] not in ("000", "013"):
-                    raise RuntimeError(f"DART list.json status {data['status']}")
             except Exception as error:
                 log.error(
                     "opendart_listing_failed",
@@ -238,7 +226,13 @@ class OpenDart:
                         if isinstance(error, httpx.HTTPStatusError)
                         else None
                     ),
-                    dart_status=data.get("status") if isinstance(data, dict) else None,
+                    dart_status=(
+                        error.status
+                        if isinstance(error, DartAPIError)
+                        else data.get("status")
+                        if isinstance(data, dict)
+                        else None
+                    ),
                 )
                 raise
             if data["status"] == "013":  # 013: No data
