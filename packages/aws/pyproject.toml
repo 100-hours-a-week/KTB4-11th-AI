@@ -5,7 +5,7 @@ description = "Shared AWS integrations for AI services"
 requires-python = ">=3.14,<3.16"
 dependencies = [
     "botocore>=1.40",
-    "redis==8.0.0",
+    "redis>=6.4",
 ]
 
 [build-system]
