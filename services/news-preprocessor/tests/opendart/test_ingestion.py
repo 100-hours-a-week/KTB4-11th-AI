@@ -1,7 +1,7 @@
 import hashlib
 import io
 import zipfile
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import httpx
 import pytest
@@ -36,6 +36,7 @@ class DartAPI:
         self.document_error = False
         self.financial_error = False
         self.empty_financials = False
+        self.listed_on = None
 
     def handler(self, request):
         self.requests.append(request)
@@ -51,11 +52,15 @@ class DartAPI:
                     "corp_name": "수집시험",
                     "report_nm": title,
                     "rcept_no": receipt,
-                    "rcept_dt": "20261030",
+                    "rcept_dt": self.listed_on or "20261030",
                 }
                 for kind, receipt, title in self.rows
                 if detail_type is None or kind == detail_type
             ]
+            if self.listed_on and not (
+                request.url.params["bgn_de"] <= self.listed_on <= request.url.params["end_de"]
+            ):
+                rows = []
             return httpx.Response(200, json={"status": "000", "total_page": 1, "list": rows})
         if path.endswith("company.json"):
             return httpx.Response(200, json={"status": "000", "acc_mt": "12"})
@@ -115,6 +120,21 @@ def company_engine(pg_engine):
 @pytest.fixture
 def settings(tmp_path):
     return Settings(archive_root=tmp_path, request_interval=0, attempts=1)
+
+
+@pytest.fixture
+def listing_clock(monkeypatch):
+    from news_preprocessor.sources.publishers.opendart import opendart
+
+    state = {"now": datetime(2026, 10, 30, 5, tzinfo=opendart.KST)}
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return state["now"].astimezone(tz)
+
+    monkeypatch.setattr(opendart, "datetime", Clock)
+    return state
 
 
 def ingest(engine, client, settings):
@@ -255,6 +275,60 @@ def test_financial_api_failure_does_not_leave_partial_document_rows(company_engi
         assert ingest(company_engine, client, settings).succeed == [RECEIPT]
     assert stored(company_engine)["financials_collected"]
     assert api.count("document.xml") == 2
+
+
+@pytest.mark.parametrize("failure", ["document_error", "financial_error"])
+def test_history_recovers_failure_after_daily_listing_window_without_duplicates(
+    company_engine, settings, listing_clock, failure
+):
+    api = DartAPI()
+    api.listed_on = "20261030"
+    setattr(api, failure, True)
+    with api.client() as client:
+        assert ingest(company_engine, client, settings).failed == [RECEIPT]
+        assert_no_rows(company_engine)
+        listing_clock["now"] += timedelta(days=3)
+        setattr(api, failure, False)
+        assert ingest(company_engine, client, settings).succeed == []
+        assert_no_rows(company_engine)
+        recovery = settings.model_copy(
+            update={"start_date": date(2026, 10, 30), "end_date": date(2026, 10, 30)}
+        )
+        assert ingest(company_engine, client, recovery).succeed == [RECEIPT]
+        assert ingest(company_engine, client, recovery).succeed == []
+    assert api.count("document.xml") == 2
+    assert stored(company_engine)["financials_collected"]
+    with company_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT count(*) FROM disclosures")).scalar_one() == 1
+        assert conn.execute(sa.text("SELECT count(*) FROM disclosure_documents")).scalar_one() == 1
+        assert (
+            conn.execute(sa.text("SELECT count(*) FROM disclosure_financial_facts")).scalar_one()
+            == 2
+        )
+
+
+def test_history_reparses_old_filing_after_parser_change(company_engine, settings, listing_clock):
+    api = DartAPI()
+    api.listed_on = "20261030"
+    with api.client() as client:
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+        with company_engine.begin() as conn:
+            conn.execute(sa.text("UPDATE disclosure_documents SET parser_version='previous'"))
+        listing_clock["now"] += timedelta(days=3)
+        assert ingest(company_engine, client, settings).succeed == []
+        recovery = settings.model_copy(
+            update={"start_date": date(2026, 10, 30), "end_date": date(2026, 10, 30)}
+        )
+        assert ingest(company_engine, client, recovery).succeed == [RECEIPT]
+        assert ingest(company_engine, client, recovery).succeed == []
+    assert api.count("document.xml") == 2
+    with company_engine.connect() as conn:
+        assert (
+            conn.execute(
+                sa.text("SELECT parser_version FROM disclosure_documents ORDER BY id DESC LIMIT 1")
+            ).scalar_one()
+            == PARSER_VERSION
+        )
 
 
 def test_empty_financial_api_results_are_complete_and_not_repeated(company_engine, settings):

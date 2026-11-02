@@ -245,8 +245,8 @@ sections, and financial facts together in one PostgreSQL transaction.
 The ordinary `news-preprocessor` command runs under the unchanged hourly
 `ktb-news-preprocessor.timer`. There is no separate collection pass, staged database
 queue, persisted item-failure loop, RSS discovery, disclosure command, or collector
-timer. HTTP requests retain bounded retries. A failed item is not saved and follows
-the normal news ingestion retry behavior on a subsequent feed pass.
+timer. HTTP requests retain bounded retries. A failed item is not saved and is retried
+only while it remains in the listing window; older failures require explicit historical replay.
 
 Long filing classes include A001 (annual), A002 (half-year), A003 (quarterly), F001
 (audit), F002 (consolidated audit), F003 (combined audit), C001–C005, J004, and H002.
@@ -260,3 +260,15 @@ financial collection as informational metadata; it is not a queue marker. Collec
 uses `NEWS_PREPROCESSOR_DISCLOSURE_*` for archive location, HTTP request pacing and
 retry attempts, and archive download/extraction limits. Original archives live outside
 the repository. Collection does not call an embedding model or generate answers.
+
+The hourly news job includes OpenDART only at 05:00 KST by default, configured through
+`NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR`; other news sources remain hourly.
+An empty filing list triggers no document or financial API requests. Normal collection
+checks today and yesterday. For one-off recovery or historical ingestion, set both
+`NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` and `END_DATE` as ISO dates. The range must
+be within the last 365 days and end no later than today. History scans backward in
+windows of at most 90 days and selects up to 1000 unique latest KOSPI200 filings,
+including both short and long types. Existing current-parser records are skipped;
+older-parser documents are reprocessed through the same transactional API flow.
+Remove historical dates after recovery so the daily schedule resumes. No new queue,
+migration, standalone collector or timer is introduced.
