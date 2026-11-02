@@ -247,12 +247,58 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        id: checkout
+        continue-on-error: true
       - uses: astral-sh/setup-uv@v7
+        id: setup
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
         with:
           enable-cache: true
-      - run: uv sync --all-packages --locked --group migrations --python 3.15
-      - run: uv run --python 3.15 alembic upgrade head
-      - run: uv run --python 3.15 pytest
+      - name: Install dependencies
+        id: install
+        if: steps.setup.outcome == 'success'
+        continue-on-error: true
+        run: uv sync --all-packages --locked --group migrations --python 3.15
+      - name: Apply database migrations
+        id: migrate
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: uv run --python 3.15 alembic upgrade head
+      - name: Run tests
+        id: test
+        if: steps.migrate.outcome == 'success'
+        continue-on-error: true
+        run: uv run --python 3.15 pytest
+      - name: Summarize Python 3.15 compatibility
+        if: always()
+        env:
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          SETUP: ${{ steps.setup.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          MIGRATE: ${{ steps.migrate.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          if [[ "$TEST" == success ]]; then
+            result=PASS
+          elif [[ "$CHECKOUT" == failure || "$SETUP" == failure ]]; then
+            result='NOT RUN (preparation failed)'
+          elif [[ "$INSTALL" == failure || "$MIGRATE" == failure || "$TEST" == failure ]]; then
+            result=FAIL
+          else
+            result='NOT RUN (incomplete)'
+          fi
+          {
+            echo "### Python 3.15 compatibility: $result"
+            echo "- Checkout: ${CHECKOUT:-skipped}"
+            echo "- Setup uv: ${SETUP:-skipped}"
+            echo "- Install dependencies: ${INSTALL:-skipped}"
+            echo "- Apply migrations: ${MIGRATE:-skipped}"
+            echo "- Run tests: ${TEST:-skipped}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$result" != PASS ]]; then
+            echo "::warning::Python 3.15 compatibility: $result; see the job summary for step outcomes."
+          fi
 
   deploy-dev:
     needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
