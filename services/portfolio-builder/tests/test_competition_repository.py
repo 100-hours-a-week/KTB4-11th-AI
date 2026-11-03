@@ -1,9 +1,15 @@
 import pytest
+from portfolio_builder.briefing.repository import (
+    find_participant_portfolio,
+    find_previous_portfolio,
+)
 from portfolio_builder.competition.repository import (
     claim_job,
     fail_job,
     finish_job,
     generation_key,
+    latest_participant_portfolio,
+    link_portfolio,
     store_settings,
 )
 
@@ -135,3 +141,62 @@ def test_a_failed_job_is_retried_until_the_attempt_limit(engine, _request):
     assert claim_job(engine, key, settings, None, 3600, 2).mine
     fail_job(engine, key, "boom")
     assert claim_job(engine, key, settings, None, 3600, 2) is None
+
+
+def test_the_latest_participant_portfolio_ignores_status(engine, _request, _insert_portfolio):
+    settings, _ = store_settings(engine, _request())
+    first = _insert_portfolio(engine, status="ready")
+    second = _insert_portfolio(engine, status="explanation_failed", trace=[{"k": "v"}])
+    link_portfolio(engine, settings.participant_id, first)
+    link_portfolio(engine, settings.participant_id, second)
+
+    assert latest_participant_portfolio(engine, settings.participant_id) == (
+        second,
+        "explanation_failed",
+        True,
+    )
+
+
+def test_a_participant_with_no_portfolio_has_no_history(engine, _request):
+    settings, _ = store_settings(engine, _request())
+
+    assert latest_participant_portfolio(engine, settings.participant_id) is None
+
+
+def test_linking_is_idempotent_and_two_participants_can_share_one_portfolio(
+    engine, _request, _insert_portfolio
+):
+    store_settings(engine, _request())
+    store_settings(engine, _request(participant_id=2))
+    portfolio_id = _insert_portfolio(engine)
+
+    link_portfolio(engine, 1, portfolio_id)
+    link_portfolio(engine, 1, portfolio_id)
+    link_portfolio(engine, 2, portfolio_id)
+
+    assert latest_participant_portfolio(engine, 1)[0] == portfolio_id
+    assert latest_participant_portfolio(engine, 2)[0] == portfolio_id
+
+
+def test_the_common_path_does_not_see_a_competition_portfolio(engine, _request, _insert_portfolio):
+    store_settings(engine, _request())
+    common = _insert_portfolio(engine)
+    competition = _insert_portfolio(engine)
+    link_portfolio(engine, 1, competition)
+
+    with engine.connect() as conn:
+        previous = find_previous_portfolio(conn)
+
+    assert previous.portfolio["id"] == common
+
+
+def test_the_participant_path_sees_only_its_own_portfolio(engine, _request, _insert_portfolio):
+    store_settings(engine, _request())
+    _insert_portfolio(engine)
+    mine = _insert_portfolio(engine)
+    link_portfolio(engine, 1, mine)
+
+    with engine.connect() as conn:
+        previous = find_participant_portfolio(conn, 1)
+
+    assert previous.portfolio["id"] == mine

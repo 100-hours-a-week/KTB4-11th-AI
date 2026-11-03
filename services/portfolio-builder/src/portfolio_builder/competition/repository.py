@@ -6,7 +6,12 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from portfolio_builder.competition.message import Request
-from portfolio_builder.database import competition_jobs, competition_participants
+from portfolio_builder.database import (
+    competition_jobs,
+    competition_participants,
+    competition_portfolios,
+    portfolios,
+)
 
 
 @dataclass(frozen=True)
@@ -169,3 +174,36 @@ def fail_job(engine: sa.Engine, key: str, error: str) -> None:
             .where(competition_jobs.c.generation_key == key)
             .values(status="failed", error=error, finished_at=sa.func.now())
         )
+
+
+def link_portfolio(engine: sa.Engine, participant_id: int, portfolio_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            pg_insert(competition_portfolios)
+            .values(participant_id=participant_id, portfolio_id=portfolio_id)
+            .on_conflict_do_nothing(index_elements=["participant_id", "portfolio_id"])
+        )
+
+
+def latest_participant_portfolio(
+    engine: sa.Engine, participant_id: int
+) -> tuple[int, str, bool] | None:
+    with engine.connect() as conn:
+        row = conn.execute(
+            sa.select(
+                portfolios.c.id,
+                portfolios.c.status,
+                portfolios.c.trace.isnot(None).label("has_trace"),
+            )
+            .select_from(
+                competition_portfolios.join(
+                    portfolios, portfolios.c.id == competition_portfolios.c.portfolio_id
+                )
+            )
+            .where(competition_portfolios.c.participant_id == participant_id)
+            .order_by(portfolios.c.id.desc())
+            .limit(1)
+        ).first()
+    if row is None:
+        return None
+    return row.id, row.status, row.has_trace
