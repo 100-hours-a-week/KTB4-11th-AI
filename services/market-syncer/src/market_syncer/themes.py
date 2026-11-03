@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from ktb_core.normalize import normalize
 from sqlalchemy.dialects.postgresql import insert
 
-from market_syncer.database import corporations, theme_companies
+from market_syncer.database import corporations, theme_corporations
 from market_syncer.database import themes as themes_table
 from market_syncer.kiwoom import Theme, ThemeMember
 
@@ -40,14 +40,14 @@ def sync_themes(
     if not is_major_by_key:
         raise ValueError("no theme member is a KOSPI corporation")
 
-    conn.execute(sa.delete(theme_companies))
+    conn.execute(sa.delete(theme_corporations))
     conn.execute(sa.delete(themes_table))
     conn.execute(
         insert(themes_table),
         [{"theme_code": theme.code, "name": theme.name} for theme in unique_themes],
     )
     conn.execute(
-        insert(theme_companies),
+        insert(theme_corporations),
         [
             {"theme_code": theme_code, "stock_code": stock_code, "is_major": is_major}
             for (theme_code, stock_code), is_major in is_major_by_key.items()

@@ -46,8 +46,8 @@ themes = sa.Table(
     ),
 )
 
-theme_companies = sa.Table(
-    "theme_companies",
+theme_corporations = sa.Table(
+    "theme_corporations",
     metadata,
     sa.Column(
         "theme_code",
@@ -62,5 +62,5 @@ theme_companies = sa.Table(
         primary_key=True,
     ),
     sa.Column("is_major", sa.Boolean, nullable=False, server_default=sa.false()),
-    sa.Index("theme_companies_stock_code_idx", "stock_code"),
+    sa.Index("theme_corporations_stock_code_idx", "stock_code"),
 )

@@ -11,6 +11,7 @@ from market_http.repositories.rankings import trade_values
 from market_http.repositories.themes import (
     StockTheme,
     Theme,
+    ThemeGroup,
     ThemeStock,
     find_stock_themes,
     find_theme_stocks,
@@ -42,10 +43,25 @@ def _by_member_trade_value[T: Theme | StockTheme](
     return [theme for theme, _ in ranked]
 
 
-async def get_themes(engine: sa.Engine, valkey: Redis) -> list[Theme]:
+def _group_by_prefix(themes: list[Theme]) -> list[Theme | ThemeGroup]:
+    result: list[Theme | ThemeGroup] = []
+    groups: dict[str, ThemeGroup] = {}
+    for theme in themes:
+        prefix, separator, name = theme.name.partition("_")
+        if not separator:
+            result.append(theme)
+            continue
+        if prefix not in groups:
+            groups[prefix] = ThemeGroup(name=prefix, items=[])
+            result.append(groups[prefix])
+        groups[prefix].items.append(Theme(code=theme.code, name=name))
+    return result
+
+
+async def get_themes(engine: sa.Engine, valkey: Redis) -> list[Theme | ThemeGroup]:
     entries = await asyncio.to_thread(list_themes, engine)
     values = await _trade_values(valkey, [code for _, members in entries for code in members])
-    return _by_member_trade_value(entries, values)
+    return _group_by_prefix(_by_member_trade_value(entries, values))
 
 
 async def get_theme_stocks(

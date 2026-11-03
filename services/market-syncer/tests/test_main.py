@@ -95,7 +95,7 @@ def test_syncs_corporations_index_and_themes(env, engine, query, market_data, ca
         ("005930", "KOSPI200")
     ]
     assert query(
-        engine, "SELECT theme_code, stock_code, is_major FROM theme_companies ORDER BY 2"
+        engine, "SELECT theme_code, stock_code, is_major FROM theme_corporations ORDER BY 2"
     ) == [("100", "000660", False), ("100", "005930", True)]
     assert market_data.client.auth.tokens == 1
     assert market_data.dart_keys == [SECRETS[2]]
@@ -147,13 +147,13 @@ def test_a_failed_later_corporation_sync_still_runs_the_other_steps_and_exits_1(
     assert run() == 0
     with engine.begin() as conn:
         conn.execute(sa.text("DELETE FROM corporation_indices"))
-        conn.execute(sa.text("DELETE FROM theme_companies"))
+        conn.execute(sa.text("DELETE FROM theme_corporations"))
     monkeypatch.setattr(entry, "fetch_kospi", fail)
 
     assert run() == 1
 
     assert query(engine, "SELECT count(*) FROM corporation_indices") == [(1,)]
-    assert query(engine, "SELECT count(*) FROM theme_companies") == [(2,)]
+    assert query(engine, "SELECT count(*) FROM theme_corporations") == [(2,)]
 
 
 @pytest.mark.parametrize("step", ["fetch_kospi200_codes", "fetch_themes", "fetch_theme_members"])
@@ -167,7 +167,9 @@ def test_a_failed_step_is_isolated_and_exits_1(env, engine, query, market_data, 
     assert query(engine, "SELECT count(*) FROM corporation_indices") == [
         (0,) if index_failed else (1,)
     ]
-    assert query(engine, "SELECT count(*) FROM theme_companies") == [(2,) if index_failed else (0,)]
+    assert query(engine, "SELECT count(*) FROM theme_corporations") == [
+        (2,) if index_failed else (0,)
+    ]
 
 
 def test_an_empty_index_fetch_keeps_the_old_rows_and_exits_1(

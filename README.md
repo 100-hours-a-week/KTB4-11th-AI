@@ -111,7 +111,7 @@ flowchart LR
 ### `market-syncer`: KOSPI 200 종목과 테마 정보 업데이트하기
 
 - 키움의 KOSPI 종목코드와 OpenDART의 기업 고유번호를 연결해 `corporations`, `corporation_aliases`를 업데이트함
-- 키움에서 KOSPI 200 구성 종목과 테마별 종목을 받아 `corporation_indices`, `themes`, `theme_companies`를 업데이트함
+- 키움에서 KOSPI 200 구성 종목과 테마별 종목을 받아 `corporation_indices`, `themes`, `theme_corporations`를 업데이트함
 
 ### `news-graph-builder`: 클러스터링 된 뉴스에서 지식 정보 추출하기
 
@@ -186,8 +186,8 @@ erDiagram
     corporations ||--o{ corporation_aliases : "별칭"
     corporations ||--o{ corporation_indices : "지수 편입"
     corporations ||--o| entities : "기업 노드"
-    corporations ||--o{ theme_companies : ""
-    themes ||--o{ theme_companies : "구성 종목"
+    corporations ||--o{ theme_corporations : ""
+    themes ||--o{ theme_corporations : "구성 종목"
     portfolios ||--o{ portfolio_holdings : "편입 종목"
     portfolios ||--o{ portfolio_exits : "편출 종목"
     portfolios ||--o{ portfolio_reasons : "종목별 설명"
@@ -262,7 +262,7 @@ erDiagram
         text name
         timestamptz synced_at
     }
-    theme_companies {
+    theme_corporations {
         text theme_code PK, FK "ON DELETE CASCADE"
         text stock_code PK, FK "ON DELETE CASCADE"
         boolean is_major "테마 주요종목 여부"
@@ -303,7 +303,7 @@ erDiagram
 | `articles` | `news-preprocessor` | `0001` |
 | `clusters`, `article_clusters` | `news-clusterer` | `0002` |
 | `cluster_summaries`, `entities`, `cluster_entities`, `relations` | `news-graph-builder` | `0003` |
-| `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | `market-syncer` | `0003`, `0004`, `0006` |
+| `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_corporations` | `market-syncer` | `0003`, `0004`, `0006` |
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
 | `portfolios.status` | `portfolio-builder` | `0008` |
