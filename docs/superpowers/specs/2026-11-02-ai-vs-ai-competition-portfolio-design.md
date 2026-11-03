@@ -206,6 +206,23 @@ to be exact.
 For the case where `running` never clears because the worker died, `started_at` plus a
 staleness threshold makes the job eligible for retry. The threshold is an environment variable.
 
+### The Queue Needs a Dead-Letter Policy
+
+Once a participant's generation has failed its allowed number of attempts, `claim_job` returns
+`None` for that key forever and the worker deliberately stops deleting the message. That is the
+right behaviour for the worker — it must not keep burning agent runs on a job that has spent its
+attempts, and it must not delete a request it never satisfied. But the consequence is that the
+message cycles in the queue indefinitely.
+
+**So the competition queue needs a redrive policy with a dead-letter queue, and nothing in the
+application can substitute for it.** This is the one requirement in this design that lives
+entirely outside the code: no task can implement it, and without it a single permanently failing
+participant leaves a message circulating forever. Whoever provisions the queue has to set it.
+
+The alternative — having the worker delete a message whose attempts are spent — was rejected.
+A deleted request is one nobody can investigate, and the failure notification the Backend
+already receives is a report, not a record of the request itself.
+
 ### Competition Generation Must Not Enter the Re-explain Flow
 
 Today `__main__.py` calls `load_unexplained` to find the newest portfolio whose explanations
