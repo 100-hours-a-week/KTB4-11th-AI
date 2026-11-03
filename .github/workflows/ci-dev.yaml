@@ -22,7 +22,77 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  detect-changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ github.event_name == 'push' || steps.filter.outputs.shared == 'true' }}
+      services: ${{ steps.targets.outputs.services }}
+      members: ${{ steps.targets.outputs.members }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Detect changed files
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4.0.3
+        with:
+          list-files: json
+          filters: |
+            shared:
+              - uv.lock
+              - pyproject.toml
+              - conftest.py
+              - tach.toml
+              - alembic.ini
+              - .python-version
+              - .dockerignore
+              - infrastructure/**
+              - .github/workflows/**
+              - scripts/**
+            members:
+              - packages/**
+              - services/**
+              - docker/*.Dockerfile
+              - docker/requirements/*.txt
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: github.event_name == 'pull_request'
+
+      - name: Export affected workspace members
+        id: targets
+        env:
+          FULL: ${{ github.event_name == 'push' || steps.filter.outputs.shared == 'true' }}
+          FILES: ${{ steps.filter.outputs.members_files }}
+        run: |
+          set -euo pipefail
+          if [[ "$FULL" == true ]]; then
+            members=$(printf '%s\n' packages/* services/*)
+          else
+            members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
+            for member in $members; do
+              if [[ "$member" == packages/* && -d "$member" ]]; then
+                package="ktb-${member#packages/}"
+                tree=$(uv tree --invert --frozen --universal --no-dev --package "$package")
+                if [[ -z "$tree" ]]; then
+                  echo "::error::$member is not the workspace package $package"
+                  exit 1
+                fi
+                members+=$'\n'$(tail -n +2 <<< "$tree" \
+                  | sed -E 's/^[^a-z]*//; s/ v[0-9].*//; /^ktb-/!s#^#services/#; s#^ktb-#packages/#')
+              fi
+            done
+          fi
+          members=$(sort -u <<< "$members" | while read -r member; do if [[ -d "$member" ]]; then echo "$member"; fi; done)
+          echo "members=$(tr '\n' ' ' <<< "$members" | sed 's/ $//')" >> "$GITHUB_OUTPUT"
+          echo "services=$(jq -Rnc '[inputs | select(startswith("services/")) | ltrimstr("services/")]' <<< "$members")" >> "$GITHUB_OUTPUT"
+
   lint-and-test:
+    needs: detect-changes
     runs-on: ubuntu-24.04
 
     services:
@@ -88,15 +158,28 @@ jobs:
           uv run tach check-external -e services
 
       - name: Check report-builder isolated import
+        if: contains(fromJSON(needs.detect-changes.outputs.services), 'report-builder')
         run: uv run --isolated --package report-builder --locked --no-dev python -c 'import report_builder.__main__'
 
       - name: Apply database migrations
+        if: needs.detect-changes.outputs.members != ''
         run: uv run alembic upgrade head
 
       - name: Run tests
-        run: uv run pytest
+        if: needs.detect-changes.outputs.members != ''
+        env:
+          FULL: ${{ needs.detect-changes.outputs.full }}
+          MEMBERS: ${{ needs.detect-changes.outputs.members }}
+        run: |
+          if [[ "$FULL" == true ]]; then
+            uv run pytest
+          else
+            uv run pytest $MEMBERS
+          fi
 
   dependency-audit:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.members != ''
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -106,10 +189,12 @@ jobs:
       - run: uv sync --all-packages --locked --group migrations
       - name: Inspect declared dependencies per workspace member
         continue-on-error: true
+        env:
+          MEMBERS: ${{ needs.detect-changes.outputs.members }}
         run: |
           set -euo pipefail
           audit_status=0
-          for member in packages/* services/*; do
+          for member in $MEMBERS; do
             echo "::group::$member"
             uv run deptry "$member/src" --config "$member/pyproject.toml" || audit_status=1
             echo "::endgroup::"
@@ -135,22 +220,13 @@ jobs:
           git diff --exit-code -- docker/requirements/
 
   build-images:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '' && needs.detect-changes.outputs.services != '[]'
     runs-on: ubuntu-24.04
 
     strategy:
       matrix:
-        service:
-          - news-preprocessor
-          - news-clusterer
-          - market-syncer
-          - news-graph-builder
-          - news-http
-          - portfolio-builder
-          - market-collector
-          - market-streamer
-          - market-http
-          - portfolio-rebalancer
-          - report-builder
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -301,8 +377,8 @@ jobs:
           fi
 
   deploy-dev:
-    needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs: [detect-changes, lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.build-app-image.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
     permissions:
       contents: read
     uses: ./.github/workflows/cd-dev.yaml
