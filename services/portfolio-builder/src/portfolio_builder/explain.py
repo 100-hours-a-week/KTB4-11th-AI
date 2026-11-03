@@ -188,6 +188,19 @@ def explain(
     raise AssertionError("unreachable")
 
 
+def explain_and_save(
+    engine: sa.Engine,
+    explainer: Runnable,
+    portfolio_id: int,
+    trace: list[TraceEntry],
+    result_chars: int,
+) -> int:
+    targets = load_targets(engine, portfolio_id)
+    explanations = explain(explainer, targets, trace, result_chars)
+    save_explanations(engine, portfolio_id, explanations)
+    return len(explanations.stocks)
+
+
 def save_explanations(engine: sa.Engine, portfolio_id: int, explanations: Explanations) -> None:
     rows = [
         {
