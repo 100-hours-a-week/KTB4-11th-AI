@@ -88,3 +88,6 @@ commit, image ids, dataset version, information version, or decision version is 
 - Models may have learned post-cutoff events in pretraining; record their published cutoffs.
 - portfolio-builder in `evaluation` submitter mode still reads its briefing and previous
   portfolio from the production database; it does not write to it.
+- Each Docker Agent decision starts a fresh session; the agent's own notes do not carry to
+  the next decision.
+- Disclosures have no point-in-time server yet (`filing-search-http` is future work).

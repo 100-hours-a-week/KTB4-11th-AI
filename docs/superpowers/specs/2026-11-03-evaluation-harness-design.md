@@ -51,9 +51,13 @@ class DecisionSystem(Protocol):
   clock setting.
 - `news-http-evaluation` serves `GET /news/articles?days&q&limit&cursor`: raw articles with
   `as_of - days < published_at <= as_of`, plus `fetched_at <= as_of` under `fetched`
-  availability. This replaces the earlier plan to serve `/news/recent`: cluster summaries
-  are recomputed over all articles, so a past `as_of` would still see later articles.
-  Cluster and graph variants need point-in-time rebuilt derived data first.
+  availability. It follows the 2026-10-28 boundary in the
+  [투자 벤치마크](https://app.notion.com/p/406b24f4c803809db24dd89f3654921c) notes: the common
+  news API serves raw articles, keyword search may name companies or themes, and cluster,
+  graph and cluster-based `/news/recent` stay out of it. The 2026-10-31 contract's mention of
+  `/news/recent` is superseded for the same reason: cluster summaries are recomputed over all
+  articles, so a past `as_of` would still see later ones. Cluster and graph variants need
+  point-in-time rebuilt derived data first.
 - Clients cannot move the cutoff: unknown parameters are ignored, cursors only narrow the
   range, other timeframes are 422, other routes 404, and an unreadable clock is 503.
 - Variants: `none`, `market`, `raw` (market + news), `enriched` (raw + `features`). The
@@ -78,6 +82,13 @@ class DecisionSystem(Protocol):
 - Outcome order: accepted, then worker unreachable (`tool_error`), then timed out, then only
   invalid attempts (`invalid_submission`), then non-zero exit (`tool_error`), else
   `no_submission`.
+- Each decision is a fresh Docker Agent session with a new HOME; nothing the agent wrote
+  carries to the next decision, and account state comes only from `get_portfolio`. Episode
+  memory, if wanted later, may only hold what earlier decisions could see.
+- Tools are rendered as `api` toolsets from provider-defined `HttpTool`s, not `openapi`
+  toolsets (the 2026-10-28 notes proposed OpenAPI tools). The `api` syntax is documented
+  end to end. How `openapi` toolsets resolve the base URL of a spec without `servers` is
+  not; switch once that is verified.
 - `harness.production.proposal_from_production` maps portfolio-builder submissions
   (`company_id` holdings, implied exits) to stock-code proposals.
 - portfolio-builder (#475): `PortfolioSubmitter` protocol with `DatabaseSubmitter` (existing
@@ -113,6 +124,9 @@ class DecisionSystem(Protocol):
   reason, for fewer than two returns or zero downside. Turnover is traded value over mean
   value; fees and taxes are reported separately. Baselines are Equal-Weight (rebalanced at
   the same decision times) and Buy-and-Hold.
+- The `(Final Return − MDD + Sortino) / 3` composite from the 2026-10-28 notes is not
+  computed. It remains a candidate there, and #438 rules out a single averaged score;
+  indicators are reported separately.
 - Replay re-simulates stored decisions (failures and holds included) without the model and
   reports differing record fields. `harness evaluate` recomputes metrics from records.
   Reproducibility lists missing commit, image ids, dataset version, information version or
@@ -131,3 +145,18 @@ class DecisionSystem(Protocol):
 - Networks: `dataset` (external, internal) for datastores and data servers; `harness` for
   prices; `information` for PIT and feature servers; `decision` for the desk and worker;
   `egress` only for the worker.
+
+## Relation to the 2026-11-01 harness research
+
+The research note (Harbor, TraderHarness, TradeBench) is a proposal and leaves Harbor
+adoption, single- versus multi-step, and the entry point open. This implementation keeps
+the Compose-first runner from #433 and #437 and satisfies the note's invariants:
+
+- Agents and the price path never share access to future prices.
+- Agents submit target portfolios and never change fills or account state.
+- Agent workspaces mount no source data.
+- The same data, rules and stored decisions replay to the same result.
+
+The pieces map onto Harbor's split if it is adopted later: a run is a Job of Trials
+(episodes), the runner and simulator are the environment, and the evaluator is the
+verifier. Date and ticker masking against pretraining memory is not implemented.
