@@ -230,9 +230,10 @@ restarts without classifying them as successful exits. The other job units are u
 
 Successful HTTP status alone is insufficient. The client checks listing fields and
 pagination, financial row field types and closing month before returning JSON. For
-original documents it checks the ZIP directory, bounded uncompressed size and member
-CRCs; a non-ZIP response must contain a recognized DART status. Missing fields,
-wrong types and damaged archives fail inside the same three-attempt loop. Normal
+original documents it requires at least one file in the ZIP, then checks bounded
+uncompressed size and member CRCs; a non-ZIP response must contain a recognized DART status. Missing fields,
+wrong types, empty/directory-only ZIPs and damaged archives fail inside the same
+three-attempt loop. Normal
 JSON 013 and XML 014 no-data responses still return after one request. Document
 content parsing and unsafe archive path failures remain immediate parse failures.
 
@@ -272,7 +273,7 @@ was injected into production to test logging.
 
 ## Verification
 
-- Full suite against a dedicated PostgreSQL test database: **1,304 passed, 49 skipped,
+- Full suite against a dedicated PostgreSQL test database: **1,309 passed, 49 skipped,
   2 subtests passed**.
 - Tests cover all thirteen filing types,
   short/long routing through normal scraping, API failure without partial rows,
@@ -291,7 +292,9 @@ was injected into production to test logging.
 - The unique migration head is 0015 after merging dev 416aabb. Real PostgreSQL
   upgrade → rollback to dev 0012 → upgrade preserves theme_corporations rows.
 - Malformed JSON, missing fields, corrupted ZIP members and uncompressed size limits
-  exhaust three requests; normal no-data responses return once. A service-entry-point
+  exhaust three requests; normal no-data responses return once. Empty and
+  directory-only ZIPs are rejected before either short or long filings can be saved;
+  a valid document on the third attempt still recovers normally. A service-entry-point
   test confirms other news can recover without repeating DART requests that day.
 - Ruff lint, formatting, module/dependency boundaries and whitespace checks passed.
   Independent review found no remaining actionable issues; its targeted tests passed.

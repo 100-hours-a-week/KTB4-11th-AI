@@ -170,6 +170,8 @@ class DartClient:
                 elif endpoint == "document.xml" and zipfile.is_zipfile(io.BytesIO(content)):
                     try:
                         with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                            if not any(not info.is_dir() for info in archive.infolist()):
+                                raise ValueError("DART archive contains no files")
                             if (
                                 sum(info.file_size for info in archive.infolist())
                                 > self.max_uncompressed_bytes

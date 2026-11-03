@@ -240,3 +240,58 @@ def test_zip_validation_respects_uncompressed_size_before_reading_members(monkey
                 "document.xml", {}
             )
     assert len(requests) == 3
+
+
+@pytest.mark.parametrize("directory_only", [False, True])
+def test_zip_without_files_exhausts_three_requests(directory_only, monkeypatch, caplog):
+    import io
+    import zipfile
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w") as archive:
+        if directory_only:
+            archive.writestr("documents/", "")
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, content=data.getvalue())
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(RuntimeError, match="DART request failed"):
+            DartClient(client, "test-key", interval=0).get("document.xml", {})
+    assert len(requests) == 3
+    final = [r for r in caplog.records if r.message == "dart_request_failed"]
+    assert len(final) == 1
+    assert final[0].fields["reason"] == "invalid_response"
+
+
+def test_empty_zip_retries_then_accepts_valid_document(monkeypatch):
+    import io
+    import zipfile
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    empty = io.BytesIO()
+    with zipfile.ZipFile(empty, "w"):
+        pass
+    valid = io.BytesIO()
+    with zipfile.ZipFile(valid, "w") as archive:
+        archive.writestr("main.xml", "<DOCUMENT><P>disclosure</P></DOCUMENT>")
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(
+            200, content=empty.getvalue() if len(requests) < 3 else valid.getvalue()
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        assert (
+            DartClient(client, "test-key", interval=0).get("document.xml", {}) == valid.getvalue()
+        )
+    assert len(requests) == 3

@@ -715,3 +715,38 @@ def test_news_restart_does_not_repeat_exhausted_disclosure_requests(
         assert next_day.value.code == 0
         assert api.count("document.xml") == 4
         assert stored(company_engine)["status"] == "ready"
+
+
+@pytest.mark.parametrize("detail_type", [None, "A001"])
+def test_empty_zip_does_not_save_short_or_long_filings(company_engine, settings, detail_type):
+    api = DartAPI(detail_type=detail_type)
+    empty = io.BytesIO()
+    with zipfile.ZipFile(empty, "w"):
+        pass
+    api.document = empty.getvalue()
+    with api.client() as client:
+        result = ingest(company_engine, client, settings.model_copy(update={"attempts": 3}))
+    assert result.succeed == []
+    assert result.failed == [RECEIPT]
+    assert api.count("document.xml") == 3
+    assert api.count("fnlttSinglAcntAll.json") == 0
+    assert_no_rows(company_engine)
+    with company_engine.connect() as conn:
+        assert (
+            conn.execute(
+                sa.text(
+                    "SELECT count(*) FROM articles WHERE source='opendart' AND external_id=:receipt"
+                ),
+                {"receipt": RECEIPT},
+            ).scalar_one()
+            == 0
+        )
+        assert (
+            conn.execute(
+                sa.text(
+                    "SELECT initial_completed FROM disclosure_collection_state "
+                    "WHERE source='opendart'"
+                )
+            ).scalar_one()
+            is False
+        )
