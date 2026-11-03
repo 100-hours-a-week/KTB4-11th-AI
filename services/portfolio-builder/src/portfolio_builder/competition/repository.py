@@ -29,8 +29,8 @@ def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSett
                 competition_id=request.competition_id,
                 user_id=request.user_id,
                 risk_profile=request.risk_profile,
-                interested_theme_codes=request.interested_theme_codes,
-                excluded_theme_codes=request.excluded_theme_codes,
+                interested_theme_codes=request.effective_interested,
+                excluded_theme_codes=request.effective_excluded,
                 additional_request=request.additional_request,
             )
             .on_conflict_do_nothing(index_elements=["participant_id"])
@@ -59,8 +59,8 @@ def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSett
         competition_id=request.competition_id,
         user_id=request.user_id,
         risk_profile=request.risk_profile,
-        interested_theme_codes=tuple(request.interested_theme_codes),
-        excluded_theme_codes=tuple(request.excluded_theme_codes),
+        interested_theme_codes=tuple(request.effective_interested),
+        excluded_theme_codes=tuple(request.effective_excluded),
         additional_request=request.additional_request,
     )
     return stored, stored != from_request
