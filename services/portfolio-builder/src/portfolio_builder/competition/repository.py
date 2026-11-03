@@ -1,10 +1,12 @@
+import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from portfolio_builder.competition.message import Request
-from portfolio_builder.database import competition_participants
+from portfolio_builder.database import competition_jobs, competition_participants
 
 
 @dataclass(frozen=True)
@@ -62,3 +64,108 @@ def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSett
         additional_request=request.additional_request,
     )
     return stored, stored != from_request
+
+
+@dataclass(frozen=True)
+class Claim:
+    key: str
+    mine: bool
+    portfolio_id: int | None
+
+
+def generation_key(
+    participant: ParticipantSettings,
+    previous_portfolio_id: int | None,
+    llm_model: str,
+) -> str:
+    parts = [
+        "v1",
+        participant.risk_profile,
+        str(len(participant.interested_theme_codes)),
+        *participant.interested_theme_codes,
+        str(len(participant.excluded_theme_codes)),
+        *participant.excluded_theme_codes,
+        participant.additional_request,
+        str(previous_portfolio_id or 0),
+        llm_model,
+    ]
+    encoded = b"".join(f"{len(part.encode())}:".encode() + part.encode() for part in parts)
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def claim_job(
+    engine: sa.Engine,
+    key: str,
+    participant: ParticipantSettings,
+    previous_portfolio_id: int | None,
+    stale_after_seconds: int,
+    max_attempts: int,
+) -> Claim | None:
+    with engine.begin() as conn:
+        inserted = conn.execute(
+            pg_insert(competition_jobs)
+            .values(
+                generation_key=key,
+                participant_id=participant.participant_id,
+                previous_portfolio_id=previous_portfolio_id,
+                status="running",
+            )
+            .on_conflict_do_nothing(index_elements=["generation_key"])
+            .returning(competition_jobs.c.generation_key)
+        ).first()
+        if inserted is not None:
+            return Claim(key=key, mine=True, portfolio_id=None)
+
+        row = (
+            conn.execute(
+                sa.select(competition_jobs)
+                .where(competition_jobs.c.generation_key == key)
+                .with_for_update()
+            )
+            .mappings()
+            .one()
+        )
+
+        if row["status"] == "succeeded":
+            return Claim(key=key, mine=False, portfolio_id=row["portfolio_id"])
+
+        is_stale = datetime.now(timezone.utc) - row["started_at"] > timedelta(
+            seconds=stale_after_seconds
+        )
+        reclaimable = (
+            row["status"] == "failed" or (row["status"] == "running" and is_stale)
+        ) and row["attempts"] < max_attempts
+        if not reclaimable:
+            return None
+
+        conn.execute(
+            sa.update(competition_jobs)
+            .where(competition_jobs.c.generation_key == key)
+            .values(
+                status="running",
+                attempts=competition_jobs.c.attempts + 1,
+                started_at=sa.func.now(),
+                finished_at=None,
+                error=None,
+                portfolio_id=None,
+            )
+        )
+        return Claim(key=key, mine=True, portfolio_id=None)
+
+
+def finish_job(engine: sa.Engine, key: str, portfolio_id: int) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(competition_jobs)
+            .where(competition_jobs.c.generation_key == key)
+            .values(status="succeeded", portfolio_id=portfolio_id, finished_at=sa.func.now())
+        )
+
+
+def fail_job(engine: sa.Engine, key: str, error: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(competition_jobs)
+            .where(competition_jobs.c.generation_key == key)
+            .values(status="failed", error=error, finished_at=sa.func.now())
+        )
