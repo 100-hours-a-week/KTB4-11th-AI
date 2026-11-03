@@ -26,5 +26,5 @@ extend-exclude = ["docs"]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["packages", "services", "infrastructure"]
+testpaths = ["packages", "services", "infrastructure", "scripts"]
 addopts = "-q --import-mode=importlib"

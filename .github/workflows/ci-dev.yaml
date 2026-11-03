@@ -22,7 +22,32 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  detect-changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      full: ${{ steps.targets.outputs.full }}
+      services: ${{ steps.targets.outputs.services }}
+      members: ${{ steps.targets.outputs.members }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Detect affected workspace members
+        id: targets
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git diff --name-only "$BASE_SHA...$GITHUB_SHA"
+          else
+            echo "::notice::Base commit unavailable; checking every workspace member" >&2
+            echo uv.lock
+          fi | python3 scripts/detect_ci_targets.py | tee -a "$GITHUB_OUTPUT"
+
   lint-and-test:
+    needs: detect-changes
     runs-on: ubuntu-24.04
 
     services:
@@ -88,15 +113,28 @@ jobs:
           uv run tach check-external -e services
 
       - name: Check report-builder isolated import
+        if: contains(fromJSON(needs.detect-changes.outputs.services), 'report-builder')
         run: uv run --isolated --package report-builder --locked --no-dev python -c 'import report_builder.__main__'
 
       - name: Apply database migrations
+        if: needs.detect-changes.outputs.members != ''
         run: uv run alembic upgrade head
 
       - name: Run tests
-        run: uv run pytest
+        if: needs.detect-changes.outputs.members != ''
+        env:
+          FULL: ${{ needs.detect-changes.outputs.full }}
+          MEMBERS: ${{ needs.detect-changes.outputs.members }}
+        run: |
+          if [[ "$FULL" == true ]]; then
+            uv run pytest
+          else
+            uv run pytest $MEMBERS
+          fi
 
   dependency-audit:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.members != ''
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -106,10 +144,12 @@ jobs:
       - run: uv sync --all-packages --locked --group migrations
       - name: Inspect declared dependencies per workspace member
         continue-on-error: true
+        env:
+          MEMBERS: ${{ needs.detect-changes.outputs.members }}
         run: |
           set -euo pipefail
           audit_status=0
-          for member in packages/* services/*; do
+          for member in $MEMBERS; do
             echo "::group::$member"
             uv run deptry "$member/src" --config "$member/pyproject.toml" || audit_status=1
             echo "::endgroup::"
@@ -135,22 +175,13 @@ jobs:
           git diff --exit-code -- docker/requirements/
 
   build-images:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '[]'
     runs-on: ubuntu-24.04
 
     strategy:
       matrix:
-        service:
-          - news-preprocessor
-          - news-clusterer
-          - market-syncer
-          - news-graph-builder
-          - news-http
-          - portfolio-builder
-          - market-collector
-          - market-streamer
-          - market-http
-          - portfolio-rebalancer
-          - report-builder
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -302,7 +333,7 @@ jobs:
 
   deploy-dev:
     needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
     permissions:
       contents: read
     uses: ./.github/workflows/cd-dev.yaml
