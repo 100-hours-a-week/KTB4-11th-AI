@@ -36,20 +36,52 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Detect affected workspace members
+      - name: Detect changed files
         id: filter
         uses: dorny/paths-filter@v4.0.3
         with:
           base: ${{ github.ref_name }}
-          filters: .github/ci-filters.yaml
+          list-files: json
+          filters: |
+            shared:
+              - uv.lock
+              - pyproject.toml
+              - conftest.py
+              - tach.toml
+              - alembic.ini
+              - .python-version
+              - .dockerignore
+              - infrastructure/**
+              - .github/workflows/ci-*.yaml
+            members:
+              - packages/**
+              - services/**
+              - docker/*.Dockerfile
+              - docker/requirements/*.txt
 
-      - name: Export affected targets
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Export affected workspace members
         id: targets
         env:
-          CHANGES: ${{ steps.filter.outputs.changes }}
+          FULL: ${{ steps.filter.outputs.shared }}
+          FILES: ${{ steps.filter.outputs.members_files }}
         run: |
-          echo "services=$(jq -c 'map(select(startswith("services/")) | ltrimstr("services/"))' <<< "$CHANGES")" >> "$GITHUB_OUTPUT"
-          echo "members=$(jq -r 'map(select(. != "shared")) | join(" ")' <<< "$CHANGES")" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [[ "$FULL" == true ]]; then
+            members=$(printf '%s\n' packages/* services/*)
+          else
+            members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
+            for member in $members; do
+              if [[ "$member" == packages/* ]]; then
+                members+=$'\n'$(uv tree --invert --frozen --no-dev --package "ktb-${member#packages/}" \
+                  | tail -n +2 | sed -E 's/^[^a-z]*//; s/ v[0-9].*//; /^ktb-/!s#^#services/#; s#^ktb-#packages/#')
+              fi
+            done
+          fi
+          members=$(sort -u <<< "$members" | while read -r member; do if [[ -d "$member" ]]; then echo "$member"; fi; done)
+          echo "members=$(tr '\n' ' ' <<< "$members" | sed 's/ $//')" >> "$GITHUB_OUTPUT"
+          echo "services=$(jq -Rnc '[inputs | select(startswith("services/")) | ltrimstr("services/")]' <<< "$members")" >> "$GITHUB_OUTPUT"
 
   lint-and-test:
     needs: detect-changes
