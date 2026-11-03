@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableLambda
 from portfolio_builder.agent.trace import TraceEntry
+from portfolio_builder.competition.repository import link_portfolio, store_settings
 from portfolio_builder.explain import (
     ExplanationRejected,
     Explanations,
@@ -36,6 +37,7 @@ VALID = {
     ]
 }
 TRACE = [TraceEntry(turn=1, kind="tool", name="search_news_cluster", args={}, result="x" * 50)]
+TRACE_ROW = [{"turn": 1, "kind": "model"}]
 
 
 def _validate(raw):
@@ -275,6 +277,25 @@ def test_a_portfolio_without_a_trace_is_not_retried(engine):
     _insert(engine, None)
 
     assert load_unexplained(engine) is None
+
+
+def test_load_unexplained_ignores_a_competition_portfolio(engine, _request, _insert_portfolio):
+    store_settings(engine, _request())
+    competition = _insert_portfolio(engine, status="explanation_failed", trace=TRACE_ROW)
+    link_portfolio(engine, 1, competition)
+
+    assert load_unexplained(engine) is None
+
+
+def test_load_unexplained_still_finds_a_common_portfolio(engine, _request, _insert_portfolio):
+    store_settings(engine, _request())
+    common = _insert_portfolio(engine, status="explanation_failed", trace=TRACE_ROW)
+    linked = _insert_portfolio(engine, status="explanation_failed", trace=TRACE_ROW)
+    link_portfolio(engine, 1, linked)
+
+    portfolio_id, _ = load_unexplained(engine)
+
+    assert portfolio_id == common
 
 
 def _portfolio_with_one_holding(engine):
