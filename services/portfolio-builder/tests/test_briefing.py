@@ -2,8 +2,9 @@ from contextlib import nullcontext
 from datetime import datetime
 
 import pytest
-from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
+from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT, SYSTEM_PROMPT
 from portfolio_builder.briefing import load_briefing, service
+from portfolio_builder.competition.repository import link_portfolio, store_settings
 from portfolio_builder.portfolio import Holding, Submission, save_portfolio
 
 SAMSUNG, HYNIX = "00126380", "00164779"
@@ -147,3 +148,62 @@ def test_news_failure_aborts_before_a_briefing_is_returned(monkeypatch):
 
     with pytest.raises(RuntimeError, match="news-http unavailable"):
         load_briefing(Engine(), FailedNewsClient(), 7)
+
+
+def test_the_common_briefing_is_unchanged_without_a_participant(engine):
+    briefing = load_briefing(engine, NewsClientStub(), 7)
+
+    assert "# Your settings" not in briefing.text
+
+
+def test_the_settings_section_carries_every_value_and_the_free_text_verbatim(engine, _settings):
+    participant = _settings(additional_request="한 종목에 몰리지 않게 해줘")
+
+    briefing = load_briefing(engine, NewsClientStub(), 7, participant=participant)
+
+    assert "# Your settings" in briefing.text
+    assert "성장형" in briefing.text
+    assert "한 종목에 몰리지 않게 해줘" in briefing.text
+
+
+def test_an_empty_free_text_omits_its_block(engine, _settings):
+    briefing = load_briefing(
+        engine, NewsClientStub(), 7, participant=_settings(additional_request="")
+    )
+
+    assert "# Your settings" in briefing.text
+    assert "성장형" in briefing.text
+    assert "Additional request" not in briefing.text
+
+
+def test_an_excluded_company_is_marked_and_not_removed(engine, _settings):
+    briefing = load_briefing(
+        engine, NewsClientStub(), 7, participant=_settings(), excluded=frozenset({SAMSUNG})
+    )
+
+    assert SAMSUNG in briefing.text
+    assert "not holdable" in briefing.text
+
+
+def test_a_participant_briefing_shows_that_participants_previous_portfolio(
+    engine, _request, _settings, _insert_portfolio
+):
+    store_settings(engine, _request())
+    _insert_portfolio(engine, commentary="다른 참가자")
+    mine = _insert_portfolio(engine, commentary="내 직전")
+    link_portfolio(engine, 1, mine)
+
+    briefing = load_briefing(engine, NewsClientStub(), 7, participant=_settings())
+
+    assert "내 직전" in briefing.text
+    assert "다른 참가자" not in briefing.text
+
+
+def test_the_competition_prompt_keeps_the_mandatory_analysis_rule():
+    assert "analyze_technicals" in COMPETITION_SYSTEM_PROMPT
+    assert "every user of this service" not in COMPETITION_SYSTEM_PROMPT
+
+
+def test_the_competition_prompt_forbids_overriding_the_service_rules():
+    for phrase in ["excluded", "constraints", "commentary"]:
+        assert phrase in COMPETITION_SYSTEM_PROMPT
