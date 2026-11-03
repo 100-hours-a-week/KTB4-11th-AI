@@ -20,13 +20,14 @@ class CollectionState:
     initial_from: date | None = None
     checked_through: date | None = None
     completed_for: date | None = None
+    attempted_for: date | None = None
 
 
 def load_collection_state(conn: sa.Connection) -> CollectionState:
     row = (
         conn.execute(
             sa.text(
-                "SELECT initial_completed,initial_from,checked_through,completed_for "
+                "SELECT initial_completed,initial_from,checked_through,completed_for,attempted_for "
                 "FROM disclosure_collection_state WHERE source='opendart'"
             )
         )
@@ -36,16 +37,19 @@ def load_collection_state(conn: sa.Connection) -> CollectionState:
     return CollectionState(**row) if row is not None else CollectionState()
 
 
-def remember_initial_from(conn: sa.Connection, first_date: date) -> None:
+def remember_collection_attempt(
+    conn: sa.Connection, scheduled_day: date, first_date: date | None
+) -> None:
     conn.execute(
         sa.text(
-            "INSERT INTO disclosure_collection_state(source,initial_from) "
-            "VALUES ('opendart',:first) "
+            "INSERT INTO disclosure_collection_state(source,initial_from,attempted_for) "
+            "VALUES ('opendart',:first,:day) "
             "ON CONFLICT(source) DO UPDATE SET "
             "initial_from=LEAST(disclosure_collection_state.initial_from,excluded.initial_from),"
+            "attempted_for=GREATEST(disclosure_collection_state.attempted_for,excluded.attempted_for),"
             "updated_at=now()"
         ),
-        {"first": first_date},
+        {"first": first_date, "day": scheduled_day},
     )
 
 

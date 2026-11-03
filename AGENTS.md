@@ -246,8 +246,8 @@ The ordinary `news-preprocessor` command runs under the unchanged hourly
 `ktb-news-preprocessor.timer`. There is no separate collection pass, staged database
 queue, persisted item-failure loop, RSS discovery, disclosure command, or collector
 timer. HTTP requests retain bounded retries. Automatic collection dates advance only
-after all selected filings succeed, so failed intervals remain due within the 365-day
-lookback. Explicit date replay is also available.
+after all selected filings succeed. Failed intervals are retried in the next daily
+slot within the 365-day lookback; same-day hourly runs do not retry them. Explicit date replay is also available.
 Listing, short/long document and financial requests share `DartClient`, with three
 attempts by default and a maximum of three. The news-preprocessor unit uses `Restart=no`
 and `StartLimitIntervalSec=0`: request retries are not multiplied by service restarts.
@@ -268,11 +268,13 @@ the repository. Collection does not call an embedding model or generate answers.
 
 OpenDART stays available in the hourly source list. On first automatic ingestion it
 selects the latest 1000 unique KOSPI200 filings within 365 days, across short and long
-types. `disclosure_collection_state` stores only initial completion and coverage/daily
-slot dates, not pending receipt IDs. Initial failure retries, subsequent incremental
+types. `disclosure_collection_state` stores initial completion, covered dates and
+attempted/successful daily slot dates, not pending receipt IDs. Initial failure retries, subsequent incremental
 checks and explicit date replay are uncapped. Successful capped initialization leaves
-an inclusive boundary sweep due, so a same-day 1001st filing is reachable. Completed
-slots skip API calls; an unfinished 05:00 slot still runs at 06:00 or a delayed startup.
+an inclusive boundary sweep for the next daily slot, so a same-day 1001st filing is
+reachable. An already attempted slot skips API calls even when it failed. Three request
+failures are logged without another same-day collection run. A delayed startup at
+06:00 runs only if that daily slot has not yet been attempted.
 The daily hour remains configurable through `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR`.
 
 Normal checks resume inclusively from the last successful date. Existing receipt and

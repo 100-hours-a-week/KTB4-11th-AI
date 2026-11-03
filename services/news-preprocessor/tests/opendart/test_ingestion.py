@@ -252,8 +252,8 @@ def test_short_and_long_filings_share_the_standard_scrape_flow(company_engine, s
     assert stored(company_engine)["status"] == "ready"
 
 
-def test_document_request_failure_saves_nothing_and_retries_on_next_scrape(
-    company_engine, settings
+def test_document_request_failure_saves_nothing_and_recovers_next_day(
+    company_engine, settings, listing_clock
 ):
     api = DartAPI()
     api.document_error = True
@@ -262,6 +262,7 @@ def test_document_request_failure_saves_nothing_and_retries_on_next_scrape(
         assert result.failed == [RECEIPT]
         assert_no_rows(company_engine)
         api.document_error = False
+        listing_clock["now"] += timedelta(days=1)
         assert ingest(company_engine, client, settings).succeed == [RECEIPT]
     assert stored(company_engine)["status"] == "ready"
 
@@ -287,7 +288,9 @@ def test_parse_failure_logs_the_filing_and_preserves_failure_result(
     assert records[0].exc_info is not None
 
 
-def test_financial_api_failure_does_not_leave_partial_document_rows(company_engine, settings):
+def test_financial_api_failure_does_not_leave_partial_document_rows(
+    company_engine, settings, listing_clock
+):
     api = DartAPI()
     api.financial_error = True
     with api.client() as client:
@@ -295,6 +298,7 @@ def test_financial_api_failure_does_not_leave_partial_document_rows(company_engi
         assert result.failed == [RECEIPT]
         assert_no_rows(company_engine)
         api.financial_error = False
+        listing_clock["now"] += timedelta(days=1)
         assert ingest(company_engine, client, settings).succeed == [RECEIPT]
     assert stored(company_engine)["financials_collected"]
     assert api.count("document.xml") == 2
@@ -464,14 +468,14 @@ def test_initial_1000_then_remaining_same_day_and_new_filings_without_duplicates
     with api.client() as client:
         assert len(ingest(company_engine, client, settings).succeed) == 1000
         assert api.count("document.xml") == 1000
-        listing_clock["now"] += timedelta(hours=1)
+        listing_clock["now"] += timedelta(days=1)
         assert ingest(company_engine, client, settings).succeed == ["typed-initial-1000"]
         assert api.count("document.xml") == 1001
         requests = len(api.requests)
         assert ingest(company_engine, client, settings).succeed == []
         assert len(api.requests) == requests
         listing_clock["now"] += timedelta(days=1)
-        api.listed_on = "20261031"
+        api.listed_on = "20261101"
         api.rows.append((None, "typed-new", "new filing"))
         assert ingest(company_engine, client, settings).succeed == ["typed-new"]
         assert api.count("document.xml") == 1002
@@ -488,7 +492,7 @@ def test_initial_1000_then_remaining_same_day_and_new_filings_without_duplicates
 
 
 @pytest.mark.parametrize("hour, minute", [(6, 0), (5, 59)])
-def test_due_collection_runs_after_hour_boundary_or_late_start(
+def test_failed_daily_collection_waits_until_next_day_even_after_hour_boundary(
     company_engine, settings, listing_clock, hour, minute
 ):
     with company_engine.begin() as conn:
@@ -511,11 +515,15 @@ def test_due_collection_runs_after_hour_boundary_or_late_start(
             ).scalar_one() == date(2026, 10, 29)
         listing_clock["now"] = listing_clock["now"].replace(hour=6, minute=5)
         api.document_error = False
+        requests = len(api.requests)
+        assert ingest(company_engine, client, settings).succeed == []
+        assert len(api.requests) == requests
+        listing_clock["now"] += timedelta(days=1)
         assert ingest(company_engine, client, settings).succeed == [RECEIPT]
     with company_engine.connect() as conn:
         assert conn.execute(
             sa.text("SELECT completed_for FROM disclosure_collection_state")
-        ).scalar_one() == date(2026, 10, 30)
+        ).scalar_one() == date(2026, 10, 31)
 
 
 def test_partial_initial_failure_is_recovered_even_when_new_filings_displace_it(
@@ -547,7 +555,7 @@ def test_partial_initial_failure_is_recovered_even_when_new_filings_displace_it(
         assert result.failed == ["typed-failed"]
         failing = False
         api.rows.insert(0, (None, "typed-new-arrival", "new"))
-        listing_clock["now"] += timedelta(hours=1)
+        listing_clock["now"] += timedelta(days=1)
         assert set(ingest(company_engine, client, settings).succeed) == {
             "typed-new-arrival",
             "typed-failed",
@@ -602,6 +610,7 @@ def test_checkpoint_failure_retries_without_downloading_saved_document_again(
             sa.text("SELECT initial_completed,checked_through FROM disclosure_collection_state")
         ).one()
         assert row.initial_completed is False and row.checked_through is None
+    listing_clock["now"] += timedelta(days=1)
     with api.client() as client:
         assert ingest(company_engine, client, settings).succeed == []
     assert api.count("document.xml") == 1
@@ -633,3 +642,26 @@ def test_manual_replay_does_not_change_automatic_collection_dates(
                 conn.execute(sa.text("SELECT * FROM disclosure_collection_state")).mappings().one()
             )
         assert before == after
+
+
+def test_exhausted_listing_is_not_retried_until_next_day(company_engine, settings, listing_clock):
+    settings = settings.model_copy(update={"attempts": 3})
+    api = DartAPI()
+    failing = True
+
+    def handle(request):
+        if failing and request.url.path.endswith("list.json"):
+            api.requests.append(request)
+            return httpx.Response(503)
+        return api.handler(request)
+
+    listing_clock["now"] = listing_clock["now"].replace(hour=5, minute=59)
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        assert ingest(company_engine, client, settings).failed
+        assert api.count("list.json") == 3
+        listing_clock["now"] = listing_clock["now"].replace(hour=6, minute=5)
+        failing = False
+        assert ingest(company_engine, client, settings).succeed == []
+        assert api.count("list.json") == 3
+        listing_clock["now"] += timedelta(days=1)
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]

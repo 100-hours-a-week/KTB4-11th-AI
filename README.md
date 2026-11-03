@@ -98,7 +98,7 @@ flowchart LR
 ### `news-preprocessor`: 뉴스 가져와서 저장하기
 
 - 경제 뉴스 RSS를 읽고 각 사이트의 본문 구조에 맞게 기사 추출
-- OpenDART initially selects the latest 1000 KOSPI200 filings within one year. It then checks new receipts once per daily slot, default 05:00 KST, using persisted successful dates so late starts and failures are retried. Other news sources remain hourly.
+- OpenDART initially selects the latest 1000 KOSPI200 filings within one year. It then checks new receipts once per daily slot, default 05:00 KST, recording both attempted and successful dates. An unattempted slot may start late; a failed attempt waits until the next daily slot. Other news sources remain hourly.
 - Short filings retain the article storage and embedding flow. Thirteen long filing types, including periodic reports, audit reports and prospectuses, are parsed into document, section and financial tables in one transaction.
 - Only the first automatic selection is capped at 1000; incremental checks and manual date replay are uncapped. Known receipts skip body downloads and duplicate storage. Manual replay accepts paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` values within 365 days and leaves the normal collection dates unchanged. See the [collection plan](docs/superpowers/plans/2026-10-30-disclosure-collection.md).
 - 기사 제목과 본문을 PostgreSQL `articles`에 저장 후 임베딩 시도

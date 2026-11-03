@@ -10,7 +10,7 @@ news path. For long filings, `OpenDart.article` fetches document and financial A
 data, parses it in memory, and returns a `DisclosureItem`. Standard scraping stores
 filing metadata, parsed documents, sections, and financial facts together in one
 PostgreSQL transaction. A failed item is not saved. The collection date advances only after all selected
-filings succeed, so the next scheduled run includes the failed interval. Recovery is
+filings succeed, so the next daily slot includes the failed interval. Recovery is
 bounded by the configured 365-day lookback. Explicit date replay is also available.
 
 OpenDART modules are flat under `sources/publishers/opendart/`:
@@ -54,28 +54,36 @@ are reported honestly; records are not padded or duplicated.
 | initial_completed | The initial pass has succeeded |
 | initial_from | Earliest date selected during initial collection; never moves later |
 | checked_through | Last successfully covered date, queried inclusively next time |
-| completed_for | Daily scheduled date whose check has finished |
+| completed_for | Daily scheduled date whose check succeeded |
+| attempted_for | Daily scheduled date already attempted, including a failed listing |
 
 No receipt is saved as a pending work item. Filing metadata, documents, sections and
 financial facts still enter their existing transaction only after parsing.
 
 The earliest initial date is recorded before processing the selected filings. If the
-initial run partly fails, its next attempt scans from that date without a 1000 cap.
+initial run partly fails, its next daily attempt scans from that date without a 1000 cap.
 This recovers a failed older receipt even if new arrivals would push it out of the
 latest 1000. Existing IDs are skipped before document fetch. A checkpoint write failure
 also leaves the run incomplete; replay skips documents already committed.
 
 A fully successful capped first pass marks the initial collection complete, but leaves
-one uncapped boundary check due from its earliest selected date. This handles a day
+one uncapped boundary check for the next daily slot from its earliest selected date. This handles a day
 with 1001 or more filings: the next run reaches the remaining receipt instead of
 reselecting only the first 1000. Later automatic collection has no 1000 limit and never
 restarts the historical 1000-filing pass after its completion.
 
 `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR` defines the daily KST slot (default 5).
-A run after 05:00 checks whether that day's slot succeeded; before 05:00 it can catch
-up the previous day's unfinished slot. If the slot is already complete, no OpenDART
-API request is made. If the service starts late at 06:00, or a 05:59 failure is followed
-by a 06:00 run, the unfinished slot still runs. No wall-clock equality gate is used.
+A run after 05:00 uses that day's slot; before 05:00 it uses the previous day's slot.
+An already attempted slot makes no OpenDART API request, whether it succeeded or
+failed. A 05:59 failure is logged and the 06:00 run does not try it again. The next
+daily slot resumes from the last successful coverage date, so failures are not lost.
+If the service first starts at 06:00 without any attempt for that slot, collection runs
+once. Late first starts and repeated attempts are separate cases.
+
+The attempt date is persisted after listing returns or exhausts its request attempts,
+before document processing. A failed listing also consumes the daily slot; it does not
+set initial completion or advance the successful coverage date. Manual date replay
+remains explicit and does not update automatic attempt dates.
 
 A due check requests the listing from the previous successfully covered date through
 today, with the last date included again to catch filings published later that day.
@@ -90,7 +98,7 @@ receipts by daily polling; it does not claim to receive vendor webhooks. The pro
 condition is the discovery of an unstored receipt, not a fixed daily refill to 1000.
 
 The coverage date and completed slot advance only after all selected filings commit.
-An API, parsing or save failure leaves the interval due. There is no automatic recovery
+An API, parsing or save failure leaves the interval for the next daily slot. There is no automatic recovery
 for dates older than 365 days; the lookback clamp is the explicit retention boundary.
 Other news sources keep their hourly schedule. The existing indexer integration reads
 new stored documents; no GPU request is added by this collection checkpoint.
@@ -204,8 +212,8 @@ They are not wrapped in an additional three-attempt transaction loop.
 The news-preprocessor systemd unit sets `Restart=no` and `StartLimitIntervalSec=0`.
 There is no one-hour start-rate rule and no service-wide automatic rerun multiplying
 the request retry count. Final job failure triggers the existing failure handler.
-The next scheduled run can retry a still-visible filing; older failures use historical
-replay. Attempts are per request within a run, not a permanent lifetime counter.
+The next daily slot can retry failures from the last successful coverage date; dates
+older than the 365-day retention boundary are outside automatic recovery. Attempts are per request within a run, not a permanent lifetime counter.
 
 [systemd start-rate settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#StartLimitIntervalSec=interval)
 document that zero disables start-rate limiting. The other job units are unchanged.
@@ -219,7 +227,7 @@ production Compose logging driver forwards stdout to the configured CloudWatch g
 | --- | --- | --- |
 | `opendart_listing_failed` | ERROR | Requested start/end dates, page, detail type, HTTP/DART status and exception type |
 | `feed_failed` | ERROR | Source, feed URL, state-load/listing stage and traceback |
-| `opendart_state_failed` | ERROR | Initial-start/completion stage, exception type and traceback |
+| `opendart_state_failed` | ERROR | Attempt/completion stage, exception type and traceback |
 | `dart_request_retry` | WARNING | Endpoint, attempt/max attempts, HTTP status and exception type |
 | `dart_request_failed` | ERROR | Same fields when HTTP, invalid-response or DART-status retries are exhausted |
 | `dart_api_failed` | ERROR | Endpoint, DART status and financial statement identifiers |
@@ -235,8 +243,8 @@ tracebacks formatted by the service logger.
 Database save failures still roll back and raise; logging does not turn them into a
 successful scrape. Listing and article failures retain their existing failed results.
 `opendart_collection_completed` and `scrape_complete` distinguish selected, already
-stored and newly stored counts. `opendart_collection_skipped` records a completed
-daily slot without an API call. One failure can produce an API event and an enclosing article event; do not add all
+stored and newly stored counts. `opendart_collection_skipped` records an already attempted
+daily slot without an API call, including its attempt and success dates. One failure can produce an API event and an enclosing article event; do not add all
 ERROR records together as a count of unique failed filings. Use receipt IDs and the
 final article events when tracing a filing for replay.
 
@@ -246,7 +254,7 @@ was injected into production to test logging.
 
 ## Verification
 
-- Full suite against a dedicated PostgreSQL test database: **1,256 passed, 49 skipped,
+- Full suite against a dedicated PostgreSQL test database: **1,257 passed, 49 skipped,
   2 subtests passed**.
 - Tests cover all thirteen filing types,
   short/long routing through normal scraping, API failure without partial rows,
@@ -254,8 +262,9 @@ was injected into production to test logging.
   missing documents, unknown fiscal metadata and archive hashes. Historical additions
   cover the initial 1000-receipt cap, uncapped replay and incremental checks, duplicates
   and nonmembers across pagination, date bounds and empty listings. Database tests
-  verify the 1001st same-day receipt, no API call after a completed daily check, new
-  arrivals during a failed initial pass, recovery after 06:00 and a three-day gap,
+  verify the 1001st same-day receipt, no API call after an attempted daily check, new
+  arrivals during a failed initial pass, no same-day retry after three listing failures,
+  next-day recovery after a 05:59 failure, first starts after 06:00, a three-day gap,
   checkpoint failure after document commit, manual replay leaving automatic state
   unchanged, and historical parser-version replacement.
 - Listing and short-document failures are verified to stop at exactly three HTTP

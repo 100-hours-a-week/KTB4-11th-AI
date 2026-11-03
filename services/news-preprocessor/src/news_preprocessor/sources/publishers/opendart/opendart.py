@@ -99,11 +99,13 @@ class OpenDart:
         scheduled_day = (
             today if now.hour >= self._settings.collection_hour else today - timedelta(days=1)
         )
-        if state is not None and not initial and not manual:
-            if state.completed_for is not None and state.completed_for >= scheduled_day:
+        if state is not None and not manual:
+            last_attempt = state.attempted_for or state.completed_for
+            if last_attempt is not None and last_attempt >= scheduled_day:
                 log.info(
                     "opendart_collection_skipped",
                     completed_for=state.completed_for,
+                    attempted_for=state.attempted_for,
                     scheduled_day=scheduled_day,
                 )
                 return []

@@ -81,6 +81,7 @@ def upgrade() -> None:
         sa.Column("initial_from", sa.Date),
         sa.Column("checked_through", sa.Date),
         sa.Column("completed_for", sa.Date),
+        sa.Column("attempted_for", sa.Date),
         sa.Column(
             "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),

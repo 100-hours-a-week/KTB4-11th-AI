@@ -8,7 +8,7 @@ from news_preprocessor.sources.publishers.opendart.opendart import OpenDart
 from news_preprocessor.sources.publishers.opendart.storage import (
     complete_collection,
     load_collection_state,
-    remember_initial_from,
+    remember_collection_attempt,
 )
 from news_preprocessor.storage import insert_new, known_external_ids
 
@@ -22,6 +22,9 @@ class ScrapeResult(NamedTuple):
 
 def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
     stage = "listing"
+    entries = None
+    if isinstance(source, OpenDart):
+        source.collection_plan = None
     try:
         if isinstance(source, OpenDart):
             stage = "state_load"
@@ -38,19 +41,20 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
             error_type=type(error).__name__,
         )
         return ScrapeResult(succeed=[], failed=[source.feed_url])
-
-    if isinstance(source, OpenDart) and source.collection_plan is not None:
-        plan = source.collection_plan
-        if plan.initial:
-            first_date = min((e.published_at.date() for e in entries), default=plan.end_date)
+    finally:
+        if isinstance(source, OpenDart) and source.collection_plan is not None:
+            plan = source.collection_plan
+            first_date = None
+            if plan.initial and entries is not None:
+                first_date = min((e.published_at.date() for e in entries), default=plan.end_date)
             try:
                 with engine.begin() as conn:
-                    remember_initial_from(conn, first_date)
+                    remember_collection_attempt(conn, plan.scheduled_day, first_date)
             except Exception as error:
                 log.exception(
                     "opendart_state_failed",
                     source=source.source,
-                    stage="initial_start",
+                    stage="attempt",
                     error_type=type(error).__name__,
                 )
                 raise
