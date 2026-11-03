@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,3 +20,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     explain_result_chars: int = Field(default=2000, gt=0)
     explain_max_tokens: int = Field(default=16000, gt=0)
+    submitter: Literal["database", "evaluation"] = "database"
+    evaluation_output_dir: str | None = None
+
+    @model_validator(mode="after")
+    def _evaluation_needs_output(self) -> Self:
+        if (self.submitter == "evaluation") != (self.evaluation_output_dir is not None):
+            raise ValueError("evaluation_output_dir is set exactly when submitter is evaluation")
+        return self

@@ -1,7 +1,6 @@
 import threading
 from typing import Annotated
 
-import sqlalchemy as sa
 from ktb_core.logging import StructuredLogger
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
@@ -9,15 +8,14 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from portfolio_builder.errors import PortfolioRejected, ToolError
-from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import (
     Exit,
     Holding,
     Submission,
     normalize_weights,
-    save_portfolio,
     validate_portfolio,
 )
+from portfolio_builder.submitters import PortfolioSubmitter
 from portfolio_builder.tools.binding import bind
 
 
@@ -38,10 +36,8 @@ def submit_portfolio(
     commentary: str,
     tool_call_id: str,
     *,
-    engine: sa.Engine,
+    submitter: PortfolioSubmitter,
     previous: frozenset[str],
-    model: str,
-    news_client: NewsClient,
     log: StructuredLogger,
     lock: threading.Lock,
     saved: list[int],
@@ -55,9 +51,7 @@ def submit_portfolio(
         errors = validate_portfolio(submission, previous)
         if not errors:
             try:
-                saved.append(
-                    save_portfolio(engine, normalize_weights(submission), model, news_client)
-                )
+                saved.append(submitter.submit(normalize_weights(submission)))
             except PortfolioRejected as rejected:
                 errors = rejected.errors
         if errors:
@@ -75,20 +69,14 @@ def submit_portfolio(
 
 
 def submit_tool(
-    engine: sa.Engine,
-    previous: frozenset[str],
-    model: str,
-    news_client: NewsClient,
-    log: StructuredLogger,
+    submitter: PortfolioSubmitter, previous: frozenset[str], log: StructuredLogger
 ) -> BaseTool:
     return StructuredTool.from_function(
         # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.
         bind(
             submit_portfolio,
-            engine=engine,
+            submitter=submitter,
             previous=previous,
-            model=model,
-            news_client=news_client,
             log=log,
             lock=threading.Lock(),
             saved=[],

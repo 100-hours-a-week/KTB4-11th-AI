@@ -75,3 +75,32 @@ def test_explain_defaults(monkeypatch):
 
     assert settings.explain_result_chars == 2000
     assert settings.explain_max_tokens == 16000
+
+
+def test_submitter_defaults_to_the_database(monkeypatch):
+    _populate(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.submitter == "database"
+    assert settings.evaluation_output_dir is None
+
+
+def test_evaluation_submitter_needs_an_output_dir(monkeypatch):
+    _populate(monkeypatch, PORTFOLIO_BUILDER_SUBMITTER="evaluation")
+    with pytest.raises(ValidationError):
+        Settings()
+
+    monkeypatch.setenv("PORTFOLIO_BUILDER_EVALUATION_OUTPUT_DIR", "/evaluation")
+    assert Settings().evaluation_output_dir == "/evaluation"
+
+    monkeypatch.setenv("PORTFOLIO_BUILDER_SUBMITTER", "database")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_rejects_an_unknown_submitter(monkeypatch):
+    _populate(monkeypatch, PORTFOLIO_BUILDER_SUBMITTER="queue")
+
+    with pytest.raises(ValidationError):
+        Settings()

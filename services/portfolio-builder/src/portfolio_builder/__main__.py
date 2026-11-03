@@ -16,8 +16,9 @@ from portfolio_builder.explain import (
 )
 from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
-from portfolio_builder.portfolio import mark_explanation_failed, save_trace
+from portfolio_builder.portfolio import mark_explanation_failed
 from portfolio_builder.settings import Settings
+from portfolio_builder.submitters import create_submitter
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
 from portfolio_builder.tools.submit import submit_tool
@@ -38,8 +39,12 @@ def main() -> None:
     ) as end:
         engine = sa.create_engine(settings.postgres_dsn)
         news_client = NewsClient(settings.news_http_base_uri)
+        evaluating = settings.submitter == "evaluation"
+        submitter = create_submitter(
+            settings, engine, news_client, f"openrouter/{settings.llm_model}"
+        )
         try:
-            unexplained = load_unexplained(engine)
+            unexplained = None if evaluating else load_unexplained(engine)
             if unexplained is None:
                 briefing = load_briefing(engine, news_client, settings.news_window_days)
                 log.info(
@@ -63,13 +68,7 @@ def main() -> None:
                     *news_tools(news_client),
                     *graph_tools(news_client),
                     technicals_tool(engine, HttpMarket(settings.market_http_base_uri, engine)),
-                    submit_tool(
-                        engine,
-                        briefing.previous_company_ids,
-                        f"openrouter/{settings.llm_model}",
-                        news_client,
-                        log,
-                    ),
+                    submit_tool(submitter, briefing.previous_company_ids, log),
                 ]
                 result = run_agent(
                     model=model,
@@ -90,10 +89,12 @@ def main() -> None:
                 portfolio_id, trace = unexplained
                 outcome, error = "reexplained", None
                 log.info("reexplain", portfolio_id=portfolio_id)
-            if portfolio_id is not None:
+            if portfolio_id is not None and evaluating:
+                submitter.save_trace(portfolio_id, trace)
+            elif portfolio_id is not None:
                 try:
                     if unexplained is None:
-                        save_trace(engine, portfolio_id, trace)
+                        submitter.save_trace(portfolio_id, trace)
                     explainer = ChatOpenRouter(
                         model=settings.llm_model,
                         api_key=settings.llm_api_key,

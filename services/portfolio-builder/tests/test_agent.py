@@ -9,6 +9,7 @@ from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from portfolio_builder.agent.hooks.nudge import NUDGE
 from portfolio_builder.agent.run import run_agent
+from portfolio_builder.submitters import DatabaseSubmitter
 from portfolio_builder.tools.submit import submit_tool
 from portfolio_builder.tools.technicals import technicals_tool
 
@@ -69,7 +70,10 @@ def analyze() -> str:
 
 def _run(engine, news_client, replies, max_turns=10, extra_tools=(analyze,)):
     log = Recorder()
-    tools = [submit_tool(engine, frozenset(), "m", news_client, log), *extra_tools]
+    tools = [
+        submit_tool(DatabaseSubmitter(engine, "m", news_client), frozenset(), log),
+        *extra_tools,
+    ]
     result = run_agent(
         model=ScriptedModel(messages=iter(replies)),
         tools=tools,

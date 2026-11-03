@@ -4,6 +4,7 @@ import threading
 import pytest
 import sqlalchemy as sa
 from portfolio_builder.errors import PortfolioRejected, ToolError
+from portfolio_builder.submitters import DatabaseSubmitter
 from portfolio_builder.tools.submit import submit_tool
 
 SAMSUNG = "00126380"
@@ -41,7 +42,9 @@ def _rows(engine):
 
 
 def test_saves_a_normalised_portfolio_and_returns_its_id_in_state(engine, news_client):
-    tool = submit_tool(engine, frozenset(), "openrouter/m", news_client, Recorder())
+    tool = submit_tool(
+        DatabaseSubmitter(engine, "openrouter/m", news_client), frozenset(), Recorder()
+    )
 
     command = tool.invoke(_call(VALID))
 
@@ -54,7 +57,7 @@ def test_saves_a_normalised_portfolio_and_returns_its_id_in_state(engine, news_c
 
 def test_rejection_lists_every_error_and_logs_it(engine, news_client):
     log = Recorder()
-    tool = submit_tool(engine, frozenset(), "m", news_client, log)
+    tool = submit_tool(DatabaseSubmitter(engine, "m", news_client), frozenset(), log)
     bad = {**VALID, "holdings": [{**VALID["holdings"][0], "reason": ""}], "commentary": ""}
 
     with pytest.raises(PortfolioRejected) as rejected:
@@ -69,7 +72,7 @@ def test_rejection_lists_every_error_and_logs_it(engine, news_client):
 
 
 def test_a_save_failure_is_returned_as_a_rejection(engine, news_client):
-    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
+    tool = submit_tool(DatabaseSubmitter(engine, "m", news_client), frozenset(), Recorder())
     bad = {**VALID, "holdings": [{**VALID["holdings"][0], "cited_cluster_ids": [404]}]}
 
     with pytest.raises(PortfolioRejected, match="cited_cluster_ids not found: 404"):
@@ -77,7 +80,7 @@ def test_a_save_failure_is_returned_as_a_rejection(engine, news_client):
 
 
 def test_a_second_submit_is_refused(engine, news_client):
-    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
+    tool = submit_tool(DatabaseSubmitter(engine, "m", news_client), frozenset(), Recorder())
     tool.invoke(_call(VALID))
 
     with pytest.raises(ToolError, match="already saved"):
@@ -86,7 +89,7 @@ def test_a_second_submit_is_refused(engine, news_client):
 
 
 def test_concurrent_submits_write_one_portfolio(engine, news_client):
-    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
+    tool = submit_tool(DatabaseSubmitter(engine, "m", news_client), frozenset(), Recorder())
     outcomes = []
 
     def submit(call_id):
@@ -104,3 +107,28 @@ def test_concurrent_submits_write_one_portfolio(engine, news_client):
 
     assert sorted(outcomes) == ["refused", "refused", "refused", "saved"]
     assert len(_rows(engine)) == 1
+
+
+class Collecting:
+    def __init__(self):
+        self.submissions = []
+
+    def submit(self, submission):
+        self.submissions.append(submission)
+        return 0
+
+    def save_trace(self, portfolio_id, trace):
+        pass
+
+
+def test_the_tool_delegates_to_the_injected_submitter():
+    submitter = Collecting()
+    tool = submit_tool(submitter, frozenset(), Recorder())
+
+    command = tool.invoke(_call(VALID))
+
+    assert command.update["portfolio_id"] == 0
+    [submission] = submitter.submissions
+    assert submission.cash_weight == pytest.approx(0.25)
+    with pytest.raises(ToolError, match="already saved"):
+        tool.invoke(_call(VALID, "c2"))

@@ -3,6 +3,7 @@ import json
 import pytest
 import talib
 from portfolio_builder import __main__ as entry
+from portfolio_builder import submitters
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.briefing import Briefing
@@ -29,7 +30,9 @@ def env(monkeypatch):
     monkeypatch.setattr(entry, "NewsClient", lambda uri: object())
     monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: BRIEFING)
     calls = {}
-    monkeypatch.setattr(entry, "save_trace", lambda engine, pid, trace: calls.update(trace=pid))
+    monkeypatch.setattr(
+        submitters, "save_trace", lambda engine, pid, trace: calls.update(trace=pid)
+    )
     monkeypatch.setattr(entry, "load_unexplained", lambda engine: None)
     monkeypatch.setattr(entry, "load_targets", lambda engine, pid: [])
     monkeypatch.setattr(entry, "explain", lambda *args: Explanations(stocks=[]))
@@ -194,3 +197,41 @@ def test_a_failed_reexplanation_stays_failed_and_exits_one(env, monkeypatch, cap
     assert exit_.value.code == 1
     assert env == {"failed": 5}
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "explanation_failed"
+
+
+def test_evaluation_mode_dumps_the_submission_without_database_writes(
+    env, monkeypatch, capsys, tmp_path
+):
+    monkeypatch.setenv("PORTFOLIO_BUILDER_SUBMITTER", "evaluation")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_EVALUATION_OUTPUT_DIR", str(tmp_path))
+    monkeypatch.setattr(entry, "load_unexplained", lambda engine: pytest.fail("read retry queue"))
+    monkeypatch.setattr(entry, "explain", lambda *args: pytest.fail("explained"))
+    trace = [TraceEntry(turn=1, kind="model", text="삼성 사요")]
+
+    def fake_run_agent(**kwargs):
+        [submit] = [t for t in kwargs["tools"] if t.name == "submit_portfolio"]
+        args = {
+            "holdings": [{"company_id": "00126380", "weight": 1, "reason": "HBM",
+                          "cited_cluster_ids": []}],
+            "exits": [],
+            "cash_weight": 1,
+            "commentary": "c",
+        }  # fmt: skip
+        command = submit.invoke(
+            {"name": "submit_portfolio", "args": args, "id": "c1", "type": "tool_call"}
+        )
+        return RunResult("saved", command.update["portfolio_id"], 1, {}, trace=trace)
+
+    monkeypatch.setattr(entry, "run_agent", fake_run_agent)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    assert env == {}
+    submission = json.loads((tmp_path / "submission.json").read_text())
+    assert submission["model"] == "openrouter/openai/gpt-5.5"
+    assert submission["cash_weight"] == 0.5
+    assert submission["holdings"][0]["weight"] == 0.5
+    assert json.loads((tmp_path / "trace.json").read_text())[0]["text"] == "삼성 사요"
+    assert _events(capsys.readouterr().out)[-1]["outcome"] == "saved"
