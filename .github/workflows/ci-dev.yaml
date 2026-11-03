@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git diff --name-only "$BASE_SHA...$GITHUB_SHA"
+            git diff --name-only --no-renames "$BASE_SHA...$GITHUB_SHA"
           else
             echo "::notice::Base commit unavailable; checking every workspace member" >&2
             echo uv.lock
@@ -332,8 +332,8 @@ jobs:
           fi
 
   deploy-dev:
-    needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+    needs: [detect-changes, lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.build-app-image.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
     permissions:
       contents: read
     uses: ./.github/workflows/cd-dev.yaml
