@@ -70,10 +70,26 @@ def test_a_different_model_changes_the_key(_settings):
     assert generation_key(_settings(), None, "other") != generation_key(_settings(), None, MODEL)
 
 
-def test_theme_code_order_does_not_change_the_key(_settings):
-    assert generation_key(_settings(interested_theme_codes=("T1", "T2")), None, MODEL) == (
-        generation_key(_settings(interested_theme_codes=("T1", "T2")), None, MODEL)
+def test_theme_code_order_does_not_change_the_key(engine, _request):
+    a, _ = store_settings(engine, _request(participant_id=1, interested_theme_codes=["T1", "T2"]))
+    b, _ = store_settings(engine, _request(participant_id=2, interested_theme_codes=["T2", "T1"]))
+    assert generation_key(a, None, MODEL) == generation_key(b, None, MODEL)
+
+
+def test_a_theme_code_in_both_lists_ends_up_excluded_only(engine, _request):
+    settings, _ = store_settings(
+        engine,
+        _request(interested_theme_codes=["T1", "T2"], excluded_theme_codes=["T2"]),
     )
+
+    assert settings.interested_theme_codes == ("T1",)
+    assert settings.excluded_theme_codes == ("T2",)
+
+
+def test_duplicate_incoming_theme_codes_collapse_in_the_stored_snapshot(engine, _request):
+    settings, _ = store_settings(engine, _request(interested_theme_codes=["T1", "T1", "T2"]))
+
+    assert settings.interested_theme_codes == ("T1", "T2")
 
 
 def test_the_first_claim_is_mine_and_a_concurrent_claim_is_not(engine, _request):
