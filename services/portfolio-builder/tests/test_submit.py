@@ -183,6 +183,30 @@ def test_a_theme_code_no_longer_in_themes_excludes_nothing(engine):
     assert excluded_company_ids(engine, ["T1"]) == frozenset()
 
 
+def test_declared_constraints_are_stored_on_the_portfolio(engine, news_client):
+    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
+
+    tool.invoke(_call({**VALID, "constraints": {"max_holdings": 5}}))
+
+    with engine.connect() as conn:
+        stored = conn.execute(
+            sa.text("SELECT acknowledged_constraints FROM portfolios")
+        ).scalar_one()
+    assert stored == {"max_holdings": 5, "max_weight_per_holding": None, "min_cash_weight": None}
+
+
+def test_no_declared_constraints_store_null(engine, news_client):
+    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
+
+    tool.invoke(_call(VALID))
+
+    with engine.connect() as conn:
+        assert (
+            conn.execute(sa.text("SELECT acknowledged_constraints FROM portfolios")).scalar_one()
+            is None
+        )
+
+
 def test_excluding_every_company_leaves_a_cash_only_portfolio_submittable(engine, news_client):
     every = excluded_company_ids(engine, ["T1"]) | {LGES}
     tool = submit_tool(engine, frozenset(), "m", news_client, Recorder(), excluded=every)

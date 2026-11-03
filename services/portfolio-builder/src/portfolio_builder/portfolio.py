@@ -30,11 +30,18 @@ class Exit(BaseModel):
     cited_cluster_ids: CitedClusters
 
 
+class Constraints(BaseModel):
+    max_holdings: int | None = None
+    max_weight_per_holding: float | None = None
+    min_cash_weight: float | None = None
+
+
 class Submission(BaseModel):
     holdings: list[Holding]
     exits: list[Exit]
     cash_weight: float
     commentary: str
+    constraints: Constraints = Constraints()
 
 
 def excluded_company_ids(engine: sa.Engine, excluded_theme_codes: Sequence[str]) -> frozenset[str]:
@@ -94,6 +101,32 @@ def validate_portfolio(
         errors.append("weights and cash_weight sum to 0 or less; at least one must be positive")
     if not submission.commentary.strip():
         errors.append("commentary must not be empty")
+    if math.isfinite(total) and total > 0:
+        errors.extend(validate_constraints(normalize_weights(submission)))
+    return errors
+
+
+def validate_constraints(submission: Submission) -> list[str]:
+    errors: list[str] = []
+    constraints = submission.constraints
+    holdings = submission.holdings
+    if constraints.max_holdings is not None and len(holdings) > constraints.max_holdings:
+        errors.append(
+            f"constraints: {len(holdings)} holdings exceeds max_holdings {constraints.max_holdings}"
+        )
+    if constraints.max_weight_per_holding is not None:
+        for holding in holdings:
+            if holding.weight > constraints.max_weight_per_holding:
+                errors.append(
+                    f"constraints: {holding.company_id} weight {holding.weight} exceeds"
+                    f" max_weight_per_holding {constraints.max_weight_per_holding}"
+                )
+    min_cash_weight = constraints.min_cash_weight
+    if min_cash_weight is not None and submission.cash_weight < min_cash_weight:
+        errors.append(
+            f"constraints: cash_weight {submission.cash_weight} is below"
+            f" min_cash_weight {constraints.min_cash_weight}"
+        )
     return errors
 
 
@@ -118,6 +151,8 @@ def save_portfolio(
     missing = [c for c in cited if not news_client.has_cluster(c)]
     if missing:
         raise PortfolioRejected([f"cited_cluster_ids not found: {', '.join(map(str, missing))}"])
+    constraints = submission.constraints.model_dump()
+    acknowledged_constraints = None if all(v is None for v in constraints.values()) else constraints
     try:
         with engine.begin() as conn:
             portfolio_id = conn.execute(
@@ -126,6 +161,7 @@ def save_portfolio(
                     cash_weight=submission.cash_weight,
                     commentary=submission.commentary,
                     model=model,
+                    acknowledged_constraints=acknowledged_constraints,
                 )
                 .returning(portfolios.c.id)
             ).scalar_one()
