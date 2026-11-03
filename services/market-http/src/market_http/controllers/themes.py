@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Path, Request
 
 from market_http.controllers.dependencies import CODE, Valkey
-from market_http.repositories.themes import StockTheme, Theme, ThemeStock
+from market_http.repositories.themes import StockTheme, ThemeGroup, ThemeStock
 from market_http.services.themes import get_stock_themes, get_theme_stocks, get_themes
 
 router = APIRouter()
@@ -35,19 +35,19 @@ async def _read[T](request: Request, query: Callable[[sa.Engine], Awaitable[T]])
 @router.get(
     "/themes",
     description=(
-        "Returns every theme, most traded first: member trade value total descending, then"
-        f" member count descending, then `code` ascending. {TRADE_VALUE} {SNAPSHOT_NOTICE}"
+        "Returns KOSPI 200 themes (at least one member), grouped by the prefix before `_`,"
+        f" with others under 기타. Themes rank by KOSPI 200 member trade value descending, then KOSPI 200 member count descending, then `code` ascending. Items retain ranked order; groups follow the first-ranked item. {TRADE_VALUE} {SNAPSHOT_NOTICE}"
     ),
     responses=ERRORS,
 )
-async def list_all_themes(request: Request, valkey: Valkey) -> list[Theme]:
+async def list_all_themes(request: Request, valkey: Valkey) -> list[ThemeGroup]:
     return await _read(request, lambda engine: get_themes(engine, valkey))
 
 
 @router.get(
     "/themes/{code}/stocks",
     description=(
-        "Returns every KOSPI stock in the theme, most traded first: trade value descending,"
+        "Returns every KOSPI 200 stock in the theme, most traded first: trade value descending,"
         " stocks without trade value last, then major stocks first, then stock `code`"
         f" ascending. {TRADE_VALUE} {SNAPSHOT_NOTICE}"
     ),
@@ -65,7 +65,7 @@ async def list_theme_stocks(
 @router.get(
     "/stocks/{code}/themes",
     description=(
-        "Returns themes containing the stock, most traded first: member trade value total"
+        "Returns themes containing the KOSPI 200 stock, most traded first: member trade value total"
         " descending, then member count descending, then theme `code` ascending."
         f" {TRADE_VALUE} {SNAPSHOT_NOTICE}"
     ),
