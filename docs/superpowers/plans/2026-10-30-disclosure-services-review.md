@@ -111,6 +111,8 @@ or position sizing. The text is not inserted into a model prompt or logged by th
   CI traverses reverse dependencies for workspace services as well as packages, so a
   retrieval-only change also tests/builds portfolio-builder. Image jobs include only
   services with Dockerfiles; indexer requirements are checked against uv.lock.
+  The actual CI shell script was exercised with retrieval-only, indexer-only, core-only
+  and full-workspace inputs. All expected dependent test/build targets were present.
 - Ruff, formatting, Tach internal and external dependencies, and diff checks pass.
 - Retrieval tests call Python functions directly and retain PostgreSQL search,
   correction, source-identity, history, candidate-50, and reranking cases. HTTP endpoint
