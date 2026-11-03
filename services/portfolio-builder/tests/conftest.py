@@ -1,5 +1,8 @@
 import pytest
 import sqlalchemy as sa
+from portfolio_builder.competition.message import Request
+from portfolio_builder.competition.repository import ParticipantSettings
+from portfolio_builder.database import portfolios
 
 TABLES = (
     "competition_jobs, competition_portfolios, competition_participants,"
@@ -70,3 +73,58 @@ def news_client():
             return cluster_id != 404
 
     return Stub()
+
+
+_REQUEST_DEFAULTS = {
+    "competition_id": 10,
+    "participant_id": 1,
+    "user_id": 100,
+    "risk_profile": "성장형",
+    "interested_theme_codes": ["T1"],
+    "excluded_theme_codes": [],
+    "additional_request": "원문",
+}
+
+_SETTINGS_DEFAULTS = {
+    "participant_id": 1,
+    "competition_id": 10,
+    "user_id": 100,
+    "risk_profile": "성장형",
+    "interested_theme_codes": ("T1",),
+    "excluded_theme_codes": (),
+    "additional_request": "원문",
+}
+
+_PORTFOLIO_DEFAULTS = {
+    "cash_weight": 0.1,
+    "commentary": "c",
+    "model": "m",
+}
+
+
+@pytest.fixture
+def _request():
+    def make(**changes) -> Request:
+        return Request(**{**_REQUEST_DEFAULTS, **changes})
+
+    return make
+
+
+@pytest.fixture
+def _settings():
+    def make(**changes) -> ParticipantSettings:
+        return ParticipantSettings(**{**_SETTINGS_DEFAULTS, **changes})
+
+    return make
+
+
+@pytest.fixture
+def _insert_portfolio():
+    def make(engine: sa.Engine, **columns) -> int:
+        values = {**_PORTFOLIO_DEFAULTS, **columns}
+        with engine.begin() as conn:
+            return conn.execute(
+                sa.insert(portfolios).values(**values).returning(portfolios.c.id)
+            ).scalar_one()
+
+    return make
