@@ -28,3 +28,4 @@ class Settings(BaseSettings):
     backend_jwt_secret: SecretStr = SecretStr("")
     backend_jwt_issuer: str = ""
     backend_timeout: int = Field(default=10, gt=0)
+    aws_region: str = "ap-northeast-2"

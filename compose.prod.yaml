@@ -353,6 +353,23 @@ services:
       news-http:
         condition: service_started
 
+  competition-portfolio-builder:
+    <<: *app
+    profiles: ["competition"]
+    command: ["competition-portfolio-builder"]
+    env_file: /etc/stockspoon/ai.env
+    mem_limit: 768m
+    restart: unless-stopped
+    environment:
+      <<: *postgres-environment
+      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:?PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI must be set}
+      PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI:-http://news-http:8000}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      news-http:
+        condition: service_started
+
 volumes:
   postgres-data:
   questdb-data:

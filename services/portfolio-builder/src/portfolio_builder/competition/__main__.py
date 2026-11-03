@@ -34,6 +34,7 @@ def main() -> None:
     logger.info("worker_started")
     sqs = boto3.client(
         "sqs",
+        region_name=settings.aws_region,
         config=Config(connect_timeout=10, read_timeout=25, retries={"max_attempts": 1}),
     )
     queue_url = settings.competition_queue_url
