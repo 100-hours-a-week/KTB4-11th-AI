@@ -9,11 +9,9 @@ from redis.exceptions import RedisError
 
 from market_http.repositories.rankings import trade_values
 from market_http.repositories.themes import (
-    StockTheme,
     Theme,
     ThemeGroup,
     ThemeStock,
-    find_stock_themes,
     find_theme_stocks,
     list_themes,
 )
@@ -29,9 +27,9 @@ async def _trade_values(valkey: Redis, codes: list[str]) -> dict[str, float]:
         return {}
 
 
-def _by_member_trade_value[T: Theme | StockTheme](
-    entries: list[tuple[T, list[str]]], values: dict[str, float]
-) -> list[T]:
+def _by_member_trade_value(
+    entries: list[tuple[Theme, list[str]]], values: dict[str, float]
+) -> list[Theme]:
     ranked = sorted(
         entries,
         key=lambda entry: (
@@ -80,13 +78,3 @@ async def get_theme_stocks(
             stock.code,
         ),
     )
-
-
-async def get_stock_themes(
-    engine: sa.Engine, valkey: Redis, stock_code: str
-) -> list[StockTheme] | None:
-    entries = await asyncio.to_thread(find_stock_themes, engine, stock_code)
-    if not entries:
-        return None if entries is None else []
-    values = await _trade_values(valkey, [code for _, members in entries for code in members])
-    return _by_member_trade_value(entries, values)
