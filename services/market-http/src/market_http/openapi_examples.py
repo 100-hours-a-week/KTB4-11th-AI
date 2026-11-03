@@ -78,6 +78,8 @@ RANKING_EXAMPLE = {
 
 THEME_EXAMPLE = {"code": "T001", "name": "반도체"}
 
+THEME_GROUP_EXAMPLE = {"name": "반도체", "items": [{"code": "550", "name": "생산"}]}
+
 THEME_STOCK_EXAMPLE = {"code": "005930", "name": "삼성전자", "is_major": True}
 
 STOCK_THEME_EXAMPLE = {"code": "T001", "name": "반도체", "is_major": True}
