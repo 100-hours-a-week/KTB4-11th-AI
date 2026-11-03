@@ -96,7 +96,7 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
                 "corporation_aliases",
                 "corporation_indices",
                 "themes",
-                "theme_companies",
+                "theme_corporations",
             },
         ),
         (
@@ -224,7 +224,7 @@ def test_theme_memberships_cascade_from_themes_and_corporations(pg_dsn, pg_engin
             )
             conn.execute(
                 sa.text(
-                    "INSERT INTO theme_companies (theme_code, stock_code, is_major)"
+                    "INSERT INTO theme_corporations (theme_code, stock_code, is_major)"
                     " VALUES ('1', '005930', true), ('2', '000660', false)"
                 )
             )
@@ -232,11 +232,13 @@ def test_theme_memberships_cascade_from_themes_and_corporations(pg_dsn, pg_engin
             conn.execute(sa.text("DELETE FROM themes WHERE theme_code = '1'"))
             conn.execute(sa.text("DELETE FROM corporations WHERE stock_code = '000660'"))
         with pg_engine.connect() as conn:
-            remaining = conn.execute(sa.text("SELECT count(*) FROM theme_companies")).scalar_one()
+            remaining = conn.execute(
+                sa.text("SELECT count(*) FROM theme_corporations")
+            ).scalar_one()
         assert remaining == 0
     finally:
         with pg_engine.begin() as conn:
-            conn.execute(sa.text("TRUNCATE theme_companies, themes, corporations CASCADE"))
+            conn.execute(sa.text("TRUNCATE theme_corporations, themes, corporations CASCADE"))
 
 
 def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypatch):
@@ -250,7 +252,9 @@ def test_downgrade_to_0003_removes_the_theme_tables(pg_dsn, pg_engine, monkeypat
 
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
-        assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is not None
+        assert (
+            conn.execute(sa.text("SELECT to_regclass('theme_corporations')")).scalar() is not None
+        )
 
 
 def test_a_reason_side_is_buy_or_sell(pg_dsn, pg_engine, monkeypatch):
@@ -444,7 +448,7 @@ def _truncate_reference_tables(pg_engine) -> None:
     with pg_engine.begin() as conn:
         conn.execute(
             sa.text(
-                "TRUNCATE corporation_indices, theme_companies, themes, corporation_aliases,"
+                "TRUNCATE corporation_indices, theme_corporations, themes, corporation_aliases,"
                 " entities, corporations CASCADE"
             )
         )
@@ -475,7 +479,7 @@ def test_upgrade_to_0006_rekeys_every_reference_by_stock_code(pg_dsn, pg_engine,
             ).all()
             memberships = conn.execute(
                 sa.text(
-                    "SELECT theme_code, stock_code, is_major FROM theme_companies"
+                    "SELECT theme_code, stock_code, is_major FROM theme_corporations"
                     " ORDER BY stock_code"
                 )
             ).all()
@@ -690,8 +694,8 @@ def test_0006_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch
             "corporation_indices_pkey",
             ["stock_code", "index_name"],
         )
-        assert _primary_key_columns(conn, "theme_companies") == (
-            "theme_companies_pkey",
+        assert _primary_key_columns(conn, "theme_corporations") == (
+            "theme_corporations_pkey",
             ["theme_code", "stock_code"],
         )
         assert _constraints(conn, "corporations", "u") == {
@@ -706,9 +710,9 @@ def test_0006_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch
             "market",
             "synced_at",
         }
-        assert "corp_code" not in _columns(conn, "entities") | _columns(conn, "theme_companies")
-        assert {"is_major"} <= _columns(conn, "theme_companies")
-        assert "is_main" not in _columns(conn, "theme_companies")
+        assert "corp_code" not in _columns(conn, "entities") | _columns(conn, "theme_corporations")
+        assert {"is_major"} <= _columns(conn, "theme_corporations")
+        assert "is_main" not in _columns(conn, "theme_corporations")
 
         target = "REFERENCES corporations(stock_code)"
         assert _constraints(conn, "corporation_aliases", "f") == {
@@ -721,7 +725,7 @@ def test_0006_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch
             "corporation_indices_stock_code_fkey": f"FOREIGN KEY (stock_code) {target}"
         }
         assert (
-            _constraints(conn, "theme_companies", "f")["theme_companies_stock_code_fkey"]
+            _constraints(conn, "theme_corporations", "f")["theme_corporations_stock_code_fkey"]
             == f"FOREIGN KEY (stock_code) {target} ON DELETE CASCADE"
         )
 
@@ -732,7 +736,7 @@ def test_0006_keys_reference_tables_by_stock_code(pg_dsn, pg_engine, monkeypatch
         assert entity_indexes["entities_name_type_key"].endswith(
             "USING btree (name, type) WHERE (stock_code IS NULL)"
         )
-        assert "theme_companies_stock_code_idx" in _indexes(conn, "theme_companies")
+        assert "theme_corporations_stock_code_idx" in _indexes(conn, "theme_corporations")
 
 
 def test_portfolio_rows_reference_corporations_and_cascade_from_portfolios(
@@ -811,3 +815,61 @@ def test_downgrade_to_0004_removes_the_portfolio_tables(pg_dsn, pg_engine, monke
     command.upgrade(config, "head")
     with pg_engine.connect() as conn:
         assert conn.execute(sa.text("SELECT to_regclass('portfolios')")).scalar() is not None
+
+
+def test_0012_renames_theme_companies_keeping_memberships(pg_dsn, pg_engine, monkeypatch):
+    monkeypatch.setenv("KTB_POSTGRES_DSN", pg_dsn)
+    config = _alembic_config()
+    memberships_query = "SELECT theme_code, stock_code, is_major FROM {} ORDER BY stock_code"
+    expected = [("1", "000660", False), ("1", "005930", True)]
+
+    def schema_names(conn, table: str) -> set[str]:
+        return (
+            set(_constraints(conn, table, "p"))
+            | set(_constraints(conn, table, "f"))
+            | set(_indexes(conn, table))
+        )
+
+    command.downgrade(config, "0011")
+    try:
+        with pg_engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO corporations (stock_code, corp_code, name)"
+                    " VALUES ('005930', '00126380', '삼성전자'), ('000660', '00164779',"
+                    " 'SK하이닉스')"
+                )
+            )
+            conn.execute(sa.text("INSERT INTO themes (theme_code, name) VALUES ('1', 'HBM')"))
+            conn.execute(
+                sa.text(
+                    "INSERT INTO theme_companies (theme_code, stock_code, is_major)"
+                    " VALUES ('1', '005930', true), ('1', '000660', false)"
+                )
+            )
+
+        command.upgrade(config, "0012")
+        with pg_engine.connect() as conn:
+            assert conn.execute(sa.text("SELECT to_regclass('theme_companies')")).scalar() is None
+            rows = conn.execute(sa.text(memberships_query.format("theme_corporations"))).all()
+            assert rows == expected
+            assert schema_names(conn, "theme_corporations") == {
+                "theme_corporations_pkey",
+                "theme_corporations_theme_code_fkey",
+                "theme_corporations_stock_code_fkey",
+                "theme_corporations_stock_code_idx",
+            }
+
+        command.downgrade(config, "0011")
+        with pg_engine.connect() as conn:
+            rows = conn.execute(sa.text(memberships_query.format("theme_companies"))).all()
+            assert rows == expected
+            assert schema_names(conn, "theme_companies") == {
+                "theme_companies_pkey",
+                "theme_companies_theme_code_fkey",
+                "theme_companies_stock_code_fkey",
+                "theme_companies_stock_code_idx",
+            }
+    finally:
+        command.upgrade(config, "head")
+        _truncate_reference_tables(pg_engine)

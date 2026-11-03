@@ -8,7 +8,7 @@ from news_http.repositories.tables import (
     clusters,
     corporations,
     entities,
-    theme_companies,
+    theme_corporations,
     themes,
 )
 
@@ -62,13 +62,13 @@ def get_recent_news(conn: sa.Connection, days: int) -> dict[str, object]:
                 sa.select(
                     corporations.c.corp_code.label("company_id"),
                     themes.c.name,
-                    theme_companies.c.is_major,
+                    theme_corporations.c.is_major,
                 )
-                .select_from(theme_companies)
-                .join(themes, themes.c.theme_code == theme_companies.c.theme_code)
-                .join(corporations, corporations.c.stock_code == theme_companies.c.stock_code)
+                .select_from(theme_corporations)
+                .join(themes, themes.c.theme_code == theme_corporations.c.theme_code)
+                .join(corporations, corporations.c.stock_code == theme_corporations.c.stock_code)
                 .where(corporations.c.corp_code.in_(companies))
-                .order_by(theme_companies.c.is_major.desc(), themes.c.name)
+                .order_by(theme_corporations.c.is_major.desc(), themes.c.name)
             ).mappings()
             for theme in theme_rows:
                 label = f"{theme['name']} (main)" if theme["is_major"] else theme["name"]

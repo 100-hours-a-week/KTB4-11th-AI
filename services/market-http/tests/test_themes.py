@@ -38,8 +38,8 @@ def engine():
         )
         conn.execute(
             sa.text(
-                "CREATE TABLE theme_companies (theme_code TEXT, stock_code TEXT, is_major BOOLEAN,"
-                " PRIMARY KEY (theme_code, stock_code))"
+                "CREATE TABLE theme_corporations (theme_code TEXT, stock_code TEXT,"
+                " is_major BOOLEAN, PRIMARY KEY (theme_code, stock_code))"
             )
         )
         conn.execute(
@@ -64,9 +64,10 @@ def engine():
         )
         conn.execute(
             sa.text(
-                "INSERT INTO theme_companies VALUES ('T001', '373220', 0), ('T001', '005930', 0),"
-                " ('T001', '111111', 1), ('T001', '000660', 0), ('T002', '035420', 0),"
-                " ('T002', '005930', 1), ('T004', '005930', 0), ('T005', '035420', 0)"
+                "INSERT INTO theme_corporations VALUES ('T001', '373220', 0),"
+                " ('T001', '005930', 0), ('T001', '111111', 1), ('T001', '000660', 0),"
+                " ('T002', '035420', 0), ('T002', '005930', 1), ('T004', '005930', 0),"
+                " ('T005', '035420', 0)"
             )
         )
     yield engine

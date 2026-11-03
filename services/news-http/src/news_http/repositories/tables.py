@@ -59,8 +59,8 @@ themes = sa.Table(
     sa.Column("name", sa.Text, nullable=False),
 )
 
-theme_companies = sa.Table(
-    "theme_companies",
+theme_corporations = sa.Table(
+    "theme_corporations",
     metadata,
     sa.Column("theme_code", sa.Text, sa.ForeignKey("themes.theme_code"), primary_key=True),
     sa.Column("stock_code", sa.Text, sa.ForeignKey("corporations.stock_code"), primary_key=True),

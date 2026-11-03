@@ -33,7 +33,7 @@ def list_themes(engine: sa.Engine) -> list[tuple[Theme, list[str]]]:
             sa.text("SELECT theme_code AS code, name FROM themes ORDER BY theme_code")
         ).mappings()
         result = {row["code"]: (Theme.model_validate(row), []) for row in themes}
-        members = conn.execute(sa.text("SELECT theme_code, stock_code FROM theme_companies"))
+        members = conn.execute(sa.text("SELECT theme_code, stock_code FROM theme_corporations"))
         for theme_code, stock_code in members:
             result[theme_code][1].append(stock_code)
     return list(result.values())
@@ -49,7 +49,7 @@ def find_theme_stocks(engine: sa.Engine, theme_code: str) -> list[ThemeStock] | 
         rows = conn.execute(
             sa.text(
                 "SELECT tc.stock_code AS code, c.name, tc.is_major"
-                " FROM theme_companies tc"
+                " FROM theme_corporations tc"
                 " JOIN corporations c ON c.stock_code = tc.stock_code"
                 " WHERE tc.theme_code = :code"
                 " ORDER BY tc.stock_code"
@@ -71,9 +71,9 @@ def find_stock_themes(
         rows = conn.execute(
             sa.text(
                 "SELECT t.theme_code AS code, t.name, tc.is_major, m.stock_code AS member"
-                " FROM theme_companies tc"
+                " FROM theme_corporations tc"
                 " JOIN themes t ON t.theme_code = tc.theme_code"
-                " JOIN theme_companies m ON m.theme_code = tc.theme_code"
+                " JOIN theme_corporations m ON m.theme_code = tc.theme_code"
                 " WHERE tc.stock_code = :code"
                 " ORDER BY t.theme_code, m.stock_code"
             ),
