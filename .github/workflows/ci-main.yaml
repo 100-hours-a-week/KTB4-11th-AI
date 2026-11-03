@@ -46,7 +46,8 @@ jobs:
               - .python-version
               - .dockerignore
               - infrastructure/**
-              - .github/workflows/ci-*.yaml
+              - .github/workflows/**
+              - scripts/**
             members:
               - packages/**
               - services/**
@@ -67,9 +68,15 @@ jobs:
           else
             members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
             for member in $members; do
-              if [[ "$member" == packages/* ]]; then
-                members+=$'\n'$(uv tree --invert --frozen --no-dev --package "ktb-${member#packages/}" \
-                  | tail -n +2 | sed -E 's/^[^a-z]*//; s/ v[0-9].*//; /^ktb-/!s#^#services/#; s#^ktb-#packages/#')
+              if [[ "$member" == packages/* && -d "$member" ]]; then
+                package="ktb-${member#packages/}"
+                tree=$(uv tree --invert --frozen --universal --no-dev --package "$package")
+                if [[ -z "$tree" ]]; then
+                  echo "::error::$member is not the workspace package $package"
+                  exit 1
+                fi
+                members+=$'\n'$(tail -n +2 <<< "$tree" \
+                  | sed -E 's/^[^a-z]*//; s/ v[0-9].*//; /^ktb-/!s#^#services/#; s#^ktb-#packages/#')
               fi
             done
           fi
