@@ -92,6 +92,12 @@ def test_competition_settings_default_to_unset(monkeypatch):
     assert settings.backend_timeout == 10
 
 
+def test_aws_region_defaults_to_ap_northeast_2(monkeypatch):
+    _populate(monkeypatch)
+
+    assert Settings().aws_region == "ap-northeast-2"
+
+
 def test_the_existing_cron_settings_still_load_without_any_competition_variable(monkeypatch):
     _populate(monkeypatch)
 
