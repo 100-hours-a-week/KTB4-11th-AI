@@ -84,22 +84,32 @@ def client(engine):
 
 
 def _flatten(groups):
-    return [(item["code"], group["name"], item["name"]) for group in groups for item in group["items"]]
+    return [
+        (item["code"], group["name"], item["name"])
+        for group in groups
+        for item in group["items"]
+    ]
 
 
 def test_themes_are_grouped_after_ranking_kospi200_members(client):
     response = client.get("/themes")
     assert response.status_code == 200
     assert response.json() == [
-        {"name": "반도체", "items": [
-            {"code": "T001", "name": "생산"},
-            {"code": "T006", "name": "후공정장비"},
-        ]},
-        {"name": "기타", "items": [
-            {"code": "T002", "name": "인공지능"},
-            {"code": "T004", "name": "스마트폰"},
-            {"code": "T005", "name": "플랫폼"},
-        ]},
+        {
+            "name": "반도체",
+            "items": [
+                {"code": "T001", "name": "생산"},
+                {"code": "T006", "name": "후공정장비"},
+            ],
+        },
+        {
+            "name": "기타",
+            "items": [
+                {"code": "T002", "name": "인공지능"},
+                {"code": "T004", "name": "스마트폰"},
+                {"code": "T005", "name": "플랫폼"},
+            ],
+        },
         {"name": "자동차", "items": [{"code": "T008", "name": "전장"}]},
     ]
     assert len(_flatten(response.json())) == 6
@@ -138,9 +148,12 @@ def test_orders_fall_back_to_kospi200_member_count_and_code(engine, valkey):
         themes = _flatten(client.get("/themes").json())
         stocks = [stock["code"] for stock in client.get("/themes/T001/stocks").json()]
     assert themes == [
-        ("T001", "반도체", "생산"), ("T006", "반도체", "후공정장비"),
-        ("T002", "기타", "인공지능"), ("T004", "기타", "스마트폰"),
-        ("T005", "기타", "플랫폼"), ("T008", "자동차", "전장"),
+        ("T001", "반도체", "생산"),
+        ("T006", "반도체", "후공정장비"),
+        ("T002", "기타", "인공지능"),
+        ("T004", "기타", "스마트폰"),
+        ("T005", "기타", "플랫폼"),
+        ("T008", "자동차", "전장"),
     ]
     assert stocks == ["000660", "005930"]
 
@@ -152,7 +165,8 @@ def test_relation_is_identical_in_both_directions(client):
                 reverse = client.get(f"/stocks/{stock['code']}/themes").json()
                 original_name = (
                     f"{group['name']}_{theme['name']}"
-                    if group["name"] != "기타" else theme["name"]
+                    if group["name"] != "기타"
+                    else theme["name"]
                 )
                 assert {
                     "code": theme["code"],
@@ -208,9 +222,13 @@ def test_openapi_documents_grouping_kospi200_and_snapshot_boundary(client):
     for path in ("/themes", "/themes/{code}/stocks", "/stocks/{code}/themes"):
         operation = paths[path]["get"]
         assert "point-in-time" in operation["description"]
-        assert operation["responses"]["200"]["content"]["application/json"]["schema"]["type"] == "array"
+        assert (
+            operation["responses"]["200"]["content"]["application/json"]["schema"]["type"]
+            == "array"
+        )
     assert "KOSPI 200" in paths["/themes"]["get"]["description"]
     assert "grouped" in paths["/themes"]["get"]["description"]
     assert "trade value descending" in paths["/themes/{code}/stocks"]["get"]["description"]
-    assert {p["name"] for p in paths["/themes/{code}/stocks"]["get"]["parameters"]} == {"code"}
+    stocks = paths["/themes/{code}/stocks"]["get"]
+    assert {p["name"] for p in stocks["parameters"]} == {"code"}
     assert {p["name"] for p in paths["/themes"]["get"].get("parameters", [])} == set()
