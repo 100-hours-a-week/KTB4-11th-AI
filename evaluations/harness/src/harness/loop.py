@@ -1,25 +1,31 @@
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from time import perf_counter
 
-from ktb_core.krx import KST
+from ktb_core.krx import KST, last_closed_date
 
 from harness.contracts import (
     Clock,
     DecisionContext,
+    DecisionFailed,
     DecisionSystem,
+    Hold,
+    InformationProvider,
+    PortfolioProposal,
     PortfolioState,
     PriceSource,
 )
-from harness.market import MarketData, close_at
-from harness.records import Episode, EpisodeFailed, Failure, Submission
+from harness.market import MarketData
+from harness.records import DecisionFailure, DecisionRecord, Episode, EpisodeFailed, Failure
 from harness.simulator import ExecutionSimulator
 from harness.validation import normalize, validate
 
 SIZING_LOOKBACK = timedelta(days=31)
+COVERAGE_LOOKAHEAD = timedelta(days=14)
 
 
 @dataclass(frozen=True)
-class ExperimentSpec:
+class EpisodeSpec:
     universe: tuple[str, ...]
     initial_capital: float
     decision_times: tuple[datetime, ...]
@@ -29,7 +35,11 @@ class ExperimentSpec:
 
 
 def run_episode(
-    spec: ExperimentSpec, decision_system: DecisionSystem, prices: PriceSource, clock: Clock
+    spec: EpisodeSpec,
+    decision_system: DecisionSystem,
+    information: InformationProvider,
+    prices: PriceSource,
+    clock: Clock,
 ) -> Episode:
     times = spec.decision_times
     if any(t.utcoffset() is None for t in (*times, spec.end)):
@@ -42,9 +52,11 @@ def run_episode(
     first_day = times[0].astimezone(KST).date()
     end_kst = spec.end.astimezone(KST)
     end_day = end_kst.date()
-    closed_day = end_day if spec.end >= close_at(end_day) else end_day - timedelta(days=1)
+    closed_day = last_closed_date(spec.end)
     try:
-        market = MarketData(prices, spec.universe, first_day - SIZING_LOOKBACK, end_day)
+        market = MarketData(
+            prices, spec.universe, first_day - SIZING_LOOKBACK, end_day + COVERAGE_LOOKAHEAD
+        )
     except EpisodeFailed as error:
         return Episode(
             spec.initial_capital,
@@ -61,22 +73,25 @@ def run_episode(
     sim = ExecutionSimulator(
         market, spec.initial_capital, spec.fee_rate, spec.sell_tax_rate, times[0], spec.end
     )
-    submissions: list[Submission] = []
+    decisions: list[DecisionRecord] = []
     failure = None
     try:
         for t in times:
             sim.advance(t)
             clock.set(t)
-            proposal = decision_system.decide(DecisionContext(t, sim.state, spec.universe))
-            errors = tuple(validate(proposal, spec.universe))
-            weights = {} if errors else normalize(proposal)
-            submissions.append(Submission(t, errors, weights, {}))
-            if not errors:
-                sim.submit(weights, t)
-                submissions[-1] = replace(submissions[-1], targets=sim.state.pending)
+            context = DecisionContext(t, sim.state, spec.universe)
+            audit: dict[str, object] = {}
+            started = perf_counter()
+            outcome = _decide(decision_system, information, context, audit)
+            elapsed = perf_counter() - started
+            record = _record(t, outcome, spec.universe, audit, elapsed)
+            decisions.append(record)
+            if record.action == "rebalance":
+                sim.submit(record.weights, t)
+                decisions[-1] = replace(record, targets=dict(sim.state.pending))
         sim.advance(spec.end)
-        last = market.dates[-1] if market.dates else None
-        if end_kst.weekday() < 5 and closed_day == end_day and (last is None or last < end_day):
+        covered = any(day >= end_day for day in market.dates)
+        if end_kst.weekday() < 5 and closed_day == end_day and not covered:
             raise EpisodeFailed("price data ends before episode end")
         if sim.state.pending:
             raise EpisodeFailed("orders pending at episode end")
@@ -85,7 +100,7 @@ def run_episode(
 
     return Episode(
         spec.initial_capital,
-        tuple(submissions),
+        tuple(decisions),
         tuple(sim.cancellations),
         tuple(sim.fills),
         tuple(sim.rejections),
@@ -94,3 +109,50 @@ def run_episode(
         sim.state,
         failure,
     )
+
+
+def _decide(
+    decision_system: DecisionSystem,
+    information: InformationProvider,
+    context: DecisionContext,
+    audit: dict[str, object],
+) -> PortfolioProposal | Hold | DecisionFailure:
+    try:
+        session = information.open(context.as_of)
+    except Exception as error:
+        return DecisionFailure("tool_error", f"information: {type(error).__name__}: {error}")
+    try:
+        return decision_system.decide(context, session, audit)
+    except DecisionFailed as failed:
+        return DecisionFailure(failed.kind, failed.detail)
+    except Exception as error:
+        return DecisionFailure("error", f"{type(error).__name__}: {error}")
+
+
+def _record(
+    as_of: datetime,
+    outcome: PortfolioProposal | Hold | DecisionFailure,
+    universe: tuple[str, ...],
+    audit: dict[str, object],
+    elapsed: float,
+) -> DecisionRecord:
+    match outcome:
+        case DecisionFailure():
+            return DecisionRecord(as_of, "failed", None, (), outcome, {}, {}, audit, elapsed)
+        case Hold():
+            return DecisionRecord(as_of, "hold", None, (), None, {}, {}, audit, elapsed)
+        case PortfolioProposal():
+            errors = tuple(validate(outcome, universe))
+            if errors:
+                return DecisionRecord(
+                    as_of, "invalid", outcome, errors, None, {}, {}, audit, elapsed
+                )
+            weights = normalize(outcome)
+            return DecisionRecord(
+                as_of, "rebalance", outcome, (), None, weights, {}, audit, elapsed
+            )
+        case _:
+            detail = f"decide returned {type(outcome).__name__}, not a portfolio proposal"
+            return DecisionRecord(
+                as_of, "failed", None, (), DecisionFailure("error", detail), {}, {}, audit, elapsed
+            )

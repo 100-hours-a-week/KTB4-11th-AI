@@ -1,5 +1,5 @@
 [tool.uv.workspace]
-members = ["packages/*", "services/*", "evaluations/*"]
+members = ["packages/*", "services/*", "evaluations/harness"]
 
 [dependency-groups]
 dev = [

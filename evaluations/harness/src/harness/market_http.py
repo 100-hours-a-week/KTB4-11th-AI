@@ -16,7 +16,7 @@ class MarketHttpPriceSource:
             response = self._client.get(f"/bars/{symbol}", params=params)
             response.raise_for_status()
             body = response.json()
-            page = [_bar(item) for item in body["items"]]
+            page = [parse_bar(item) for item in body["items"]]
             found.extend(page)
             cursor = body["next_cursor"]
             if cursor is None or any(bar.trading_date < start for bar in page):
@@ -28,7 +28,7 @@ class MarketHttpPriceSource:
         )
 
 
-def _bar(item: dict) -> DailyBar:
+def parse_bar(item: dict) -> DailyBar:
     return DailyBar(
         trading_date=datetime.fromisoformat(item["timestamp"]).astimezone(UTC).date(),
         open=float(item["open"]),

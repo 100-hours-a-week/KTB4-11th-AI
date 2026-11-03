@@ -1,12 +1,21 @@
 [project]
 name = "harness"
 version = "0.1.0"
-description = "Investment evaluation harness loop and execution simulator"
+description = "Investment evaluation harness: loop, simulator, information variants, decision adapters, records"
 requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
+    "fastapi>=0.142",
     "httpx>=0.28",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "uvicorn>=0.54",
 ]
+
+[project.scripts]
+harness = "harness.__main__:main"
+harness-features = "harness.features:main"
+harness-agent-worker = "harness.agent_worker:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }

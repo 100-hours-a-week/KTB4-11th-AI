@@ -441,14 +441,22 @@ name = "harness"
 version = "0.1.0"
 source = { editable = "evaluations/harness" }
 dependencies = [
+    { name = "fastapi" },
     { name = "httpx" },
     { name = "ktb-core" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "fastapi", specifier = ">=0.142" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "ktb-core", editable = "packages/core" },
+    { name = "pydantic", specifier = ">=2.9" },
+    { name = "pydantic-settings", specifier = ">=2.7" },
+    { name = "uvicorn", specifier = ">=0.54" },
 ]
 
 [[package]]

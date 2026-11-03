@@ -32,6 +32,7 @@ class ExecutionSimulator:
         self._holdings: dict[str, int] = {}
         self._pending: dict[str, float] = {}
         self._fill_day: date | None = None
+        self._decided_at = start
         self._events = sorted(
             [(open_at(day), day, True) for day in market.dates]
             + [(close_at(day), day, False) for day in market.dates]
@@ -61,6 +62,7 @@ class ExecutionSimulator:
         self._pending = {symbol: 0.0 for symbol in self._holdings}
         self._pending.update({symbol: w * sizing_value for symbol, w in weights.items()})
         self._fill_day = fill_day
+        self._decided_at = as_of
 
     def advance(self, to: datetime) -> None:
         while self._next_event < len(self._events):
@@ -98,7 +100,9 @@ class ExecutionSimulator:
             bar = self._market.bar(symbol, day)
             if bar is None:
                 if target or held:
-                    self.rejections.append(Rejection(day, symbol, "no bar on fill date"))
+                    self.rejections.append(
+                        Rejection(day, symbol, "no bar on fill date", self._decided_at)
+                    )
                 continue
             delta = math.floor(target / bar.open) - held
             if delta:
@@ -118,7 +122,7 @@ class ExecutionSimulator:
         tax = gross * self._sell_tax_rate
         self._cash += gross - fee - tax
         self._holdings[symbol] -= quantity
-        self.fills.append(Fill(day, symbol, "sell", quantity, price, fee, tax))
+        self.fills.append(Fill(day, symbol, "sell", quantity, price, fee, tax, self._decided_at))
 
     def _buy(self, day: date, symbol: str, quantity: int, price: float) -> None:
         def cost(q: int) -> float:
@@ -131,9 +135,9 @@ class ExecutionSimulator:
             while cost(quantity + 1) <= self._cash:
                 quantity += 1
         if quantity == 0:
-            self.rejections.append(Rejection(day, symbol, "insufficient cash"))
+            self.rejections.append(Rejection(day, symbol, "insufficient cash", self._decided_at))
             return
         fee = quantity * price * self._fee_rate
         self._cash -= cost(quantity)
         self._holdings[symbol] = self._holdings.get(symbol, 0) + quantity
-        self.fills.append(Fill(day, symbol, "buy", quantity, price, fee, 0.0))
+        self.fills.append(Fill(day, symbol, "buy", quantity, price, fee, 0.0, self._decided_at))

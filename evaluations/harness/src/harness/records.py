@@ -1,9 +1,9 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Literal
 
-from harness.contracts import PortfolioState
+from harness.contracts import FailureKind, PortfolioProposal, PortfolioState
 
 
 class EpisodeFailed(Exception):
@@ -22,11 +22,25 @@ class Failure:
 
 
 @dataclass(frozen=True)
-class Submission:
+class DecisionFailure:
+    kind: FailureKind
+    detail: str
+
+
+Action = Literal["rebalance", "hold", "invalid", "failed"]
+
+
+@dataclass(frozen=True)
+class DecisionRecord:
     as_of: datetime
+    action: Action
+    proposal: PortfolioProposal | None
     errors: tuple[str, ...]
+    failure: DecisionFailure | None
     weights: Mapping[str, float]
     targets: Mapping[str, float]
+    audit: Mapping[str, object] = field(default_factory=dict, compare=False)
+    latency_seconds: float = field(default=0.0, compare=False)
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,7 @@ class Fill:
     price: float
     fee: float
     tax: float
+    decided_at: datetime
 
 
 @dataclass(frozen=True)
@@ -51,6 +66,7 @@ class Rejection:
     day: date
     symbol: str
     reason: str
+    decided_at: datetime
 
 
 @dataclass(frozen=True)
@@ -65,7 +81,7 @@ class PortfolioSnapshot:
 @dataclass(frozen=True)
 class Episode:
     initial_capital: float
-    submissions: tuple[Submission, ...]
+    decisions: tuple[DecisionRecord, ...]
     cancellations: tuple[Cancellation, ...]
     fills: tuple[Fill, ...]
     rejections: tuple[Rejection, ...]
