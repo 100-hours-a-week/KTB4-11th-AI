@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from portfolio_builder.errors import PortfolioRejected, ToolError
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import (
+    Constraints,
     Exit,
     Holding,
     Submission,
@@ -28,6 +29,14 @@ class SubmitPortfolioArgs(BaseModel):
     commentary: str = Field(
         description="overall assessment of the portfolio and this run's decisions"
     )
+    constraints: Constraints = Field(
+        default_factory=Constraints,
+        description=(
+            "Numeric limits you actually read in the user's request, such as a maximum number"
+            " of holdings, a maximum weight for any single holding, or a minimum cash weight."
+            " Leave a field unset if the user did not state that limit; never invent one."
+        ),
+    )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
 
@@ -36,6 +45,7 @@ def submit_portfolio(
     exits: list[Exit],
     cash_weight: float,
     commentary: str,
+    constraints: Constraints,
     tool_call_id: str,
     *,
     engine: sa.Engine,
@@ -48,7 +58,11 @@ def submit_portfolio(
     excluded: frozenset[str] = frozenset(),
 ) -> Command:
     submission = Submission(
-        holdings=holdings, exits=exits, cash_weight=cash_weight, commentary=commentary
+        holdings=holdings,
+        exits=exits,
+        cash_weight=cash_weight,
+        commentary=commentary,
+        constraints=constraints,
     )
     with lock:
         if saved:
