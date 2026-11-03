@@ -7,13 +7,7 @@ from langchain_openrouter import ChatOpenRouter
 from portfolio_builder.agent.run import run_agent
 from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
 from portfolio_builder.briefing import load_briefing
-from portfolio_builder.explain import (
-    Explanations,
-    explain,
-    load_targets,
-    load_unexplained,
-    save_explanations,
-)
+from portfolio_builder.explain import Explanations, explain_and_save, load_unexplained
 from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
@@ -100,16 +94,10 @@ def main() -> None:
                         max_tokens=settings.explain_max_tokens,
                         reasoning={"effort": "none"},
                     ).with_structured_output(Explanations, include_raw=True)
-                    explanations = explain(
-                        explainer,
-                        load_targets(engine, portfolio_id),
-                        trace,
-                        settings.explain_result_chars,
+                    stocks = explain_and_save(
+                        engine, explainer, portfolio_id, trace, settings.explain_result_chars
                     )
-                    save_explanations(engine, portfolio_id, explanations)
-                    log.info(
-                        "explained", portfolio_id=portfolio_id, stocks=len(explanations.stocks)
-                    )
+                    log.info("explained", portfolio_id=portfolio_id, stocks=stocks)
                 except Exception as failure:
                     outcome, error = "explanation_failed", f"explain: {failure}"
                     log.exception("explain_failed", portfolio_id=portfolio_id, error=str(failure))

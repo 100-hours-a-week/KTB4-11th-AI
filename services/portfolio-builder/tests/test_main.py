@@ -6,7 +6,7 @@ from portfolio_builder import __main__ as entry
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.briefing import Briefing
-from portfolio_builder.explain import ExplanationRejected, Explanations
+from portfolio_builder.explain import ExplanationRejected
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
@@ -31,10 +31,10 @@ def env(monkeypatch):
     calls = {}
     monkeypatch.setattr(entry, "save_trace", lambda engine, pid, trace: calls.update(trace=pid))
     monkeypatch.setattr(entry, "load_unexplained", lambda engine: None)
-    monkeypatch.setattr(entry, "load_targets", lambda engine, pid: [])
-    monkeypatch.setattr(entry, "explain", lambda *args: Explanations(stocks=[]))
     monkeypatch.setattr(
-        entry, "save_explanations", lambda engine, pid, explanations: calls.update(saved=pid)
+        entry,
+        "explain_and_save",
+        lambda engine, explainer, pid, trace, chars: calls.update(saved=pid) or 0,
     )
     monkeypatch.setattr(
         entry, "mark_explanation_failed", lambda engine, pid: calls.update(failed=pid)
@@ -110,7 +110,7 @@ def test_a_rejected_explanation_marks_the_portfolio_failed_and_exits_one(env, mo
     def rejected(*args):
         raise ExplanationRejected("HYNIX: missing")
 
-    monkeypatch.setattr(entry, "explain", rejected)
+    monkeypatch.setattr(entry, "explain_and_save", rejected)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
@@ -133,7 +133,7 @@ def test_provider_error_during_explain_marks_the_portfolio_failed_and_exits_one(
     def provider_error(*args):
         raise RuntimeError("502 from provider")
 
-    monkeypatch.setattr(entry, "explain", provider_error)
+    monkeypatch.setattr(entry, "explain_and_save", provider_error)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
@@ -165,8 +165,8 @@ def test_an_unexplained_portfolio_is_explained_again_without_the_agent(env, monk
     seen = {}
     monkeypatch.setattr(
         entry,
-        "explain",
-        lambda model, targets, t, chars: seen.update(trace=t) or Explanations(stocks=[]),
+        "explain_and_save",
+        lambda engine, explainer, pid, t, chars: seen.update(trace=t) or env.update(saved=pid) or 0,
     )
 
     with pytest.raises(SystemExit) as exit_:
@@ -186,7 +186,7 @@ def test_a_failed_reexplanation_stays_failed_and_exits_one(env, monkeypatch, cap
     def rejected(*args):
         raise ExplanationRejected("HYNIX: missing")
 
-    monkeypatch.setattr(entry, "explain", rejected)
+    monkeypatch.setattr(entry, "explain_and_save", rejected)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
