@@ -1,7 +1,7 @@
 import pytest
 import sqlalchemy as sa
 
-TABLES = "theme_companies, themes, corporation_indices, corporation_aliases, corporations"
+TABLES = "theme_corporations, themes, corporation_indices, corporation_aliases, corporations"
 
 
 def _truncate(engine):

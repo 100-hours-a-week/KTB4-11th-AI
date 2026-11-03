@@ -11,10 +11,10 @@ from alembic.script import ScriptDirectory
 def test_vector_revision_follows_collection_and_preserves_both_chunk_formats():
     migrations = pathlib.Path(__file__).resolve().parents[1] / "migrations"
     scripts = ScriptDirectory(str(migrations))
-    assert scripts.get_heads() == ["0015"]
-    migration = scripts.get_revision("0015")
-    assert migration is not None and migration.down_revision == "0014"
-    spec = importlib.util.spec_from_file_location("migration_0015", migration.path)
+    assert scripts.get_heads() == ["0016"]
+    migration = scripts.get_revision("0016")
+    assert migration is not None and migration.down_revision == "0015"
+    spec = importlib.util.spec_from_file_location("migration_0016", migration.path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

@@ -1,7 +1,7 @@
 """create disclosures
 
-Revision ID: 0012
-Revises: 0011
+Revision ID: 0013
+Revises: 0012
 Create Date: 2026-10-29
 """
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0012"
-down_revision = "0011"
+revision = "0013"
+down_revision = "0012"
 branch_labels = None
 depends_on = None
 
@@ -74,9 +74,23 @@ def upgrade() -> None:
         ),
         sa.UniqueConstraint("receipt_id", "source_hash", "parser_version"),
     )
+    op.create_table(
+        "disclosure_collection_state",
+        sa.Column("source", sa.Text, primary_key=True),
+        sa.Column("initial_completed", sa.Boolean, nullable=False, server_default=sa.false()),
+        sa.Column("initial_from", sa.Date),
+        sa.Column("checked_through", sa.Date),
+        sa.Column("completed_for", sa.Date),
+        sa.Column("attempted_for", sa.Date),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.CheckConstraint("source = 'opendart'", name="disclosure_collection_source_check"),
+    )
 
 
 def downgrade() -> None:
+    op.drop_table("disclosure_collection_state")
     op.drop_table("disclosure_documents")
     op.drop_index("disclosures_company_date_idx", table_name="disclosures")
     op.drop_table("disclosures")

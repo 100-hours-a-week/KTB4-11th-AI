@@ -78,6 +78,27 @@ def previous_trading_day(day: date) -> date:
     return day
 
 
+async def daily_ranking_key(valkey: Redis, metric: str, now: datetime) -> tuple[str, date] | None:
+    local = now.astimezone(KST)
+    day = local.date()
+    if not is_trading_day(day) or local.time() < time(9, 10):
+        day = previous_trading_day(day)
+    for _ in range(14):
+        key = f"ranking:{metric}:{day:%Y%m%d}"
+        if await valkey.exists(key):
+            return key, day
+        day = previous_trading_day(day)
+    return None
+
+
+async def trade_values(valkey: Redis, codes: list[str], now: datetime) -> dict[str, float]:
+    found = await daily_ranking_key(valkey, "trade_value", now)
+    if found is None or not codes:
+        return {}
+    scores = await valkey.zmscore(found[0], codes)
+    return {code: score for code, score in zip(codes, scores, strict=True) if score is not None}
+
+
 async def read_rankings(
     valkey: Redis, kind: RankingType, limit: int, now: datetime
 ) -> dict[str, object]:
@@ -86,19 +107,11 @@ async def read_rankings(
         updated_at = await valkey.get("ranking:{popular}:updated_at")
         as_of = updated_at[:10] if updated_at else None
     else:
-        local = now.astimezone(KST)
-        day = local.date()
-        if not is_trading_day(day) or local.time() < time(9, 10):
-            day = previous_trading_day(day)
         metric = "change_rate" if kind in ("gainers", "losers") else kind
-        key = f"ranking:{metric}:{day:%Y%m%d}"
-        for _ in range(14):
-            if await valkey.exists(key):
-                break
-            day = previous_trading_day(day)
-            key = f"ranking:{metric}:{day:%Y%m%d}"
-        else:
+        found = await daily_ranking_key(valkey, metric, now)
+        if found is None:
             return {"as_of": None, "updated_at": None, "items": []}
+        key, day = found
         as_of = day.isoformat()
         updated_at = None
 

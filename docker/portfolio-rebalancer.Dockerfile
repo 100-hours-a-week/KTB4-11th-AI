@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -16,7 +16,7 @@ COPY packages/core packages/core
 COPY services/portfolio-rebalancer services/portfolio-rebalancer
 RUN uv pip install --no-deps ./packages/aws ./packages/core ./services/portfolio-rebalancer
 
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app

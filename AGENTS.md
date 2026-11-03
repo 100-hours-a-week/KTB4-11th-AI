@@ -1,8 +1,8 @@
 # Working in this repository
 
 This is the AI services monorepo for 척척개미단. Run commands from the repository root.
-Python 3.13 is the primary runtime; workspace packages support Python 3.13–3.14.
-The Python 3.14 compatibility job in CI is advisory.
+Python 3.14 is the primary runtime; workspace packages support Python 3.14–3.15.
+The Python 3.15 compatibility job in CI is advisory.
 
 ## Start here
 
@@ -168,26 +168,11 @@ third-party dependencies.
   ranking and timestamp. An empty or failed calculation retains the previous ranking.
 - Daily rankings use the previous trading day before 09:10 KST or when today's ranking
   is absent.
+- Market HTTP theme endpoints read market-syncer's current PostgreSQL snapshot and return
+  bare arrays keyed by `code`. Never expose them as point-in-time data in historical
+  evaluations.
 - Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing
   orderbook contracts.
-
-### Order queue
-
-- Fetch the Backend account snapshot once per rebalancer run through HTTP. Lookup
-  failures must exit before placing orders; do not add an account snapshot consumer.
-- Publish cancellations and replacements to the same Order FIFO queue, grouped by
-  account ID and deduplicated by `eventId`.
-- Successful cancellation publication means requested, not completed. Preserve
-  `order_cancel_requested` / `cancel_requested` terminology.
-- After successful cancellation sends, publish recalculated replacements immediately
-  in the same FIFO group. Do not refresh the snapshot or wait for pending orders to clear.
-  The Backend consumer must finish cancellation before processing the next command.
-- Failed or partial cancellation publication skips that account. Exit stocks produce
-  sells only; unconfirmed sell proceeds must not fund buys.
-- Preserve MessageId/eventId/correlationId/result logging and existing Backend JWT auth.
-  Use the AWS credential chain/IAM roles. Do not add an application failure queue or
-  directly publish to or normally consume DLQs.
-- Contract details: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
 
 ## Dependencies and images
 
@@ -256,8 +241,16 @@ sections, and financial facts together in one PostgreSQL transaction.
 The ordinary `news-preprocessor` command runs under the unchanged hourly
 `ktb-news-preprocessor.timer`. There is no separate collection pass, staged database
 queue, persisted item-failure loop, RSS discovery, disclosure command, or collector
-timer. HTTP requests retain bounded retries. A failed item is not saved and follows
-the normal news ingestion retry behavior on a subsequent feed pass.
+timer. HTTP requests retain bounded retries. Automatic collection dates advance only
+after all selected filings succeed. Failed intervals are retried in the next daily
+slot within the 365-day lookback; same-day hourly runs do not retry them. Explicit date replay is also available.
+Listing, short/long document and financial requests share `DartClient`, with three
+attempts by default and a maximum of three. Disclosure-only failures exit with code 2;
+`RestartPreventExitStatus=2` prevents their same-day systemd restart. Other news,
+embedding and DB failures keep exit code 1 and the existing `Restart=on-failure`,
+five-minute delay and service start-rate limits. An hourly or service retry skips
+already-attempted OpenDART slots. Parsing and DB transaction failures retain immediate
+error/rollback behavior; state-loading DB exceptions propagate for service recovery.
 
 Long filing classes include A001 (annual), A002 (half-year), A003 (quarterly), F001
 (audit), F002 (consolidated audit), F003 (combined audit), C001–C005, J004, and H002.
@@ -265,12 +258,31 @@ These classes describe filings; narrative, table, section, and financial-fact sp
 is a separate parsing decision. `detail_type` is nullable for legacy rows, and fiscal
 year/period can be absent for nonperiodic filings without fiscal metadata.
 
-Migrations 0012–0014 create filing metadata and original documents, sections, and
+Migrations 0013–0015 create filing metadata and original documents, sections, and
 financial facts respectively. `financials_collected` records completed periodic
 financial collection as informational metadata; it is not a queue marker. Collection
 uses `NEWS_PREPROCESSOR_DISCLOSURE_*` for archive location, HTTP request pacing and
 retry attempts, and archive download/extraction limits. Original archives live outside
 the repository. Collection does not call an embedding model or generate answers.
+
+OpenDART stays available in the hourly source list. On first automatic ingestion it
+selects the latest 1000 unique KOSPI200 filings within 365 days, across short and long
+types. `disclosure_collection_state` stores initial completion, covered dates and
+attempted/successful daily slot dates, not pending receipt IDs. Initial failure retries, subsequent incremental
+checks and explicit date replay are uncapped. Successful capped initialization leaves
+an inclusive boundary sweep for the next daily slot, so a same-day 1001st filing is
+reachable. An already attempted slot skips API calls even when it failed. Three request
+failures are logged without another same-day collection run. A delayed startup at
+06:00 runs only if that daily slot has not yet been attempted.
+The daily hour remains configurable through `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR`.
+
+Normal checks resume inclusively from the last successful date. Existing receipt and
+parser-version checks skip stored documents before downloading. No new receipts means
+no document fetch, and no filing list means no classification/financial request. Set
+paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` for manual replay within
+365 days; it does not update automatic progress. Remove date overrides after replay.
+The collection-state table belongs to the merged 0013; collection still owns three
+migration revisions and no standalone collector, extra timer or pending-work queue.
 
 The existing news-preprocessor service starts the DB-only indexer after success or
 final failure. There is no separate collection or indexing timer.
