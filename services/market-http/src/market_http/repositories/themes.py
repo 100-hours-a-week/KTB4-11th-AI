@@ -1,7 +1,12 @@
 import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict
 
-from market_http.openapi_examples import STOCK_THEME_EXAMPLE, THEME_EXAMPLE, THEME_STOCK_EXAMPLE
+from market_http.openapi_examples import (
+    STOCK_THEME_EXAMPLE,
+    THEME_EXAMPLE,
+    THEME_GROUP_EXAMPLE,
+    THEME_STOCK_EXAMPLE,
+)
 
 
 class Theme(BaseModel):
@@ -9,6 +14,13 @@ class Theme(BaseModel):
     name: str
 
     model_config = ConfigDict(json_schema_extra={"examples": [THEME_EXAMPLE]})
+
+
+class ThemeGroup(BaseModel):
+    name: str
+    items: list[Theme]
+
+    model_config = ConfigDict(json_schema_extra={"examples": [THEME_GROUP_EXAMPLE]})
 
 
 class ThemeStock(BaseModel):
@@ -29,13 +41,22 @@ class StockTheme(BaseModel):
 
 def list_themes(engine: sa.Engine) -> list[tuple[Theme, list[str]]]:
     with engine.connect() as conn:
-        themes = conn.execute(
-            sa.text("SELECT theme_code AS code, name FROM themes ORDER BY theme_code")
+        rows = conn.execute(
+            sa.text(
+                "SELECT t.theme_code AS code, t.name, tc.stock_code"
+                " FROM themes t"
+                " JOIN theme_companies tc ON tc.theme_code = t.theme_code"
+                " JOIN corporation_indices ci ON ci.stock_code = tc.stock_code"
+                " AND ci.index_name = 'KOSPI200'"
+                " ORDER BY t.theme_code, tc.stock_code"
+            )
         ).mappings()
-        result = {row["code"]: (Theme.model_validate(row), []) for row in themes}
-        members = conn.execute(sa.text("SELECT theme_code, stock_code FROM theme_companies"))
-        for theme_code, stock_code in members:
-            result[theme_code][1].append(stock_code)
+        result: dict[str, tuple[Theme, list[str]]] = {}
+        for row in rows:
+            entry = result.setdefault(
+                row["code"], (Theme(code=row["code"], name=row["name"]), [])
+            )
+            entry[1].append(row["stock_code"])
     return list(result.values())
 
 
@@ -51,6 +72,8 @@ def find_theme_stocks(engine: sa.Engine, theme_code: str) -> list[ThemeStock] | 
                 "SELECT tc.stock_code AS code, c.name, tc.is_major"
                 " FROM theme_companies tc"
                 " JOIN corporations c ON c.stock_code = tc.stock_code"
+                " JOIN corporation_indices ci ON ci.stock_code = tc.stock_code"
+                " AND ci.index_name = 'KOSPI200'"
                 " WHERE tc.theme_code = :code"
                 " ORDER BY tc.stock_code"
             ),
@@ -74,6 +97,10 @@ def find_stock_themes(
                 " FROM theme_companies tc"
                 " JOIN themes t ON t.theme_code = tc.theme_code"
                 " JOIN theme_companies m ON m.theme_code = tc.theme_code"
+                " JOIN corporation_indices target ON target.stock_code = tc.stock_code"
+                " AND target.index_name = 'KOSPI200'"
+                " JOIN corporation_indices member_index ON member_index.stock_code = m.stock_code"
+                " AND member_index.index_name = 'KOSPI200'"
                 " WHERE tc.stock_code = :code"
                 " ORDER BY t.theme_code, m.stock_code"
             ),
