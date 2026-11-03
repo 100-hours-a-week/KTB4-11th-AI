@@ -9,9 +9,9 @@ intake. It classifies filings by `pblntf_detail_ty`. Short filings follow the ex
 news path. For long filings, `OpenDart.article` fetches document and financial API
 data, parses it in memory, and returns a `DisclosureItem`. Standard scraping stores
 filing metadata, parsed documents, sections, and financial facts together in one
-PostgreSQL transaction. A failed item is not saved. Normal feed passes retry it while
-its filing date remains in the daily listing window. Failures outside that window
-require an explicit historical replay; bounded HTTP retries alone do not recover them.
+PostgreSQL transaction. A failed item is not saved. The collection date advances only after all selected
+filings succeed, so the next scheduled run includes the failed interval. Recovery is
+bounded by the configured 365-day lookback. Explicit date replay is also available.
 
 OpenDART modules are flat under `sources/publishers/opendart/`:
 
@@ -21,14 +21,16 @@ OpenDART modules are flat under `sources/publishers/opendart/`:
 | parser.py | Short and long document parsing, including section flattening |
 | dart.py | Bounded API requests and fiscal-period parsing |
 | financials.py | Financial-account rows and amount normalization |
-| storage.py | Transactional disclosure storage |
+| storage.py | Transactional filing storage and the single collection-state row |
 | settings.py | Archive and HTTP request configuration |
 
-There is no `disclosures/` subfolder, staged database queue, pending-record readback,
-persisted item-failure loop, separate collection pass, or disclosure command. The
+There is no `disclosures/` subfolder, staged filing queue, pending-record readback,
+separate collection pass, or disclosure command. Collection progress is stored as a
+single row of dates and an initial-completion flag, without a list of pending receipts. The
 ordinary `news-preprocessor` command uses the unchanged hourly
-`ktb-news-preprocessor.timer`. Other news sources run hourly. OpenDART is included
-only at 05:00 KST by default, or when an explicit historical range is supplied.
+`ktb-news-preprocessor.timer`. Other news sources run hourly. OpenDART remains in the
+source list at every hour and uses persisted completion state to decide whether its
+daily check is due. It is not excluded merely because the process starts after 05:00.
 The standalone collector service and timer and their CD activation entries remain
 removed. RSS discovery is not used.
 
@@ -38,36 +40,72 @@ location, HTTP request pacing and retry attempts, and downloaded/extracted byte 
 Queue attempt limits, refresh windows, document processing limits, and the financial
 collection toggle are removed.
 
-## Daily collection and historical recovery
+## Initial collection and daily new-filings checks
 
-`NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR` selects the daily KST hour (default 5).
-The existing job checks today's and yesterday's filings once at that scheduled hour.
-Individual API requests retry within that run. An empty KOSPI200 filing list
-causes no classification, document or financial API requests after the listing check.
-New daily filings are not capped at 1000. Already-stored receipts with the current
-parser version are skipped before fetching a document.
+The first automatic run selects the latest 1000 unique KOSPI200 receipts from the
+last 365 days, including short and long filings. It fetches and parses only receipts
+not already stored with the current parser version. Fewer than 1000 available receipts
+are reported honestly; records are not padded or duplicated.
 
-For historical collection or recovery, set both
-`NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` and `END_DATE` as ISO dates. Missing pairs,
-reversed ranges, future end dates and start dates more than 365 days ago are rejected.
-Historical collection runs regardless of the daily collection hour. It scans latest
-dates first in non-overlapping windows of at most 90 days, following OpenDART's
-three-month limit when no corporate code is supplied. Each window retains API page
-ordering, filters KOSPI200 membership and deduplicates receipt IDs before counting
-toward the combined short-and-long limit of 1000. Once that limit is reached, older
-windows are not fetched. If fewer are available within the range, the actual count
-is reported; duplicate or older filings are not added to fill the count.
+`disclosure_collection_state` has one `opendart` row:
 
-The limit counts selected unique receipts, not successful new database inserts.
-Existing records remain in place, and document/financial failures still make the
-normal job report failure. A selected filing follows the same API parsing and
-transactional save as daily collection. A historical filing saved by an older parser
-is reprocessed through that flow. There is no automatic persistent retry queue and
-no recovery outside the configured one-year retention scope.
+| Field | Meaning |
+| --- | --- |
+| initial_completed | The initial pass has succeeded |
+| initial_from | Earliest date selected during initial collection; never moves later |
+| checked_through | Last successfully covered date, queried inclusively next time |
+| completed_for | Daily scheduled date whose check has finished |
 
-Example: a filing fails on October 30 and the service resumes on November 2.
-The regular feed no longer includes it. Run the existing command with a one-off
-October 30 range to recover it:
+No receipt is saved as a pending work item. Filing metadata, documents, sections and
+financial facts still enter their existing transaction only after parsing.
+
+The earliest initial date is recorded before processing the selected filings. If the
+initial run partly fails, its next attempt scans from that date without a 1000 cap.
+This recovers a failed older receipt even if new arrivals would push it out of the
+latest 1000. Existing IDs are skipped before document fetch. A checkpoint write failure
+also leaves the run incomplete; replay skips documents already committed.
+
+A fully successful capped first pass marks the initial collection complete, but leaves
+one uncapped boundary check due from its earliest selected date. This handles a day
+with 1001 or more filings: the next run reaches the remaining receipt instead of
+reselecting only the first 1000. Later automatic collection has no 1000 limit and never
+restarts the historical 1000-filing pass after its completion.
+
+`NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR` defines the daily KST slot (default 5).
+A run after 05:00 checks whether that day's slot succeeded; before 05:00 it can catch
+up the previous day's unfinished slot. If the slot is already complete, no OpenDART
+API request is made. If the service starts late at 06:00, or a 05:59 failure is followed
+by a 06:00 run, the unfinished slot still runs. No wall-clock equality gate is used.
+
+A due check requests the listing from the previous successfully covered date through
+today, with the last date included again to catch filings published later that day.
+Existing receipt IDs prevent repeated body downloads and duplicate database rows.
+Only a newly discovered receipt triggers normal `article` parsing and storage. An empty
+listing performs no classification, document or financial requests after the list check.
+If all listed receipts are already known, no document is fetched. A successful empty
+check still completes the daily slot.
+
+OpenDART's current list API is a GET/pagination API. This implementation detects new
+receipts by daily polling; it does not claim to receive vendor webhooks. The processing
+condition is the discovery of an unstored receipt, not a fixed daily refill to 1000.
+
+The coverage date and completed slot advance only after all selected filings commit.
+An API, parsing or save failure leaves the interval due. There is no automatic recovery
+for dates older than 365 days; the lookback clamp is the explicit retention boundary.
+Other news sources keep their hourly schedule. The existing indexer integration reads
+new stored documents; no GPU request is added by this collection checkpoint.
+
+## Explicit date replay
+
+Set both `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` and `END_DATE` as ISO dates to
+reprocess a specific period, including old parser versions. Missing pairs, reversed
+ranges, future end dates and start dates more than 365 days ago are rejected. Replay
+runs at any hour, has no 1000 cap, and does not change automatic collection dates.
+Already-current receipts remain skipped.
+
+Both initial and replay listings use latest-first, non-overlapping windows of at most
+90 days and normal API pagination. The 1000 cap applies only to the first automatic
+selection. This follows OpenDART's three-month limit when no corporate code is supplied.
 
 ```bash
 docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm -T \
@@ -76,11 +114,9 @@ docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --
   news-preprocessor
 ```
 
-The same command accepts a range of up to one year for initial historical ingestion.
-It retains the existing news scraping and pending-news embedding steps; long filing
-collection itself performs no embedding. Prefer one-off `-e` overrides. Remove dates
-from persistent environment files after replay so normal daily collection resumes.
-The hourly timer, schema and deployment job ownership are unchanged.
+The command retains normal news scraping and pending-news embedding. Long disclosure
+collection itself performs no inference. Prefer one-off overrides and remove dates
+from persistent environment files after replay. A normal first run needs no date flags.
 
 Official listing constraints:
 [OpenDART disclosure search API](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019001).
@@ -137,11 +173,13 @@ financial statement API.
 
 | Revision | Previous | Owned tables |
 | --- | --- | --- |
-| 0012 | 0011 | disclosures, disclosure_documents |
+| 0012 | 0011 | disclosures, disclosure_documents, disclosure_collection_state |
 | 0013 | 0012 | disclosure_sections |
 | 0014 | 0013 | disclosure_financial_facts; disclosures.financials_collected |
 
-Each migration downgrade removes only that revision's objects.
+The not-yet-merged 0012 includes the collection-state table. No fourth collection
+revision is introduced. Its downgrade removes the state row/table before the original
+filing tables. Each migration downgrade removes only that revision's objects.
 `financials_collected` is informational metadata for completed periodic financial
 collection, not a queue marker. Numeric accounts preserve scope, currency, original
 amounts, and null values. Sections preserve names, tables, and source offsets.
@@ -180,7 +218,8 @@ production Compose logging driver forwards stdout to the configured CloudWatch g
 | Event | Level | Context |
 | --- | --- | --- |
 | `opendart_listing_failed` | ERROR | Requested start/end dates, page, detail type, HTTP/DART status and exception type |
-| `feed_failed` | ERROR | Source, feed URL, `listing` stage and traceback |
+| `feed_failed` | ERROR | Source, feed URL, state-load/listing stage and traceback |
+| `opendart_state_failed` | ERROR | Initial-start/completion stage, exception type and traceback |
 | `dart_request_retry` | WARNING | Endpoint, attempt/max attempts, HTTP status and exception type |
 | `dart_request_failed` | ERROR | Same fields when HTTP, invalid-response or DART-status retries are exhausted |
 | `dart_api_failed` | ERROR | Endpoint, DART status and financial statement identifiers |
@@ -195,7 +234,9 @@ tracebacks formatted by the service logger.
 
 Database save failures still roll back and raise; logging does not turn them into a
 successful scrape. Listing and article failures retain their existing failed results.
-One failure can produce an API event and an enclosing article event; do not add all
+`opendart_collection_completed` and `scrape_complete` distinguish selected, already
+stored and newly stored counts. `opendart_collection_skipped` records a completed
+daily slot without an API call. One failure can produce an API event and an enclosing article event; do not add all
 ERROR records together as a count of unique failed filings. Use receipt IDs and the
 final article events when tracing a filing for replay.
 
@@ -205,21 +246,23 @@ was injected into production to test logging.
 
 ## Verification
 
-- Full suite against a dedicated PostgreSQL test database: **1,271 passed, 49 skipped,
+- Full suite against a dedicated PostgreSQL test database: **1,256 passed, 49 skipped,
   2 subtests passed**.
 - Tests cover all thirteen filing types,
   short/long routing through normal scraping, API failure without partial rows,
   database failure rolling back every related row, parser-version deduplication,
   missing documents, unknown fiscal metadata and archive hashes. Historical additions
-  cover the 1000-receipt cap, duplicates and nonmembers across pagination, all 24
-  scheduling hours, date bounds, empty listings and explicit replay outside the daily
-  hour. Three database tests verify document/financial failures recovering after a
-  three-day gap without duplicate rows, and historical parser-version replacement.
+  cover the initial 1000-receipt cap, uncapped replay and incremental checks, duplicates
+  and nonmembers across pagination, date bounds and empty listings. Database tests
+  verify the 1001st same-day receipt, no API call after a completed daily check, new
+  arrivals during a failed initial pass, recovery after 06:00 and a three-day gap,
+  checkpoint failure after document commit, manual replay leaving automatic state
+  unchanged, and historical parser-version replacement.
 - Listing and short-document failures are verified to stop at exactly three HTTP
   requests. DART status failures also stop at three; a third-attempt success returns
   without logging a final failure. Settings reject attempt limits above three.
 - Ruff lint, formatting and whitespace checks passed. Code review found no actionable
-  issues in the direct-ingestion changes.
+  issues in the incremental collection changes.
 - The news image builds and imports with networking disabled; the old subfolder and
   separate processing call are absent.
 

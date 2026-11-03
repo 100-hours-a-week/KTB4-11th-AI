@@ -1,4 +1,6 @@
 import json
+from dataclasses import dataclass
+from datetime import date
 from typing import TYPE_CHECKING
 
 import sqlalchemy as sa
@@ -10,6 +12,58 @@ if TYPE_CHECKING:
     from news_preprocessor.sources.publishers.opendart.opendart import DisclosureItem
 
 metadata = sa.MetaData()
+
+
+@dataclass(frozen=True)
+class CollectionState:
+    initial_completed: bool = False
+    initial_from: date | None = None
+    checked_through: date | None = None
+    completed_for: date | None = None
+
+
+def load_collection_state(conn: sa.Connection) -> CollectionState:
+    row = (
+        conn.execute(
+            sa.text(
+                "SELECT initial_completed,initial_from,checked_through,completed_for "
+                "FROM disclosure_collection_state WHERE source='opendart'"
+            )
+        )
+        .mappings()
+        .one_or_none()
+    )
+    return CollectionState(**row) if row is not None else CollectionState()
+
+
+def remember_initial_from(conn: sa.Connection, first_date: date) -> None:
+    conn.execute(
+        sa.text(
+            "INSERT INTO disclosure_collection_state(source,initial_from) "
+            "VALUES ('opendart',:first) "
+            "ON CONFLICT(source) DO UPDATE SET "
+            "initial_from=LEAST(disclosure_collection_state.initial_from,excluded.initial_from),"
+            "updated_at=now()"
+        ),
+        {"first": first_date},
+    )
+
+
+def complete_collection(
+    conn: sa.Connection, end_date: date, scheduled_day: date, recheck_boundary: bool
+) -> None:
+    conn.execute(
+        sa.text(
+            "UPDATE disclosure_collection_state SET initial_completed=true, "
+            "checked_through=CASE WHEN :recheck THEN COALESCE(checked_through,initial_from) "
+            "ELSE GREATEST(checked_through,:end_date) END, "
+            "completed_for=CASE WHEN :recheck THEN completed_for "
+            "ELSE GREATEST(completed_for,:scheduled_day) END,updated_at=now() "
+            "WHERE source='opendart'"
+        ),
+        {"end_date": end_date, "scheduled_day": scheduled_day, "recheck": recheck_boundary},
+    )
+
 
 disclosure_sections = sa.Table(
     "disclosure_sections",

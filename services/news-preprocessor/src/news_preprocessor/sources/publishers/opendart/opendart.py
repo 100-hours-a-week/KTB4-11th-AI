@@ -30,12 +30,22 @@ from news_preprocessor.sources.publishers.opendart.parser import (
     parse_document_body,
 )
 from news_preprocessor.sources.publishers.opendart.settings import Settings
+from news_preprocessor.sources.publishers.opendart.storage import CollectionState
 
 OPENDART_API = "https://opendart.fss.or.kr/api"
 KST = timezone(timedelta(hours=9))
 HISTORY_DAYS = 365
 HISTORY_LIMIT = 1000
 log = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class CollectionPlan:
+    start_date: date
+    end_date: date
+    scheduled_day: date
+    initial: bool
+    limit: int | None
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,8 @@ class OpenDart:
     ) -> None:
         self._stock_codes = stock_codes
         self._settings = settings or Settings()
+        self.collection_state: CollectionState | None = None
+        self.collection_plan: CollectionPlan | None = None
         self._dart = DartClient(
             client,
             api_key,
@@ -78,17 +90,43 @@ class OpenDart:
     def entries(self) -> list[FeedEntry]:
         if not self._stock_codes:
             raise RuntimeError("corporation_indices has no KOSPI200 rows; run market-syncer")
-        today = datetime.now(KST).date()
+        now = datetime.now(KST)
+        today = now.date()
+        self.collection_plan = None
+        manual = self._settings.start_date is not None
+        state = self.collection_state
+        initial = state is not None and not state.initial_completed and not manual
+        scheduled_day = (
+            today if now.hour >= self._settings.collection_hour else today - timedelta(days=1)
+        )
+        if state is not None and not initial and not manual:
+            if state.completed_for is not None and state.completed_for >= scheduled_day:
+                log.info(
+                    "opendart_collection_skipped",
+                    completed_for=state.completed_for,
+                    scheduled_day=scheduled_day,
+                )
+                return []
         begin = self._settings.start_date or today - timedelta(days=1)
         end = self._settings.end_date or today
+        limit = None
+        if initial and state is not None:
+            begin = state.initial_from or today - timedelta(days=HISTORY_DAYS)
+            limit = HISTORY_LIMIT if state.initial_from is None else None
+        elif state is not None and not manual:
+            begin = state.checked_through or begin
+        if not manual:
+            begin = max(begin, today - timedelta(days=HISTORY_DAYS))
         if end > today:
             raise ValueError("historical end_date must not be in the future")
         if begin < today - timedelta(days=HISTORY_DAYS):
             raise ValueError("historical start_date must be within the last 365 days")
-        historical = self._settings.start_date is not None
+        historical = manual or initial
+        if state is not None and not manual:
+            self.collection_plan = CollectionPlan(begin, end, scheduled_day, initial, limit)
         entries: dict[str, FeedEntry] = {}
         cursor = end
-        while cursor >= begin and (not historical or len(entries) < HISTORY_LIMIT):
+        while cursor >= begin and (limit is None or len(entries) < limit):
             window_begin = max(begin, cursor - timedelta(days=89))
             window = {
                 "bgn_de": f"{window_begin:%Y%m%d}",
@@ -97,7 +135,7 @@ class OpenDart:
                 "sort": "date",
                 "sort_mth": "desc",
             }
-            rows = self._list(window, HISTORY_LIMIT - len(entries) if historical else None)
+            rows = self._list(window, limit - len(entries) if limit is not None else None)
             if not rows:
                 cursor = window_begin - timedelta(days=1)
                 continue

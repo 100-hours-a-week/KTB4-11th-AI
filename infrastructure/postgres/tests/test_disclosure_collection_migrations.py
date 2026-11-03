@@ -15,7 +15,7 @@ VERSIONS = pathlib.Path(__file__).resolve().parents[1] / "migrations" / "version
     [
         (
             "0012",
-            ["disclosures", "disclosure_documents"],
+            ["disclosures", "disclosure_documents", "disclosure_collection_state"],
             ["disclosures_company_date_idx"],
         ),
         ("0013", ["disclosure_sections"], ["disclosure_sections_receipt_idx"]),

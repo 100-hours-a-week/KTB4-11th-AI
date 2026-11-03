@@ -357,21 +357,10 @@ def test_another_document_status_raises():
         _article({"20260928800899": _dart_status("020", "요청 제한을 초과하였습니다.")})
 
 
-@pytest.mark.parametrize("hour", range(24))
-def test_publishers_include_opendart_only_at_the_daily_collection_hour(monkeypatch, hour):
-    import importlib
-
-    module = importlib.import_module("news_preprocessor.sources.publishers")
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 11, 2, hour, tzinfo=tz)
-
-    monkeypatch.setattr(module, "datetime", Clock)
+def test_publishers_keep_opendart_available_for_late_runs():
     client = httpx.Client(transport=httpx.MockTransport(FakeDart().handler))
     sources = publishers(client, KEY, {SAMSUNG})
-    assert any(isinstance(source, OpenDart) for source in sources) == (hour == 5)
+    assert any(isinstance(source, OpenDart) for source in sources)
     assert sum(not isinstance(source, OpenDart) for source in sources) == 11
 
 
@@ -387,12 +376,16 @@ def test_historical_range_older_than_one_year_is_rejected(monkeypatch):
     assert dart.requests == []
 
 
-def test_history_selects_latest_1000_unique_kospi200_filings_and_keeps_types(monkeypatch):
+@pytest.mark.parametrize("initial", [True, False])
+def test_initial_limit_and_uncapped_replay_keep_unique_kospi200_filings(monkeypatch, initial):
+    from news_preprocessor.sources.publishers.opendart.storage import CollectionState
+
     today = datetime.now(KST).date()
-    monkeypatch.setenv(
-        "NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", (today - timedelta(days=365)).isoformat()
-    )
-    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", today.isoformat())
+    if not initial:
+        monkeypatch.setenv(
+            "NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", (today - timedelta(days=365)).isoformat()
+        )
+        monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", today.isoformat())
     rows = [_row(f"{n:014d}") for n in range(1100, 0, -1)]
     for row in rows:
         row["rcept_dt"] = today.strftime("%Y%m%d")
@@ -403,25 +396,35 @@ def test_history_selects_latest_1000_unique_kospi200_filings_and_keeps_types(mon
         for start in range(0, len(paginated), 100)
     ]
     dart = FakeDart(pages=pages, long_pages={"A001": _page(rows[::10])})
-    entries = dart.source().entries()
-    assert _ids(entries) == [row["rcept_no"] for row in rows[:1000]]
-    assert sum("pblntf_detail_ty" in json.loads(e.raw_payload) for e in entries) == 100
-    overview = [r for r in dart.list_requests() if "pblntf_detail_ty" not in r]
-    assert len(overview) == 11
+
+    def dated_handler(request):
+        params = dict(request.url.params)
+        if not params["bgn_de"] <= today.strftime("%Y%m%d") <= params["end_de"]:
+            params.pop("crtfc_key")
+            dart.requests.append(params)
+            return httpx.Response(200, json=NO_DATA)
+        return dart.handler(request)
+
+    from news_preprocessor.sources.publishers.opendart.settings import Settings
+
+    client = httpx.Client(transport=httpx.MockTransport(dated_handler))
+    source = OpenDart(client, KEY, {SAMSUNG, HYNIX}, Settings(request_interval=0))
+    source.collection_state = CollectionState() if initial else None
+    entries = source.entries()
+    expected = 1000 if initial else 1100
+    assert _ids(entries) == [row["rcept_no"] for row in rows[:expected]]
+    assert sum("pblntf_detail_ty" in json.loads(e.raw_payload) for e in entries) == expected // 10
+    overview = [
+        r
+        for r in dart.list_requests()
+        if "pblntf_detail_ty" not in r and r["end_de"] == today.strftime("%Y%m%d")
+    ]
+    assert len(overview) == (11 if initial else 12)
     assert all(r["sort_mth"] == "desc" for r in overview)
+    client.close()
 
 
 def test_explicit_history_runs_outside_the_daily_hour(monkeypatch):
-    import importlib
-
-    module = importlib.import_module("news_preprocessor.sources.publishers")
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 11, 2, 12, tzinfo=tz)
-
-    monkeypatch.setattr(module, "datetime", Clock)
     monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", "2026-10-30")
     monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", "2026-10-30")
     with httpx.Client() as client:
