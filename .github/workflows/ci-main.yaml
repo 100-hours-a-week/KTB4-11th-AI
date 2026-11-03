@@ -16,76 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  detect-changes:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-    outputs:
-      full: ${{ steps.filter.outputs.shared }}
-      services: ${{ steps.targets.outputs.services }}
-      members: ${{ steps.targets.outputs.members }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Detect changed files
-        id: filter
-        uses: dorny/paths-filter@v4.0.3
-        with:
-          base: ${{ github.ref_name }}
-          list-files: json
-          filters: |
-            shared:
-              - uv.lock
-              - pyproject.toml
-              - conftest.py
-              - tach.toml
-              - alembic.ini
-              - .python-version
-              - .dockerignore
-              - infrastructure/**
-              - .github/workflows/**
-              - scripts/**
-            members:
-              - packages/**
-              - services/**
-              - docker/*.Dockerfile
-              - docker/requirements/*.txt
-
-      - uses: astral-sh/setup-uv@v10.2.0
-
-      - name: Export affected workspace members
-        id: targets
-        env:
-          FULL: ${{ steps.filter.outputs.shared }}
-          FILES: ${{ steps.filter.outputs.members_files }}
-        run: |
-          set -euo pipefail
-          if [[ "$FULL" == true ]]; then
-            members=$(printf '%s\n' packages/* services/*)
-          else
-            members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
-            for member in $members; do
-              if [[ "$member" == packages/* && -d "$member" ]]; then
-                package="ktb-${member#packages/}"
-                tree=$(uv tree --invert --frozen --universal --no-dev --package "$package")
-                if [[ -z "$tree" ]]; then
-                  echo "::error::$member is not the workspace package $package"
-                  exit 1
-                fi
-                members+=$'\n'$(tail -n +2 <<< "$tree" \
-                  | sed -E 's/^[^a-z]*//; s/ v[0-9].*//; /^ktb-/!s#^#services/#; s#^ktb-#packages/#')
-              fi
-            done
-          fi
-          members=$(sort -u <<< "$members" | while read -r member; do if [[ -d "$member" ]]; then echo "$member"; fi; done)
-          echo "members=$(tr '\n' ' ' <<< "$members" | sed 's/ $//')" >> "$GITHUB_OUTPUT"
-          echo "services=$(jq -Rnc '[inputs | select(startswith("services/")) | ltrimstr("services/")]' <<< "$members")" >> "$GITHUB_OUTPUT"
-
   lint-and-test:
-    needs: detect-changes
     runs-on: ubuntu-latest
 
     services:
@@ -131,24 +62,12 @@ jobs:
           uv run tach check-external -e services
 
       - name: Apply database migrations
-        if: needs.detect-changes.outputs.members != ''
         run: uv run alembic upgrade head
 
       - name: Run tests
-        if: needs.detect-changes.outputs.members != ''
-        env:
-          FULL: ${{ needs.detect-changes.outputs.full }}
-          MEMBERS: ${{ needs.detect-changes.outputs.members }}
-        run: |
-          if [[ "$FULL" == true ]]; then
-            uv run pytest
-          else
-            uv run pytest $MEMBERS
-          fi
+        run: uv run pytest
 
   dependency-audit:
-    needs: detect-changes
-    if: needs.detect-changes.outputs.members != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -158,12 +77,10 @@ jobs:
       - run: uv sync --all-packages --locked --group migrations
       - name: Inspect declared dependencies per workspace member
         continue-on-error: true
-        env:
-          MEMBERS: ${{ needs.detect-changes.outputs.members }}
         run: |
           set -euo pipefail
           audit_status=0
-          for member in $MEMBERS; do
+          for member in packages/* services/*; do
             echo "::group::$member"
             uv run deptry "$member/src" --config "$member/pyproject.toml" || audit_status=1
             echo "::endgroup::"

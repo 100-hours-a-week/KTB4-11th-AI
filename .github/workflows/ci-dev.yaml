@@ -28,7 +28,7 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      full: ${{ steps.filter.outputs.shared }}
+      full: ${{ github.event_name == 'push' || steps.filter.outputs.shared == 'true' }}
       services: ${{ steps.targets.outputs.services }}
       members: ${{ steps.targets.outputs.members }}
     steps:
@@ -38,9 +38,9 @@ jobs:
 
       - name: Detect changed files
         id: filter
+        if: github.event_name == 'pull_request'
         uses: dorny/paths-filter@v4.0.3
         with:
-          base: ${{ github.ref_name }}
           list-files: json
           filters: |
             shared:
@@ -61,11 +61,12 @@ jobs:
               - docker/requirements/*.txt
 
       - uses: astral-sh/setup-uv@v10.2.0
+        if: github.event_name == 'pull_request'
 
       - name: Export affected workspace members
         id: targets
         env:
-          FULL: ${{ steps.filter.outputs.shared }}
+          FULL: ${{ github.event_name == 'push' || steps.filter.outputs.shared == 'true' }}
           FILES: ${{ steps.filter.outputs.members_files }}
         run: |
           set -euo pipefail
