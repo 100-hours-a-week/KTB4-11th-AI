@@ -2,7 +2,8 @@ import pytest
 import sqlalchemy as sa
 
 TABLES = (
-    "portfolio_reasons, portfolio_exits, portfolio_holdings, portfolios, relations,"
+    "competition_jobs, competition_portfolios, competition_participants,"
+    " portfolio_reasons, portfolio_exits, portfolio_holdings, portfolios, relations,"
     " cluster_entities, entities, cluster_summaries, article_clusters, clusters, articles,"
     " theme_companies, themes, corporation_indices, corporation_aliases, corporations"
 )
