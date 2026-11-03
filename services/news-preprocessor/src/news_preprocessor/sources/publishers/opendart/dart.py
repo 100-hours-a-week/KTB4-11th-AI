@@ -1,8 +1,11 @@
 import calendar
+import io
 import json
 import re
 import time
-from datetime import date
+import zipfile
+import zlib
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -66,12 +69,14 @@ class DartClient:
         interval: float = 1,
         attempts: int = 3,
         max_bytes: int = 100_000_000,
+        max_uncompressed_bytes: int = 64_000_000,
     ):
         self.client = client
         self.api_key = api_key
         self.interval = interval
         self.attempts = attempts
         self.max_bytes = max_bytes
+        self.max_uncompressed_bytes = max_uncompressed_bytes
         self.last_request = 0.0
 
     def get(self, endpoint: str, params: dict[str, str]) -> bytes:
@@ -105,10 +110,81 @@ class DartClient:
                     status = payload.get("status", "unknown")
                     if status not in ("000", "013"):
                         raise DartAPIError(str(status))
-                elif endpoint == "document.xml" and not content.startswith(b"PK"):
+                    if status == "000":
+                        if endpoint in ("list.json", "fnlttSinglAcntAll.json"):
+                            rows = payload.get("list")
+                            if not isinstance(rows, list) or any(
+                                not isinstance(row, dict) for row in rows
+                            ):
+                                raise ValueError("DART response requires a list of objects")
+                            if endpoint == "list.json":
+                                pages = payload.get("total_page")
+                                if type(pages) is not int or pages < 0 or rows and pages == 0:
+                                    raise ValueError("DART listing requires a valid page count")
+                                for row in rows:
+                                    if (
+                                        any(
+                                            not isinstance(row.get(key), str)
+                                            for key in (
+                                                "corp_code",
+                                                "stock_code",
+                                                "corp_name",
+                                                "report_nm",
+                                                "rcept_no",
+                                                "rcept_dt",
+                                            )
+                                        )
+                                        or not row["rcept_no"]
+                                    ):
+                                        raise ValueError(
+                                            "DART listing has incomplete filing fields"
+                                        )
+                                    datetime.strptime(row["rcept_dt"], "%Y%m%d")
+                            else:
+                                for row in rows:
+                                    if (
+                                        not isinstance(row.get("sj_div"), str)
+                                        or not row["sj_div"].strip()
+                                    ):
+                                        raise ValueError("DART account requires a statement type")
+                                    if any(
+                                        row.get(key) is not None and not isinstance(row[key], str)
+                                        for key in (
+                                            "account_id",
+                                            "account_nm",
+                                            "currency",
+                                            "ord",
+                                            "thstrm_amount",
+                                        )
+                                    ):
+                                        raise ValueError("DART account fields must be strings")
+                        elif endpoint == "company.json":
+                            month = payload.get("acc_mt")
+                            if (
+                                not isinstance(month, str)
+                                or not month.isascii()
+                                or not month.isdigit()
+                                or not 1 <= int(month) <= 12
+                            ):
+                                raise ValueError("DART company requires a valid closing month")
+                elif endpoint == "document.xml" and zipfile.is_zipfile(io.BytesIO(content)):
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                            if (
+                                sum(info.file_size for info in archive.infolist())
+                                > self.max_uncompressed_bytes
+                            ):
+                                raise ValueError("DART archive exceeds uncompressed limit")
+                            if archive.testzip() is not None:
+                                raise ValueError("DART archive has corrupt members")
+                    except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError):
+                        raise ValueError("DART archive cannot be read") from None
+                elif endpoint == "document.xml":
                     result = BeautifulSoup(content, "xml").find("result")
                     status = result.find("status") if result is not None else None
-                    if status is not None and status.get_text(strip=True) not in ("000", "014"):
+                    if status is None or status.get_text(strip=True) == "000":
+                        raise ValueError("DART document requires a ZIP or no-data status")
+                    if status.get_text(strip=True) != "014":
                         raise DartAPIError(status.get_text(strip=True))
                 return content
             except (httpx.HTTPError, ValueError, DartAPIError) as error:

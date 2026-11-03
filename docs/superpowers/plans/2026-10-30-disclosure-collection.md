@@ -181,11 +181,12 @@ financial statement API.
 
 | Revision | Previous | Owned tables |
 | --- | --- | --- |
-| 0012 | 0011 | disclosures, disclosure_documents, disclosure_collection_state |
-| 0013 | 0012 | disclosure_sections |
-| 0014 | 0013 | disclosure_financial_facts; disclosures.financials_collected |
+| 0013 | 0012 | disclosures, disclosure_documents, disclosure_collection_state |
+| 0014 | 0013 | disclosure_sections |
+| 0015 | 0014 | disclosure_financial_facts; disclosures.financials_collected |
 
-The not-yet-merged 0012 includes the collection-state table. No fourth collection
+The existing dev revision 0012 renames theme_companies to theme_corporations and is
+left unchanged. The not-yet-merged 0013 includes the collection-state table. No fourth collection
 revision is introduced. Its downgrade removes the state row/table before the original
 filing tables. Each migration downgrade removes only that revision's objects.
 `financials_collected` is informational metadata for completed periodic financial
@@ -205,18 +206,35 @@ their normal no-data handling and do not cause retries.
 
 The first two failed attempts produce WARNING records. A failed third attempt produces
 an ERROR and marks that listing or filing as failed. Other filings can still complete;
-the job exits with code 1 if any source or news embedding step failed. Parsing failures
+the job exits with code 2 for disclosure-only failures and code 1 for other news or
+embedding failures, including a mixed failure. Parsing failures
 are recorded immediately. Database save failures roll back, log context and propagate.
 They are not wrapped in an additional three-attempt transaction loop.
 
-The news-preprocessor systemd unit sets `Restart=no` and `StartLimitIntervalSec=0`.
-There is no one-hour start-rate rule and no service-wide automatic rerun multiplying
-the request retry count. Final job failure triggers the existing failure handler.
-The next daily slot can retry failures from the last successful coverage date; dates
-older than the 365-day retention boundary are outside automatic recovery. Attempts are per request within a run, not a permanent lifetime counter.
+The unit retains `Restart=on-failure`, `RestartMode=direct`, `RestartSec=5m` and its
+existing `StartLimitIntervalSec=1h` / `StartLimitBurst=3` for other news, embeddings
+and infrastructure failures. `RestartPreventExitStatus=2` excludes disclosure-only
+failures from those restarts. The one-hour service guard is not a DART request limit:
+each DART request has at most three attempts, and a failed daily slot waits until the
+next day regardless of elapsed time. A service retry for another source skips that
+already-attempted OpenDART slot.
 
-[systemd start-rate settings](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html#StartLimitIntervalSec=interval)
-document that zero disables start-rate limiting. The other job units are unchanged.
+State-loading database exceptions propagate instead of becoming a disclosure-only
+failure. Document storage exceptions also keep their existing rollback/propagation.
+Those infrastructure errors remain eligible for the service's recovery policy.
+Disclosure failure logs and exit code 2 remain failures, not successful checks.
+
+[systemd service restart settings](https://www.freedesktop.org/software/systemd/man/259/systemd.service.html)
+document that `RestartPreventExitStatus` excludes selected nonzero exit codes from
+restarts without classifying them as successful exits. The other job units are unchanged.
+
+Successful HTTP status alone is insufficient. The client checks listing fields and
+pagination, financial row field types and closing month before returning JSON. For
+original documents it checks the ZIP directory, bounded uncompressed size and member
+CRCs; a non-ZIP response must contain a recognized DART status. Missing fields,
+wrong types and damaged archives fail inside the same three-attempt loop. Normal
+JSON 013 and XML 014 no-data responses still return after one request. Document
+content parsing and unsafe archive path failures remain immediate parse failures.
 
 ## Failure logs
 
@@ -254,7 +272,7 @@ was injected into production to test logging.
 
 ## Verification
 
-- Full suite against a dedicated PostgreSQL test database: **1,257 passed, 49 skipped,
+- Full suite against a dedicated PostgreSQL test database: **1,304 passed, 49 skipped,
   2 subtests passed**.
 - Tests cover all thirteen filing types,
   short/long routing through normal scraping, API failure without partial rows,
@@ -270,9 +288,14 @@ was injected into production to test logging.
 - Listing and short-document failures are verified to stop at exactly three HTTP
   requests. DART status failures also stop at three; a third-attempt success returns
   without logging a final failure. Settings reject attempt limits above three.
-- Ruff lint, formatting and whitespace checks passed. Code review found no actionable
-  issues in the incremental collection changes.
-- The news image builds and imports with networking disabled; the old subfolder and
+- The unique migration head is 0015 after merging dev 416aabb. Real PostgreSQL
+  upgrade → rollback to dev 0012 → upgrade preserves theme_corporations rows.
+- Malformed JSON, missing fields, corrupted ZIP members and uncompressed size limits
+  exhaust three requests; normal no-data responses return once. A service-entry-point
+  test confirms other news can recover without repeating DART requests that day.
+- Ruff lint, formatting, module/dependency boundaries and whitespace checks passed.
+  Independent review found no remaining actionable issues; its targeted tests passed.
+- The Python 3.14 news image builds and its import check passes with networking disabled; the old subfolder and
   separate processing call are absent.
 
 Tests use fixed API responses and a dedicated local database. No production service,

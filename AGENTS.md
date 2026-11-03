@@ -234,9 +234,12 @@ timer. HTTP requests retain bounded retries. Automatic collection dates advance 
 after all selected filings succeed. Failed intervals are retried in the next daily
 slot within the 365-day lookback; same-day hourly runs do not retry them. Explicit date replay is also available.
 Listing, short/long document and financial requests share `DartClient`, with three
-attempts by default and a maximum of three. The news-preprocessor unit uses `Restart=no`
-and `StartLimitIntervalSec=0`: request retries are not multiplied by service restarts.
-Parsing and DB transaction failures retain immediate error/rollback behavior.
+attempts by default and a maximum of three. Disclosure-only failures exit with code 2;
+`RestartPreventExitStatus=2` prevents their same-day systemd restart. Other news,
+embedding and DB failures keep exit code 1 and the existing `Restart=on-failure`,
+five-minute delay and service start-rate limits. An hourly or service retry skips
+already-attempted OpenDART slots. Parsing and DB transaction failures retain immediate
+error/rollback behavior; state-loading DB exceptions propagate for service recovery.
 
 Long filing classes include A001 (annual), A002 (half-year), A003 (quarterly), F001
 (audit), F002 (consolidated audit), F003 (combined audit), C001–C005, J004, and H002.
@@ -244,7 +247,7 @@ These classes describe filings; narrative, table, section, and financial-fact sp
 is a separate parsing decision. `detail_type` is nullable for legacy rows, and fiscal
 year/period can be absent for nonperiodic filings without fiscal metadata.
 
-Migrations 0012–0014 create filing metadata and original documents, sections, and
+Migrations 0013–0015 create filing metadata and original documents, sections, and
 financial facts respectively. `financials_collected` records completed periodic
 financial collection as informational metadata; it is not a queue marker. Collection
 uses `NEWS_PREPROCESSOR_DISCLOSURE_*` for archive location, HTTP request pacing and
@@ -267,5 +270,5 @@ parser-version checks skip stored documents before downloading. No new receipts 
 no document fetch, and no filing list means no classification/financial request. Set
 paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` for manual replay within
 365 days; it does not update automatic progress. Remove date overrides after replay.
-The collection-state table belongs to the unmerged 0012; collection still owns three
+The collection-state table belongs to the unmerged 0013; collection still owns three
 migration revisions and no standalone collector, extra timer or pending-work queue.

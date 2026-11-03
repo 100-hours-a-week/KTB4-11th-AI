@@ -85,6 +85,7 @@ class OpenDart:
             self._settings.request_interval,
             self._settings.attempts,
             self._settings.max_archive_bytes,
+            self._settings.max_uncompressed_bytes,
         )
 
     def entries(self) -> list[FeedEntry]:

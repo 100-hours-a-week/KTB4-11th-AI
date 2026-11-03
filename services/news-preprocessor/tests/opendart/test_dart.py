@@ -117,3 +117,126 @@ def test_request_recovers_on_third_attempt_without_logging_final_failure(
     assert len(requests) == 3
     assert [r.message for r in caplog.records].count("dart_request_retry") == 2
     assert not any(r.message in ("dart_request_failed", "dart_api_failed") for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [
+        ("list.json", b'{"status":"000"}'),
+        ("list.json", b'{"status":"000","list":null,"total_page":1}'),
+        ("list.json", b'{"status":"000","list":[{}],"total_page":1}'),
+        ("list.json", b'{"status":"000","list":[],"total_page":"one"}'),
+        ("fnlttSinglAcntAll.json", b'{"status":"000"}'),
+        ("fnlttSinglAcntAll.json", b'{"status":"000","list":[null]}'),
+        ("fnlttSinglAcntAll.json", b'{"status":"000","list":[{}]}'),
+        ("fnlttSinglAcntAll.json", b'{"status":"000","list":[{"sj_div":123}]}'),
+        ("fnlttSinglAcntAll.json", b'{"status":"000","list":[{"sj_div":"BS","ord":1}]}'),
+        ("company.json", b'{"status":"000"}'),
+        ("company.json", b'{"status":"000","acc_mt":"13"}'),
+        ("document.xml", b"not a ZIP or DART status XML"),
+        ("document.xml", b"PKbroken archive"),
+        ("document.xml", b"<result><status>000</status></result>"),
+        ("document.xml", b"<result/>"),
+    ],
+)
+def test_invalid_success_responses_exhaust_three_attempts(endpoint, payload, monkeypatch, caplog):
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    requests = []
+
+    def invalid(request):
+        requests.append(request)
+        return httpx.Response(200, content=payload)
+
+    with httpx.Client(transport=httpx.MockTransport(invalid)) as client:
+        with pytest.raises(RuntimeError, match="DART request failed"):
+            DartClient(client, "test-key", interval=0).get(endpoint, {})
+    assert len(requests) == 3
+    final = [r for r in caplog.records if r.message == "dart_request_failed"]
+    assert len(final) == 1
+    assert final[0].fields["reason"] == "invalid_response"
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "payload"),
+    [
+        ("list.json", b'{"status":"013"}'),
+        ("fnlttSinglAcntAll.json", b'{"status":"013"}'),
+        ("document.xml", b"<result><status>014</status></result>"),
+    ],
+)
+def test_no_data_responses_return_without_retry(endpoint, payload):
+    requests = []
+
+    def empty(request):
+        requests.append(request)
+        return httpx.Response(200, content=payload)
+
+    with httpx.Client(transport=httpx.MockTransport(empty)) as client:
+        assert DartClient(client, "test-key", interval=0).get(endpoint, {}) == payload
+    assert len(requests) == 1
+
+
+def test_malformed_listing_recovers_on_third_valid_response(monkeypatch):
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    requests = []
+
+    def recover(request):
+        requests.append(request)
+        return httpx.Response(
+            200, json={"status": "000"} if len(requests) < 3 else {"status": "013"}
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(recover)) as client:
+        assert DartClient(client, "test-key", interval=0).json("list.json", {}) == {"status": "013"}
+    assert len(requests) == 3
+
+
+def test_corrupted_zip_members_exhaust_three_requests(monkeypatch):
+    import io
+    import zipfile
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("main.xml", "<DOCUMENT><P>unique-body</P></DOCUMENT>")
+    corrupt = data.getvalue().replace(b"unique-body", b"broken-body")
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, content=corrupt)
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(RuntimeError, match="DART request failed"):
+            DartClient(client, "test-key", interval=0).get("document.xml", {})
+    assert len(requests) == 3
+
+
+def test_zip_validation_respects_uncompressed_size_before_reading_members(monkeypatch):
+    import io
+    import zipfile
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("large.xml", "A" * 1000)
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, content=data.getvalue())
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        with pytest.raises(RuntimeError, match="DART request failed"):
+            DartClient(client, "test-key", interval=0, max_uncompressed_bytes=100).get(
+                "document.xml", {}
+            )
+    assert len(requests) == 3

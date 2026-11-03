@@ -40,6 +40,8 @@ def scrape(engine: sa.Engine, source: NewsSource) -> ScrapeResult:
             stage=stage,
             error_type=type(error).__name__,
         )
+        if stage == "state_load":
+            raise
         return ScrapeResult(succeed=[], failed=[source.feed_url])
     finally:
         if isinstance(source, OpenDart) and source.collection_plan is not None:

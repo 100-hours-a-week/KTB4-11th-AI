@@ -665,3 +665,53 @@ def test_exhausted_listing_is_not_retried_until_next_day(company_engine, setting
         assert api.count("list.json") == 3
         listing_clock["now"] += timedelta(days=1)
         assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+
+
+def test_news_restart_does_not_repeat_exhausted_disclosure_requests(
+    company_engine, settings, listing_clock, monkeypatch
+):
+    from news_preprocessor import __main__ as entry
+    from news_preprocessor.embed_pending import EmbedResult
+    from news_preprocessor.scrape import ScrapeResult
+
+    monkeypatch.setenv("NEWS_PREPROCESSOR_POSTGRES_DSN", "postgresql+psycopg://unused/test")
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DART_API_KEY", "test")
+    monkeypatch.setattr(entry.sa, "create_engine", lambda _: company_engine)
+    monkeypatch.setattr(entry, "kospi200_stock_codes", lambda _: {STOCK})
+    monkeypatch.setattr(entry, "embed_pending", lambda *args: EmbedResult([], []))
+    api = DartAPI()
+    api.listed_on = "20261030"
+    api.document_error = True
+    news_failed = True
+    news = object()
+    calls = []
+
+    def scrape_source(engine, source):
+        if source is news:
+            calls.append(source)
+            return ScrapeResult([], ["news"] if news_failed else [])
+        return scrape(engine, source)
+
+    monkeypatch.setattr(entry, "scrape", scrape_source)
+    with api.client() as client:
+        source = OpenDart(client, "test", {STOCK}, settings.model_copy(update={"attempts": 3}))
+        monkeypatch.setattr(entry, "publishers", lambda *args: (news, source))
+        with pytest.raises(SystemExit) as first:
+            entry.main()
+        assert first.value.code == 1
+        assert api.count("document.xml") == 3
+        requests = len(api.requests)
+        news_failed = False
+        listing_clock["now"] += timedelta(minutes=5)
+        with pytest.raises(SystemExit) as restarted:
+            entry.main()
+        assert restarted.value.code == 0
+        assert len(api.requests) == requests
+        assert len(calls) == 2
+        api.document_error = False
+        listing_clock["now"] += timedelta(days=1)
+        with pytest.raises(SystemExit) as next_day:
+            entry.main()
+        assert next_day.value.code == 0
+        assert api.count("document.xml") == 4
+        assert stored(company_engine)["status"] == "ready"
