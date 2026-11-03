@@ -102,9 +102,15 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 ## Verification
 
 - Added tests failed first for missing profile parsing, direct-read methods, and tools.
-- Final full suite against the disposable `ktb_typed_disclosure_services_test` PostgreSQL database:
-  **1,364 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+- Final full suite against the disposable `ktb_disclosure432_test` PostgreSQL database:
+  **1,451 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
   account for the skips.
+- The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail
+  changes. Collection revisions 0013–0015 are unchanged; the only index revision is 0016.
+- Python 3.14, existing CI job structure and hash-pinned Docker requirements match dev.
+  CI traverses reverse dependencies for workspace services as well as packages, so a
+  retrieval-only change also tests/builds portfolio-builder. Image jobs include only
+  services with Dockerfiles; indexer requirements are checked against uv.lock.
 - Ruff, formatting, Tach internal and external dependencies, and diff checks pass.
 - Retrieval tests call Python functions directly and retain PostgreSQL search,
   correction, source-identity, history, candidate-50, and reranking cases. HTTP endpoint

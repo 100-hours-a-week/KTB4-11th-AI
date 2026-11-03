@@ -131,7 +131,8 @@ index belongs to a retired embedding space. An empty result is not evidence that
 exists; `latest_searched` says how many candidates were scored.
 
 Services communicate through datastores and explicit HTTP/queue contracts. Do not import
-another service's implementation. Keep module boundaries aligned with `tach.toml`.
+another service's implementation except the explicitly declared disclosure-retrieval
+library dependency used by portfolio-builder. Keep module boundaries aligned with `tach.toml`.
 Move code into shared packages only when actual callers need it; keep core free of
 third-party dependencies.
 

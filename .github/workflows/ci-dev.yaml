@@ -75,8 +75,12 @@ jobs:
           else
             members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
             for member in $members; do
-              if [[ "$member" == packages/* && -d "$member" ]]; then
-                package="ktb-${member#packages/}"
+              if [[ -d "$member" ]]; then
+                if [[ "$member" == packages/* ]]; then
+                  package="ktb-${member#packages/}"
+                else
+                  package="${member#services/}"
+                fi
                 tree=$(uv tree --invert --frozen --universal --no-dev --package "$package")
                 if [[ -z "$tree" ]]; then
                   echo "::error::$member is not the workspace package $package"
@@ -216,7 +220,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector market-streamer market-http portfolio-rebalancer report-builder; do
+          for pkg in disclosure-indexer news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector market-streamer market-http portfolio-rebalancer report-builder; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done
