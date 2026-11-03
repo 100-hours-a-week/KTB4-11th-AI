@@ -30,7 +30,7 @@ def test_recent_news_returns_only_recent_clusters_and_aggregates_mentions(client
         )
         conn.execute(
             sa.text(
-                "INSERT INTO theme_companies (theme_code, stock_code, is_major)"
+                "INSERT INTO theme_corporations (theme_code, stock_code, is_major)"
                 " VALUES (:other, '005930', false), (:major, '005930', true)"
             ),
             {"major": major_code, "other": other_code},

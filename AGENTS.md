@@ -1,8 +1,8 @@
 # Working in this repository
 
 This is the AI services monorepo for 척척개미단. Run commands from the repository root.
-Python 3.13 is the primary runtime; workspace packages support Python 3.13–3.14.
-The Python 3.14 compatibility job in CI is advisory.
+Python 3.14 is the primary runtime; workspace packages support Python 3.14–3.15.
+The Python 3.15 compatibility job in CI is advisory.
 
 ## Start here
 
@@ -157,26 +157,11 @@ third-party dependencies.
   ranking and timestamp. An empty or failed calculation retains the previous ranking.
 - Daily rankings use the previous trading day before 09:10 KST or when today's ranking
   is absent.
+- Market HTTP theme endpoints read market-syncer's current PostgreSQL snapshot and return
+  bare arrays keyed by `code`. Never expose them as point-in-time data in historical
+  evaluations.
 - Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing
   orderbook contracts.
-
-### Order queue
-
-- Fetch the Backend account snapshot once per rebalancer run through HTTP. Lookup
-  failures must exit before placing orders; do not add an account snapshot consumer.
-- Publish cancellations and replacements to the same Order FIFO queue, grouped by
-  account ID and deduplicated by `eventId`.
-- Successful cancellation publication means requested, not completed. Preserve
-  `order_cancel_requested` / `cancel_requested` terminology.
-- After successful cancellation sends, publish recalculated replacements immediately
-  in the same FIFO group. Do not refresh the snapshot or wait for pending orders to clear.
-  The Backend consumer must finish cancellation before processing the next command.
-- Failed or partial cancellation publication skips that account. Exit stocks produce
-  sells only; unconfirmed sell proceeds must not fund buys.
-- Preserve MessageId/eventId/correlationId/result logging and existing Backend JWT auth.
-  Use the AWS credential chain/IAM roles. Do not add an application failure queue or
-  directly publish to or normally consume DLQs.
-- Contract details: `docs/superpowers/specs/2026-10-08-sqs-messaging-design.md`.
 
 ## Dependencies and images
 

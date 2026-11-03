@@ -2,7 +2,7 @@
 name = "market-streamer"
 version = "0.1.0"
 description = "Kiwoom realtime KOSPI 200 prices into Valkey"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
     "ktb-aws",
