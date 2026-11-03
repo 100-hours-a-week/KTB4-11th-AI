@@ -1,0 +1,92 @@
+shared: &shared
+  - uv.lock
+  - pyproject.toml
+  - conftest.py
+  - tach.toml
+  - alembic.ini
+  - .python-version
+  - .dockerignore
+  - infrastructure/**
+  - .github/workflows/ci-*.yaml
+  - .github/ci-filters.yaml
+packages/aws:
+  - *shared
+  - packages/aws/**
+packages/core:
+  - *shared
+  - packages/core/**
+packages/telemetry:
+  - *shared
+  - packages/telemetry/**
+services/market-collector:
+  - *shared
+  - packages/core/**
+  - packages/aws/**
+  - services/market-collector/**
+  - docker/market-collector.Dockerfile
+  - docker/requirements/market-collector.txt
+services/market-http:
+  - *shared
+  - packages/core/**
+  - packages/aws/**
+  - packages/telemetry/**
+  - services/market-http/**
+  - docker/market-http.Dockerfile
+  - docker/requirements/market-http.txt
+services/market-streamer:
+  - *shared
+  - packages/core/**
+  - packages/aws/**
+  - packages/telemetry/**
+  - services/market-streamer/**
+  - docker/market-streamer.Dockerfile
+  - docker/requirements/market-streamer.txt
+services/market-syncer:
+  - *shared
+  - packages/core/**
+  - services/market-syncer/**
+  - docker/market-syncer.Dockerfile
+  - docker/requirements/market-syncer.txt
+services/news-clusterer:
+  - *shared
+  - packages/core/**
+  - services/news-clusterer/**
+  - docker/news-clusterer.Dockerfile
+  - docker/requirements/news-clusterer.txt
+services/news-graph-builder:
+  - *shared
+  - packages/core/**
+  - services/news-graph-builder/**
+  - docker/news-graph-builder.Dockerfile
+  - docker/requirements/news-graph-builder.txt
+services/news-http:
+  - *shared
+  - packages/core/**
+  - services/news-http/**
+  - docker/news-http.Dockerfile
+  - docker/requirements/news-http.txt
+services/news-preprocessor:
+  - *shared
+  - packages/core/**
+  - services/news-preprocessor/**
+  - docker/news-preprocessor.Dockerfile
+  - docker/requirements/news-preprocessor.txt
+services/portfolio-builder:
+  - *shared
+  - packages/core/**
+  - services/portfolio-builder/**
+  - docker/portfolio-builder.Dockerfile
+  - docker/requirements/portfolio-builder.txt
+services/portfolio-rebalancer:
+  - *shared
+  - packages/core/**
+  - packages/aws/**
+  - services/portfolio-rebalancer/**
+  - docker/portfolio-rebalancer.Dockerfile
+  - docker/requirements/portfolio-rebalancer.txt
+services/report-builder:
+  - *shared
+  - packages/core/**
+  - services/report-builder/**
+  - docker/report-builder.Dockerfile
+  - docker/requirements/report-builder.txt

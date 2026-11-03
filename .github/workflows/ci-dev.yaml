@@ -24,27 +24,30 @@ concurrency:
 jobs:
   detect-changes:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
-      full: ${{ steps.targets.outputs.full }}
+      full: ${{ steps.filter.outputs.shared }}
       services: ${{ steps.targets.outputs.services }}
       members: ${{ steps.targets.outputs.members }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       - name: Detect affected workspace members
+        id: filter
+        uses: dorny/paths-filter@v4.0.3
+        with:
+          base: ${{ github.ref_name }}
+          filters: .github/ci-filters.yaml
+
+      - name: Export affected targets
         id: targets
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          CHANGES: ${{ steps.filter.outputs.changes }}
         run: |
-          set -euo pipefail
-          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            git diff --name-only --no-renames "$BASE_SHA...$GITHUB_SHA"
-          else
-            echo "::notice::Base commit unavailable; checking every workspace member" >&2
-            echo uv.lock
-          fi | python3 scripts/detect_ci_targets.py | tee -a "$GITHUB_OUTPUT"
+          echo "services=$(jq -c 'map(select(startswith("services/")) | ltrimstr("services/"))' <<< "$CHANGES")" >> "$GITHUB_OUTPUT"
+          echo "members=$(jq -r 'map(select(. != "shared")) | join(" ")' <<< "$CHANGES")" >> "$GITHUB_OUTPUT"
 
   lint-and-test:
     needs: detect-changes
