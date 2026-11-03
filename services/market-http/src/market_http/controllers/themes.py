@@ -36,7 +36,10 @@ async def _read[T](request: Request, query: Callable[[sa.Engine], Awaitable[T]])
     "/themes",
     description=(
         "Returns KOSPI 200 themes (at least one member), grouped by the prefix before `_`,"
-        f" with others under 기타. Themes rank by KOSPI 200 member trade value descending, then KOSPI 200 member count descending, then `code` ascending. Items retain ranked order; groups follow the first-ranked item. {TRADE_VALUE} {SNAPSHOT_NOTICE}"
+        " with others under 기타. Themes rank by KOSPI 200 member trade value descending,"
+        " then KOSPI 200 member count descending, then `code` ascending. Items retain"
+        " ranked order; groups follow the first-ranked item."
+        f" {TRADE_VALUE} {SNAPSHOT_NOTICE}"
     ),
     responses=ERRORS,
 )
@@ -65,7 +68,8 @@ async def list_theme_stocks(
 @router.get(
     "/stocks/{code}/themes",
     description=(
-        "Returns themes containing the KOSPI 200 stock, most traded first: member trade value total"
+        "Returns themes containing the KOSPI 200 stock, most traded first: member trade"
+        " value total"
         " descending, then member count descending, then theme `code` ascending."
         f" {TRADE_VALUE} {SNAPSHOT_NOTICE}"
     ),
