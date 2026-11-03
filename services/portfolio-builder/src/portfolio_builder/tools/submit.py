@@ -45,6 +45,7 @@ def submit_portfolio(
     log: StructuredLogger,
     lock: threading.Lock,
     saved: list[int],
+    excluded: frozenset[str] = frozenset(),
 ) -> Command:
     submission = Submission(
         holdings=holdings, exits=exits, cash_weight=cash_weight, commentary=commentary
@@ -52,7 +53,7 @@ def submit_portfolio(
     with lock:
         if saved:
             raise ToolError(f"portfolio already saved as {saved[0]}; the run is over")
-        errors = validate_portfolio(submission, previous)
+        errors = validate_portfolio(submission, previous, excluded)
         if not errors:
             try:
                 saved.append(
@@ -80,6 +81,7 @@ def submit_tool(
     model: str,
     news_client: NewsClient,
     log: StructuredLogger,
+    excluded: frozenset[str] = frozenset(),
 ) -> BaseTool:
     return StructuredTool.from_function(
         # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.
@@ -92,6 +94,7 @@ def submit_tool(
             log=log,
             lock=threading.Lock(),
             saved=[],
+            excluded=excluded,
         ),
         name="submit_portfolio",
         description=(

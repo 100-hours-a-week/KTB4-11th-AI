@@ -1,4 +1,5 @@
 import math
+from collections.abc import Sequence
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -36,7 +37,22 @@ class Submission(BaseModel):
     commentary: str
 
 
-def validate_portfolio(submission: Submission, previous: frozenset[str]) -> list[str]:
+def excluded_company_ids(engine: sa.Engine, excluded_theme_codes: Sequence[str]) -> frozenset[str]:
+    if not excluded_theme_codes:
+        return frozenset()
+    query = sa.text(
+        "SELECT corporations.corp_code FROM theme_companies"
+        " JOIN corporations ON corporations.stock_code = theme_companies.stock_code"
+        " WHERE theme_companies.theme_code IN :theme_codes"
+    ).bindparams(sa.bindparam("theme_codes", expanding=True))
+    with engine.connect() as conn:
+        rows = conn.execute(query, {"theme_codes": list(excluded_theme_codes)})
+        return frozenset(row[0] for row in rows)
+
+
+def validate_portfolio(
+    submission: Submission, previous: frozenset[str], excluded: frozenset[str] = frozenset()
+) -> list[str]:
     errors: list[str] = []
     held: set[str] = set()
     for holding in submission.holdings:
@@ -47,6 +63,8 @@ def validate_portfolio(submission: Submission, previous: frozenset[str]) -> list
             errors.append(f"holdings: {company} is entering the portfolio and needs a reason")
         if company in held:
             errors.append(f"holdings: {company} appears more than once")
+        if company in excluded:
+            errors.append(f"holdings: {company} is in an excluded theme")
         held.add(company)
 
     exited: set[str] = set()
