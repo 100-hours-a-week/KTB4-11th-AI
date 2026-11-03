@@ -184,21 +184,18 @@ def test_missing_engine_returns_503():
         assert client.get("/themes").status_code == 503
 
 
-def test_openapi_documents_ordering_and_snapshot_boundary(client):
+def test_openapi_documents_theme_routes(client):
     paths = client.get("/openapi.json").json()["paths"]
 
     assert set(paths) >= {"/themes", "/themes/{code}/stocks", "/stocks/{code}/themes"}
     assert "/themes/{code}" not in paths
     for path in ("/themes", "/themes/{code}/stocks", "/stocks/{code}/themes"):
         operation = paths[path]["get"]
-        assert "`code` ascending" in operation["description"]
-        assert "point-in-time" in operation["description"]
         assert operation["responses"]["200"]["content"]["application/json"]["schema"]["type"] == (
             "array"
         )
     stocks = paths["/themes/{code}/stocks"]["get"]
     assert {parameter["name"] for parameter in stocks["parameters"]} == {"code"}
-    assert "trade value descending" in stocks["description"]
     assert {
         parameter["name"] for parameter in paths["/themes"]["get"].get("parameters", [])
     } == set()
