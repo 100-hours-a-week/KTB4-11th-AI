@@ -55,3 +55,24 @@ class Settings(BaseSettings):
         if self.valkey_auth_mode == "iam" and not (self.valkey_username and self.valkey_cache_name):
             raise ValueError("iam auth needs valkey_username and valkey_cache_name")
         return self
+
+
+class EvaluationSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_prefix="MARKET_HTTP_", extra="ignore", hide_input_in_errors=True
+    )
+
+    questdb_conf: str
+    evaluation_access: Literal["pit", "harness"]
+    evaluation_clock_file: str | None = None
+    host: str = "0.0.0.0"
+    port: int = Field(default=8000, gt=0, lt=65536)
+    log_level: str = "INFO"
+
+    @model_validator(mode="after")
+    def _clock_matches_access(self) -> Self:
+        if (self.evaluation_access == "pit") != (self.evaluation_clock_file is not None):
+            raise ValueError(
+                "pit access needs evaluation_clock_file; harness access must not set it"
+            )
+        return self

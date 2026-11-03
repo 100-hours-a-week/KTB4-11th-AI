@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 KST = ZoneInfo("Asia/Seoul")
@@ -28,3 +28,8 @@ COVERED_THROUGH = date(2027, 10, 1)
 
 def is_trading_day(day: date) -> bool:
     return day.weekday() < 5 and day not in KRX_HOLIDAYS
+
+
+def last_closed_date(as_of: datetime) -> date:
+    local = as_of.astimezone(KST)
+    return local.date() if local.time() >= MARKET_CLOSE else local.date() - timedelta(days=1)

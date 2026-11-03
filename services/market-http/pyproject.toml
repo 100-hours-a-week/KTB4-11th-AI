@@ -23,6 +23,7 @@ dependencies = [
 
 [project.scripts]
 market-http = "market_http.__main__:main"
+market-http-evaluation = "market_http.evaluation:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }
