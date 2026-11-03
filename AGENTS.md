@@ -118,6 +118,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent |
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
+| `evaluations/harness` (`harness`) | Evaluation loop, execution simulator, point-in-time information variants, decision adapters, and run records; not a deployed service |
 
 Services communicate through datastores and explicit HTTP/queue contracts. Do not import
 another service's implementation. Keep module boundaries aligned with `tach.toml`.
@@ -162,6 +163,14 @@ third-party dependencies.
   evaluations.
 - Read `docs/superpowers/specs/2026-10-15-market-orderbooks-design.md` before changing
   orderbook contracts.
+
+### Evaluation
+
+- Read `docs/superpowers/specs/2026-11-03-evaluation-harness-design.md` before changing the
+  harness, `compose.evaluate.yaml`, or the `*-evaluation` entry points.
+- Decision systems never receive the harness `PriceSource`. Point-in-time data comes only
+  from `market-http-evaluation` and `news-http-evaluation`, which read the cutoff from the
+  clock file; request parameters must never move it. Failures are recorded, never scored.
 
 ## Dependencies and images
 

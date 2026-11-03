@@ -1,0 +1,20 @@
+{
+  "experiment_id": "daily-rebalancing-2026q3",
+  "dataset_version": "questdb-postgres-snapshot-YYYYMMDD",
+  "universe": ["005930", "000660", "373220", "207940", "005380", "000270", "068270", "035420", "105560", "055550"],
+  "initial_capital": 100000000,
+  "fee_rate": 0.00015,
+  "sell_tax_rate": 0.002,
+  "episodes": [
+    {
+      "id": "daily-after-close",
+      "schedule": {"every": "day", "start": "2026-07-01", "end": "2026-09-29", "at": "16:00"},
+      "end": "2026-09-30T23:59:00+09:00"
+    },
+    {
+      "id": "weekly-monday-open",
+      "schedule": {"every": "week", "weekday": 0, "start": "2026-07-06", "end": "2026-09-28", "at": "08:00"},
+      "end": "2026-09-30T23:59:00+09:00"
+    }
+  ]
+}

@@ -57,6 +57,8 @@ jobs:
             members:
               - packages/**
               - services/**
+              - evaluations/**
+              - compose.evaluate.yaml
               - docker/*.Dockerfile
               - docker/requirements/*.txt
 
@@ -71,9 +73,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$FULL" == true ]]; then
-            members=$(printf '%s\n' packages/* services/*)
+            members=$(printf '%s\n' packages/* services/* evaluations/harness)
           else
-            members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
+            members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) elif .[0] == "evaluations" or .[0] == "compose.evaluate.yaml" then "evaluations/harness" else .[:2] | join("/") end' <<< "$FILES")
             for member in $members; do
               if [[ "$member" == packages/* && -d "$member" ]]; then
                 package="ktb-${member#packages/}"
@@ -87,9 +89,15 @@ jobs:
               fi
             done
           fi
-          members=$(sort -u <<< "$members" | while read -r member; do if [[ -d "$member" ]]; then echo "$member"; fi; done)
+          members=$(sort -u <<< "$members" | while read -r member; do
+            if [[ -d "$member" ]]; then
+              echo "$member"
+            elif [[ "$member" == services/* && -d "evaluations/${member#services/}" ]]; then
+              echo "evaluations/${member#services/}"
+            fi
+          done | sort -u)
           echo "members=$(tr '\n' ' ' <<< "$members" | sed 's/ $//')" >> "$GITHUB_OUTPUT"
-          echo "services=$(jq -Rnc '[inputs | select(startswith("services/")) | ltrimstr("services/")]' <<< "$members")" >> "$GITHUB_OUTPUT"
+          echo "services=$(jq -Rnc '[inputs | select(startswith("services/") or startswith("evaluations/")) | split("/")[1]]' <<< "$members")" >> "$GITHUB_OUTPUT"
 
   lint-and-test:
     needs: detect-changes
@@ -211,7 +219,7 @@ jobs:
       - name: Exported requirements still match uv.lock
         run: |
           set -euo pipefail
-          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector market-streamer market-http portfolio-rebalancer report-builder; do
+          for pkg in news-preprocessor news-clusterer market-syncer news-graph-builder news-http portfolio-builder market-collector market-streamer market-http portfolio-rebalancer report-builder harness; do
             uv export --package "$pkg" --no-dev --no-emit-workspace \
               --format requirements-txt -o "docker/requirements/${pkg}.txt" > /dev/null
           done

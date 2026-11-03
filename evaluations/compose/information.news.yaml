@@ -1,0 +1,30 @@
+# Layered on information.market.yaml: the raw variant.
+services:
+  news-http-pit:
+    image: ktb4-evaluation/news-http:local
+    build:
+      context: .
+      dockerfile: docker/news-http.Dockerfile
+    command: ["news-http-evaluation"]
+    environment:
+      NEWS_HTTP_POSTGRES_DSN: ${EVALUATION_POSTGRES_DSN:?EVALUATION_POSTGRES_DSN must be set}
+      NEWS_HTTP_EVALUATION_CLOCK_FILE: /clock/as_of
+      NEWS_HTTP_EVALUATION_AVAILABILITY: ${EVALUATION_NEWS_AVAILABILITY:-published}
+      NEWS_HTTP_LOG_LEVEL: ${EVALUATION_LOG_LEVEL:-INFO}
+    volumes:
+      - clock:/clock:ro
+    networks: [dataset, information]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  runner:
+    environment:
+      HARNESS_INFORMATION_VARIANT: raw
+      HARNESS_NEWS_URL: http://news-http-pit:8000
+    depends_on:
+      news-http-pit:
+        condition: service_healthy

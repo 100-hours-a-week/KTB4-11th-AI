@@ -1,0 +1,31 @@
+# Layered on information.market.yaml and information.news.yaml: the enriched variant.
+# Features read only the point-in-time market-http, so they inherit its cutoff.
+services:
+  features:
+    image: ktb4-evaluation/harness:local
+    build:
+      context: .
+      dockerfile: docker/harness.Dockerfile
+      target: harness
+    command: ["harness-features"]
+    environment:
+      HARNESS_FEATURES_MARKET_URL: http://market-http-pit:8000
+      HARNESS_FEATURES_LOG_LEVEL: ${EVALUATION_LOG_LEVEL:-INFO}
+    networks: [information]
+    depends_on:
+      market-http-pit:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  runner:
+    environment:
+      HARNESS_INFORMATION_VARIANT: enriched
+      HARNESS_FEATURES_URL: http://features:8000
+    depends_on:
+      features:
+        condition: service_healthy

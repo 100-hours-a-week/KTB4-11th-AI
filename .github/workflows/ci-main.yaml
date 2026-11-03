@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           audit_status=0
-          for member in packages/* services/*; do
+          for member in packages/* services/* evaluations/harness; do
             echo "::group::$member"
             uv run deptry "$member/src" --config "$member/pyproject.toml" || audit_status=1
             echo "::endgroup::"

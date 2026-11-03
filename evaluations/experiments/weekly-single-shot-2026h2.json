@@ -1,0 +1,17 @@
+{
+  "experiment_id": "weekly-single-shot-2026h2",
+  "dataset_version": "questdb-postgres-snapshot-YYYYMMDD",
+  "universe": ["005930", "000660", "373220", "207940", "005380", "000270", "068270", "035420", "105560", "055550"],
+  "initial_capital": 100000000,
+  "fee_rate": 0.00015,
+  "sell_tax_rate": 0.002,
+  "metrics": {"periods_per_year": 252, "target_return": 0.0, "risk_free_rate": 0.0},
+  "weekly_single_shot": {
+    "first_week": "2026-07-06",
+    "last_week": "2026-10-26",
+    "weekday": 0,
+    "at": "08:00",
+    "end_offset_days": 4,
+    "end_at": "23:59"
+  }
+}

@@ -1,7 +1,8 @@
 # Investment harness loop and execution simulator
 
 Date: 2026-10-31
-Status: Draft
+Status: Implemented; contracts extended by
+[`2026-11-03-evaluation-harness-design.md`](2026-11-03-evaluation-harness-design.md)
 Issue: https://github.com/100-hours-a-week/KTB4-11th-AI/issues/434 (parent #433)
 
 ## Purpose

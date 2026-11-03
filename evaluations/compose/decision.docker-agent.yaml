@@ -1,0 +1,48 @@
+# Docker Agent decision system. The worker reaches the information servers, the runner's
+# submission desk, and the model API; it never joins the dataset or harness networks.
+services:
+  agent-worker:
+    image: ktb4-evaluation/harness-agent:local
+    build:
+      context: .
+      dockerfile: docker/harness.Dockerfile
+      target: agent
+      args:
+        DOCKER_AGENT_URL: ${DOCKER_AGENT_URL:?DOCKER_AGENT_URL must be set}
+        DOCKER_AGENT_SHA256: ${DOCKER_AGENT_SHA256:?DOCKER_AGENT_SHA256 must be set}
+    environment:
+      HARNESS_AGENT_MODEL_PROVIDER: ${EVALUATION_MODEL_PROVIDER:?EVALUATION_MODEL_PROVIDER must be set}
+      HARNESS_AGENT_MODEL: ${EVALUATION_MODEL:?EVALUATION_MODEL must be set}
+      HARNESS_AGENT_MODEL_BASE_URL: ${EVALUATION_MODEL_BASE_URL:-}
+      HARNESS_AGENT_API_KEY_FILE: /run/secrets/model_api_key
+      HARNESS_AGENT_API_KEY_ENV: ${EVALUATION_MODEL_API_KEY_ENV:?EVALUATION_MODEL_API_KEY_ENV must be set}
+      HARNESS_AGENT_LOG_LEVEL: ${EVALUATION_LOG_LEVEL:-INFO}
+    secrets: [model_api_key]
+    networks: [information, decision, egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8200/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  runner:
+    environment:
+      HARNESS_DECISION_SYSTEM: docker-agent
+      HARNESS_AGENT_WORKER_URL: http://agent-worker:8200
+      HARNESS_SUBMISSION_URL: http://runner:8100
+    networks: [harness, decision]
+    depends_on:
+      agent-worker:
+        condition: service_healthy
+
+secrets:
+  model_api_key:
+    file: ${EVALUATION_MODEL_API_KEY_FILE:?EVALUATION_MODEL_API_KEY_FILE must be set}
+
+networks:
+  information:
+    internal: true
+  decision:
+    internal: true
+  egress: {}
