@@ -78,34 +78,3 @@ def find_theme_stocks(engine: sa.Engine, theme_code: str) -> list[ThemeStock] | 
             {"code": theme_code},
         ).mappings()
         return [ThemeStock.model_validate(row) for row in rows]
-
-
-def find_stock_themes(
-    engine: sa.Engine, stock_code: str
-) -> list[tuple[StockTheme, list[str]]] | None:
-    with engine.connect() as conn:
-        exists = conn.execute(
-            sa.text("SELECT 1 FROM corporations WHERE stock_code = :code"), {"code": stock_code}
-        ).first()
-        if exists is None:
-            return None
-        rows = conn.execute(
-            sa.text(
-                "SELECT t.theme_code AS code, t.name, tc.is_major, m.stock_code AS member"
-                " FROM theme_corporations tc"
-                " JOIN themes t ON t.theme_code = tc.theme_code"
-                " JOIN theme_corporations m ON m.theme_code = tc.theme_code"
-                " JOIN corporation_indices ci"
-                " ON ci.stock_code = tc.stock_code AND ci.index_name = 'KOSPI200'"
-                " JOIN corporation_indices mi"
-                " ON mi.stock_code = m.stock_code AND mi.index_name = 'KOSPI200'"
-                " WHERE tc.stock_code = :code"
-                " ORDER BY t.theme_code, m.stock_code"
-            ),
-            {"code": stock_code},
-        ).mappings()
-        result: dict[str, tuple[StockTheme, list[str]]] = {}
-        for row in rows:
-            entry = result.setdefault(row["code"], (StockTheme.model_validate(row), []))
-            entry[1].append(row["member"])
-        return list(result.values())

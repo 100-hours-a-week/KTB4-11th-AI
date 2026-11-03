@@ -39,6 +39,7 @@ COPY --chown=app:app alembic.ini ./
 COPY --chown=app:app infrastructure infrastructure
 ENV PATH="/app/.venv/bin:$PATH"
 
+RUN mkdir -p /app/archive && chown app:app /app/archive
 USER app
 EXPOSE 8000
 CMD ["portfolio-rebalancer"]

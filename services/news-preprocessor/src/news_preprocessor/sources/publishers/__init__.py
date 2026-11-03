@@ -24,7 +24,7 @@ __all__ = [
 def publishers(
     client: httpx.Client, dart_api_key: str, stock_codes: set[str]
 ) -> tuple[NewsSource, ...]:
-    return (
+    sources: tuple[NewsSource, ...] = (
         ChosunEconomyRSS(client),
         HankyungEconomyRSS(client),
         MaeilBusinessEconomyRSS(client),
@@ -33,3 +33,4 @@ def publishers(
         *(SeoulEconomicRSS(client, section) for section in SeoulEconomicRSS.sections),
         OpenDart(client, dart_api_key, stock_codes),
     )
+    return sources

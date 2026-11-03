@@ -7,6 +7,9 @@ from pgvector.sqlalchemy import VECTOR
 from sqlalchemy.dialects.postgresql import insert
 
 from news_preprocessor.sources import NewsItem
+from news_preprocessor.sources.publishers.opendart.opendart import DisclosureItem
+from news_preprocessor.sources.publishers.opendart.parser import PARSER_VERSION
+from news_preprocessor.sources.publishers.opendart.storage import insert_disclosure
 
 metadata = sa.MetaData()
 
@@ -74,7 +77,20 @@ def known_external_ids(conn: sa.Connection, source: str, external_ids: list[str]
     query = sa.select(articles.c.external_id).where(
         articles.c.source == source, articles.c.external_id.in_(external_ids)
     )
-    return set(conn.execute(query).scalars())
+    known = set(conn.execute(query).scalars())
+    if source == "opendart":
+        known.update(
+            conn.execute(
+                sa.text(
+                    "SELECT r.receipt_id FROM disclosures r WHERE r.receipt_id = ANY(:ids) "
+                    "AND r.status IN ('ready','unavailable') AND (SELECT parser_version "
+                    "FROM disclosure_documents WHERE receipt_id=r.receipt_id "
+                    "ORDER BY id DESC LIMIT 1)=:parser"
+                ),
+                {"ids": external_ids, "parser": PARSER_VERSION},
+            ).scalars()
+        )
+    return known
 
 
 def kospi200_stock_codes(conn: sa.Connection) -> set[str]:
@@ -85,6 +101,8 @@ def kospi200_stock_codes(conn: sa.Connection) -> set[str]:
 
 
 def insert_new(conn: sa.Connection, item: NewsItem) -> bool:
+    if isinstance(item, DisclosureItem):
+        return insert_disclosure(conn, item)
     statement = (
         insert(articles)
         .values(**asdict(item))

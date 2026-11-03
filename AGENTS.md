@@ -218,3 +218,57 @@ that combined image. Keep CI service/export lists in sync when adding a service.
 - Consult `.github/workflows/` for current publishing/deployment behavior. Both dev and
   main push workflows publish the application image to ECR Public; deployment paths
   are defined in the corresponding CD workflows.
+
+OpenDART collection lives under `news_preprocessor.sources.publishers.opendart`, with
+flat `opendart.py`, `parser.py`, `dart.py`, `financials.py`, `storage.py`, and
+`settings.py` modules. The existing API publisher is the single intake: it classifies
+`pblntf_detail_ty`, keeps short filings in the news path, and fetches long filings'
+document and financial API data in `OpenDart.article`. It parses that data in memory
+and returns a `DisclosureItem`. The standard scrape stores filing metadata, documents,
+sections, and financial facts together in one PostgreSQL transaction.
+
+The ordinary `news-preprocessor` command runs under the unchanged hourly
+`ktb-news-preprocessor.timer`. There is no separate collection pass, staged database
+queue, persisted item-failure loop, RSS discovery, disclosure command, or collector
+timer. HTTP requests retain bounded retries. Automatic collection dates advance only
+after all selected filings succeed. Failed intervals are retried in the next daily
+slot within the 365-day lookback; same-day hourly runs do not retry them. Explicit date replay is also available.
+Listing, short/long document and financial requests share `DartClient`, with three
+attempts by default and a maximum of three. Disclosure-only failures exit with code 2;
+`RestartPreventExitStatus=2` prevents their same-day systemd restart. Other news,
+embedding and DB failures keep exit code 1 and the existing `Restart=on-failure`,
+five-minute delay and service start-rate limits. An hourly or service retry skips
+already-attempted OpenDART slots. Parsing and DB transaction failures retain immediate
+error/rollback behavior; state-loading DB exceptions propagate for service recovery.
+
+Long filing classes include A001 (annual), A002 (half-year), A003 (quarterly), F001
+(audit), F002 (consolidated audit), F003 (combined audit), C001–C005, J004, and H002.
+These classes describe filings; narrative, table, section, and financial-fact splitting
+is a separate parsing decision. `detail_type` is nullable for legacy rows, and fiscal
+year/period can be absent for nonperiodic filings without fiscal metadata.
+
+Migrations 0013–0015 create filing metadata and original documents, sections, and
+financial facts respectively. `financials_collected` records completed periodic
+financial collection as informational metadata; it is not a queue marker. Collection
+uses `NEWS_PREPROCESSOR_DISCLOSURE_*` for archive location, HTTP request pacing and
+retry attempts, and archive download/extraction limits. Original archives live outside
+the repository. Collection does not call an embedding model or generate answers.
+
+OpenDART stays available in the hourly source list. On first automatic ingestion it
+selects the latest 1000 unique KOSPI200 filings within 365 days, across short and long
+types. `disclosure_collection_state` stores initial completion, covered dates and
+attempted/successful daily slot dates, not pending receipt IDs. Initial failure retries, subsequent incremental
+checks and explicit date replay are uncapped. Successful capped initialization leaves
+an inclusive boundary sweep for the next daily slot, so a same-day 1001st filing is
+reachable. An already attempted slot skips API calls even when it failed. Three request
+failures are logged without another same-day collection run. A delayed startup at
+06:00 runs only if that daily slot has not yet been attempted.
+The daily hour remains configurable through `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR`.
+
+Normal checks resume inclusively from the last successful date. Existing receipt and
+parser-version checks skip stored documents before downloading. No new receipts means
+no document fetch, and no filing list means no classification/financial request. Set
+paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` for manual replay within
+365 days; it does not update automatic progress. Remove date overrides after replay.
+The collection-state table belongs to the unmerged 0013; collection still owns three
+migration revisions and no standalone collector, extra timer or pending-work queue.

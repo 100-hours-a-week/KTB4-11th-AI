@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict
 from redis.asyncio import Redis
 from scalar_fastapi import get_scalar_api_reference
 
-from market_http.controllers import bars, indices, orderbooks, prices, rankings, themes
+from market_http.controllers import bars, indices, orderbooks, prices, rankings, stocks, themes
 from market_http.market_subscription import MarketSubscription
 from market_http.observability.memory import memory_profiling
 from market_http.observability.metrics import SSEConnectionMetrics
@@ -94,6 +94,7 @@ def create_app(
     app.include_router(indices.router)
     app.include_router(rankings.router)
     app.include_router(themes.router)
+    app.include_router(stocks.router)
 
     if docs_enabled:
 

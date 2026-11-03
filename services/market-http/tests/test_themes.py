@@ -109,16 +109,6 @@ def test_theme_stocks_are_ordered_by_trade_value_with_missing_values_last(client
     ]
 
 
-def test_stock_themes_are_ordered_by_member_trade_value(client):
-    response = client.get("/stocks/035420/themes")
-
-    assert response.status_code == 200
-    assert response.json() == [
-        {"code": "T002", "name": "인공지능", "is_major": False},
-        {"code": "T005", "name": "플랫폼", "is_major": False},
-    ]
-
-
 @pytest.mark.parametrize("valkey", [Valkey({}), Valkey(fail=True)], ids=["empty", "failing"])
 def test_orders_fall_back_to_major_member_count_and_code_without_trade_values(engine, valkey):
     with TestClient(create_app(valkey, "unused", postgres_engine=engine)) as client:
@@ -129,48 +119,26 @@ def test_orders_fall_back_to_major_member_count_and_code_without_trade_values(en
     assert stocks == ["000660", "005930"]
 
 
-def test_relation_is_identical_in_both_directions(client):
-    for entry in client.get("/themes").json():
-        for theme in entry.get("items", [entry]):
-            for stock in client.get(f"/themes/{theme['code']}/stocks").json():
-                reverse = client.get(f"/stocks/{stock['code']}/themes").json()
-                assert {"code": theme["code"], "is_major": stock["is_major"]} in [
-                    {"code": item["code"], "is_major": item["is_major"]} for item in reverse
-                ]
-
-
 def test_existing_identifiers_without_relations_return_empty_arrays(client):
     assert client.get("/themes/T003/stocks").json() == []
     assert client.get("/themes/T006/stocks").json() == []
-    assert client.get("/stocks/222222/themes").json() == []
-    assert client.get("/stocks/373220/themes").json() == []
 
 
-def test_missing_identifiers_return_404(client):
+def test_missing_theme_returns_404(client):
     theme = client.get("/themes/T999/stocks")
-    stock = client.get("/stocks/999999/themes")
 
     assert (theme.status_code, theme.json()) == (404, {"detail": "theme not found"})
-    assert (stock.status_code, stock.json()) == (404, {"detail": "stock not found"})
 
 
 def test_theme_detail_route_is_not_provided(client):
     assert client.get("/themes/T001").status_code == 404
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/themes/T-01/stocks",
-        "/stocks/00593/themes",
-        "/stocks/005930A/themes",
-    ],
-)
-def test_invalid_parameters_return_422(client, path):
-    assert client.get(path).status_code == 422
+def test_invalid_theme_code_returns_422(client):
+    assert client.get("/themes/T-01/stocks").status_code == 422
 
 
-@pytest.mark.parametrize("path", ["/themes", "/themes/T001/stocks", "/stocks/005930/themes"])
+@pytest.mark.parametrize("path", ["/themes", "/themes/T001/stocks"])
 def test_database_failures_return_503(path):
     engine = sa.create_engine("sqlite://", poolclass=StaticPool)
     with TestClient(create_app(Valkey(), "unused", postgres_engine=engine)) as client:
@@ -187,9 +155,10 @@ def test_missing_engine_returns_503():
 def test_openapi_documents_theme_routes(client):
     paths = client.get("/openapi.json").json()["paths"]
 
-    assert set(paths) >= {"/themes", "/themes/{code}/stocks", "/stocks/{code}/themes"}
+    assert set(paths) >= {"/themes", "/themes/{code}/stocks"}
     assert "/themes/{code}" not in paths
-    for path in ("/themes", "/themes/{code}/stocks", "/stocks/{code}/themes"):
+    assert "/stocks/{code}/themes" not in paths
+    for path in ("/themes", "/themes/{code}/stocks"):
         operation = paths[path]["get"]
         assert operation["responses"]["200"]["content"]["application/json"]["schema"]["type"] == (
             "array"

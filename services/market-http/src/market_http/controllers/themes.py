@@ -4,9 +4,9 @@ from typing import Annotated
 import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Path, Request
 
-from market_http.controllers.dependencies import CODE, Valkey
-from market_http.repositories.themes import StockTheme, Theme, ThemeGroup, ThemeStock
-from market_http.services.themes import get_stock_themes, get_theme_stocks, get_themes
+from market_http.controllers.dependencies import Valkey
+from market_http.repositories.themes import Theme, ThemeGroup, ThemeStock
+from market_http.services.themes import get_theme_stocks, get_themes
 
 router = APIRouter()
 
@@ -43,16 +43,3 @@ async def list_theme_stocks(
     if stocks is None:
         raise HTTPException(404, "theme not found")
     return stocks
-
-
-@router.get(
-    "/stocks/{code}/themes",
-    responses={404: {"description": "Stock not found"}, **ERRORS},
-)
-async def list_stock_themes(
-    request: Request, valkey: Valkey, code: Annotated[str, Path(pattern=CODE)]
-) -> list[StockTheme]:
-    themes = await _read(request, lambda engine: get_stock_themes(engine, valkey, code))
-    if themes is None:
-        raise HTTPException(404, "stock not found")
-    return themes
