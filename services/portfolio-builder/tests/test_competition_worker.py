@@ -2,6 +2,7 @@ import json
 import logging
 from unittest.mock import Mock
 
+import pytest
 import sqlalchemy as sa
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.trace import TraceEntry
@@ -63,6 +64,13 @@ def _message(body, receipt="receipt"):
 
 def _deps():
     return Mock(), Mock(), Recorder()
+
+
+@pytest.fixture(autouse=True)
+def _stub_classification(monkeypatch):
+    monkeypatch.setattr(
+        worker, "_classify", lambda engine, settings, log, request: (None, None, False)
+    )
 
 
 class NewsClientStub:
@@ -324,3 +332,43 @@ def test_a_notification_failure_leaves_the_message_for_redelivery(
     )
 
     assert not sqs.delete_message.called
+
+
+def test_classification_runs_once_at_creation_and_never_again(
+    engine, monkeypatch, _insert_portfolio
+):
+    sqs, backend, log = _deps()
+    settings = _settings()
+    classify_spy = Mock(return_value=({"relevant": False}, "v", True))
+    monkeypatch.setattr(worker, "_classify", classify_spy)
+    portfolio_id = _insert_portfolio(engine)
+    monkeypatch.setattr(
+        worker,
+        "run_agent",
+        Mock(
+            return_value=RunResult(
+                outcome="saved",
+                portfolio_id=portfolio_id,
+                turns=1,
+                usage={},
+                trace=[TraceEntry(turn=1, kind="model", text="생각")],
+            )
+        ),
+    )
+    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    _patch_news(monkeypatch)
+
+    worker.process_message(
+        _message(MESSAGE), sqs, engine, backend, Mock(return_value=Mock()), settings, log
+    )
+    worker.process_message(
+        _message({**MESSAGE, "additional_request": "다른 원문"}),
+        sqs,
+        engine,
+        backend,
+        Mock(return_value=Mock()),
+        settings,
+        log,
+    )
+
+    assert classify_spy.call_count == 1

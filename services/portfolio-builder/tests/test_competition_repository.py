@@ -4,6 +4,7 @@ from portfolio_builder.briefing.repository import (
     find_participant_portfolio,
     find_previous_portfolio,
 )
+from portfolio_builder.competition.canonical import classify_additional_request
 from portfolio_builder.competition.repository import (
     claim_job,
     fail_job,
@@ -16,6 +17,11 @@ from portfolio_builder.competition.repository import (
 from portfolio_builder.database import competition_jobs
 
 MODEL = "openrouter/m"
+
+
+class _NullLog:
+    def error(self, event, **fields):
+        pass
 
 
 def test_first_message_stores_the_snapshot(engine, _request):
@@ -57,6 +63,66 @@ def test_an_identical_later_message_reports_no_difference(engine, _request):
     assert not changed
 
 
+def test_without_an_injected_classifier_the_row_is_stored_unclassified(engine, _request):
+    settings, _ = store_settings(engine, _request())
+
+    assert settings.canonical_form is None
+    assert settings.canonical_version is None
+    assert not settings.classified
+
+
+def test_classification_happens_only_on_the_message_that_creates_the_row(engine, _request):
+    calls = []
+
+    def classify(request):
+        calls.append(request.participant_id)
+        return {"relevant": True}, "v1", True
+
+    store_settings(engine, _request(), classify)
+    store_settings(engine, _request(risk_profile="안정형"), classify)
+
+    assert calls == [1]
+
+
+def test_a_redelivered_first_message_cannot_classify_twice(engine, _request):
+    def classify(request):
+        return {"relevant": True}, "v1", True
+
+    settings_a, _ = store_settings(engine, _request(), classify)
+
+    def must_not_run(request):
+        raise AssertionError("a conflicting insert must not classify")
+
+    settings_b, _ = store_settings(engine, _request(), must_not_run)
+
+    assert settings_b.canonical_form == settings_a.canonical_form == {"relevant": True}
+    assert settings_b.canonical_version == "v1"
+    assert settings_b.classified
+
+
+def test_a_classification_failure_stores_the_raw_text_and_leaves_it_unclassified(engine, _request):
+    def raising_ask(state, questions):
+        raise RuntimeError("jev is down")
+
+    def classify(request):
+        return classify_additional_request(
+            engine,
+            raising_ask,
+            "typesafe/jev-1.14",
+            0.5,
+            0.5,
+            request.additional_request,
+            request.effective_interested,
+            _NullLog(),
+        )
+
+    settings, _ = store_settings(engine, _request(additional_request="원문"), classify)
+
+    assert settings.canonical_form == "원문"
+    assert settings.canonical_version is None
+    assert not settings.classified
+
+
 def test_same_settings_and_previous_portfolio_give_the_same_key(_settings):
     a = _settings()
     b = _settings()
@@ -67,15 +133,30 @@ def test_same_settings_and_previous_portfolio_give_the_same_key(_settings):
     "changes",
     [
         {"risk_profile": "안정형"},
-        {"additional_request": "원문 "},
         {"interested_theme_codes": ("T1", "T2")},
         {"excluded_theme_codes": ("T9",)},
+        {"canonical_form": {"relevant": True}},
+        {"canonical_version": "other"},
     ],
 )
 def test_any_setting_difference_changes_the_key(changes, _settings):
     assert generation_key(_settings(**changes), None, MODEL) != generation_key(
         _settings(), None, MODEL
     )
+
+
+def test_additional_request_alone_no_longer_changes_the_key(_settings):
+    # Canonicalisation, not the raw text, carries identity now: two rows with the same
+    # canonical_form/canonical_version share a key even if their raw text differs.
+    a = _settings(additional_request="반도체 위주")
+    b = _settings(additional_request="반도체만")
+    assert generation_key(a, None, MODEL) == generation_key(b, None, MODEL)
+
+
+def test_the_pinned_jev_model_or_threshold_changing_changes_the_key(_settings):
+    a = _settings(canonical_version="typesafe/jev-1.14|0.5|0.0|v1")
+    b = _settings(canonical_version="typesafe/jev-1.14|0.6|0.0|v1")
+    assert generation_key(a, None, MODEL) != generation_key(b, None, MODEL)
 
 
 def test_a_different_previous_portfolio_changes_the_key(_settings):
