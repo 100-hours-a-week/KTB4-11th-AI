@@ -98,7 +98,7 @@ def test_duplicate_incoming_theme_codes_collapse_in_the_stored_snapshot(engine, 
     assert settings.interested_theme_codes == ("T1", "T2")
 
 
-def test_the_first_claim_is_mine_and_a_concurrent_claim_is_not(engine, _request):
+def test_a_second_claim_while_one_is_running_is_refused(engine, _request):
     settings, _ = store_settings(engine, _request())
     key = generation_key(settings, None, MODEL)
 
