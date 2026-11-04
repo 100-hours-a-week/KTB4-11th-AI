@@ -29,7 +29,7 @@ docker compose -f compose.local.yaml up news-graph-builder   # needs the env bel
 PORTFOLIO_BUILDER_LLM_MODEL=<openrouter model id> docker compose -f compose.local.yaml up portfolio-builder   # key from PORTFOLIO_BUILDER_LLM_API_KEY in .env
 docker compose -f compose.local.yaml --profile jobs run --rm portfolio-rebalancer   # one tick, then exits
 docker compose -f compose.local.yaml up report-builder
-docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder   # needs the competition queue and Backend variables in ai.env
+docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder   # needs the competition queue, Backend, and LLM (PORTFOLIO_BUILDER_LLM_API_KEY/LLM_MODEL) variables in ai.env
 
 # tests TRUNCATE tables: point them at a separate database, never at `ktb`
 docker compose -f compose.local.yaml exec postgres createdb -U ktb ktb_test

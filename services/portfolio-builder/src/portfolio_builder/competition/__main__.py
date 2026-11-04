@@ -24,13 +24,14 @@ REQUIRED_SETTINGS = (
 
 def main() -> None:
     settings = Settings()
+    setup_logging(settings.log_level, service_name="competition-portfolio-builder")
     missing = [name for name in REQUIRED_SETTINGS if not getattr(settings, name)]
     if not settings.backend_jwt_secret.get_secret_value():
         missing.append("backend_jwt_secret")
     if missing:
+        logger.error("missing_required_settings", missing=missing)
         raise SystemExit(f"missing required settings: {', '.join(missing)}")
 
-    setup_logging(settings.log_level, service_name="competition-portfolio-builder")
     logger.info("worker_started")
     sqs = boto3.client(
         "sqs",
