@@ -107,7 +107,7 @@ def test_jev_settings_default(monkeypatch):
     assert settings.jev_model == "typesafe/jev-1.14"
     assert settings.jev_timeout == 20
     assert settings.jev_noul_threshold == 0.5
-    assert settings.jev_choice_min_confidence == 0.0
+    assert settings.jev_choice_min_confidence == 0.5
 
 
 def test_jev_settings_are_read_from_the_environment(monkeypatch):
