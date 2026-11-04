@@ -116,6 +116,9 @@ competition_participants = sa.Table(
         server_default=sa.text("'{}'"),
     ),
     sa.Column("additional_request", sa.Text, nullable=False, server_default=sa.text("''")),
+    sa.Column("canonical_form", postgresql.JSONB, nullable=True),
+    sa.Column("canonical_version", sa.Text, nullable=True),
+    sa.Column("classified", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.Column(
         "created_at",
         sa.DateTime(timezone=True),
