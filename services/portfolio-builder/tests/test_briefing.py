@@ -225,6 +225,8 @@ def test_a_participant_briefing_shows_that_participants_previous_portfolio(
 def test_the_competition_prompt_keeps_the_mandatory_analysis_rule():
     assert "analyze_technicals" in COMPETITION_SYSTEM_PROMPT
     assert "every user of this service" not in COMPETITION_SYSTEM_PROMPT
+    assert "judged" not in COMPETITION_SYSTEM_PROMPT
+    assert "different user" not in COMPETITION_SYSTEM_PROMPT
 
 
 def test_the_competition_prompt_forbids_overriding_the_service_rules():
