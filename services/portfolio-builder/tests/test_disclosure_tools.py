@@ -28,6 +28,7 @@ def tools():
             disclosures.insert(),
             {
                 "receipt_id": "receipt-1",
+                "title": "사업보고서",
                 "stock_code": "005930",
                 "business_year": 2025,
                 "kind": "annual",
@@ -101,6 +102,9 @@ def test_direct_reads_use_database_without_http_or_gpu(tools):
         )
 
     assert sections["sections"][0]["text"] == "사업 위험 설명"
+    assert facts["facts"][0]["published_date"] == "2026-03-01"
+    assert facts["facts"][0]["title"] == "사업보고서"
+    assert facts["facts"][0]["previous_receipt_id"] is None
     assert facts["facts"][0]["source_value"] == "1,000"
     assert Decimal(facts["facts"][0]["value"]) == 1000
     assert json.loads(

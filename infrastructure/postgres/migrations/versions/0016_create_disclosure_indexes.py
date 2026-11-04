@@ -49,7 +49,7 @@ def upgrade() -> None:
             name="disclosure_indexes_identity_check",
         ),
         sa.CheckConstraint(
-            "status IN ('pending','processing','ready','failed','dead_letter')",
+            "status IN ('pending','processing','ready','empty','failed','dead_letter')",
             name="disclosure_indexes_status_check",
         ),
         sa.CheckConstraint(

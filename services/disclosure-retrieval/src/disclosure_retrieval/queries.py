@@ -24,15 +24,18 @@ WITH ranked AS (
         r.period_end, r.published_date, r.status, i.id AS index_id,
         CASE
             WHEN i.id IS NULL THEN 'pending'
+            WHEN i.status = 'empty' THEN 'empty'
             WHEN i.model = :model AND i.dimensions = :dimensions THEN 'ready'
             ELSE 'other_space'
         END AS index_state
     FROM ranked r
     LEFT JOIN LATERAL (
-        SELECT idx.id, idx.model, idx.dimensions
+        SELECT idx.id, idx.model, idx.dimensions, idx.status
         FROM disclosure_indexes idx
         JOIN disclosure_documents d ON d.id = idx.document_id
-        WHERE d.receipt_id = r.receipt_id AND idx.active AND idx.status = 'ready'
+        WHERE d.receipt_id = r.receipt_id
+            AND ((idx.active AND idx.status = 'ready')
+                 OR (idx.status = 'empty' AND idx.model = :model AND idx.dimensions = :dimensions))
             AND d.source_hash = (SELECT v.source_hash FROM disclosure_documents v
                         WHERE v.receipt_id = r.receipt_id ORDER BY v.id DESC LIMIT 1)
         ORDER BY (idx.model = :model AND idx.dimensions = :dimensions) DESC,
