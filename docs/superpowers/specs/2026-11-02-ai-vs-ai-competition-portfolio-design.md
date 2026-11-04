@@ -459,16 +459,42 @@ final return is marked to market or realised.
 Generation (writing) and trading (reading) are different flows, so they ship separately.
 
 1. **Generation**: schema, the competition worker, settings injection, excluded-theme
-   validation, Backend notification. The rebalancer is untouched, so common-portfolio trading
-   continues exactly as it does. Competition portfolios are generated and stored but not traded.
+   validation, Backend notification, **and scoping the rebalancer's reads to common portfolios**.
+   Competition portfolios are generated and stored but not traded, and common-portfolio trading
+   continues exactly as it does — the second of those does not hold without the scoping, as the
+   paragraphs below explain.
 2. **Trading**: `participant_id` in the snapshot, per-participant loading, leftover scoping.
 
-The split is only valid if stage 1 alone is a safe state. It is -- with one condition.
-Participant accounts carry no `participant_id` yet, so they look like common accounts. **If a
-participant account arrives with `is_active=true` while only stage 1 is deployed, it will be
-traded against the common portfolio.** Stage 1 can therefore only ship while the Backend
-either has not created participant accounts or keeps them inactive. That ordering has to be
-agreed with the Backend.
+The split is only valid if stage 1 alone is a safe state. Making it one takes two conditions,
+and the first of them was missed in an earlier draft of this document.
+
+**The rebalancer must ignore competition portfolios, and that belongs in stage 1.** An earlier
+version of this section said stage 1 touches nothing in `portfolio-rebalancer`. That was wrong,
+and wrong in the most dangerous direction. The rebalancer reads
+`SELECT id, status FROM portfolios ORDER BY id DESC LIMIT 1` and trades it when the status is
+`ready`. Competition portfolios are rows in that same table and they reach `ready` as soon as
+their explanations are saved, so the newest row would routinely be a participant's portfolio —
+and `__main__.py` applies whatever it loads to **every active account of every user**. One
+participant's AI-chosen holdings would be traded with every common user's money, which is
+anti-goal number one at the top of this document.
+
+The hazard runs the opposite way from how it was first analysed. The question is not whether a
+participant account might be traded against the common portfolio; it is whether a competition
+portfolio can poison the common read path. It can, so `LATEST` and `LEFTOVERS` both gain the
+same "no row in `competition_portfolios`" condition that `find_previous_portfolio` and
+`load_unexplained` carry. The condition is a no-op against all existing data, because no
+portfolio had a link row before this feature — which is why every pre-existing rebalancer test
+must pass unchanged.
+
+`LEFTOVERS` is the quieter half of the same defect: it scans sell reasons with
+`WHERE r.portfolio_id <= :id` across the whole table, so without the condition a common user's
+order could carry a competition participant's sell reason as the justification shown to them.
+
+**The second condition is the one about accounts.** Participant accounts carry no
+`participant_id` until stage 2, so they look like common accounts. If a participant account
+arrives with `is_active=true` while only stage 1 is deployed, it will be traded against the
+common portfolio. Stage 1 can therefore only ship while the Backend either has not created
+participant accounts or keeps them inactive. That ordering has to be agreed with the Backend.
 
 ## Schema
 
@@ -662,6 +688,7 @@ Not decided in conversation; decided here. The structure survives reversing any 
 
 | Call | Where |
 |---|---|
+| Scope the rebalancer's `LATEST` and `LEFTOVERS` to common portfolios in stage 1, overruling this document's earlier claim that stage 1 touches no rebalancer code | Two Pull Requests |
 | Express ownership with three link tables rather than a column on `portfolios` | Ownership and Sharing |
 | Use `previous_portfolio_id` in `generation_key` instead of a round identifier | generation_key |
 | Hash `additional_request` verbatim, without normalisation | generation_key |
