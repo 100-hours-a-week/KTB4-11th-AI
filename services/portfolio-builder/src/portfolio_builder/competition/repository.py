@@ -1,5 +1,5 @@
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
@@ -25,7 +25,7 @@ class ParticipantSettings:
     additional_request: str
 
 
-def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSettings, bool]:
+def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSettings, list[str]]:
     with engine.begin() as conn:
         conn.execute(
             pg_insert(competition_participants)
@@ -68,12 +68,16 @@ def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSett
         excluded_theme_codes=tuple(request.effective_excluded),
         additional_request=request.additional_request,
     )
-    return stored, stored != from_request
+    differing = [
+        field.name
+        for field in fields(ParticipantSettings)
+        if getattr(stored, field.name) != getattr(from_request, field.name)
+    ]
+    return stored, differing
 
 
 @dataclass(frozen=True)
 class Claim:
-    key: str
     mine: bool
     portfolio_id: int | None
 
@@ -119,7 +123,7 @@ def claim_job(
             .returning(competition_jobs.c.generation_key)
         ).first()
         if inserted is not None:
-            return Claim(key=key, mine=True, portfolio_id=None)
+            return Claim(mine=True, portfolio_id=None)
 
         row = (
             conn.execute(
@@ -132,7 +136,9 @@ def claim_job(
         )
 
         if row["status"] == "succeeded":
-            return Claim(key=key, mine=False, portfolio_id=row["portfolio_id"])
+            if row["portfolio_id"] is None:
+                return None
+            return Claim(mine=False, portfolio_id=row["portfolio_id"])
 
         is_stale = datetime.now(timezone.utc) - row["started_at"] > timedelta(
             seconds=stale_after_seconds
@@ -155,7 +161,7 @@ def claim_job(
                 portfolio_id=None,
             )
         )
-        return Claim(key=key, mine=True, portfolio_id=None)
+        return Claim(mine=True, portfolio_id=None)
 
 
 def finish_job(engine: sa.Engine, key: str, portfolio_id: int) -> None:

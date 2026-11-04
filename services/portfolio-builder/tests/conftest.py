@@ -45,9 +45,9 @@ SEED = [
     " (1, 1, 1, 2, 'supplies', '삼성전자가 엔비디아에 HBM을 공급'),"
     " (2, 1, 4, 2, 'used_by', 'HBM은 엔비디아 GPU에 쓰인다'),"
     " (3, 2, 3, 4, 'produces', 'SK하이닉스가 HBM을 생산')",
-    "INSERT INTO themes (theme_code, name) VALUES ('T1', 'HBM')",
+    "INSERT INTO themes (theme_code, name) VALUES ('T1', 'HBM'), ('T2', 'AI반도체')",
     "INSERT INTO theme_corporations (theme_code, stock_code, is_major) VALUES"
-    " ('T1', '005930', true), ('T1', '000660', false)",
+    " ('T1', '005930', true), ('T1', '000660', false), ('T2', '005930', true)",
 ]
 
 

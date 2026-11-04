@@ -177,6 +177,20 @@ def test_exclusion_errors_join_the_other_errors_in_one_rejection(engine, news_cl
     assert len(rejected.value.errors) == 2
 
 
+def test_a_company_in_two_themes_is_excluded_when_either_one_is_excluded(engine, news_client):
+    assert excluded_company_ids(engine, ["T2"]) == frozenset({SAMSUNG})
+
+    tool = submit_tool(
+        engine, frozenset(), "m", news_client, Recorder(), excluded=frozenset({SAMSUNG})
+    )
+
+    with pytest.raises(PortfolioRejected) as rejected:
+        tool.invoke(_call(VALID))
+
+    assert f"holdings: {SAMSUNG} is in an excluded theme" in rejected.value.errors
+    assert _rows(engine) == []
+
+
 def test_a_theme_code_no_longer_in_themes_excludes_nothing(engine):
     with engine.begin() as conn:
         conn.execute(sa.text("DELETE FROM theme_corporations WHERE theme_code = 'T1'"))

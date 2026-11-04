@@ -161,10 +161,11 @@ third-party dependencies.
   excludes them, which is the only thing that makes this true — competition portfolios do
   reach `ready`, so removing that condition would trade one participant's holdings in
   every user's account. Per-participant trading is separate, later work.
-- A participant's settings are frozen at its first request: later requests for the same
-  participant carry settings that are logged and ignored. Participants whose settings and
-  previous portfolio match share one generated portfolio, keyed by `generation_key`, whose
-  uniqueness is also what stops the same request generating twice.
+- A participant's settings are frozen at its first request, as a snapshot in
+  `competition_participants`: later requests for the same participant carry settings that
+  are logged and ignored. Participants whose settings and previous portfolio match share
+  one generated portfolio, tracked in `competition_jobs` and keyed by `generation_key`,
+  whose uniqueness is also what stops the same request generating twice.
 
 ### Market data
 

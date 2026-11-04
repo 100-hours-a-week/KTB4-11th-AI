@@ -237,7 +237,8 @@ def test_round_two_settings_drift_is_logged_and_the_snapshot_wins(
         log,
     )
 
-    assert ("settings_mismatch", logging.WARNING) in [(e, lvl) for e, lvl, _ in log.events]
+    mismatch = next(fields for e, lvl, fields in log.events if e == "settings_mismatch")
+    assert set(mismatch["fields"]) == {"risk_profile", "additional_request"}
 
 
 def test_a_failed_generation_fails_the_job_notifies_and_deletes(engine, monkeypatch):
@@ -290,6 +291,9 @@ def test_an_explain_failure_keeps_the_job_succeeded_and_marks_the_portfolio(
     assert (status, job) == ("explanation_failed", "succeeded")
     assert backend.completed.called
     assert sqs.delete_message.called
+    failed = next(fields for e, _, fields in log.events if e == "explain_failed")
+    assert failed["portfolio_id"] == portfolio_id
+    assert "rejected" in failed["error"]
 
 
 def test_a_notification_failure_leaves_the_message_for_redelivery(

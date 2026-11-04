@@ -112,6 +112,9 @@ def validate_portfolio(
     return errors
 
 
+FLOAT_TOLERANCE = 1e-9
+
+
 def validate_constraints(submission: Submission) -> list[str]:
     errors: list[str] = []
     constraints = submission.constraints
@@ -122,13 +125,13 @@ def validate_constraints(submission: Submission) -> list[str]:
         )
     if constraints.max_weight_per_holding is not None:
         for holding in holdings:
-            if holding.weight > constraints.max_weight_per_holding:
+            if holding.weight > constraints.max_weight_per_holding + FLOAT_TOLERANCE:
                 errors.append(
                     f"constraints: {holding.company_id} weight {holding.weight} exceeds"
                     f" max_weight_per_holding {constraints.max_weight_per_holding}"
                 )
     min_cash_weight = constraints.min_cash_weight
-    if min_cash_weight is not None and submission.cash_weight < min_cash_weight:
+    if min_cash_weight is not None and submission.cash_weight < min_cash_weight - FLOAT_TOLERANCE:
         errors.append(
             f"constraints: cash_weight {submission.cash_weight} is below"
             f" min_cash_weight {constraints.min_cash_weight}"

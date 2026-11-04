@@ -1,4 +1,5 @@
 import pytest
+import sqlalchemy as sa
 from portfolio_builder.briefing.repository import (
     find_participant_portfolio,
     find_previous_portfolio,
@@ -12,6 +13,7 @@ from portfolio_builder.competition.repository import (
     link_portfolio,
     store_settings,
 )
+from portfolio_builder.database import competition_jobs
 
 MODEL = "openrouter/m"
 
@@ -35,6 +37,16 @@ def test_later_message_keeps_the_stored_snapshot_and_reports_the_difference(engi
     assert changed
     assert settings.risk_profile == "성장형"
     assert settings.additional_request == "원문"
+
+
+def test_the_reported_difference_names_which_fields_drifted(engine, _request):
+    store_settings(engine, _request())
+
+    _, changed = store_settings(
+        engine, _request(risk_profile="안정형", additional_request="다른 원문")
+    )
+
+    assert set(changed) == {"risk_profile", "additional_request"}
 
 
 def test_an_identical_later_message_reports_no_difference(engine, _request):
@@ -122,6 +134,22 @@ def test_a_finished_job_hands_back_its_portfolio_without_generating(
 
     assert not claim.mine
     assert claim.portfolio_id == portfolio_id
+
+
+def test_a_succeeded_job_with_no_portfolio_id_cannot_be_shared(engine, _request):
+    settings, _ = store_settings(engine, _request())
+    key = generation_key(settings, None, MODEL)
+    claim_job(engine, key, settings, None, 3600, 3)
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(competition_jobs)
+            .where(competition_jobs.c.generation_key == key)
+            .values(status="succeeded", portfolio_id=None, finished_at=sa.func.now())
+        )
+
+    claim = claim_job(engine, key, settings, None, 3600, 3)
+
+    assert claim is None
 
 
 def test_a_stale_running_job_is_reclaimable(engine, _request):

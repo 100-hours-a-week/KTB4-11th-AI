@@ -129,6 +129,35 @@ def test_limits_are_measured_against_normalised_weights_including_cash():
     assert len(validate_constraints(normalize_weights(stricter))) == 1
 
 
+def test_a_holding_exactly_at_max_weight_per_holding_passes():
+    submission = _submission([("a", 0.5)], cash_weight=0.5, max_weight_per_holding=0.5)
+    assert validate_constraints(submission) == []
+
+
+def test_three_equal_holdings_exactly_at_one_third_each_passes():
+    submission = _submission(
+        [("a", 0.33), ("b", 0.33), ("c", 0.33)],
+        cash_weight=0.0,
+        max_weight_per_holding=1 / 3,
+    )
+    assert validate_constraints(normalize_weights(submission)) == []
+
+
+def test_a_holding_clearly_over_max_weight_per_holding_still_fails():
+    submission = _submission([("a", 0.51)], cash_weight=0.49, max_weight_per_holding=0.5)
+    assert len(validate_constraints(submission)) == 1
+
+
+def test_cash_exactly_at_min_cash_weight_passes():
+    submission = _submission([("a", 0.8)], cash_weight=0.2, min_cash_weight=0.2)
+    assert validate_constraints(submission) == []
+
+
+def test_cash_clearly_below_min_cash_weight_still_fails():
+    submission = _submission([("a", 0.81)], cash_weight=0.19, min_cash_weight=0.2)
+    assert len(validate_constraints(submission)) == 1
+
+
 def test_a_submission_satisfying_every_declared_constraint_passes():
     submission = _submission(
         [("a", 0.2), ("b", 0.2)],

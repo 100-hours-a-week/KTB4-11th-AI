@@ -21,6 +21,7 @@ def test_spaced_or_unknown_risk_profile_is_rejected(profile):
     "changes",
     [
         {"competition_id": "bad"},
+        {"competition_id": "12"},
         {"participant_id": None},
         {"participant_id": 0},
         {"user_id": -1},

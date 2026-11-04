@@ -67,7 +67,7 @@ def _explain(
         )
         log.info("explained", portfolio_id=portfolio_id, stocks=stocks)
     except Exception as error:
-        log.error("explain_failed", portfolio_id=portfolio_id, error_type=type(error).__name__)
+        log.exception("explain_failed", portfolio_id=portfolio_id, error=str(error))
         mark_explanation_failed(engine, portfolio_id)
 
 
@@ -127,9 +127,13 @@ def process_message(
         sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
         return
 
-    participant, differs = store_settings(engine, request)
-    if differs:
-        log.warning("settings_mismatch", participant_id=participant.participant_id)
+    participant, differing_fields = store_settings(engine, request)
+    if differing_fields:
+        log.warning(
+            "settings_mismatch",
+            participant_id=participant.participant_id,
+            fields=differing_fields,
+        )
 
     previous = latest_participant_portfolio(engine, participant.participant_id)
     previous_portfolio_id = previous[0] if previous is not None else None
