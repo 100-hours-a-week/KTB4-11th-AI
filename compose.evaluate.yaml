@@ -1,6 +1,7 @@
 # Evaluation harness. Combine with one information and one decision override:
-#   scripts/run-evaluation.sh evaluations/experiments/example.json raw equal-weight
-# Start the shared dataset first (evaluations/compose/dataset.yaml); see evaluations/README.md.
+#   scripts/run-evaluation.sh evaluations/experiments/weekly-single-shot-2026h2.json raw equal-weight
+# Start the shared dataset first (evaluations/compose/dataset.yaml).
+# See evaluations/harness/README.md.
 name: ktb4-evaluation
 
 x-health: &health
