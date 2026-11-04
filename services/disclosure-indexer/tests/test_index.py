@@ -669,3 +669,67 @@ def test_process_death_consumes_claim_budget_and_eventually_dead_letters(
         )
     assert index_documents(report_engine, settings)["failed"] == 0
     assert len(calls) == 3
+
+
+def test_different_signatures_complete_concurrently_without_deadlock(report_engine, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier, Event, Lock
+
+    inference = Barrier(2)
+    first_inference = Event()
+    second_index_locked = Event()
+    completion_lock = Lock()
+    completions = []
+    database_errors = []
+
+    def embed(texts, *args):
+        first_inference.set()
+        inference.wait(timeout=5)
+        return [[1.0] + [0.0] * 1999 for _ in texts]
+
+    def after_query(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("SELECT id FROM disclosure_indexes WHERE id="):
+            with completion_lock:
+                completions.append(parameters["id"])
+                first = len(completions) == 1
+            if first:
+                second_index_locked.wait(timeout=2)
+            else:
+                second_index_locked.set()
+
+    def before_query(conn, cursor, statement, parameters, context, executemany):
+        cursor.execute("SET LOCAL statement_timeout = '8s'")
+
+    def database_error(context):
+        database_errors.append(getattr(context.original_exception, "sqlstate", None))
+
+    monkeypatch.setattr("disclosure_indexer.index.embed_vectors", embed)
+    sa.event.listen(report_engine, "handle_error", database_error)
+    sa.event.listen(report_engine, "after_cursor_execute", after_query)
+    sa.event.listen(report_engine, "before_cursor_execute", before_query)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(index_documents, report_engine, _settings())
+            assert first_inference.wait(timeout=5)
+            b = pool.submit(index_documents, report_engine, _settings(chunk_bytes=1200))
+            results = [a.result(timeout=15), b.result(timeout=15)]
+    finally:
+        sa.event.remove(report_engine, "handle_error", database_error)
+        sa.event.remove(report_engine, "after_cursor_execute", after_query)
+        sa.event.remove(report_engine, "before_cursor_execute", before_query)
+    assert [r["ready"] for r in results] == [1, 1], database_errors
+    assert database_errors == []
+    assert [r["failed"] for r in results] == [0, 0]
+    with report_engine.connect() as conn:
+        assert (
+            conn.execute(
+                sa.text("SELECT count(*) FROM disclosure_indexes WHERE active")
+            ).scalar_one()
+            == 1
+        )
+        assert (
+            conn.execute(
+                sa.text("SELECT count(*) FROM disclosure_indexes WHERE status='ready'")
+            ).scalar_one()
+            == 2
+        )

@@ -3,7 +3,12 @@ from datetime import date
 import pytest
 import sqlalchemy as sa
 from disclosure_retrieval.sections import read_sections
-from disclosure_retrieval.tables import disclosure_sections, disclosures, metadata
+from disclosure_retrieval.tables import (
+    disclosure_documents,
+    disclosure_sections,
+    disclosures,
+    metadata,
+)
 
 
 @pytest.fixture
@@ -112,11 +117,14 @@ def insert_section(conn, receipt_id, published_date, **options):
             **options,
         },
     )
+    document_id = conn.scalar(sa.select(sa.func.count()).select_from(disclosure_documents)) + 1
+    conn.execute(disclosure_documents.insert(), {"id": document_id, "receipt_id": receipt_id})
     conn.execute(
         disclosure_sections.insert(),
         {
             "id": conn.scalar(sa.select(sa.func.count()).select_from(disclosure_sections)) + 1,
             "receipt_id": receipt_id,
+            "document_id": document_id,
             "document_name": "main.xml",
             "document_order": 0,
             "ordinal": 0,
@@ -205,3 +213,105 @@ def test_nonperiodic_revision_family_does_not_depend_on_optional_business_year(s
     insert_section(conn, "correction", date(2026, 3, 2), kind="audit", detail_type="F001")
     assert read_sections(conn, "005930", "original") == []
     assert len(read_sections(conn, "005930", "correction")) == 1
+
+
+@pytest.mark.parametrize("same_parser", [False, True])
+def test_latest_document_sections_are_selected_before_filters_and_limit(
+    sqlite_sections, same_parser
+):
+    conn = sqlite_sections
+    insert_section(conn, "receipt", date(2026, 3, 1))
+    conn.execute(disclosure_documents.insert(), {"id": 2, "receipt_id": "receipt"})
+    conn.execute(
+        disclosure_sections.insert(),
+        {
+            "id": 2,
+            "document_id": 2,
+            "receipt_id": "receipt",
+            "document_name": "main.xml",
+            "document_order": 0,
+            "ordinal": 0,
+            "heading": "new",
+            "topic": "business",
+            "text": "latest",
+            "start_offset": 0,
+            "end_offset": 6,
+            "parser_version": "v1" if same_parser else "v2",
+        },
+    )
+    assert [r.text for r in read_sections(conn, "005930", "receipt", limit=1)] == ["latest"]
+    assert read_sections(conn, "005930", "receipt", heading="risk") == []
+    assert read_sections(conn, "005930", "receipt", topic="risk") == []
+
+
+@pytest.mark.parametrize("status", ["ready", "failed", "pending", "unavailable"])
+def test_latest_document_without_sections_never_falls_back(sqlite_sections, status):
+    conn = sqlite_sections
+    insert_section(conn, "receipt", date(2026, 3, 1))
+    conn.execute(
+        disclosure_documents.insert(),
+        {
+            "id": 2,
+            "receipt_id": "receipt",
+            "extraction_status": status,
+        },
+    )
+    assert read_sections(conn, "005930", "receipt") == []
+
+
+@pytest.mark.parametrize("same_parser", [False, True])
+def test_postgres_sections_use_only_latest_document(sectioned, same_parser):
+    with sectioned.begin() as conn:
+        document_id = conn.execute(
+            sa.text("""
+            INSERT INTO disclosure_documents(receipt_id,archive_key,source_hash,
+                parser_version,documents)
+            VALUES ('sec-1','new',:hash,:parser,'[]') RETURNING id
+        """),
+            {
+                "hash": "new-hash" if same_parser else "h",
+                "parser": "sections-v1" if same_parser else "sections-v2",
+            },
+        ).scalar_one()
+        conn.execute(
+            sa.text("""
+            INSERT INTO disclosure_sections(document_id,receipt_id,document_name,
+                document_order,ordinal,heading,topic,text,start_offset,end_offset,parser_version)
+            VALUES (:d,'sec-1','00001.xml',0,0,'new','business','new text',0,8,:parser)
+        """),
+            {"d": document_id, "parser": "sections-v1" if same_parser else "sections-v2"},
+        )
+        assert [s.text for s in read_sections(conn, "005930", "sec-1", limit=1)] == ["new text"]
+        assert read_sections(conn, "005930", "sec-1", document_name="00002.xml") == []
+
+
+@pytest.mark.parametrize("status", ["failed", "pending", "unavailable"])
+def test_latest_unusable_document_sections_are_not_returned(sqlite_sections, status):
+    conn = sqlite_sections
+    insert_section(conn, "receipt", date(2026, 3, 1))
+    conn.execute(
+        disclosure_documents.insert(),
+        {
+            "id": 2,
+            "receipt_id": "receipt",
+            "extraction_status": status,
+        },
+    )
+    conn.execute(
+        disclosure_sections.insert(),
+        {
+            "id": 2,
+            "document_id": 2,
+            "receipt_id": "receipt",
+            "document_name": "main.xml",
+            "document_order": 0,
+            "ordinal": 0,
+            "heading": "bad",
+            "topic": "risk",
+            "text": "partial text",
+            "start_offset": 0,
+            "end_offset": 12,
+            "parser_version": "v2",
+        },
+    )
+    assert read_sections(conn, "005930", "receipt") == []

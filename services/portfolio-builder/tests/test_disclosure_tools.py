@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from disclosure_retrieval.queries import Evidence, SearchResult
 from disclosure_retrieval.settings import Settings
 from disclosure_retrieval.tables import (
+    disclosure_documents,
     disclosure_financial_facts,
     disclosure_sections,
     disclosures,
@@ -37,10 +38,12 @@ def tools():
                 "status": "ready",
             },
         )
+        conn.execute(disclosure_documents.insert(), {"id": 1, "receipt_id": "receipt-1"})
         conn.execute(
             disclosure_sections.insert(),
             {
                 "id": 1,
+                "document_id": 1,
                 "receipt_id": "receipt-1",
                 "document_name": "main.xml",
                 "document_order": 0,

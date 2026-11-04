@@ -120,6 +120,27 @@ an active processing lease. Disabled indexing rejects the recovery command befor
 access. Logs record the reset count; successful repeated recovery neither duplicates
 chunks nor calls inference again. This change does not run recovery against any deployed DB.
 
+## Parsed-section selection and activation locks
+
+Direct section reads join the existing `disclosure_sections.document_id` to the latest
+`disclosure_documents.id` for the requested receipt before applying topic, heading,
+physical-file or result-limit filters. The document must have ready extraction status.
+Parser version strings and source hashes are not substitutes for the document ID.
+Historical rows remain stored, but an empty or failed latest extraction never falls back
+to older text. Existing database columns are modeled in retrieval metadata; no migration
+or collector change is needed. SQLite and PostgreSQL regressions cover parser changes,
+changed source under the same parser, old matches taking the limit, and empty latest data.
+Three additional SQLite guard tests reject partial sections in non-ready latest documents.
+
+Concurrent different-signature completion was reproduced in PostgreSQL with SQLSTATE
+`40P01`: each transaction held its own index row while updating the other's active flag.
+Claim, ready-index restoration and completion now acquire the filing row before index
+rows. A fresh claim check runs after that lock, including the latest parsed document and
+lease state. Completion checks current document ownership again before writing vectors.
+Peer deactivation updates only active rows, leaving other processing work untouched.
+A coordinated two-worker PostgreSQL regression now completes both signatures without a
+DB error and preserves exactly one active index. Inference remains outside DB locks.
+
 ## Runtime failure limits and historical reads
 
 A new indexing attempt is recorded in the same transaction as the processing claim,
@@ -232,7 +253,7 @@ or position sizing. The text is not inserted into a model prompt or logged by th
   enabled configuration, and verify a technical-only portfolio can save when disabled.
   Existing enabled-mode tests still require successful disclosure search.
 - Final accuracy follow-up suite against disposable `ktb_disclosure_accuracy_test` PostgreSQL:
-  **1,521 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
+  **1,530 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
   upgraded in this test DB to verify the explicit empty state. Unconfigured optional integrations
   account for the skips.
 - The branch includes dev c6838ec, including the merged collection fixes and stock-detail
