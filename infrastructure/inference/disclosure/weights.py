@@ -1,7 +1,7 @@
 import json
-import runpy
 from pathlib import Path
 
+from disclosure_inference.contracts import Manifest
 from disclosure_inference.verification import verify_adapter
 
 
@@ -10,7 +10,8 @@ def download_weights(
 ) -> None:
     from huggingface_hub import snapshot_download
 
-    spec = runpy.run_path(config_path)["DISCLOSURE_MODELS"][kind]
+    manifest = Manifest.load(Path(config_path))
+    spec = {"embedding": manifest.embedding, "reranker": manifest.reranker}[kind]
     for part in ("base", "adapter"):
         snapshot_download(
             repo_id=spec[f"{part}_repo"],

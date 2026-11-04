@@ -1,3 +1,5 @@
+import json
+import os
 import runpy
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,7 +25,8 @@ class Manifest:
 
     @classmethod
     def load(cls, path: Path) -> "Manifest":
-        data = runpy.run_path(str(path))["DISCLOSURE_MODELS"]
+        frozen = os.environ.get("DISCLOSURE_MODEL_MANIFEST")
+        data = json.loads(frozen) if frozen else runpy.run_path(str(path))["DISCLOSURE_MODELS"]
         return cls(
             transform_version=data["transform_version"],
             max_tokens=data["max_tokens"],

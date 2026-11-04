@@ -1,4 +1,6 @@
+import json
 import os
+from dataclasses import asdict
 from pathlib import Path
 
 import modal
@@ -23,7 +25,13 @@ image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install_from_pyproject(str(SERVICE_PROJECT))
     .pip_install("huggingface_hub==1.33.0", "fastapi[standard]==0.142.2")
-    .env({"HF_HOME": CACHE, "TOKENIZERS_PARALLELISM": "false"})
+    .env(
+        {
+            "HF_HOME": CACHE,
+            "TOKENIZERS_PARALLELISM": "false",
+            "DISCLOSURE_MODEL_MANIFEST": json.dumps(asdict(MANIFEST), sort_keys=True),
+        }
+    )
     .add_local_file(MODEL_CONFIG_PATH, "/root/model_config.py", copy=True)
     .add_local_file(SERVICE_PROJECT, "/root/inference_pyproject.toml", copy=True)
     .add_local_python_source("disclosure_inference", copy=True)

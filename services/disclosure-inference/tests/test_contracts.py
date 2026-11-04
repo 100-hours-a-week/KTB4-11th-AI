@@ -118,3 +118,20 @@ def test_reranker_uses_the_evaluated_chat_template():
         "<Query>: 소송 위험\n<Document>: 회사: 삼성전자" in prompt
     )
     assert prompt.endswith("<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n")
+
+
+def test_image_manifest_preserves_resolved_overrides_without_shell_environment(monkeypatch):
+    import json
+    from dataclasses import asdict
+
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_ADAPTER_REVISION", "new-embedding-revision")
+    monkeypatch.setenv("DISCLOSURE_RERANKER_ADAPTER_REVISION", "new-reranker-revision")
+    selected = Manifest.load(MANIFEST)
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_ADAPTER_REVISION")
+    monkeypatch.delenv("DISCLOSURE_RERANKER_ADAPTER_REVISION")
+    monkeypatch.setenv("DISCLOSURE_MODEL_MANIFEST", json.dumps(asdict(selected)))
+    loaded = Manifest.load(MANIFEST)
+    assert loaded.embedding["adapter_revision"] == "new-embedding-revision"
+    assert loaded.reranker["adapter_revision"] == "new-reranker-revision"
+    assert loaded.embedding_identity() == selected.embedding_identity()
+    assert loaded.reranker_identity() == selected.reranker_identity()
