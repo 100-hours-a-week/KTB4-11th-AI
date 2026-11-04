@@ -16,7 +16,7 @@ def retrieval_metrics(question: dict, ids: list[str]) -> dict[str, float]:
     dcg = sum((2 ** relevance.get(cid, 0) - 1) / math.log2(i + 2) for i, cid in enumerate(ranked))
     ideal = sum(
         (2**value - 1) / math.log2(i + 2)
-        for i, value in enumerate(sorted(relevance.values(), reverse=True)[: len(ranked)])
+        for i, value in enumerate(sorted(relevance.values(), reverse=True)[:5])
     )
     return {
         "recall@5": len(gold.intersection(ranked)) / len(gold) if gold else 0,
@@ -41,7 +41,6 @@ def main() -> None:
     args = parser.parse_args()
     if not args.test_postgres_dsn.endswith("/ktb_test"):
         raise ValueError("Only the disposable ktb_test database is allowed")
-    args.output.mkdir(parents=True, exist_ok=True)
     chunks = [json.loads(line) for line in (args.dataset / "chunks.jsonl").read_text().splitlines()]
     questions = [
         json.loads(line) for line in (args.dataset / "questions.jsonl").read_text().splitlines()
@@ -50,11 +49,28 @@ def main() -> None:
     digest = hashlib.sha256(
         json.dumps(chunks, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
-    if identity["corpus_sha"] != digest:
+    embedding = identity.get("embedding")
+    if not isinstance(embedding, dict) or embedding != model_identity("embedding"):
+        raise ValueError("Cached document vectors require a matching generating embedding identity")
+    if embedding["dimensions"] != 1024 or embedding["max_tokens"] != 16384:
+        raise ValueError("Benchmark requires 1024 dimensions and 16384 tokens")
+    if identity.get("corpus_sha") != digest:
         raise ValueError("Frozen corpus does not match cached document vectors")
-    cached = np.load(args.vectors, allow_pickle=False)
-    vectors = cached["documents"]
-    if vectors.shape != (len(chunks), 1024) or not np.isfinite(vectors).all():
+    with args.vectors.open("rb") as source:
+        vectors_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
+        if identity.get("vectors_sha256") != vectors_sha256:
+            raise ValueError("Cached vectors file does not match its provenance hash")
+        source.seek(0)
+        with np.load(source, allow_pickle=False) as cached:
+            vectors = cached["documents"]
+            queries = cached["queries"]
+    dimensions = embedding["dimensions"]
+    if (
+        vectors.shape != (len(chunks), dimensions)
+        or queries.shape != (len(questions), dimensions)
+        or not np.isfinite(vectors).all()
+        or not np.isfinite(queries).all()
+    ):
         raise ValueError("Invalid cached vectors")
     run_identity = {
         "corpus_sha256": digest,
@@ -62,7 +78,9 @@ def main() -> None:
             json.dumps(questions, sort_keys=True, ensure_ascii=False).encode()
         ).hexdigest(),
         "document_vectors_sha256": hashlib.sha256(vectors.tobytes()).hexdigest(),
-        "embedding": model_identity("embedding"),
+        "embedding": embedding,
+        "vectors_file_sha256": vectors_sha256,
+        "metrics_version": "retrieval-v2-ideal-top5",
         "reranker": model_identity("reranker"),
         "policy": "calibration-narrative-positive-full-report-metadata-v1",
         "candidate_count": 50,
@@ -74,6 +92,7 @@ def main() -> None:
         raise ValueError("Benchmark output identity changed; select a separate output directory")
     if not run_path.exists() and (args.output / "questions.jsonl").exists():
         raise ValueError("Benchmark output identity is absent; do not resume unaudited results")
+    args.output.mkdir(parents=True, exist_ok=True)
     run_path.write_text(json.dumps(run_identity, sort_keys=True, indent=2))
     auth = json.loads(args.proxy_token_file.read_text())
     headers = {
@@ -153,7 +172,7 @@ def main() -> None:
             if response["identity"] != payload["identity"]:
                 raise ValueError("Query identity mismatch")
             query = np.array(response["vector"], dtype=np.float32)
-            parity = float(query @ cached["queries"][qi])
+            parity = float(query @ queries[qi])
             if parity < 0.999:
                 raise ValueError(f"Query compatibility tolerance failed: {question['id']}")
             embedding_seconds = time.perf_counter() - embedding_start

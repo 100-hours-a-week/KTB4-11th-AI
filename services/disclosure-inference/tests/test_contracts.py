@@ -135,3 +135,58 @@ def test_image_manifest_preserves_resolved_overrides_without_shell_environment(m
     assert loaded.reranker["adapter_revision"] == "new-reranker-revision"
     assert loaded.embedding_identity() == selected.embedding_identity()
     assert loaded.reranker_identity() == selected.reranker_identity()
+
+
+@pytest.mark.parametrize("chunk_id", ["1", True, False, 1.0, -1])
+def test_document_groups_reject_non_integer_or_negative_chunk_ids(chunk_id):
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        document_groups([{"document_id": "a", "chunks": [{"chunk_id": chunk_id, "text": "가"}]}])
+
+
+def test_all_document_ids_are_validated_before_encoding(manifest):
+    from disclosure_inference.runtime import EmbeddingRuntime
+
+    runtime = object.__new__(EmbeddingRuntime)
+    runtime.manifest = manifest
+    encoded = []
+    runtime._encode = lambda *args: encoded.append(args)
+    documents = [
+        {"document_id": "a", "chunks": [{"chunk_id": 1, "text": "가"}]},
+        {"document_id": "b", "chunks": [{"chunk_id": "1", "text": "나"}]},
+    ]
+    with pytest.raises(ValueError, match="nonnegative integer"):
+        runtime.document_embeddings(
+            {"identity": manifest.embedding_identity(), "documents": documents}
+        )
+    assert encoded == []
+
+
+def test_document_embedding_preserves_integer_ids_and_document_layout(manifest):
+    from disclosure_inference.runtime import EmbeddingRuntime
+
+    runtime = object.__new__(EmbeddingRuntime)
+    runtime.manifest = manifest
+    calls = []
+
+    def encode(documents, task):
+        calls.append((documents, task))
+        return [[[float(len(text))] for text in documents[0]]]
+
+    runtime._encode = encode
+    result = runtime.document_embeddings(
+        {
+            "identity": manifest.embedding_identity(),
+            "documents": [
+                {
+                    "document_id": "a",
+                    "chunks": [{"chunk_id": 0, "text": "가"}, {"chunk_id": 2, "text": "나다"}],
+                },
+                {"document_id": "b", "chunks": [{"chunk_id": 1, "text": "라마바"}]},
+            ],
+        }
+    )
+    assert calls == [([["가", "나다"]], "document"), ([["라마바"]], "document")]
+    assert result == {
+        "identity": manifest.embedding_identity(),
+        "vectors": {"0": [1.0], "2": [2.0], "1": [3.0]},
+    }

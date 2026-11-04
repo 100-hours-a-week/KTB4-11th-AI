@@ -69,6 +69,8 @@ def document_groups(documents: list[dict[str, Any]]) -> list[DocumentGroup]:
         pairs = []
         for chunk in chunks:
             chunk_id = chunk["chunk_id"]
+            if type(chunk_id) is not int or chunk_id < 0:
+                raise ValueError("chunk_id must be a nonnegative integer")
             text = chunk["text"]
             if not text.strip():
                 raise ValueError(f"chunk {chunk_id} is empty")

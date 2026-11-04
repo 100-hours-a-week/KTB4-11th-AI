@@ -184,9 +184,9 @@ stored in the DB. Only news-preprocessor uses the DART key and archive volume. N
 and the weekday 06:00 portfolio pipeline keep their existing roles. No eligible
 documents means zero disclosure inference calls. GPU serving PR #430 owns no migration.
 
-Parsed sections retain whether they came from narrative or a table. Known narrative topics
-are embedded; tables and unclassified sections remain available through direct section
-reads. Financial facts remain structured rows for direct SQL tools. Context windows never cross
+Parsed sections retain whether they came from narrative or a table. Every nonblank narrative
+section is embedded, including topic `other`; tables remain available through direct section
+reads. Documents without narrative text finish as `empty`, never as a ready vector index. Financial facts remain structured rows for direct SQL tools. Context windows never cross
 physical files inside a ZIP and retain source order. A conservative 12,000-byte group budget
 is followed by the checkpoint's exact tokenizer check at 16,384 tokens, with no truncation.
 This grouping/classification is a serving change and needs its own quality evaluation.
@@ -217,6 +217,34 @@ Before production cutover, measure snapshot hit/miss startup at a larger sample 
 maximum-token VRAM, identical-input parity, halfvec Top-5 effects, quality on the frozen
 evaluation set, end-to-end latency and cost at 100 randomly timed requests/day. Historical
 scores and startup numbers do not validate this implementation.
+
+## Benchmark provenance and metric version
+
+`benchmark.py` requires a frozen `identity.json` beside the document/query NPZ cache:
+
+| Field | Value |
+| --- | --- |
+| `embedding` | Full generating embedding identity, including pinned model/adapter revisions, adapter hash, dimensions, token budget and transform |
+| `corpus_sha` | SHA256 of `json.dumps(chunks, sort_keys=True, ensure_ascii=False).encode()` |
+| `vectors_sha256` | SHA256 of the exact NPZ file bytes |
+
+The NPZ must contain finite `documents` and `queries` arrays with matching corpus,
+question counts and dimensions. The producing identity must match the configured model;
+missing or mismatched provenance stops before output creation, database access or model
+calls. Do not fill missing producer metadata from today's model settings. Recover the
+original producer record independently or regenerate the cache with recorded provenance.
+
+nDCG@5 uses the five highest relevance labels for ideal DCG even when fewer than five
+results are returned. Duplicate result IDs count once. Run identity records
+`metrics_version=retrieval-v2-ideal-top5` and the cache-file hash, preventing resume into
+results produced by the previous metric or a different cache. Select a fresh output
+directory when either changes. Earlier cached-corpus accuracy results are historical,
+unaudited measurements pending provenance recovery and recomputation; they do not validate
+the current model. Latency observations remain separately scoped historical measurements.
+
+Document requests accept only nonnegative integer chunk IDs, unique across every group.
+Booleans, strings (including `"1"`), floats and duplicate IDs are rejected before encoding;
+the response's string keys therefore cannot collide through type coercion.
 
 ## Official references
 

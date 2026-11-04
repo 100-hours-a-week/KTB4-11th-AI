@@ -27,3 +27,6 @@ Run CPU tests from the repository root:
 ```bash
 uv run pytest services/disclosure-inference infrastructure/inference/disclosure
 ```
+
+Document chunk IDs must be unique nonnegative integers across all groups. Strings, floats,
+booleans and duplicate IDs are rejected before encoding, so response keys cannot collide.

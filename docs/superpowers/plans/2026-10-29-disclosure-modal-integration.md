@@ -198,7 +198,7 @@ DISCLOSURE_RETRIEVAL_TIMEOUT=150
   16,003-token document encoded in 8.634 seconds, with peak allocated/reserved VRAM of
   19.04/21.34 GiB; reported free memory was 0.42 GiB. Concurrency remains one input per container.
 - [x] Recompute GPU query vectors and reranking for 34 answerable narrative calibration
-  questions. Reuse verified full-report document vectors: 9,101 eligible chunks from five reports.
+  questions. Historical run reused full-report document vectors without the now-required producer-identity check: 9,101 eligible chunks from five reports.
 
 | Metric | Result |
 | --- | ---: |
@@ -208,7 +208,10 @@ DISCLOSURE_RETRIEVAL_TIMEOUT=150
 | Combined retrieval p50 | 14.540 seconds |
 | Combined retrieval p95 | 19.656 seconds |
 
-These scores validate compatibility with the original cached full-report corpus, not the new
+These historical scores are withdrawn as validation of the current model. The cached document
+vectors did not pass the producer-identity checks now required, and the previous nDCG
+implementation overestimated results when fewer than five documents were returned. Recover
+cache provenance and recompute before citing quality scores. They also do not evaluate the new
 production parser/classification/context grouping policy. The benchmark uses evaluation
 metadata and preceding context; production reranking input differs. The DB measurements use
 a local temporary test table. Labels have not completed SME review. No answer-generation F1
@@ -296,3 +299,19 @@ zero buffer and five-second scaledown for both models. No accuracy scores were r
 
 [Current comparison and hourly cost assumptions](https://docs.google.com/document/d/1cKUcbLhc1Sn4ez6XCdgt6y82BnTneBzy_a9JDEf8h9c/edit)
 and [measurement inputs, raw timings and verification archive](https://drive.google.com/file/d/1jgeZQow5ZiD-v93Ix4ynj2wU_7oSFjHl/view).
+
+## 10. Accuracy review follow-up
+
+- Verify the cached document vectors' complete producing embedding identity, corpus hash,
+  NPZ file hash, array shapes and finite values before any benchmark output or remote call.
+  Missing provenance must be recovered from the original producer record or regenerated;
+  current model settings cannot establish how an old cache was produced.
+- Calculate ideal DCG from the best five labelled documents independently of returned count.
+  Short, empty and duplicate-result examples are covered. New metric/cache identities reject
+  resuming old outputs; historical quality scores above are not current verification.
+- Reject noninteger, boolean, negative and repeated chunk IDs across all groups before
+  encoding. Integer 1 and string "1" cannot overwrite the same response key.
+- Integrate #432's complete narrative coverage, explicit empty index state, latest financial
+  filing reads with provenance, and receipt-scoped dead-letter recovery.
+- Keep #430 based on #432 while both are open. After #432 merges into dev, retarget #430
+  to dev and rerun CI. This follow-up performs no merge, deployment or paid inference.
