@@ -208,7 +208,7 @@ def test_filing_families_and_companies_do_not_supersede_each_other(sqlite_financ
     for receipt, options in [
         ("annual", {}),
         ("half", {"kind": "half"}),
-        ("other-detail", {"detail_type": "F002"}),
+        ("other-detail", {"kind": "audit", "detail_type": "F002"}),
         ("other-company", {"stock_code": "000660"}),
         ("other-year", {"business_year": 2024}),
         ("other-period", {"period_end": date(2025, 6, 30)}),
@@ -257,3 +257,93 @@ def test_missing_scope_in_latest_filing_does_not_fall_back(sqlite_financials):
     insert_filing(conn, "original", date(2026, 3, 1), [("OFS", "assets", "100")])
     insert_filing(conn, "latest", date(2026, 3, 2), [("CFS", "assets", "200")])
     assert read_financials(conn, "005930", business_year=2025, scope="OFS") == []
+
+
+@pytest.mark.parametrize(
+    "as_of, receipt, previous",
+    [
+        (date(2026, 2, 28), None, None),
+        (date(2026, 3, 1), "original", None),
+        (date(2026, 3, 2), "correction", "original"),
+    ],
+)
+def test_financial_revision_selection_uses_only_filings_published_as_of(
+    sqlite_financials, as_of, receipt, previous
+):
+    conn = sqlite_financials
+    insert_filing(conn, "original", date(2026, 3, 1), [("CFS", "assets", "100")])
+    insert_filing(conn, "correction", date(2026, 3, 2), [("CFS", "assets", "200")])
+    insert_filing(conn, "future", date(2026, 3, 3), [("CFS", "assets", "300")])
+    rows = read_financials(conn, "005930", business_year=2025, as_of=as_of)
+    assert [row.receipt_id for row in rows] == ([] if receipt is None else [receipt])
+    if rows:
+        assert rows[0].previous_receipt_id == previous
+
+
+@pytest.mark.parametrize("kind", ["annual", "half", "q1", "q3"])
+def test_periodic_correction_supersedes_different_detail_type(sqlite_financials, kind):
+    conn = sqlite_financials
+    insert_filing(
+        conn,
+        "original",
+        date(2026, 3, 1),
+        [("CFS", "assets", "100")],
+        kind=kind,
+        detail_type="A001",
+    )
+    insert_filing(
+        conn,
+        "correction",
+        date(2026, 3, 2),
+        [("CFS", "assets", "200")],
+        kind=kind,
+        detail_type="A002",
+    )
+    rows = read_financials(conn, "005930", business_year=2025)
+    assert [row.receipt_id for row in rows] == ["correction"]
+    assert rows[0].previous_receipt_id == "original"
+
+
+def test_future_failed_correction_does_not_hide_historical_financials(sqlite_financials):
+    conn = sqlite_financials
+    insert_filing(conn, "original", date(2026, 3, 1), [("CFS", "assets", "100")])
+    insert_filing(conn, "failed", date(2026, 3, 2), [], status="failed")
+    rows = read_financials(conn, "005930", business_year=2025, as_of=date(2026, 3, 1))
+    assert [row.receipt_id for row in rows] == ["original"]
+    assert read_financials(conn, "005930", business_year=2025, as_of=date(2026, 3, 2)) == []
+
+
+def test_financials_default_cutoff_excludes_future_filings(sqlite_financials):
+    from datetime import datetime
+    from unittest.mock import patch
+
+    conn = sqlite_financials
+    insert_filing(conn, "original", date(2026, 3, 1), [("CFS", "assets", "100")])
+    insert_filing(conn, "future", date(2026, 3, 2), [("CFS", "assets", "200")])
+    with patch("disclosure_retrieval.revisions.datetime") as clock:
+        clock.now.return_value = datetime(2026, 3, 1, 23, 59)
+        rows = read_financials(conn, "005930", business_year=2025)
+    assert [row.receipt_id for row in rows] == ["original"]
+
+
+def test_nonperiodic_financial_detail_types_remain_separate(sqlite_financials):
+    conn = sqlite_financials
+    insert_filing(
+        conn,
+        "audit",
+        date(2026, 3, 1),
+        [("CFS", "assets", "100")],
+        kind="audit",
+        detail_type="F001",
+    )
+    insert_filing(
+        conn,
+        "other-audit",
+        date(2026, 3, 2),
+        [("CFS", "assets", "200")],
+        kind="audit",
+        detail_type="F002",
+    )
+    rows = read_financials(conn, "005930", business_year=2025)
+    assert {row.receipt_id for row in rows} == {"audit", "other-audit"}
+    assert all(row.previous_receipt_id is None for row in rows)

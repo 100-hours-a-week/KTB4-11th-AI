@@ -638,3 +638,34 @@ def test_modal_context_rollback_restores_existing_vectors(report_engine, monkeyp
         disclosures(report_engine, "990001", retrieval, as_of=date(2026, 1, 1))[0].index_state
         == "ready"
     )
+
+
+def test_process_death_consumes_claim_budget_and_eventually_dead_letters(
+    report_engine, monkeypatch
+):
+    settings = _settings(max_attempts=3)
+    calls = []
+
+    def killed(*args):
+        calls.append(1)
+        raise SystemExit("worker killed")
+
+    monkeypatch.setattr("disclosure_indexer.index.embed_vectors", killed)
+    for attempt in range(1, 4):
+        with pytest.raises(SystemExit):
+            index_documents(report_engine, settings)
+        with report_engine.begin() as conn:
+            row = conn.execute(sa.text("SELECT attempts,status FROM disclosure_indexes")).one()
+            assert row == (attempt, "processing")
+            conn.execute(
+                sa.text("UPDATE disclosure_indexes SET lease_until=now()-interval '1 second'")
+            )
+    result = index_documents(report_engine, settings)
+    assert result["failed"] == 1
+    with report_engine.connect() as conn:
+        assert (
+            conn.execute(sa.text("SELECT status FROM disclosure_indexes")).scalar_one()
+            == "dead_letter"
+        )
+    assert index_documents(report_engine, settings)["failed"] == 0
+    assert len(calls) == 3

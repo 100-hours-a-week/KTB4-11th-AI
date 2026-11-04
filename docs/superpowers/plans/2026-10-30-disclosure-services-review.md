@@ -120,6 +120,45 @@ an active processing lease. Disabled indexing rejects the recovery command befor
 access. Logs record the reset count; successful repeated recovery neither duplicates
 chunks nor calls inference again. This change does not run recovery against any deployed DB.
 
+## Runtime failure limits and historical reads
+
+A new indexing attempt is recorded in the same transaction as the processing claim,
+before inference starts. OOM, SIGKILL and service timeout therefore consume the same
+budget as a handled request failure. A last-attempt processing lease that expires is
+moved to `dead_letter` on the next run, logged, and never calls inference again. Normal
+failure handling uses the already-recorded attempt rather than incrementing twice.
+Atomic reactivation of ready vectors does not spend an inference attempt.
+
+The indexer has no systemd automatic restart. It still starts after the existing news
+job completes or finally fails, including a manual news run; this is the selected collection
+and indexing flow. Subsequent scheduled runs retry bounded failed work. The explicit receipt
+recovery command remains available after an outage. Disabled startup reads only the enable
+flag and logging level, then exits before validating DSN, chunk budgets or model settings.
+`run_agent` also defaults disclosure work to false; enabled callers must opt in explicitly.
+
+All three disclosure tools accept `as_of`; direct section and financial reads apply the
+publication cutoff before choosing a revision. Omitting it uses today's KST date.
+A section receipt must be ready and the latest visible revision in its filing family.
+A later correction cannot appear in a historical read or its predecessor metadata.
+Latest failed/unavailable data still suppresses stale earlier amounts instead of guessing.
+Periodic revision families do not split on incidental detail-code changes. The normalized
+detail-type filter is applied after revision selection, so null legacy codes match their
+periodic type and filters cannot revive a superseded original.
+
+History searches execute four report CTE statements instead of seven: report selection,
+combined preflight counts, latest candidates plus their count, and history candidates plus
+their count. Final counts share the candidate statement's snapshot, so changes during
+inference cannot leave preflight totals attached to different results. Count queries exclude
+unrequested history. Search remains exact cosine over the selected scope; no ANN quality
+or production latency improvement is claimed. Nonempty latest/history reranking calls use
+at most two threads and retain separate top-k results; empty scopes make no request.
+
+The two CPU services now use the same stdlib-only transport and vector validation in
+`ktb_core.embedding.inference`. It handles authenticated same-origin result polling,
+shared deadlines, identity checks and normalized-vector validation. Service-specific
+settings and document/query/reranker response shapes remain local. Core has no GPU or
+third-party HTTP dependency. No inbound HTTP server is introduced.
+
 ## Activation and deployment ownership
 
 `DISCLOSURE_ENABLED` is shared by portfolio-builder and disclosure-indexer and defaults
@@ -177,14 +216,14 @@ Add `investment_profile` to each user, beside `user_id` and `accounts`:
 | Field | Meaning |
 | --- | --- |
 | `investment_profile` | Optional; omitted or null preserves the existing response contract. |
-| `risk_level` | Required strict integer, 1–5. Strings, booleans, and fractional values are rejected. |
+| `risk_level` | When supplied, strict integer 1–5. An invalid optional profile is ignored and logged; account validation remains unchanged. |
 | `strategy` | Optional free text, at most 4,000 characters; defaults to an empty string. |
 
 Levels: 1 conservative, 2 moderately conservative, 3 balanced, 4 moderately aggressive,
 5 aggressive. These correspond to 안정형, 안정추구형, 위험중립형, 적극투자형, 공격투자형.
 
 This is the AI-side receiving contract. The backend must add the field to its response.
-Profiles are parsed and retained, but do not yet affect portfolio generation, orders,
+Valid profiles are parsed and retained. Invalid optional profiles are ignored without rejecting users or accounts. Profiles do not affect portfolio generation, orders,
 or position sizing. The text is not inserted into a model prompt or logged by this change.
 
 ## Verification
@@ -193,10 +232,10 @@ or position sizing. The text is not inserted into a model prompt or logged by th
   enabled configuration, and verify a technical-only portfolio can save when disabled.
   Existing enabled-mode tests still require successful disclosure search.
 - Final accuracy follow-up suite against disposable `ktb_disclosure_accuracy_test` PostgreSQL:
-  **1,481 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
+  **1,521 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
   upgraded in this test DB to verify the explicit empty state. Unconfigured optional integrations
   account for the skips.
-- The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail
+- The branch includes dev c6838ec, including the merged collection fixes and stock-detail
   changes. Collection revisions 0013–0015 are unchanged; the only index revision is 0016.
 - Python 3.14, existing CI job structure and hash-pinned Docker requirements match dev.
   CI traverses reverse dependencies for workspace services as well as packages, so a

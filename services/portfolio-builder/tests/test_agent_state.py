@@ -92,3 +92,25 @@ def test_error_recovers_last_checkpoint():
 
 def test_usage_without_reported_cost_keeps_unknown_cost():
     assert reduce_usage({}, {"input": 3})["cost"] is None
+
+
+def test_default_agent_does_not_require_an_unregistered_disclosure_tool():
+    from .test_agent import Recorder, ScriptedModel, reply
+    from .test_required_technicals import tools_for
+
+    saved = []
+    tools = [tool for tool in tools_for(saved) if tool.name != "search_disclosures"]
+    result = run_agent(
+        model=ScriptedModel(
+            messages=iter(
+                [reply("", ("analyze_technicals", {})), reply("", ("submit_portfolio", {}))]
+            )
+        ),
+        tools=tools,
+        system_prompt="sys",
+        briefing="brief",
+        max_turns=3,
+        log=Recorder(),
+    )
+    assert result.outcome == "saved"
+    assert saved == [42]

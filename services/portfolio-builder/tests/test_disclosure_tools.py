@@ -182,3 +182,33 @@ def test_search_passes_detail_type_filter_to_direct_retrieval(tools):
             {"stock_code": "005930", "query": "합병 위험", "detail_type": "F002"}
         )
     assert run.call_args.args[2].detail_type == "F002"
+
+
+@pytest.mark.parametrize(
+    "name, args, key",
+    [
+        ("get_disclosure_sections", {"receipt_id": "receipt-1"}, "sections"),
+        ("get_disclosure_financials", {"business_year": 2025}, "facts"),
+    ],
+)
+def test_direct_tools_apply_as_of_to_database_reads(tools, name, args, key):
+    before = json.loads(
+        tools[name].invoke(
+            {
+                "stock_code": "005930",
+                "as_of": "2026-02-28",
+                **args,
+            }
+        )
+    )
+    published = json.loads(
+        tools[name].invoke(
+            {
+                "stock_code": "005930",
+                "as_of": "2026-03-01",
+                **args,
+            }
+        )
+    )
+    assert before == {key: []}
+    assert len(published[key]) == 1

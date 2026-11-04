@@ -1,6 +1,9 @@
+from datetime import date
+
 import pytest
 import sqlalchemy as sa
 from disclosure_retrieval.sections import read_sections
+from disclosure_retrieval.tables import disclosure_sections, disclosures, metadata
 
 
 @pytest.fixture
@@ -83,3 +86,122 @@ def test_a_section_read_makes_no_embedding_call(sectioned, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", forbidden)
     with sectioned.connect() as conn:
         assert read_sections(conn, "005930", "sec-1")
+
+
+@pytest.fixture
+def sqlite_sections():
+    engine = sa.create_engine("sqlite://")
+    metadata.create_all(engine)
+    with engine.begin() as conn:
+        yield conn
+    engine.dispose()
+
+
+def insert_section(conn, receipt_id, published_date, **options):
+    conn.execute(
+        disclosures.insert(),
+        {
+            "receipt_id": receipt_id,
+            "stock_code": "005930",
+            "title": "report",
+            "business_year": 2025,
+            "kind": "annual",
+            "period_end": date(2025, 12, 31),
+            "published_date": published_date,
+            "status": "ready",
+            **options,
+        },
+    )
+    conn.execute(
+        disclosure_sections.insert(),
+        {
+            "id": conn.scalar(sa.select(sa.func.count()).select_from(disclosure_sections)) + 1,
+            "receipt_id": receipt_id,
+            "document_name": "main.xml",
+            "document_order": 0,
+            "ordinal": 0,
+            "heading": "risk",
+            "topic": "risk",
+            "text": receipt_id,
+            "start_offset": 0,
+            "end_offset": len(receipt_id),
+            "parser_version": "v1",
+        },
+    )
+
+
+def test_section_visibility_uses_latest_revision_at_publication_cutoff(sqlite_sections):
+    conn = sqlite_sections
+    insert_section(conn, "original", date(2026, 3, 1), detail_type="A001")
+    insert_section(conn, "correction", date(2026, 3, 2), detail_type="A002")
+    assert read_sections(conn, "005930", "original", as_of=date(2026, 2, 28)) == []
+    assert len(read_sections(conn, "005930", "original", as_of=date(2026, 3, 1))) == 1
+    assert read_sections(conn, "005930", "correction", as_of=date(2026, 3, 1)) == []
+    assert read_sections(conn, "005930", "original", as_of=date(2026, 3, 2)) == []
+    assert len(read_sections(conn, "005930", "correction", as_of=date(2026, 3, 2))) == 1
+    assert read_sections(conn, "000660", "correction") == []
+
+
+@pytest.mark.parametrize("status", ["pending", "failed", "unavailable"])
+def test_unusable_section_revision_hides_older_sections(sqlite_sections, status):
+    conn = sqlite_sections
+    insert_section(conn, "original", date(2026, 3, 1))
+    insert_section(conn, "latest", date(2026, 3, 2), status=status)
+    assert read_sections(conn, "005930", "original") == []
+    assert read_sections(conn, "005930", "latest") == []
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"detail_type": "F002"},
+        {"period_end": date(2025, 6, 30)},
+        {"period_end": None},
+    ],
+)
+def test_nonperiodic_section_families_remain_separate(sqlite_sections, options):
+    conn = sqlite_sections
+    insert_section(
+        conn,
+        "original",
+        date(2026, 3, 1),
+        kind="audit",
+        detail_type="F001",
+        period_end=None if options.get("period_end", True) is None else date(2025, 12, 31),
+    )
+    insert_section(
+        conn, "other", date(2026, 3, 2), kind="audit", **{"detail_type": "F001", **options}
+    )
+    assert len(read_sections(conn, "005930", "original")) == 1
+    assert len(read_sections(conn, "005930", "other")) == 1
+
+
+def test_nonperiodic_section_correction_supersedes_same_detail_and_period(sqlite_sections):
+    conn = sqlite_sections
+    insert_section(conn, "original", date(2026, 3, 1), kind="audit", detail_type="F001")
+    insert_section(conn, "correction", date(2026, 3, 2), kind="audit", detail_type="F001")
+    assert read_sections(conn, "005930", "original") == []
+    assert len(read_sections(conn, "005930", "correction")) == 1
+
+
+def test_sections_default_cutoff_excludes_future_filings(sqlite_sections):
+    from datetime import datetime
+    from unittest.mock import patch
+
+    conn = sqlite_sections
+    insert_section(conn, "original", date(2026, 3, 1))
+    insert_section(conn, "future", date(2026, 3, 2))
+    with patch("disclosure_retrieval.revisions.datetime") as clock:
+        clock.now.return_value = datetime(2026, 3, 1, 23, 59)
+        assert len(read_sections(conn, "005930", "original")) == 1
+        assert read_sections(conn, "005930", "future") == []
+
+
+def test_nonperiodic_revision_family_does_not_depend_on_optional_business_year(sqlite_sections):
+    conn = sqlite_sections
+    insert_section(
+        conn, "original", date(2026, 3, 1), kind="audit", detail_type="F001", business_year=None
+    )
+    insert_section(conn, "correction", date(2026, 3, 2), kind="audit", detail_type="F001")
+    assert read_sections(conn, "005930", "original") == []
+    assert len(read_sections(conn, "005930", "correction")) == 1

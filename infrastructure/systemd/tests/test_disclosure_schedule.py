@@ -18,6 +18,7 @@ def test_existing_news_run_starts_indexing_after_completion_or_final_failure():
             if line.startswith(key + "=")
         )
         assert "ktb-disclosure-indexer.service" in values
+    assert "Restart=no" in indexer
     assert "ktb-disclosure-collector.service" not in indexer
     assert not (UNITS / "ktb-disclosure-collector.service.in").exists()
     assert not (UNITS / "ktb-disclosure-collector.timer").exists()

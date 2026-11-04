@@ -144,6 +144,33 @@ def index_documents(
             )
         log.info("disclosure_indexes_requeued", receipts=retry_receipts, count=len(requeued))
     result = {"ready": 0, "empty": 0, "failed": 0, "chunks": 0, "requeued": len(requeued)}
+    with engine.begin() as conn:
+        expired = (
+            conn.execute(
+                sa.text("""
+            UPDATE disclosure_indexes i
+            SET status='dead_letter', error='LeaseExpired', owner=NULL, lease_until=NULL
+            FROM disclosure_documents d
+            WHERE i.document_id=d.id AND i.signature=:signature
+                AND i.attempts >= :max_attempts
+                AND (i.status IN ('pending','failed')
+                     OR (i.status='processing' AND i.lease_until < now()))
+                AND (cardinality(CAST(:receipts AS text[]))=0
+                     OR d.receipt_id=ANY(CAST(:receipts AS text[])))
+            RETURNING i.id
+        """),
+                {
+                    "signature": signature,
+                    "max_attempts": settings.max_attempts,
+                    "receipts": list(retry_receipts),
+                },
+            )
+            .scalars()
+            .all()
+        )
+    result["failed"] += len(expired)
+    for index_id in expired:
+        log.warning("disclosure_index_dead_letter", index_id=index_id, reason="attempts_exhausted")
     attempted = []
     for _ in range(settings.document_limit):
         owner = str(uuid4())
@@ -204,7 +231,7 @@ def index_documents(
                 continue
             conn.execute(
                 sa.text(
-                    "UPDATE disclosure_indexes SET status='processing', "
+                    "UPDATE disclosure_indexes SET status='processing', attempts=attempts+1, "
                     "owner=CAST(:owner AS uuid), "
                     "lease_until=now()+make_interval(secs=>:lease), error=NULL WHERE "
                     "id=:id"
@@ -326,9 +353,8 @@ def index_documents(
                 conn.execute(
                     sa.text("""
                         UPDATE disclosure_indexes
-                        SET attempts = LEAST(attempts + 1, :max_attempts),
-                            status = CASE
-                                WHEN attempts + 1 >= :max_attempts THEN 'dead_letter'
+                        SET status = CASE
+                                WHEN attempts >= :max_attempts THEN 'dead_letter'
                                 ELSE 'failed'
                             END,
                             error = :error, owner = NULL, lease_until = NULL

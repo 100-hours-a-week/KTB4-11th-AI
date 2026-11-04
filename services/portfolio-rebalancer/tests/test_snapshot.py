@@ -1,6 +1,5 @@
 import pytest
 from portfolio_rebalancer.snapshot import Snapshot
-from pydantic import ValidationError
 
 EXAMPLE = {
     "users": [
@@ -72,8 +71,10 @@ def test_polling_retains_investment_profile_and_free_text(risk_level):
 
 
 @pytest.mark.parametrize("risk_level", [0, 6, True, 1.5, "3"])
-def test_polling_rejects_invalid_risk_levels(risk_level):
+def test_polling_ignores_invalid_unused_profile_without_rejecting_accounts(risk_level):
     user = {**EXAMPLE["users"][0], "investment_profile": {"risk_level": risk_level}}
 
-    with pytest.raises(ValidationError):
-        Snapshot.model_validate({"users": [user]})
+    snapshot = Snapshot.model_validate({"users": [user, EXAMPLE["users"][0]]})
+    assert len(snapshot.users) == 2
+    assert snapshot.users[0].investment_profile is None
+    assert snapshot.users[0].accounts == snapshot.users[1].accounts
