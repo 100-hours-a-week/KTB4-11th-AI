@@ -148,12 +148,13 @@ Gates first, then detail only where a gate opened. Most prompts should cost one 
 | 2 | `noul` × 9 technical signals | Only when the signals gate opened. |
 | 3 | `noul` per selected theme, or one `choice` over the sector list | Only when the theme gate opened. |
 
-At most three calls per participant, once, at creation. An empty or purely conversational
-prompt costs one.
+At most three calls per participant, once, at creation. An empty prompt costs zero calls — there
+is nothing to classify, so none is made; a purely conversational (non-empty) prompt still costs
+one, to learn that the gate closes.
 
-The canonical form is the ordered, thresholded result: the gate bits, the nine signal bits, and
-the theme identity. Participants share when that structure is byte-identical — which is what
-"의미가 같으면 공유" means here, since the structure *is* the extracted meaning.
+The canonical form is the ordered, thresholded result: the nine signal bits and the theme
+identity. Participants share when that structure is byte-identical — which is what "의미가
+같으면 공유" means here, since the structure *is* the extracted meaning.
 
 ## Failure must not stop generation
 
@@ -210,7 +211,7 @@ account.
 
 ## Testing
 
-- An empty `additional_request` produces an empty canonical form and costs one call.
+- An empty `additional_request` produces an empty canonical form and costs zero calls.
 - A gate below threshold short-circuits: the detail calls are not made.
 - Two participants whose prompts extract to the same structure produce the same
   `generation_key`; two whose structures differ anywhere produce different keys.
