@@ -18,6 +18,11 @@ def _label(company: Any) -> str:
     )
 
 
+def _prefix_continuation_lines(text: str) -> str:
+    first, *rest = text.split("\n")
+    return "\n".join([first, *(f"| {line}" for line in rest)])
+
+
 def _previous_lines(previous: PreviousPortfolio | None, excluded: frozenset[str]) -> list[str]:
     lines = ["# Previous portfolio"]
     if previous is None:
@@ -29,17 +34,16 @@ def _previous_lines(previous: PreviousPortfolio | None, excluded: frozenset[str]
         f" cash_weight {portfolio['cash_weight']}"
     )
     for h in previous.holdings:
-        line = (
-            f"- {_label(h)}: weight {h['weight']}. Reason: {h['reason'] or '(kept, no new reason)'}"
-        )
+        reason = _prefix_continuation_lines(h["reason"] or "(kept, no new reason)")
+        line = f"- {_label(h)}: weight {h['weight']}. Reason: {reason}"
         if h["corp_code"] in excluded:
             line += " [not holdable: excluded by your settings]"
         lines.append(line)
     if previous.exits:
         lines.append("Exited last time:")
     for e in previous.exits:
-        lines.append(f"- {_label(e)}. Reason: {e['reason']}")
-    lines.append(f"Commentary: {portfolio['commentary']}")
+        lines.append(f"- {_label(e)}. Reason: {_prefix_continuation_lines(e['reason'])}")
+    lines.append(f"Commentary: {_prefix_continuation_lines(portfolio['commentary'])}")
     return lines
 
 
