@@ -19,6 +19,7 @@ REQUIRED_SETTINGS = (
     "competition_queue_url",
     "backend_base_uri",
     "backend_jwt_issuer",
+    "jev_choice_min_confidence",
 )
 
 

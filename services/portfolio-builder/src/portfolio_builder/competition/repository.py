@@ -1,16 +1,29 @@
 import hashlib
-from dataclasses import dataclass, fields
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
+from typing import Any
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from portfolio_builder.competition.canonical import canonical_form_part
 from portfolio_builder.competition.message import Request
 from portfolio_builder.database import (
     competition_jobs,
     competition_participants,
     competition_portfolios,
     portfolios,
+)
+
+SETTINGS_DRIFT_FIELDS = (
+    "participant_id",
+    "competition_id",
+    "user_id",
+    "risk_profile",
+    "interested_theme_codes",
+    "excluded_theme_codes",
+    "additional_request",
 )
 
 
@@ -23,11 +36,25 @@ class ParticipantSettings:
     interested_theme_codes: tuple[str, ...]
     excluded_theme_codes: tuple[str, ...]
     additional_request: str
+    canonical_form: Any = None
+    canonical_version: str | None = None
+    classified: bool = False
 
 
-def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSettings, list[str]]:
+ClassifyFn = Callable[[Request], tuple[Any, str | None, bool]]
+
+
+def _no_classification(request: Request) -> tuple[Any, str | None, bool]:
+    return None, None, False
+
+
+def store_settings(
+    engine: sa.Engine,
+    request: Request,
+    classify: ClassifyFn = _no_classification,
+) -> tuple[ParticipantSettings, list[str]]:
     with engine.begin() as conn:
-        conn.execute(
+        inserted = conn.execute(
             pg_insert(competition_participants)
             .values(
                 participant_id=request.participant_id,
@@ -39,7 +66,21 @@ def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSett
                 additional_request=request.additional_request,
             )
             .on_conflict_do_nothing(index_elements=["participant_id"])
-        )
+            .returning(competition_participants.c.participant_id)
+        ).first()
+
+        if inserted is not None:
+            canonical_form, canonical_version, classified = classify(request)
+            conn.execute(
+                sa.update(competition_participants)
+                .where(competition_participants.c.participant_id == request.participant_id)
+                .values(
+                    canonical_form=canonical_form,
+                    canonical_version=canonical_version,
+                    classified=classified,
+                )
+            )
+
         row = (
             conn.execute(
                 sa.select(competition_participants).where(
@@ -58,6 +99,9 @@ def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSett
         interested_theme_codes=tuple(row["interested_theme_codes"]),
         excluded_theme_codes=tuple(row["excluded_theme_codes"]),
         additional_request=row["additional_request"],
+        canonical_form=row["canonical_form"],
+        canonical_version=row["canonical_version"],
+        classified=row["classified"],
     )
     from_request = ParticipantSettings(
         participant_id=request.participant_id,
@@ -69,9 +113,9 @@ def store_settings(engine: sa.Engine, request: Request) -> tuple[ParticipantSett
         additional_request=request.additional_request,
     )
     differing = [
-        field.name
-        for field in fields(ParticipantSettings)
-        if getattr(stored, field.name) != getattr(from_request, field.name)
+        name
+        for name in SETTINGS_DRIFT_FIELDS
+        if getattr(stored, name) != getattr(from_request, name)
     ]
     return stored, differing
 
@@ -94,7 +138,8 @@ def generation_key(
         *participant.interested_theme_codes,
         str(len(participant.excluded_theme_codes)),
         *participant.excluded_theme_codes,
-        participant.additional_request,
+        canonical_form_part(participant.canonical_form),
+        participant.canonical_version or "",
         str(previous_portfolio_id or 0),
         llm_model,
     ]

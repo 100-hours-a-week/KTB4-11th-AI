@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from functools import partial
 from typing import Any
 
 import sqlalchemy as sa
@@ -10,7 +11,9 @@ from portfolio_builder.agent.run import RunResult, run_agent
 from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.briefing import load_briefing
+from portfolio_builder.competition import jev
 from portfolio_builder.competition.backend import Backend
+from portfolio_builder.competition.canonical import classify_additional_request
 from portfolio_builder.competition.message import Request
 from portfolio_builder.competition.repository import (
     claim_job,
@@ -108,6 +111,31 @@ def _generate(
     )
 
 
+def _classify(
+    engine: sa.Engine,
+    settings: Settings,
+    log: StructuredLogger,
+    request: Request,
+) -> tuple[Any, str | None, bool]:
+    ask = partial(
+        jev.ask,
+        settings.jev_base_uri,
+        settings.jev_model,
+        settings.llm_api_key,
+        timeout=settings.jev_timeout,
+    )
+    return classify_additional_request(
+        engine,
+        ask,
+        settings.jev_model,
+        settings.jev_noul_threshold,
+        settings.jev_choice_min_confidence,
+        request.additional_request,
+        request.effective_interested,
+        log,
+    )
+
+
 def process_message(
     message: dict[str, object],
     sqs: Any,
@@ -127,7 +155,9 @@ def process_message(
         sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
         return
 
-    participant, differing_fields = store_settings(engine, request)
+    participant, differing_fields = store_settings(
+        engine, request, partial(_classify, engine, settings, log)
+    )
     if differing_fields:
         log.warning(
             "settings_mismatch",
