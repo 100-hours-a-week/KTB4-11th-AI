@@ -5,8 +5,8 @@ Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and se
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The final accuracy follow-up was verified with **1,551 passed, 49 skipped, 2 subtests passed**
-using disposable PostgreSQL `ktb_disclosure_accuracy_test`. Its 70 inference and deployment CPU tests
+The final accuracy follow-up was verified with **1,636 passed, 49 skipped, 2 subtests passed**
+using disposable PostgreSQL `ktb_disclosure_accuracy_test`. Its 115 inference and deployment CPU tests
 include model-setting propagation through the image, image-build downloads and clean
 worker environments. The actual Modal SDK 1.6.3 app definition loads without importing
 GPU libraries or creating remote resources. No GPU deployment or new inference timing
