@@ -18,10 +18,12 @@ Modal images, GPU selection, snapshots, scaling, authenticated HTTP endpoints an
 image-build weight downloads belong to
 [infrastructure/inference/disclosure](../../infrastructure/inference/disclosure/README.md).
 The deployment includes this package with `add_local_python_source(copy=True)`
-before downloading weights into the model images.
+before downloading weights into the model images. The deployment resolves model
+settings into `DISCLOSURE_MODEL_MANIFEST`; image builds and runtime imports use that
+same non-secret configuration.
 
 Run CPU tests from the repository root:
 
 ```bash
-./scripts/run-tests.sh services/disclosure-inference infrastructure/inference/disclosure
+uv run pytest services/disclosure-inference infrastructure/inference/disclosure
 ```

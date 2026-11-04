@@ -1,19 +1,25 @@
 # Disclosure RAG: Final Implementation Plan
 
-Finalized: 2026-10-29; runtime and Modal deployment split updated 2026-10-31.
+Finalized: 2026-10-29; model configuration and CI integration updated 2026-11-04.
 Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and services #346 / #432.
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The 2026-10-31 runtime/deployment split was verified with **1,401 passed, 49 skipped,
-2 subtests passed** on the combined serving branch using a disposable PostgreSQL database.
-This run checks CPU code and model contracts; it does not redeploy GPU workers or
-produce new inference timings. The 37 inference and deployment tests pass separately.
-Ruff lint/format, Tach boundaries and dependency checks, GPU project dependency audit,
-standalone wheel/sdist builds and local Modal SDK 1.6.3 app loading pass. Both Modal
-classes register without importing GPU libraries locally. CPU `uv.lock` and regenerated
-production image requirements have no changes. An independent code review found no
-actionable issue in the extraction or image/import setup.
+The combined branch was verified with **1,496 passed, 49 skipped, 2 subtests passed**
+using a disposable PostgreSQL database. Its 40 inference and deployment CPU tests
+include model-setting propagation through the image, image-build downloads and clean
+worker environments. The actual Modal SDK 1.6.3 app definition loads without importing
+GPU libraries or creating remote resources. No GPU deployment or new inference timing
+is part of this verification.
+
+CI keeps the excluded GPU project in CPU test selection while skipping its workspace
+dependency expansion. Inference-only, mixed inference/retrieval, core-only and full
+change inputs were checked with the actual target-selection script. The same CPU CI
+also runs for the serving PR while its base is the services branch.
+
+The source includes #432's default-disabled rollout. `DISCLOSURE_ENABLED=false` keeps
+legacy portfolio generation and skips indexing until the model configuration is ready.
+Enabled mode retains strict model validation and the disclosure-search requirement.
 
 ## 1. Service boundaries
 
@@ -29,8 +35,8 @@ actionable issue in the extraction or image/import setup.
 The existing hourly news command uses `opendart/opendart.py` as its single API intake.
 Long filings retain official `detail_type` codes. `OpenDart.article` fetches and parses
 them before standard scraping stores metadata, documents, sections and accounts in one
-transaction. OpenDART modules are flat, and there is no pending-record readback. There is no RSS path, separate collector command/timer or historical
-window loop. The DB-only indexer embeds eligible stored narrative content. It never
+transaction. OpenDART modules are flat, and there is no pending-record readback. There is no RSS path or separate collector command/timer. Collection preserves
+its bounded initial history and daily completion state. The DB-only indexer embeds eligible stored narrative content. It never
 calls OpenDART or opens source archives. News-http remains read-only.
 
 The existing news pipeline keeps its own model and configuration. CPU services call Modal
@@ -46,17 +52,17 @@ through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libra
   and normalized NUMERIC values. Missing values remain null. Store named sections for direct reads.
 - [x] Embed recognized narrative sections. Tables and unclassified sections remain accessible
   through section storage. Context groups preserve source order and never cross physical files.
-- [x] Keep the three collection migrations in PR #441: 0012 filing metadata/originals,
-  0013 sections, and 0014 financial facts plus completion metadata.
-  PR #432 adds vector migration 0015. GPU serving owns no schema revision. Store narrative vectors in
+- [x] Keep the three collection migrations in PR #441: 0013 filing metadata/originals,
+  0014 sections, and 0015 financial facts plus completion metadata.
+  PR #432 adds vector migration 0016. GPU serving owns no schema revision. Store narrative vectors in
   halfvec(1024), preserving legacy halfvec(2000) data. Enforce parent-index dimensions and identity.
 - [x] Activate indexes atomically. During rollback, accept an older parser's index only when
   its source hash matches the latest document. Never serve an index from a replaced source.
 
 Run migrations through the existing dedicated migration job, then build the new index before
 switching callers. To roll back, restore the previous provider/model/prefix and 2000 dimensions;
-no schema downgrade is required. Downgrading 0015 to 0014 removes vector indexes and chunks
-while retaining collected sources. Downgrading the collection revisions to 0011 removes
+no schema downgrade is required. Downgrading 0016 to 0015 removes vector indexes and chunks
+while retaining collected sources. Downgrading the collection revisions to 0012 removes
 stored documents and financial facts; provider rollback does not require either operation.
 
 ## 3. Model contracts and Modal deployment
@@ -64,7 +70,11 @@ stored documents and financial facts; provider rollback does not require either 
 The model configuration is `packages/core/src/ktb_core/embedding/config.py`. It contains
 the existing news settings and the pinned disclosure model configuration. Modal copies
 this same Python file into its images as `/root/model_config.py`; CPU services import
-its identity functions. Separate disclosure model JSON/Python files are unnecessary.
+its identity functions. Deployment resolves all selected fields into the non-secret
+`DISCLOSURE_MODEL_MANIFEST` JSON image environment before downloading weights.
+Image-build and worker imports prefer that resolved manifest, so local overrides
+cannot disappear when the worker's environment is different. Environment layers also
+invalidate image-build caches when the selected model changes. Separate disclosure model JSON/Python files are unnecessary.
 External inference HTTP requests and 303 result polling stay in the indexer and retrieval library;
 core has no HTTP transport or GPU dependencies.
 
@@ -174,7 +184,7 @@ DISCLOSURE_RETRIEVAL_TIMEOUT=150
   `ktb_typed_disclosure_services_test` database: **1,394 passed, 49 skipped, two subtests passed**.
   The collection branch passed 1,226 tests; the indexing/tools branch passed 1,364.
   These CPU checks do not deploy GPU workers or recompute model quality scores.
-- [x] Upgrade fresh test databases through 0014 and 0015. Offline migration tests verify
+- [x] Upgrade fresh test databases through collection 0015 and vector 0016. Offline migration tests verify
   object ownership and reversed downgrade operations. Type metadata and nullable fiscal
   periods support nonperiodic filings; no collection-window table remains.
 - [x] Build news-preprocessor, portfolio-builder and shared application images, then import

@@ -304,3 +304,9 @@ selection, snapshot lifecycle, scaling, HTTP adapters and image-build weight dow
 belong to `infrastructure/inference/disclosure`. The GPU project is excluded from the
 CPU uv workspace; Modal installs its own declared dependencies and copies its source
 package into the model images. It is not installed in the shared production Docker image.
+
+Disclosure indexing and portfolio disclosure tools require `DISCLOSURE_ENABLED=true`.
+The default false mode preserves portfolio generation without model configuration and
+lets the indexer exit before DB/model work. Enabled mode validates all model settings
+and retains the mandatory successful disclosure search before portfolio submission.
+Deployment environment and SSM ownership stay with the Cloud configuration.

@@ -94,6 +94,12 @@ Runtime model loading uses local paths and offline mode. A snapshot miss still h
 the model, but cannot re-download it from Hugging Face. Image downloads and deserialization
 still take time; startup and inference measurements are recorded in the final implementation plan.
 
+At deployment, `app.py` resolves the model settings once and stores the resulting
+non-secret JSON in `DISCLOSURE_MODEL_MANIFEST` on each Modal image. Weight downloads
+and worker imports read this same snapshot of settings rather than the worker's default
+environment. Changing a revision or adapter hash changes the image environment and
+invalidates the corresponding weight-build cache. Proxy tokens are not included.
+
 The model settings live in `packages/core/src/ktb_core/embedding/config.py`, alongside
 the existing news configuration. Modal copies that file into its image as
 `/root/model_config.py`; CPU services import the same disclosure identity values.
@@ -128,9 +134,14 @@ require proxy authentication. Use a workspace proxy token, never the SDK account
 
 ## Docker configuration
 
-Add these values to the deployment environment, keeping secrets out of Git:
+Disclosure work defaults to disabled. The existing portfolio path remains available
+without model settings, and the indexer logs a skip without DB/model calls. Deploy the
+model endpoints before enabling the feature. Add the following keys through the
+Cloud-owned environment/SSM configuration used by `DEV_AI_ENV`, keeping secrets out
+of Git. The AI repository validates and forwards them:
 
 ```dotenv
+DISCLOSURE_ENABLED=true
 DISCLOSURE_INFERENCE_BACKEND=modal
 DISCLOSURE_EMBEDDING_DIMENSIONS=1024
 DISCLOSURE_EMBEDDING_MAX_TOKENS=16384
@@ -158,8 +169,8 @@ historical restore measurements do not establish an availability guarantee.
 
 ## Storage, scheduling and cutover
 
-Apply collection migrations `0012`–`0014` from PR #441, then vector migration `0015`
-from PR #432 through the existing dedicated migration job. Migration `0015` creates
+Apply collection migrations `0013`–`0015` from PR #441, then vector migration `0016`
+from PR #432 through the existing dedicated migration job. Migration `0016` creates
 `disclosure_narrative_chunks` with `halfvec(1024)` and keeps the legacy
 `disclosure_chunks` with `halfvec(2000)`. Dimensions are checked against the parent index;
 model revisions, adapter hash and transform are recorded with every new index. Activation
@@ -193,7 +204,7 @@ refuses to delete 1024 indexes automatically; removing them is a separate destru
 ## Verification and remaining measurements
 
 ```bash
-./scripts/run-tests.sh infrastructure/inference services/disclosure-inference services/disclosure-indexer services/disclosure-retrieval
+uv run pytest infrastructure/inference services/disclosure-inference services/disclosure-indexer services/disclosure-retrieval
 ```
 
 Local tests cover transport identities, proxy authentication, invalid vectors/scores,
