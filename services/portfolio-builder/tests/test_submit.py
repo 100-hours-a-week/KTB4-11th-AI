@@ -3,6 +3,8 @@ import threading
 
 import pytest
 import sqlalchemy as sa
+from portfolio_builder.briefing.repository import find_previous_portfolio
+from portfolio_builder.competition.repository import store_settings
 from portfolio_builder.errors import PortfolioRejected, ToolError
 from portfolio_builder.portfolio import excluded_company_ids
 from portfolio_builder.tools.submit import submit_tool
@@ -215,3 +217,43 @@ def test_excluding_every_company_leaves_a_cash_only_portfolio_submittable(engine
 
     [(_, cash_weight)] = _rows(engine)
     assert cash_weight == pytest.approx(1.0)
+
+
+def test_a_submission_with_a_participant_id_links_the_portfolio_in_the_same_call(
+    engine, news_client, _request
+):
+    settings, _ = store_settings(engine, _request())
+    tool = submit_tool(
+        engine, frozenset(), "m", news_client, Recorder(), participant_id=settings.participant_id
+    )
+
+    tool.invoke(_call(VALID))
+
+    [(portfolio_id, _)] = _rows(engine)
+    with engine.connect() as conn:
+        linked = conn.execute(
+            sa.text(
+                "SELECT 1 FROM competition_portfolios"
+                " WHERE participant_id = :p AND portfolio_id = :pf"
+            ),
+            {"p": settings.participant_id, "pf": portfolio_id},
+        ).first()
+        previous = find_previous_portfolio(conn)
+    assert linked is not None
+    assert previous is None
+
+
+def test_a_submission_with_no_participant_id_inserts_no_link_row(engine, news_client):
+    tool = submit_tool(engine, frozenset(), "m", news_client, Recorder())
+
+    tool.invoke(_call(VALID))
+
+    [(portfolio_id, _)] = _rows(engine)
+    with engine.connect() as conn:
+        link_count = conn.execute(
+            sa.text("SELECT count(*) FROM competition_portfolios")
+        ).scalar_one()
+        previous = find_previous_portfolio(conn)
+    assert link_count == 0
+    assert previous is not None
+    assert previous.portfolio["id"] == portfolio_id

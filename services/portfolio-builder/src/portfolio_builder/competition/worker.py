@@ -80,6 +80,7 @@ def _generate(
     previous_company_ids: frozenset[str],
     excluded: frozenset[str],
     briefing_text: str,
+    participant_id: int,
 ) -> RunResult:
     market = HttpMarket(settings.market_http_base_uri, engine)
     model = model_factory(reasoning={"effort": settings.thinking_level})
@@ -94,6 +95,7 @@ def _generate(
             news_client,
             log,
             excluded,
+            participant_id,
         ),
     ]
     return run_agent(
@@ -191,6 +193,7 @@ def process_message(
         briefing.previous_company_ids,
         excluded,
         briefing.text,
+        participant.participant_id,
     )
 
     if result.portfolio_id is None:

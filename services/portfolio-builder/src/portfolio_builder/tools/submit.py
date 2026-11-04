@@ -56,6 +56,7 @@ def submit_portfolio(
     lock: threading.Lock,
     saved: list[int],
     excluded: frozenset[str] = frozenset(),
+    participant_id: int | None = None,
 ) -> Command:
     submission = Submission(
         holdings=holdings,
@@ -71,7 +72,13 @@ def submit_portfolio(
         if not errors:
             try:
                 saved.append(
-                    save_portfolio(engine, normalize_weights(submission), model, news_client)
+                    save_portfolio(
+                        engine,
+                        normalize_weights(submission),
+                        model,
+                        news_client,
+                        participant_id,
+                    )
                 )
             except PortfolioRejected as rejected:
                 errors = rejected.errors
@@ -96,6 +103,7 @@ def submit_tool(
     news_client: NewsClient,
     log: StructuredLogger,
     excluded: frozenset[str] = frozenset(),
+    participant_id: int | None = None,
 ) -> BaseTool:
     return StructuredTool.from_function(
         # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.
@@ -109,6 +117,7 @@ def submit_tool(
             lock=threading.Lock(),
             saved=[],
             excluded=excluded,
+            participant_id=participant_id,
         ),
         name="submit_portfolio",
         description=(

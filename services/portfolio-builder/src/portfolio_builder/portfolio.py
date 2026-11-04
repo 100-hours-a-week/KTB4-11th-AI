@@ -4,9 +4,15 @@ from typing import Annotated
 
 import sqlalchemy as sa
 from pydantic import BaseModel, Field
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.database import portfolio_exits, portfolio_holdings, portfolios
+from portfolio_builder.database import (
+    competition_portfolios,
+    portfolio_exits,
+    portfolio_holdings,
+    portfolios,
+)
 from portfolio_builder.errors import PortfolioRejected
 from portfolio_builder.news_client import NewsClient
 
@@ -143,7 +149,11 @@ def normalize_weights(submission: Submission) -> Submission:
 
 
 def save_portfolio(
-    engine: sa.Engine, submission: Submission, model: str, news_client: NewsClient
+    engine: sa.Engine,
+    submission: Submission,
+    model: str,
+    news_client: NewsClient,
+    participant_id: int | None = None,
 ) -> int:
     cited = sorted(
         {c for item in [*submission.holdings, *submission.exits] for c in item.cited_cluster_ids}
@@ -174,6 +184,12 @@ def save_portfolio(
                 conn.execute(
                     sa.insert(portfolio_exits),
                     [{"portfolio_id": portfolio_id, **e.model_dump()} for e in submission.exits],
+                )
+            if participant_id is not None:
+                conn.execute(
+                    pg_insert(competition_portfolios)
+                    .values(participant_id=participant_id, portfolio_id=portfolio_id)
+                    .on_conflict_do_nothing(index_elements=["participant_id", "portfolio_id"])
                 )
             return portfolio_id
     except sa.exc.IntegrityError as error:
