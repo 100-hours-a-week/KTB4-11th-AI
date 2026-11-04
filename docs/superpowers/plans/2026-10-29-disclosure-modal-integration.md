@@ -76,7 +76,8 @@ Image-build and worker imports prefer that resolved manifest, so local overrides
 cannot disappear when the worker's environment is different. Environment layers also
 invalidate image-build caches when the selected model changes. Separate disclosure model JSON/Python files are unnecessary.
 External inference HTTP requests and 303 result polling stay in the indexer and retrieval library;
-core has no HTTP transport or GPU dependencies.
+core shares stdlib inference transport and vector validation between the two CPU services;
+it has no GPU or third-party HTTP dependency.
 
 Inference implementation lives in `services/disclosure-inference/src/disclosure_inference`.
 Its `runtime.py` owns Context and Qwen loading, warmup, embedding, reranking, token limits
@@ -332,3 +333,25 @@ contribute relevance once without shifting later documents forward; a sixth-plac
 answer cannot enter Top-5 by deduplication. The metric version is now
 `retrieval-v3-ranked-top5-cosine`, preventing resume of earlier results. No historical
 quality score was recomputed in this code-review follow-up.
+
+## 12. Request validation and benchmark recovery review
+
+Explicit invalid requests receive sanitized 422 responses; identity mismatch receives
+409. Unexpected runtime errors remain 503 and are logged internally with tracebacks.
+Internal exception text is never returned to callers. `_reject` has NoReturn semantics.
+The frozen-manifest test uses an absent temporary config file to prove the image snapshot
+works without a host `/root/model_config.py` file. Resolving model settings before image
+build and requiring a rebuild to change weights are deliberate identity guarantees.
+
+Benchmark endpoints are required CLI arguments and part of run identity. SQLAlchemy URL
+parsing enforces the exact test database while allowing SSL parameters; an empty selected
+scope fails early. Resume repairs only a truncated final record in place and preserves
+completed rows. Latency summaries cover one invocation's session ID, while retrieval
+quality can include prior completed questions. No historical latency is silently mixed
+into current percentiles. Regression tests include all byte prefixes of representative
+JSON, including exponent numbers, literals, escaped text and UTF-8 characters.
+
+CI no longer names the temporary services branch in its pull-request trigger. Workspace
+exclusion patterns remain Bash glob comparisons by design, and inference CPU tests remain
+in the root test selection. Container caps stay two plus two and idle timeout stays five
+seconds, matching the selected cost policy; no new latency/cost claim is made.

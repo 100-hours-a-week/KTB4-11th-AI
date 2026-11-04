@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Any
 
 
+class InvalidRequest(ValueError):
+    pass
+
+
 class IdentityMismatch(Exception):
     pass
 
@@ -48,6 +52,8 @@ class Manifest:
 def require_identity(claimed: dict[str, Any] | None, loaded: dict[str, Any]) -> None:
     if claimed is None:
         raise IdentityMismatch("identity is required on every inference request")
+    if not isinstance(claimed, dict):
+        raise InvalidRequest("identity must be an object")
     differing = sorted(
         (field for field, value in loaded.items() if claimed.get(field, _MISSING) != value)
     )
@@ -59,23 +65,33 @@ _MISSING = object()
 
 
 def document_groups(documents: list[dict[str, Any]]) -> list[DocumentGroup]:
+    if not isinstance(documents, list) or not documents:
+        raise InvalidRequest("documents must be a nonempty list")
     groups = []
     seen: set[int] = set()
     for document in documents:
-        document_id = document["document_id"]
-        chunks = document["chunks"]
+        if not isinstance(document, dict):
+            raise InvalidRequest("document must be an object")
+        document_id = document.get("document_id")
+        if not isinstance(document_id, str) or not document_id.strip():
+            raise InvalidRequest("document_id must be a nonempty string")
+        chunks = document.get("chunks")
+        if not isinstance(chunks, list):
+            raise InvalidRequest("chunks must be a list")
         if not chunks:
-            raise ValueError(f"document {document_id} has no chunks")
+            raise InvalidRequest(f"document {document_id} has no chunks")
         pairs = []
         for chunk in chunks:
-            chunk_id = chunk["chunk_id"]
+            if not isinstance(chunk, dict):
+                raise InvalidRequest("chunk must be an object")
+            chunk_id = chunk.get("chunk_id")
             if type(chunk_id) is not int or chunk_id < 0:
-                raise ValueError("chunk_id must be a nonnegative integer")
-            text = chunk["text"]
-            if not text.strip():
-                raise ValueError(f"chunk {chunk_id} is empty")
+                raise InvalidRequest("chunk_id must be a nonnegative integer")
+            text = chunk.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise InvalidRequest(f"chunk {chunk_id} is empty")
             if chunk_id in seen:
-                raise ValueError(f"duplicate chunk_id {chunk_id}")
+                raise InvalidRequest(f"duplicate chunk_id {chunk_id}")
             seen.add(chunk_id)
             pairs.append((chunk_id, text))
         groups.append(DocumentGroup(document_id=document_id, chunks=tuple(pairs)))
@@ -91,3 +107,28 @@ def reranker_prompt(query: str, text: str) -> str:
         f"<Query>: {query}\n<Document>: {text}"
         "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
     )
+
+
+def request_query(payload: dict) -> str:
+    query = payload.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise InvalidRequest("query is empty or not a string")
+    return query
+
+
+def request_candidates(payload: dict) -> list[dict]:
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise InvalidRequest("candidates must not be empty")
+    seen = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            raise InvalidRequest("candidate must be an object")
+        chunk_id = candidate.get("chunk_id")
+        if type(chunk_id) is not int or chunk_id < 0 or chunk_id in seen:
+            raise InvalidRequest("candidate IDs must be unique nonnegative integers")
+        seen.add(chunk_id)
+        text = candidate.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise InvalidRequest("candidate text must be a nonempty string")
+    return candidates

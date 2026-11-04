@@ -1,4 +1,12 @@
-from .contracts import Manifest, document_groups, require_identity, reranker_prompt
+from .contracts import (
+    InvalidRequest,
+    Manifest,
+    document_groups,
+    request_candidates,
+    request_query,
+    require_identity,
+    reranker_prompt,
+)
 from .transform import truncate_and_normalize
 from .verification import verify_adapter
 
@@ -27,7 +35,7 @@ class EmbeddingRuntime:
     def _encode(self, documents: list[list[str]], task: str) -> list[list[list[float]]]:
         count = self._token_count(documents, task)
         if count > self.manifest.max_tokens:
-            raise ValueError(
+            raise InvalidRequest(
                 f"input is {count} tokens, over the {self.manifest.max_tokens}-token limit"
             )
         rows = self.model.encode(
@@ -68,7 +76,7 @@ class EmbeddingRuntime:
 
     def document_embeddings(self, payload: dict) -> dict[str, object]:
         require_identity(payload.get("identity"), self.manifest.embedding_identity())
-        groups = document_groups(payload["documents"])
+        groups = document_groups(payload.get("documents"))
         vectors: dict[str, list[float]] = {}
         for group in groups:
             (encoded,) = self._encode([[text for _, text in group.chunks]], "document")
@@ -78,9 +86,7 @@ class EmbeddingRuntime:
 
     def query_embedding(self, payload: dict) -> dict[str, object]:
         require_identity(payload.get("identity"), self.manifest.embedding_identity())
-        query = payload["query"]
-        if not query.strip():
-            raise ValueError("query is empty")
+        query = request_query(payload)
         ((vector,),) = self._encode([[query]], "query")
         return {"identity": self.manifest.embedding_identity(), "vector": vector}
 
@@ -150,7 +156,7 @@ class RerankerRuntime:
                 prompt, add_special_tokens=False, return_tensors="pt", truncation=False
             )
             if batch["input_ids"].shape[1] > self.manifest.max_tokens:
-                raise ValueError(
+                raise InvalidRequest(
                     f"candidate {candidate['chunk_id']} is "
                     f"{batch['input_ids'].shape[1]} tokens, over the limit"
                 )
@@ -175,10 +181,8 @@ class RerankerRuntime:
 
     def rerank(self, payload: dict) -> dict[str, object]:
         require_identity(payload.get("identity"), self.manifest.reranker_identity())
-        query = payload["query"]
-        candidates = payload["candidates"]
-        if not candidates:
-            raise ValueError("candidates must not be empty")
+        query = request_query(payload)
+        candidates = request_candidates(payload)
         return {
             "identity": self.manifest.reranker_identity(),
             "scores": self._score(query, candidates),

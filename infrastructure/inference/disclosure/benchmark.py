@@ -3,10 +3,13 @@ import csv
 import hashlib
 import json
 import math
+import re
 import statistics
 import time
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import urlsplit
+from uuid import uuid4
 
 
 def retrieval_metrics(question: dict, ids: list[str]) -> dict[str, float]:
@@ -43,6 +46,69 @@ def query_cosine(actual, reference) -> float:
     return float(np.clip((a / a_norm) @ (b / b_norm), -1, 1))
 
 
+def incomplete_json(data: bytes) -> bool:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as error:
+        if error.reason != "unexpected end of data":
+            return False
+        text = data[: error.start].decode("utf-8")
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as error:
+        tail = text[error.pos :]
+        if error.pos == len(text) or error.msg.startswith("Unterminated string"):
+            return True
+        if error.msg == "Expecting value":
+            return tail == "-" or any(token.startswith(tail) for token in ("true", "false", "null"))
+        if error.msg == "Expecting ',' delimiter":
+            return re.fullmatch(r"\.|[eE][+-]?", tail) is not None
+        if error.msg == "Invalid \\uXXXX escape":
+            return re.fullmatch(r"u[0-9a-fA-F]{0,4}", tail) is not None
+    return False
+
+
+def load_results(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    data = path.read_bytes()
+    lines = data.splitlines(keepends=True)
+    rows = []
+    consumed = 0
+    for index, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict) or not isinstance(row.get("question_id"), str):
+                raise ValueError("Invalid result row")
+        except (ValueError, UnicodeDecodeError) as error:
+            if index == len(lines) - 1 and not line.endswith(b"\n") and incomplete_json(line):
+                with path.open("r+b") as destination:
+                    destination.seek(consumed)
+                    destination.truncate()
+                break
+            raise ValueError("Corrupt benchmark result row") from error
+        rows.append(row)
+        consumed += len(line)
+    if rows and data and not data.endswith(b"\n") and consumed == len(data):
+        with path.open("ab") as destination:
+            destination.write(b"\n")
+    return rows
+
+
+def timing_summary(rows: list[dict], metric: str, session_id: str) -> dict:
+    values = sorted(row[metric] for row in rows if row.get("session_id") == session_id)
+    if not values:
+        return {"session_id": session_id, "n": 0}
+    return {
+        "session_id": session_id,
+        "n": len(values),
+        "p50": statistics.median(values),
+        "p95_nearest_rank": values[math.ceil(0.95 * len(values)) - 1],
+        "min": min(values),
+        "max": max(values),
+    }
+
+
 def main() -> None:
     import numpy as np
     import sqlalchemy as sa
@@ -56,8 +122,29 @@ def main() -> None:
     parser.add_argument("--proxy-token-file", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--test-postgres-dsn", required=True)
+    parser.add_argument("--query-endpoint", required=True)
+    parser.add_argument("--rerank-endpoint", required=True)
     args = parser.parse_args()
-    if not args.test_postgres_dsn.endswith("/ktb_test"):
+    for endpoint in (args.query_endpoint, args.rerank_endpoint):
+        url = urlsplit(endpoint)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.fragment
+        ):
+            raise ValueError(
+                "Inference endpoints must be HTTPS URLs without credentials or fragments"
+            )
+    database_url = sa.engine.make_url(args.test_postgres_dsn)
+    if (
+        database_url.get_backend_name() != "postgresql"
+        or database_url.database != "ktb_test"
+        or any(
+            database_url.query.get(key, "ktb_test") != "ktb_test" for key in ("dbname", "database")
+        )
+    ):
         raise ValueError("Only the disposable ktb_test database is allowed")
     chunks = [json.loads(line) for line in (args.dataset / "chunks.jsonl").read_text().splitlines()]
     questions = [
@@ -90,7 +177,16 @@ def main() -> None:
         or not np.isfinite(queries).all()
     ):
         raise ValueError("Invalid cached vectors")
+    selected = [
+        (i, q)
+        for i, q in enumerate(questions)
+        if q["split"] == "calibration" and q["kind"] == "narrative" and q["answerable"]
+    ]
+    if not selected:
+        raise ValueError("No questions match the benchmark scope")
     run_identity = {
+        "query_endpoint": args.query_endpoint,
+        "rerank_endpoint": args.rerank_endpoint,
         "corpus_sha256": digest,
         "questions_sha256": hashlib.sha256(
             json.dumps(questions, sort_keys=True, ensure_ascii=False).encode()
@@ -118,11 +214,6 @@ def main() -> None:
         "Modal-Key": auth["Modal-Key"],
         "Modal-Secret": auth["Modal-Secret"],
     }
-    selected = [
-        (i, q)
-        for i, q in enumerate(questions)
-        if q["split"] == "calibration" and q["kind"] == "narrative" and q["answerable"]
-    ]
     reports = {q["report_id"] for _, q in selected}
     groups = defaultdict(list)
     for chunk in chunks:
@@ -137,13 +228,10 @@ def main() -> None:
                 if " | " not in r["text"] and len(r["text"]) <= 400
             ]
             contexts[chunk["chunk_id"]] = "\n".join(previous[-3:])
-    engine = sa.create_engine(args.test_postgres_dsn)
     results_path = args.output / "questions.jsonl"
-    prior = (
-        [json.loads(line) for line in results_path.read_text().splitlines()]
-        if results_path.exists()
-        else []
-    )
+    prior = load_results(results_path)
+    session_id = uuid4().hex
+    engine = sa.create_engine(args.test_postgres_dsn)
     completed = {row["question_id"] for row in prior}
     results = list(prior)
     indexed = [(i, c) for i, c in enumerate(chunks) if c["rcept_no"] in reports]
@@ -182,7 +270,7 @@ def main() -> None:
             embedding_start = time.perf_counter()
             payload = {"identity": model_identity("embedding"), "query": question["question"]}
             response = post_json(
-                "https://djdj1473--disclosure-inference-embedder-query-embedding.us-east.modal.run",
+                args.query_endpoint,
                 payload,
                 headers,
                 150,
@@ -234,7 +322,7 @@ def main() -> None:
                 "candidates": candidates,
             }
             response = post_json(
-                "https://djdj1473--disclosure-inference-reranker-rerank.us-east.modal.run",
+                args.rerank_endpoint,
                 payload,
                 headers,
                 150,
@@ -262,6 +350,7 @@ def main() -> None:
             ]
             row = {
                 "question_id": question["id"],
+                "session_id": session_id,
                 "query_embedding_seconds": embedding_seconds,
                 "db_seconds": db_seconds,
                 "reranking_seconds": time.perf_counter() - rerank_start,
@@ -323,14 +412,9 @@ def main() -> None:
     for metric in ("recall@5", "nDCG@5", "MRR"):
         summary[metric] = statistics.mean(r[metric] for r in results)
     for metric in ("query_embedding_seconds", "db_seconds", "reranking_seconds", "total_seconds"):
-        values = sorted(r[metric] for r in results)
-        summary[metric] = {
-            "n": len(values),
-            "p50": statistics.median(values),
-            "p95_nearest_rank": values[math.ceil(0.95 * len(values)) - 1],
-            "min": min(values),
-            "max": max(values),
-        }
+        summary[metric] = timing_summary(results, metric, session_id)
+    summary["session_id"] = session_id
+    summary["timing_scope"] = "current invocation only; quality metrics include resumed questions"
     (args.output / "summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2))
     print(json.dumps(summary, ensure_ascii=False), flush=True)
 

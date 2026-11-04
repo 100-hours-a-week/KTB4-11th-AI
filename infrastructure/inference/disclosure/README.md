@@ -103,7 +103,9 @@ invalidates the corresponding weight-build cache. Proxy tokens are not included.
 The model settings live in `packages/core/src/ktb_core/embedding/config.py`, alongside
 the existing news configuration. Modal copies that file into its image as
 `/root/model_config.py`; CPU services import the same disclosure identity values.
-The separate disclosure model files were removed. External inference HTTP calls belong to the indexer and retrieval library; core contains no HTTP transport or GPU dependencies.
+The separate disclosure model files were removed. Both CPU services use the stdlib-only transport and vector validation in
+`ktb_core.embedding.inference`; their request/response shapes remain service-specific.
+Core has no GPU or third-party HTTP dependency.
 
 The reranker uses the evaluated financial chat template, NF4 with double quantization,
 float32 preparation of non-quantized layers, no KV cache and last-token logits only. Its
@@ -161,8 +163,9 @@ Document/query prefixes are applied by the checkpoint; the old
 `DISCLOSURE_EMBEDDING_QUERY_INSTRUCTION` is ignored in Modal mode. The old model/base URI
 settings remain only for the legacy 2000-dimensional provider.
 
-A retrieval request may use one query embedding and two reranking calls when history is
-included, so its caller allows 480 seconds versus 150 seconds per upstream call. 303 result polling uses a shared deadline without resubmitting the inference request.
+A history retrieval request uses one query embedding followed by at most two concurrent
+reranking calls. Empty scopes make no call. Each upstream call allows 150 seconds; the
+existing caller budget remains 480 seconds. 303 result polling uses a shared deadline without resubmitting the inference request.
 Socket I/O timeouts also apply, with no automatic inference retries. Blocking streaming
 body reads are not a general hard wall-clock cancellation guarantee. A slow snapshot miss can still return 503; the
 historical restore measurements do not establish an availability guarantee.
@@ -247,6 +250,38 @@ the current model. Latency observations remain separately scoped historical meas
 Document requests accept only nonnegative integer chunk IDs, unique across every group.
 Booleans, strings (including `"1"`), floats and duplicate IDs are rejected before encoding;
 the response's string keys therefore cannot collide through type coercion.
+
+## Error responses and benchmark execution
+
+Endpoints return a generic 422 only for explicit request validation errors, 409 for
+model identity mismatch, and a generic 503 for internal inference errors. Internal
+KeyError, TypeError and ValueError do not become client errors and do not expose their
+messages to callers. Internal tracebacks go to server logs. Model snapshots and the
+five-second idle policy are unchanged by these CPU contract fixes.
+
+Supply the exact deployed endpoints to `benchmark.py` using `--query-endpoint` and
+`--rerank-endpoint`. Both must be HTTPS; user/password URL credentials and fragments are
+rejected. Endpoint URLs are recorded with the run identity, and changed destinations
+cannot resume an existing result directory. Proxy credentials come only from the token
+file. No personal workspace URL is compiled into the benchmark.
+
+The database URL is parsed and must name the PostgreSQL database `ktb_test` exactly,
+including any database-name query override. SSL query parameters remain supported.
+An empty evaluation scope raises a clear error before output, authentication, DB or GPU
+access. Every invocation has a session ID: quality may aggregate completed questions,
+but latency percentiles use only questions run in that invocation. A fully resumed run
+reports latency n=0 rather than blending previous cold/warm conditions.
+
+A truncated final JSONL record without a newline is recovered by truncating only that
+tail. A complete last record missing its newline is preserved and receives a newline.
+Malformed complete rows fail explicitly. Recovery does not rewrite prior completed rows.
+Tests cover every byte prefix of a result with UTF-8 text, escapes, exponents and literals.
+
+PR CI runs independently of its base branch name. The shell exclusion comparison uses
+Bash pattern matching intentionally; quoting the right-hand pattern would turn wildcard
+exclusions into literal strings. CPU tests exercise application definitions, contracts and
+benchmark behavior without importing GPU libraries or requiring a real Modal runtime.
+They do not substitute for actual GPU inference or snapshot-restoration tests.
 
 ## Official references
 

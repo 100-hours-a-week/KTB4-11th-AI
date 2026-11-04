@@ -118,3 +118,52 @@ def test_embedding_keeps_int8_outputs_then_truncates_and_normalizes():
             },
         )
     ]
+
+
+@pytest.mark.parametrize(
+    "documents",
+    [
+        None,
+        [],
+        [1],
+        [{}],
+        [{"document_id": "a", "chunks": [None]}],
+        [{"document_id": "a", "chunks": [{"chunk_id": 0, "text": 1}]}],
+    ],
+)
+def test_malformed_document_requests_raise_explicit_validation_error(documents):
+    from disclosure_inference.contracts import InvalidRequest
+
+    runtime = embedder()
+    with pytest.raises(InvalidRequest):
+        runtime.document_embeddings(
+            {"identity": runtime.manifest.embedding_identity(), "documents": documents}
+        )
+
+
+@pytest.mark.parametrize(
+    "candidates",
+    [
+        None,
+        [],
+        [1],
+        [{}],
+        [{"chunk_id": True, "text": "risk"}],
+        [{"chunk_id": 1, "text": 3}],
+        [{"chunk_id": 1, "text": "a"}, {"chunk_id": 1, "text": "b"}],
+    ],
+)
+def test_malformed_rerank_requests_raise_explicit_validation_error(candidates):
+    from disclosure_inference.contracts import InvalidRequest, Manifest
+    from disclosure_inference.runtime import RerankerRuntime
+
+    runtime = object.__new__(RerankerRuntime)
+    runtime.manifest = Manifest("v1", 16384, {}, {})
+    with pytest.raises(InvalidRequest):
+        runtime.rerank(
+            {
+                "identity": runtime.manifest.reranker_identity(),
+                "query": "risk",
+                "candidates": candidates,
+            }
+        )

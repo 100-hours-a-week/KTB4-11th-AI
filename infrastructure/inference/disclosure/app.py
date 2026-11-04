@@ -1,10 +1,12 @@
 import json
+import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
+from typing import NoReturn
 
 import modal
-from disclosure_inference.contracts import IdentityMismatch, Manifest
+from disclosure_inference.contracts import IdentityMismatch, InvalidRequest, Manifest
 from disclosure_inference.runtime import EmbeddingRuntime, RerankerRuntime
 from weights import download_weights
 
@@ -47,13 +49,14 @@ reranker_image = image.run_function(download_weights, kwargs={"kind": "reranker"
 )
 
 
-def _reject(error: Exception) -> dict[str, object]:
+def _reject(error: Exception) -> NoReturn:
     from fastapi import HTTPException
 
     if isinstance(error, IdentityMismatch):
-        raise HTTPException(status_code=409, detail=str(error))
-    if isinstance(error, (ValueError, KeyError, TypeError)):
-        raise HTTPException(status_code=422, detail=str(error))
+        raise HTTPException(status_code=409, detail="Model identity mismatch")
+    if isinstance(error, InvalidRequest):
+        raise HTTPException(status_code=422, detail="Invalid inference request")
+    logging.getLogger(__name__).error("Model inference failed", exc_info=error)
     raise HTTPException(status_code=503, detail="Model inference failed") from None
 
 
