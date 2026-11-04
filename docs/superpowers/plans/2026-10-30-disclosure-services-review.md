@@ -232,10 +232,10 @@ or position sizing. The text is not inserted into a model prompt or logged by th
   enabled configuration, and verify a technical-only portfolio can save when disabled.
   Existing enabled-mode tests still require successful disclosure search.
 - Final accuracy follow-up suite against disposable `ktb_disclosure_accuracy_test` PostgreSQL:
-  **1,516 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
+  **1,521 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
   upgraded in this test DB to verify the explicit empty state. Unconfigured optional integrations
   account for the skips.
-- The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail
+- The branch includes dev c6838ec, including the merged collection fixes and stock-detail
   changes. Collection revisions 0013–0015 are unchanged; the only index revision is 0016.
 - Python 3.14, existing CI job structure and hash-pinned Docker requirements match dev.
   CI traverses reverse dependencies for workspace services as well as packages, so a
