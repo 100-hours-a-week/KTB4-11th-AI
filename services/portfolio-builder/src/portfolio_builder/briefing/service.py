@@ -18,7 +18,7 @@ def _label(company: Any) -> str:
     )
 
 
-def _previous_lines(previous: PreviousPortfolio | None) -> list[str]:
+def _previous_lines(previous: PreviousPortfolio | None, excluded: frozenset[str]) -> list[str]:
     lines = ["# Previous portfolio"]
     if previous is None:
         lines.append("None: this is the first portfolio, so every holding is an entry.")
@@ -29,9 +29,12 @@ def _previous_lines(previous: PreviousPortfolio | None) -> list[str]:
         f" cash_weight {portfolio['cash_weight']}"
     )
     for h in previous.holdings:
-        lines.append(
+        line = (
             f"- {_label(h)}: weight {h['weight']}. Reason: {h['reason'] or '(kept, no new reason)'}"
         )
+        if h["corp_code"] in excluded:
+            line += " [not holdable: excluded by your settings]"
+        lines.append(line)
     if previous.exits:
         lines.append("Exited last time:")
     for e in previous.exits:
@@ -125,7 +128,7 @@ def load_briefing(
         theme_count=news.theme_count,
         text="\n".join(
             settings_lines
-            + _previous_lines(previous)
+            + _previous_lines(previous, excluded)
             + _news_lines(news, news_window_days, excluded)
         ),
     )
