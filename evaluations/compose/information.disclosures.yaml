@@ -1,0 +1,48 @@
+# Layered on information.market.yaml and information.news.yaml: raw plus disclosures.
+# disclosure-http reads filings published before the decision date and calls the disclosure
+# embedding and reranking models, so it also joins egress. Model identity comes from the
+# ktb_core defaults that the disclosure index was built with.
+services:
+  disclosure-http-pit:
+    image: ktb4-evaluation/disclosure-http:local
+    build:
+      context: .
+      dockerfile: docker/disclosure-http.Dockerfile
+    command: ["disclosure-http-evaluation"]
+    environment:
+      DISCLOSURE_HTTP_POSTGRES_DSN: ${EVALUATION_POSTGRES_DSN:?EVALUATION_POSTGRES_DSN must be set}
+      DISCLOSURE_HTTP_EVALUATION_CLOCK_FILE: /clock/as_of
+      DISCLOSURE_HTTP_PUBLIC_URL: http://disclosure-http-pit:8000
+      DISCLOSURE_HTTP_LOG_LEVEL: ${EVALUATION_LOG_LEVEL:-INFO}
+      DISCLOSURE_INFERENCE_BACKEND: ${DISCLOSURE_INFERENCE_BACKEND:-modal}
+      DISCLOSURE_MODAL_KEY: ${DISCLOSURE_MODAL_KEY:-}
+      DISCLOSURE_MODAL_SECRET: ${DISCLOSURE_MODAL_SECRET:-}
+      DISCLOSURE_MODAL_QUERY_URL: ${DISCLOSURE_MODAL_QUERY_URL:-}
+      DISCLOSURE_MODAL_RERANK_URL: ${DISCLOSURE_MODAL_RERANK_URL:-}
+      DISCLOSURE_EMBEDDING_BASE_URI: ${DISCLOSURE_EMBEDDING_BASE_URI:-}
+      DISCLOSURE_EMBEDDING_API_KEY: ${DISCLOSURE_EMBEDDING_API_KEY:-}
+      DISCLOSURE_EMBEDDING_MODEL: ${DISCLOSURE_EMBEDDING_MODEL:-}
+      DISCLOSURE_EMBEDDING_DIMENSIONS: ${DISCLOSURE_EMBEDDING_DIMENSIONS:-1024}
+      DISCLOSURE_EMBEDDING_MAX_TOKENS: ${DISCLOSURE_EMBEDDING_MAX_TOKENS:-16384}
+      DISCLOSURE_RETRIEVAL_TIMEOUT: ${DISCLOSURE_RETRIEVAL_TIMEOUT:-150}
+      DISCLOSURE_RETRIEVAL_MAX_DISTANCE: ${DISCLOSURE_RETRIEVAL_MAX_DISTANCE:-}
+    volumes:
+      - clock:/clock:ro
+    networks: [dataset, information, egress]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  runner:
+    environment:
+      HARNESS_INFORMATION_VARIANT: disclosures
+      HARNESS_DISCLOSURES_URL: http://disclosure-http-pit:8000
+    depends_on:
+      disclosure-http-pit:
+        condition: service_healthy
+
+networks:
+  egress: {}

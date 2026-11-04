@@ -20,9 +20,9 @@ market-http is the default provider of market data for evaluation:
 - Corporation, sector, and theme metadata (not served yet).
 - Historical universe and index membership (not served yet, and no history is stored).
 
-Data owners for the other sources: news-http for raw news search, a future
-`filing-search-http` for disclosures. Clustering, graphs, and RAG are optional information
-variants, not owners.
+Data owners for the other sources: news-http for raw news search, `disclosure-http` for
+disclosures (called `filing-search-http` before 2026-11-03). Clustering, graphs, and RAG are
+optional information variants, not owners.
 
 market-http retrieves data and enforces availability rules. It does not simulate trades or
 compute returns; that is the ExecutionSimulator's job (#434).

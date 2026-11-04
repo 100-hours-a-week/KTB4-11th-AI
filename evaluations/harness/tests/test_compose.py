@@ -12,12 +12,18 @@ LAYERS = {
     "market": ["information.market.yaml"],
     "raw": ["information.market.yaml", "information.news.yaml"],
     "enriched": ["information.market.yaml", "information.news.yaml", "information.features.yaml"],
+    "disclosures": [
+        "information.market.yaml",
+        "information.news.yaml",
+        "information.disclosures.yaml",
+    ],
 }
 SERVICES = {
     "none": set(),
     "market": {"market-http-pit"},
     "raw": {"market-http-pit", "news-http-pit"},
     "enriched": {"market-http-pit", "news-http-pit", "features"},
+    "disclosures": {"market-http-pit", "news-http-pit", "disclosure-http-pit"},
 }
 DECISIONS = {"rule": "decision.rule.yaml", "docker-agent": "decision.docker-agent.yaml"}
 ENV = {
@@ -92,9 +98,15 @@ def test_decision_containers_cannot_reach_data_or_harness_prices(information, de
         assert not any("sk-" in str(value) for value in agent["environment"].values())
     if "features" in services:
         assert set(services["features"]["networks"]) == {"information"}
+    if "disclosure-http-pit" in services:
+        assert set(services["disclosure-http-pit"]["networks"]) == {
+            "dataset",
+            "information",
+            "egress",
+        }
 
 
-@pytest.mark.parametrize("information", ["market", "raw", "enriched"])
+@pytest.mark.parametrize("information", ["market", "raw", "enriched", "disclosures"])
 def test_only_pit_servers_read_the_clock_and_only_the_runner_writes_it(information):
     services = render(information, "rule")["services"]
     for name, service in services.items():
@@ -116,7 +128,7 @@ PUBLIC_URLS = {
 }
 
 
-@pytest.mark.parametrize("information", ["market", "raw", "enriched"])
+@pytest.mark.parametrize("information", ["market", "raw", "enriched", "disclosures"])
 def test_tool_servers_publish_their_compose_address(information):
     services = render(information, "docker-agent")["services"]
     for name, variable in PUBLIC_URLS.items():

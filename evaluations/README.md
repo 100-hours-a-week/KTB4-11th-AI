@@ -29,6 +29,13 @@ and writes versioned records that can be replayed. Design:
    | `market` | `market-http-pit` | `get_daily_bars` |
    | `raw` | + `news-http-pit` | + `search_news` (raw articles) |
    | `enriched` | + `features` | + `get_technicals` |
+   | `disclosures` | `raw` + `disclosure-http-pit` | + `list_disclosures`, `search_disclosures`, `get_disclosure_sections`, `get_disclosure_financials` |
+
+   Tools are the OpenAPI operations of those servers; the worker gives the agent one Docker
+   Agent `openapi` toolset per server plus the runner's submission desk (`get_portfolio`,
+   `submit_portfolio`). Every tool server publishes an OpenAPI `servers` entry from a required
+   public URL, and the runner stops at start if any spec lacks one. The `disclosures` variant
+   also needs the `DISCLOSURE_*` model settings (Modal by default) and migration 0016's index.
 
    | Decision | Where it runs | Needs |
    | --- | --- | --- |
@@ -55,6 +62,10 @@ and writes versioned records that can be replayed. Design:
 - Daily bars are visible after their 15:30 KST close. News is visible once `published_at` is
   at or before the clock (`fetched` availability also requires `fetched_at`). Cluster
   summaries and graphs are not served: they are rebuilt from later articles.
+- Filings have only an OpenDART receipt date, so `disclosure-http` serves those published
+  before the clock's KST date; a same-day filing appears at the next day's decisions.
+  Listing and search pass that cutoff to `disclosure-retrieval`; financial facts and sections
+  check the filing's publication date themselves.
 - `features` computes technicals only from `market-http-pit`, so it inherits the cutoff.
 - The agent worker joins `information`, `decision` (the runner's submission desk) and
   `egress` (the model API). It cannot reach `dataset` or `harness`.
@@ -90,4 +101,5 @@ commit, image ids, dataset version, information version, or decision version is 
   portfolio from the production database; it does not write to it.
 - Each Docker Agent decision starts a fresh session; the agent's own notes do not carry to
   the next decision.
-- Disclosures have no point-in-time server yet (`filing-search-http` is future work).
+- Disclosure vectors are built later than filing dates; they embed only the filing's own
+  text, but a reindex with a new model changes search results for past decisions.

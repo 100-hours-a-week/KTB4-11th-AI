@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 usage() {
-  echo "usage: $0 SPEC_JSON none|market|raw|enriched equal-weight|buy-and-hold|jev-stub|docker-agent" >&2
+  echo "usage: $0 SPEC_JSON none|market|raw|enriched|disclosures" \
+    "equal-weight|buy-and-hold|jev-stub|docker-agent" >&2
   exit 64
 }
 
@@ -16,6 +17,7 @@ case "$information" in
   market) layers=(information.market.yaml) ;;
   raw) layers=(information.market.yaml information.news.yaml) ;;
   enriched) layers=(information.market.yaml information.news.yaml information.features.yaml) ;;
+  disclosures) layers=(information.market.yaml information.news.yaml information.disclosures.yaml) ;;
   *) usage ;;
 esac
 case "$decision" in

@@ -111,6 +111,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
 | `services/disclosure-indexer` | Read collected disclosure documents from PostgreSQL, embed narrative sections, and store vectors in pgvector |
 | `services/disclosure-retrieval` | Direct Python disclosure search and database reads called by portfolio-builder |
+| `services/disclosure-http` | Serve point-in-time disclosure listing, search, sections, and financial facts to evaluations through `disclosure-retrieval` |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
 | `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
 | `services/news-http` | Serve private, read-only news and graph HTTP queries |
@@ -133,7 +134,7 @@ exists; `latest_searched` says how many candidates were scored.
 
 Services communicate through datastores and explicit HTTP/queue contracts. Do not import
 another service's implementation except the explicitly declared disclosure-retrieval
-library dependency used by portfolio-builder. Keep module boundaries aligned with `tach.toml`.
+library dependency used by portfolio-builder and disclosure-http. Keep module boundaries aligned with `tach.toml`.
 Move code into shared packages only when actual callers need it; keep core free of
 third-party dependencies.
 
@@ -181,8 +182,11 @@ third-party dependencies.
 - Read `docs/superpowers/specs/2026-11-03-evaluation-harness-design.md` before changing the
   harness, `compose.evaluate.yaml`, or the `*-evaluation` entry points.
 - Decision systems never receive the harness `PriceSource`. Point-in-time data comes only
-  from `market-http-evaluation` and `news-http-evaluation`, which read the cutoff from the
-  clock file; request parameters must never move it. Failures are recorded, never scored.
+  from `market-http-evaluation`, `news-http-evaluation`, and `disclosure-http-evaluation`,
+  which read the cutoff from the clock file; request parameters must never move it.
+  Failures are recorded, never scored.
+- Agent tools are those servers' OpenAPI operations. Each tool server publishes a `servers`
+  entry from a required public URL, and the harness stops when a spec has none.
 
 ## Dependencies and images
 

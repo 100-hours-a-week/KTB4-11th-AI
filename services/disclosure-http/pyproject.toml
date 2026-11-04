@@ -1,0 +1,30 @@
+[project]
+name = "disclosure-http"
+version = "0.1.0"
+description = "Point-in-time OpenDART disclosure search over HTTP for evaluations"
+requires-python = ">=3.14,<3.16"
+dependencies = [
+    "ktb-core",
+    "disclosure-retrieval",
+    "fastapi>=0.142",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.7",
+    "sqlalchemy>=2.0.54",
+    "uvicorn>=0.54",
+]
+
+[project.scripts]
+disclosure-http-evaluation = "disclosure_http.__main__:main"
+
+[tool.uv.sources]
+ktb-core = { workspace = true }
+disclosure-retrieval = { workspace = true }
+
+[tool.deptry.per_rule_ignores]
+# psycopg is the SQLAlchemy driver for PostgreSQL connections.
+DEP002 = ["psycopg"]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"

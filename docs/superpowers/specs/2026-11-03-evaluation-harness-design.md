@@ -2,7 +2,7 @@
 
 Date: 2026-11-03
 Status: Implemented
-Issues: #435, #436, #437, #438, #439, #475 (parent #433). Builds on
+Issues: #435, #436, #437, #438, #439, #475 (parent #433). Disclosures build on #432. Builds on
 [`2026-10-31-investment-harness-loop-design.md`](2026-10-31-investment-harness-loop-design.md)
 (#434) and [`2026-10-31-evaluation-market-data-contract-design.md`](2026-10-31-evaluation-market-data-contract-design.md).
 
@@ -16,10 +16,11 @@ class InformationProvider(Protocol):
 
 class InformationSession(Protocol):
     as_of: datetime
-    tools: tuple[HttpTool, ...]            # HTTP representation for tool-calling agents
+    openapi: tuple[str, ...]               # OpenAPI spec URLs for tool-calling agents
     def daily_bars(self, symbol, limit) -> list[DailyBar]: ...        # direct representation
     def news(self, days, query, limit) -> list[NewsArticle]: ...
     def technicals(self, symbol) -> Mapping[str, float | None]: ...
+    def disclosures(self, symbol, query, include_history) -> Mapping[str, Any]: ...
 
 class DecisionSystem(Protocol):
     requires: frozenset[str]
@@ -60,10 +61,25 @@ class DecisionSystem(Protocol):
   point-in-time rebuilt derived data first.
 - Clients cannot move the cutoff: unknown parameters are ignored, cursors only narrow the
   range, other timeframes are 422, other routes 404, and an unreadable clock is 503.
-- Variants: `none`, `market`, `raw` (market + news), `enriched` (raw + `features`). The
-  `features` server computes returns, volatility, moving-average gaps, RSI and volume ratio
-  from the PIT market server only. Manifests list variant, version, capabilities, endpoints,
-  and tool names.
+- `disclosure-http-evaluation` (new `services/disclosure-http`) is the disclosure provider
+  that the notes called `filing-search-http`. It wraps the #432 `disclosure-retrieval`
+  library: `list_disclosures`, `search_disclosures` (embedding search plus reranking),
+  `get_disclosure_sections` and `get_disclosure_financials`. OpenDART gives only a receipt
+  date, so a filing counts when `published_date` is before the clock's KST date; a same-day
+  filing waits for the next day's decisions. Listing and search pass that cutoff as the
+  library's `as_of`. The library's section and financial reads have no date filter, so
+  disclosure-http checks the filing's `published_date` itself: sections of a later filing
+  are 404, and financial facts join `disclosures` on publication date. Clients cannot pass
+  `as_of` or `history_start`.
+- Variants: `none`, `market`, `raw` (market + news), `enriched` (raw + `features`),
+  `disclosures` (raw + `disclosure-http`). The `features` server computes returns,
+  volatility, moving-average gaps, RSI and volume ratio from the PIT market server only.
+- Every server a decision system calls (PIT servers, `features`, `disclosure-http`, and the
+  submission desk) publishes an OpenAPI `servers` entry from a required public URL setting
+  and names its operations, which become the agent's tool names. The provider reads each
+  spec when the run starts and raises when `servers` is missing or not an absolute URL, so
+  the run stops before any episode. The manifest records each spec, its server and its
+  operations.
 
 ## Decision systems (#436)
 
@@ -71,11 +87,11 @@ class DecisionSystem(Protocol):
   Jev-shaped pipeline: a feature builder over PIT bars, then per-symbol BUY/HOLD/SELL
   probabilities, a threshold, and an allocation. Its versioned policy goes in the manifest
   and its probabilities go in `audit`. `momentum_choices` is the stub model.
-- Docker Agent: the runner hosts a submission desk (`GET/POST /portfolio`, keyed by an
-  `X-Decision-Id` header). The `agent-worker` container renders a Docker Agent config.
-  Each information tool and the two desk tools become an `api` toolset, and the model comes
-  from settings. The worker runs `docker-agent run --exec --yolo` in a fresh HOME with a
-  timeout.
+- Docker Agent: the runner hosts a submission desk (`get_portfolio`, `submit_portfolio`;
+  the decision id travels in an `X-Decision-Id` header the toolset adds, not as a tool
+  argument). The `agent-worker` container renders a Docker Agent config with one `openapi`
+  toolset per information server plus the desk, and the model from settings. The worker
+  runs `docker-agent run --exec --yolo` in a fresh HOME with a timeout.
 - Desk rules: one accepted portfolio per decision. Invalid payloads get 422 with every error
   and may be fixed and resubmitted. A second submission gets 409 `duplicate`. A stale or
   missing decision id gets 409. Completion comes from the desk, never the agent's final text.
@@ -85,10 +101,9 @@ class DecisionSystem(Protocol):
 - Each decision is a fresh Docker Agent session with a new HOME; nothing the agent wrote
   carries to the next decision, and account state comes only from `get_portfolio`. Episode
   memory, if wanted later, may only hold what earlier decisions could see.
-- Tools are rendered as `api` toolsets from provider-defined `HttpTool`s, not `openapi`
-  toolsets (the 2026-10-28 notes proposed OpenAPI tools). The `api` syntax is documented
-  end to end. How `openapi` toolsets resolve the base URL of a spec without `servers` is
-  not; switch once that is verified.
+- Tools are Docker Agent `openapi` toolsets, as the 2026-10-28 notes proposed. Rather than
+  rely on how a toolset picks a base URL for a spec without `servers`, specs without one are
+  an error.
 - `harness.production.proposal_from_production` maps portfolio-builder submissions
   (`company_id` holdings, implied exits) to stock-code proposals.
 - portfolio-builder (#475): `PortfolioSubmitter` protocol with `DatabaseSubmitter` (existing
@@ -160,3 +175,7 @@ the Compose-first runner from #433 and #437 and satisfies the note's invariants:
 The pieces map onto Harbor's split if it is adopted later: a run is a Job of Trials
 (episodes), the runner and simulator are the environment, and the evaluator is the
 verifier. Date and ticker masking against pretraining memory is not implemented.
+
+Disclosure vectors are built after the filing dates. They embed only each filing's own
+text, so they hold nothing a decision could not have read, but reindexing with another
+model changes past search results; record the index model with the dataset version.
