@@ -4,7 +4,7 @@ from datetime import date
 import sqlalchemy as sa
 
 from disclosure_retrieval.revisions import filing_revisions
-from disclosure_retrieval.tables import disclosure_sections
+from disclosure_retrieval.tables import disclosure_documents, disclosure_sections
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,11 @@ def read_sections(
     limit: int = 50,
 ) -> list[Section]:
     revisions = filing_revisions(stock_code, as_of)
+    latest_document = (
+        sa.select(sa.func.max(disclosure_documents.c.id))
+        .where(disclosure_documents.c.receipt_id == receipt_id)
+        .scalar_subquery()
+    )
     query = (
         sa.select(
             disclosure_sections.c.receipt_id,
@@ -45,7 +50,16 @@ def read_sections(
             disclosure_sections.c.parser_version,
         )
         .join(revisions, revisions.c.receipt_id == disclosure_sections.c.receipt_id)
+        .join(
+            disclosure_documents,
+            sa.and_(
+                disclosure_documents.c.id == disclosure_sections.c.document_id,
+                disclosure_documents.c.receipt_id == disclosure_sections.c.receipt_id,
+            ),
+        )
         .where(
+            disclosure_sections.c.document_id == latest_document,
+            disclosure_documents.c.extraction_status == "ready",
             revisions.c.revision == 1,
             revisions.c.status == "ready",
             disclosure_sections.c.receipt_id == receipt_id,

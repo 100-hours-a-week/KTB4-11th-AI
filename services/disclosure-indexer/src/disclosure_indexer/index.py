@@ -178,7 +178,7 @@ def index_documents(
             row = (
                 conn.execute(
                     sa.text("""
-                        SELECT i.id, i.status AS previous_status, d.documents, r.company_name,
+                        SELECT i.id, d.documents, d.receipt_id, r.company_name,
                             r.stock_code, r.business_year, r.kind, r.period_end
                         FROM disclosure_indexes i
                         JOIN disclosure_documents d ON d.id = i.document_id
@@ -196,7 +196,7 @@ def index_documents(
                             )
                             AND NOT (i.id = ANY(CAST(:attempted AS bigint[])))
                         ORDER BY i.id
-                        FOR UPDATE OF i, d SKIP LOCKED
+                        FOR UPDATE OF r SKIP LOCKED
                         LIMIT 1
                     """),
                     {
@@ -213,12 +213,32 @@ def index_documents(
                 break
             index_id = row["id"]
             attempted.append(index_id)
-            if row["previous_status"] == "ready":
+            current_status = conn.execute(
+                sa.text("""
+                SELECT status FROM disclosure_indexes
+                WHERE id=:id AND attempts < :max_attempts
+                    AND document_id=(SELECT max(id) FROM disclosure_documents
+                                     WHERE receipt_id=:receipt)
+                    AND EXISTS (SELECT 1 FROM disclosures
+                                WHERE receipt_id=:receipt AND status='ready')
+                    AND (status IN ('pending','failed') OR (status='ready' AND NOT active)
+                         OR (status='processing' AND lease_until < now()))
+                FOR UPDATE
+            """),
+                {
+                    "id": index_id,
+                    "receipt": row["receipt_id"],
+                    "max_attempts": settings.max_attempts,
+                },
+            ).scalar()
+            if current_status is None:
+                continue
+            if current_status == "ready":
                 conn.execute(
                     sa.text(
                         "UPDATE disclosure_indexes SET active=false WHERE "
                         "document_id=(SELECT document_id FROM disclosure_indexes WHERE id=:id) "
-                        "AND dimensions=:dimensions AND id != :id"
+                        "AND dimensions=:dimensions AND id != :id AND active"
                     ),
                     {"id": index_id, "dimensions": settings.dimensions},
                 )
@@ -289,12 +309,20 @@ def index_documents(
                     )
             status = "ready" if chunks else "empty"
             with engine.begin() as conn:
+                conn.execute(
+                    sa.text(
+                        "SELECT receipt_id FROM disclosures WHERE receipt_id=:receipt FOR UPDATE"
+                    ),
+                    {"receipt": row["receipt_id"]},
+                ).scalar_one()
                 owned = conn.execute(
                     sa.text(
                         "SELECT id FROM disclosure_indexes WHERE id=:id AND "
-                        "owner=CAST(:owner AS uuid) AND status='processing' FOR UPDATE"
+                        "owner=CAST(:owner AS uuid) AND status='processing' "
+                        "AND document_id=(SELECT max(id) FROM disclosure_documents "
+                        "WHERE receipt_id=:receipt) FOR UPDATE"
                     ),
-                    {"id": index_id, "owner": owner},
+                    {"id": index_id, "owner": owner, "receipt": row["receipt_id"]},
                 ).scalar()
                 if owned is None:
                     raise RuntimeError("index lease lost")
@@ -333,7 +361,7 @@ def index_documents(
                     sa.text(
                         "UPDATE disclosure_indexes SET active=false WHERE "
                         "document_id=(SELECT document_id FROM disclosure_indexes WHERE "
-                        "id=:id) AND dimensions=:dimensions AND id != :id"
+                        "id=:id) AND dimensions=:dimensions AND id != :id AND active"
                     ),
                     {"id": index_id, "dimensions": settings.dimensions},
                 )

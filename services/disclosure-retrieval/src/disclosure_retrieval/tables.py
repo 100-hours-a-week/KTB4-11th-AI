@@ -16,9 +16,20 @@ disclosures = sa.Table(
     sa.Column("status", sa.Text, nullable=False),
 )
 
+disclosure_documents = sa.Table(
+    "disclosure_documents",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True),
+    sa.Column("receipt_id", sa.Text, sa.ForeignKey("disclosures.receipt_id"), nullable=False),
+    sa.Column("extraction_status", sa.Text, nullable=False, server_default="ready"),
+)
+
 disclosure_sections = sa.Table(
     "disclosure_sections",
     metadata,
+    sa.Column(
+        "document_id", sa.BigInteger, sa.ForeignKey("disclosure_documents.id"), nullable=False
+    ),
     sa.Column("id", sa.BigInteger, primary_key=True),
     sa.Column("receipt_id", sa.Text, sa.ForeignKey("disclosures.receipt_id"), nullable=False),
     sa.Column("document_name", sa.Text, nullable=False),
