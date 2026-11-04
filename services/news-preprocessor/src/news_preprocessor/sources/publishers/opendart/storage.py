@@ -110,41 +110,57 @@ disclosure_financial_facts = sa.Table(
 def insert_disclosure(conn: sa.Connection, item: "DisclosureItem") -> bool:
     payload = json.loads(item.raw_payload)
     status = "ready" if any(doc["status"] == "ready" for doc in item.documents) else "unavailable"
-    conn.execute(
+    filing = {
+        "receipt": item.external_id,
+        "stock": payload["stock_code"],
+        "corp": payload["corp_code"],
+        "name": payload["corp_name"],
+        "title": payload["report_nm"],
+        "type": item.detail_type,
+        "year": item.business_year,
+        "kind": item.kind,
+        "period": item.period_end,
+        "published": item.published_at.date(),
+        "raw": item.raw_payload,
+        "status": status,
+        "financials": status == "ready" and item.kind in REPORT_CODES,
+    }
+    created = conn.execute(
         sa.text(
             "INSERT INTO disclosures(receipt_id,stock_code,corp_code,company_name,title,"
             "detail_type,business_year,kind,period_end,published_date,raw_payload,status,"
             "financials_collected) VALUES (:receipt,:stock,:corp,:name,:title,:type,:year,:kind,"
             ":period,:published,CAST(:raw AS jsonb),:status,:financials) "
-            "ON CONFLICT(receipt_id) DO UPDATE SET business_year=excluded.business_year,"
-            "kind=excluded.kind,period_end=excluded.period_end,status=excluded.status,"
-            "detail_type=excluded.detail_type,raw_payload=excluded.raw_payload,"
-            "financials_collected=excluded.financials_collected,attempts=0,error=NULL,updated_at=now()"
+            "ON CONFLICT(receipt_id) DO NOTHING RETURNING receipt_id"
         ),
-        {
-            "receipt": item.external_id,
-            "stock": payload["stock_code"],
-            "corp": payload["corp_code"],
-            "name": payload["corp_name"],
-            "title": payload["report_nm"],
-            "type": item.detail_type,
-            "year": item.business_year,
-            "kind": item.kind,
-            "period": item.period_end,
-            "published": item.published_at.date(),
-            "raw": item.raw_payload,
-            "status": status,
-            "financials": status == "ready" and item.kind in REPORT_CODES,
-        },
-    )
+        filing,
+    ).scalar_one_or_none()
+    conn.execute(
+        sa.text("SELECT receipt_id FROM disclosures WHERE receipt_id=:receipt FOR UPDATE"),
+        {"receipt": item.external_id},
+    ).scalar_one()
+    existing = conn.execute(
+        sa.text("SELECT id FROM disclosure_documents WHERE receipt_id=:receipt LIMIT 1"),
+        {"receipt": item.external_id},
+    ).scalar_one_or_none()
+    if existing is not None:
+        return False
+    if created is None:
+        conn.execute(
+            sa.text(
+                "UPDATE disclosures SET stock_code=:stock,corp_code=:corp,company_name=:name,"
+                "title=:title,detail_type=:type,business_year=:year,kind=:kind,period_end=:period,"
+                "published_date=:published,raw_payload=CAST(:raw AS jsonb),status=:status,"
+                "financials_collected=:financials,attempts=0,error=NULL,updated_at=now() "
+                "WHERE receipt_id=:receipt"
+            ),
+            filing,
+        )
     document_id = conn.execute(
         sa.text(
             "INSERT INTO disclosure_documents(receipt_id,archive_key,source_hash,parser_version,"
             "documents,extraction_status) VALUES (:receipt,:key,:hash,:parser,CAST(:docs AS jsonb),"
-            ":status) ON CONFLICT(receipt_id,source_hash,parser_version) "
-            "DO UPDATE SET documents=excluded.documents,"
-            "extraction_status=excluded.extraction_status "
-            "RETURNING id"
+            ":status) RETURNING id"
         ),
         {
             "receipt": item.external_id,
@@ -155,9 +171,6 @@ def insert_disclosure(conn: sa.Connection, item: "DisclosureItem") -> bool:
             "status": status,
         },
     ).scalar_one()
-    conn.execute(
-        sa.delete(disclosure_sections).where(disclosure_sections.c.document_id == document_id)
-    )
     rows = section_rows(item.documents)
     if rows:
         conn.execute(

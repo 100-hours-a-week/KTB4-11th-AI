@@ -333,7 +333,7 @@ def test_collection_recovers_failure_after_daily_listing_window_without_duplicat
         )
 
 
-def test_history_reparses_old_filing_after_parser_change(company_engine, settings, listing_clock):
+def test_history_skips_stored_filing_after_parser_change(company_engine, settings, listing_clock):
     api = DartAPI()
     api.listed_on = "20261030"
     with api.client() as client:
@@ -344,15 +344,13 @@ def test_history_reparses_old_filing_after_parser_change(company_engine, setting
         recovery = settings.model_copy(
             update={"start_date": date(2026, 10, 30), "end_date": date(2026, 10, 30)}
         )
-        assert ingest(company_engine, client, recovery).succeed == [RECEIPT]
         assert ingest(company_engine, client, recovery).succeed == []
-    assert api.count("document.xml") == 2
+        assert ingest(company_engine, client, recovery).succeed == []
+    assert api.count("document.xml") == 1
     with company_engine.connect() as conn:
         assert (
-            conn.execute(
-                sa.text("SELECT parser_version FROM disclosure_documents ORDER BY id DESC LIMIT 1")
-            ).scalar_one()
-            == PARSER_VERSION
+            conn.execute(sa.text("SELECT parser_version FROM disclosure_documents")).scalar_one()
+            == "previous"
         )
 
 
@@ -375,34 +373,18 @@ def test_nonperiodic_filing_keeps_unknown_fiscal_fields(company_engine, settings
     assert api.count("company.json") == api.count("fnlttSinglAcntAll.json") == 0
 
 
-def test_old_parser_version_is_replaced_through_the_same_api_flow(company_engine, settings):
+def test_changed_source_does_not_refetch_a_stored_receipt(company_engine, settings):
     api = DartAPI()
     with api.client() as client:
-        ingest(company_engine, client, settings)
-        with company_engine.begin() as conn:
-            conn.execute(
-                sa.text(
-                    "UPDATE disclosure_documents SET parser_version='previous-parser' "
-                    "WHERE receipt_id=:receipt"
-                ),
-                {"receipt": RECEIPT},
-            )
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+        first = receipt_rows(company_engine)
+        api.document = archive("변경된 원문입니다.")
         recovery = settings.model_copy(
             update={"start_date": date(2026, 10, 30), "end_date": date(2026, 10, 30)}
         )
-        assert ingest(company_engine, client, recovery).succeed == [RECEIPT]
-    assert api.count("document.xml") == 2
-    with company_engine.connect() as conn:
-        assert (
-            conn.execute(
-                sa.text(
-                    "SELECT parser_version FROM disclosure_documents WHERE receipt_id=:receipt "
-                    "ORDER BY id DESC LIMIT 1"
-                ),
-                {"receipt": RECEIPT},
-            ).scalar_one()
-            == PARSER_VERSION
-        )
+        assert ingest(company_engine, client, recovery).succeed == []
+    assert api.count("document.xml") == 1
+    assert receipt_rows(company_engine) == first
 
 
 def test_failure_during_database_save_rolls_back_all_related_rows(company_engine, settings, caplog):
@@ -750,3 +732,142 @@ def test_empty_zip_does_not_save_short_or_long_filings(company_engine, settings,
             ).scalar_one()
             is False
         )
+
+
+def receipt_rows(engine):
+    with engine.connect() as conn:
+        return {
+            table: [
+                dict(row)
+                for row in conn.execute(
+                    sa.text(f"SELECT * FROM {table} WHERE receipt_id=:receipt ORDER BY 1"),
+                    {"receipt": RECEIPT},
+                ).mappings()
+            ]
+            for table in (
+                "disclosures",
+                "disclosure_documents",
+                "disclosure_sections",
+                "disclosure_financial_facts",
+            )
+        }
+
+
+def parsed_item(settings, text="최초 본문"):
+    api = DartAPI()
+    api.document = archive(text)
+    with api.client() as client:
+        source = OpenDart(client, "test", {STOCK}, settings=settings)
+        entry = next(e for e in source.entries() if e.external_id == RECEIPT)
+        return source.article(entry)
+
+
+@pytest.mark.parametrize("parser", [PARSER_VERSION, "another-parser"])
+def test_direct_store_preserves_first_save_on_source_and_parser_replay(
+    company_engine, settings, monkeypatch, parser
+):
+    from news_preprocessor.storage import insert_new
+
+    original = parsed_item(settings)
+    changed = parsed_item(settings, "다른 본문")
+    with company_engine.begin() as conn:
+        assert insert_new(conn, original)
+    first = receipt_rows(company_engine)
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.storage.PARSER_VERSION", parser
+    )
+    with company_engine.begin() as conn:
+        assert insert_new(conn, changed) is False
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.storage.PARSER_VERSION", PARSER_VERSION
+    )
+    with company_engine.begin() as conn:
+        assert insert_new(conn, original) is False
+    assert receipt_rows(company_engine) == first
+
+
+@pytest.mark.parametrize("different_source", [False, True])
+def test_parallel_saves_commit_one_document_set(company_engine, settings, different_source):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from news_preprocessor.storage import insert_new
+
+    item = parsed_item(settings)
+    other = parsed_item(settings, "다른 동시 원문") if different_source else item
+    start = Barrier(2)
+
+    def save(candidate):
+        start.wait(timeout=5)
+        with company_engine.begin() as conn:
+            conn.execute(sa.text("SET LOCAL statement_timeout='5s'"))
+            return insert_new(conn, candidate)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        a, b = pool.submit(save, item), pool.submit(save, other)
+        saved_a, saved_b = a.result(timeout=10), b.result(timeout=10)
+        assert sorted([saved_a, saved_b]) == [False, True]
+    winner = item if saved_a else other
+    rows = receipt_rows(company_engine)
+    assert len(rows["disclosures"]) == len(rows["disclosure_documents"]) == 1
+    assert len(rows["disclosure_financial_facts"]) == 2
+    assert rows["disclosure_documents"][0]["source_hash"] == winner.source_hash
+    assert rows["disclosure_documents"][0]["documents"] == winner.documents
+
+
+def test_correction_receipt_is_added_without_overwriting_original(
+    company_engine, settings, listing_clock
+):
+    api = DartAPI()
+    with api.client() as client:
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+        first = receipt_rows(company_engine)
+        listing_clock["now"] += timedelta(days=1)
+        api.listed_on = "20261031"
+        api.document = archive("정정된 본문")
+        api.rows.append(("A001", "typed-correction", "[기재정정]사업보고서 (2025.12)"))
+        assert ingest(company_engine, client, settings).succeed == ["typed-correction"]
+        assert ingest(company_engine, client, settings).succeed == []
+    assert receipt_rows(company_engine) == first
+    assert api.count("document.xml") == 2
+    with company_engine.connect() as conn:
+        rows = conn.execute(
+            sa.text("SELECT receipt_id,published_date FROM disclosures ORDER BY published_date")
+        ).all()
+        assert rows == [(RECEIPT, date(2026, 10, 30)), ("typed-correction", date(2026, 10, 31))]
+        assert conn.execute(sa.text("SELECT count(*) FROM disclosure_documents")).scalar_one() == 2
+
+
+@pytest.mark.parametrize("status", ["ready", "unavailable", "failed", "pending", "dead_letter"])
+def test_stored_document_is_known_independently_of_legacy_status(company_engine, settings, status):
+    api = DartAPI()
+    with api.client() as client:
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+        with company_engine.begin() as conn:
+            conn.execute(sa.text("UPDATE disclosures SET status=:status"), {"status": status})
+        first = receipt_rows(company_engine)
+        replay = settings.model_copy(
+            update={"start_date": date(2026, 10, 30), "end_date": date(2026, 10, 30)}
+        )
+        assert ingest(company_engine, client, replay).succeed == []
+    assert api.count("document.xml") == 1
+    assert receipt_rows(company_engine) == first
+
+
+def test_metadata_without_document_can_finish_its_first_complete_save(company_engine, settings):
+    api = DartAPI()
+    with api.client() as client:
+        ingest(company_engine, client, settings)
+        with company_engine.begin() as conn:
+            conn.execute(sa.text("DELETE FROM disclosure_documents"))
+            conn.execute(sa.text("UPDATE disclosures SET status='failed'"))
+        replay = settings.model_copy(
+            update={"start_date": date(2026, 10, 30), "end_date": date(2026, 10, 30)}
+        )
+        assert ingest(company_engine, client, replay).succeed == [RECEIPT]
+        assert ingest(company_engine, client, replay).succeed == []
+    rows = receipt_rows(company_engine)
+    assert len(rows["disclosures"]) == len(rows["disclosure_documents"]) == 1
+    assert len(rows["disclosure_financial_facts"]) == 2
+    assert rows["disclosures"][0]["status"] == "ready"
+    assert api.count("document.xml") == 2
