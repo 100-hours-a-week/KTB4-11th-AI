@@ -7,6 +7,7 @@ disclosures = sa.Table(
     metadata,
     sa.Column("receipt_id", sa.Text, primary_key=True),
     sa.Column("stock_code", sa.Text, nullable=False),
+    sa.Column("title", sa.Text, nullable=False),
     sa.Column("business_year", sa.Integer),
     sa.Column("kind", sa.Text, nullable=False),
     sa.Column("detail_type", sa.Text),

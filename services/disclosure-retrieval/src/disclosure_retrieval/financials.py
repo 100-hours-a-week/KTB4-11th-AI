@@ -4,12 +4,15 @@ from decimal import Decimal
 
 import sqlalchemy as sa
 
-from disclosure_retrieval.tables import disclosure_financial_facts
+from disclosure_retrieval.tables import disclosure_financial_facts, disclosures
 
 
 @dataclass(frozen=True)
 class FinancialFact:
     receipt_id: str
+    published_date: date
+    title: str
+    previous_receipt_id: str | None
     business_year: int
     kind: str
     period_end: date
@@ -37,9 +40,44 @@ def read_financials(
     if period_end is None and business_year is None:
         raise ValueError("period_end or business_year is required")
     facts = disclosure_financial_facts
+    reports = disclosures
+    family = [
+        reports.c.stock_code,
+        reports.c.kind,
+        sa.func.coalesce(
+            reports.c.detail_type,
+            sa.case(
+                (reports.c.kind == "annual", "A001"),
+                (reports.c.kind == "half", "A002"),
+                (reports.c.kind.in_(["q1", "q3"]), "A003"),
+            ),
+        ),
+        reports.c.business_year,
+        reports.c.period_end,
+    ]
+    revision_order = [reports.c.published_date.desc(), reports.c.receipt_id.desc()]
+    revisions = (
+        sa.select(
+            reports.c.receipt_id,
+            reports.c.published_date,
+            reports.c.title,
+            reports.c.status,
+            sa.func.row_number()
+            .over(partition_by=family, order_by=revision_order)
+            .label("revision"),
+            sa.func.lead(reports.c.receipt_id)
+            .over(partition_by=family, order_by=revision_order)
+            .label("previous_receipt_id"),
+        )
+        .where(reports.c.stock_code == stock_code)
+        .cte("financial_revisions")
+    )
     query = (
         sa.select(
             facts.c.receipt_id,
+            revisions.c.published_date,
+            revisions.c.title,
+            revisions.c.previous_receipt_id,
             facts.c.business_year,
             facts.c.kind,
             facts.c.period_end,
@@ -52,7 +90,12 @@ def read_financials(
             facts.c.value,
             facts.c.normalized,
         )
-        .where(facts.c.stock_code == stock_code)
+        .join(revisions, facts.c.receipt_id == revisions.c.receipt_id)
+        .where(
+            facts.c.stock_code == stock_code,
+            revisions.c.revision == 1,
+            revisions.c.status == "ready",
+        )
         .order_by(facts.c.period_end.desc(), facts.c.scope, facts.c.statement_type, facts.c.ordinal)
         .limit(limit)
     )

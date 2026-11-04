@@ -68,6 +68,40 @@ environment variable does not deploy different GPU weights. Incompatible serving
 identities are rejected. Changing embedding metadata creates a different index space;
 old vectors are not silently reused.
 
+## Accuracy and failed-index recovery
+
+Modal indexes every nonblank narrative section, including `topic=other`. A topic is
+metadata, not an eligibility filter. Asset-disposal text from the real OpenDART parser
+is covered by a regression test. The `content-kind-v2` signature creates new indexing
+work for documents previously indexed under the narrower topic rule.
+
+A document containing no narrative text finishes with `status=empty`, `active=false`.
+It creates no vectors, makes no inference call, and is not reported as ready. Retrieval
+returns its `empty` state and no narrative candidates. Repeating the job does not retry
+these documents. Migration 0016 includes this state; collection revisions are unchanged.
+
+Financial reads select the latest stored filing in each company/year/report-type/period
+family before filtering accounts and consolidation scope. The family normalizes legacy
+periodic detail codes. An unavailable, failed, or not-yet-parsed latest filing does not
+silently fall back to an older amount. Results include the filing title, publication
+date and `previous_receipt_id`. This field identifies the nearest earlier stored filing
+in the same family, not an official DART correction link. An uncollected predecessor
+cannot be identified. Independent companies, periods, and report families remain separate.
+
+Normal indexing preserves the configured failure limit and does not automatically revive
+`dead_letter` work. After fixing an inference outage, explicitly retry named receipts:
+
+```bash
+uv run disclosure-indexer --retry-receipt RECEIPT_ID
+```
+
+Repeat the option for multiple receipts. This resets only dead-letter indexes for the
+current signature and latest parsed version of each named receipt. The run processes
+only the named receipts, leaving unrelated pending work untouched. It does not take over
+an active processing lease. Disabled indexing rejects the recovery command before DB
+access. Logs record the reset count; successful repeated recovery neither duplicates
+chunks nor calls inference again. This change does not run recovery against any deployed DB.
+
 ## Activation and deployment ownership
 
 `DISCLOSURE_ENABLED` is shared by portfolio-builder and disclosure-indexer and defaults
@@ -140,8 +174,9 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 - Tests reproduce default deployment without disclosure model settings, reject incomplete
   enabled configuration, and verify a technical-only portfolio can save when disabled.
   Existing enabled-mode tests still require successful disclosure search.
-- Final full suite against the disposable `ktb_disclosure432_test` PostgreSQL database:
-  **1,456 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+- Final accuracy follow-up suite against disposable `ktb_disclosure_accuracy_test` PostgreSQL:
+  **1,472 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
+  upgraded in this test DB to verify the explicit empty state. Unconfigured optional integrations
   account for the skips.
 - The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail
   changes. Collection revisions 0013–0015 are unchanged; the only index revision is 0016.

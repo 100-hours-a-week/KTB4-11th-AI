@@ -52,21 +52,11 @@ def narrative_groups(
     report: Mapping[str, Any], settings: Settings
 ) -> tuple[list[dict], list[dict]]:
     chunks, groups = [], []
-    topics = {
-        "litigation",
-        "outlook",
-        "risk",
-        "contracts",
-        "notes",
-        "research",
-        "production",
-        "business",
-    }
     for document in report["documents"]:
         sections = [
             s
             for s in document["sections"]
-            if s.get("content_kind") == "narrative" and s["topic"] in topics
+            if s.get("content_kind") == "narrative" and s["text"].strip()
         ]
         local = chunk_sections(sections, settings.chunk_bytes, settings.overlap_bytes)
         texts = embedding_inputs(report, local, settings.input_bytes)
@@ -99,7 +89,9 @@ def chunk_column_type(conn: sa.Connection, table: str = "disclosure_chunks") -> 
     ).scalar()
 
 
-def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
+def index_documents(
+    engine: sa.Engine, settings: Settings, *, retry_receipts: tuple[str, ...] = ()
+) -> dict[str, int]:
     modal = settings.inference_backend == "modal"
     table = "disclosure_narrative_chunks" if modal else "disclosure_chunks"
     expected = f"halfvec({settings.dimensions})"
@@ -125,7 +117,7 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
             identity=identity,
             grouping="file-byte-context-v1",
             context_bytes=settings.context_bytes,
-            narrative_rule="topic-and-kind-v1",
+            narrative_rule="content-kind-v2",
         )
         config.pop("query_instruction")
     signature = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
@@ -148,7 +140,29 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                 "identity": json.dumps(identity),
             },
         )
-    result = {"ready": 0, "failed": 0, "chunks": 0}
+    requeued = []
+    if retry_receipts:
+        with engine.begin() as conn:
+            requeued = (
+                conn.execute(
+                    sa.text("""
+                    UPDATE disclosure_indexes i
+                    SET status='pending', attempts=0, error=NULL, owner=NULL, lease_until=NULL
+                    FROM disclosure_documents d
+                    WHERE i.document_id=d.id AND i.signature=:signature
+                        AND i.status='dead_letter'
+                        AND d.receipt_id=ANY(CAST(:receipts AS text[]))
+                        AND d.id=(SELECT max(v.id) FROM disclosure_documents v
+                                  WHERE v.receipt_id=d.receipt_id)
+                    RETURNING i.id
+                """),
+                    {"signature": signature, "receipts": list(retry_receipts)},
+                )
+                .scalars()
+                .all()
+            )
+        log.info("disclosure_indexes_requeued", receipts=retry_receipts, count=len(requeued))
+    result = {"ready": 0, "empty": 0, "failed": 0, "chunks": 0, "requeued": len(requeued)}
     attempted = []
     for _ in range(settings.document_limit):
         owner = str(uuid4())
@@ -161,7 +175,11 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                         FROM disclosure_indexes i
                         JOIN disclosure_documents d ON d.id = i.document_id
                         JOIN disclosures r ON r.receipt_id = d.receipt_id
-                        WHERE i.signature = :signature
+                        WHERE i.signature = :signature AND r.status='ready'
+                            AND d.id=(SELECT max(v.id) FROM disclosure_documents v
+                                      WHERE v.receipt_id=d.receipt_id)
+                            AND (cardinality(CAST(:retry_receipts AS text[]))=0
+                                 OR d.receipt_id=ANY(CAST(:retry_receipts AS text[])))
                             AND i.attempts < :max_attempts
                             AND (
                                 i.status IN ('pending', 'failed')
@@ -174,6 +192,7 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                     """),
                     {
                         "signature": signature,
+                        "retry_receipts": list(retry_receipts),
                         "attempted": attempted,
                         "max_attempts": settings.max_attempts,
                     },
@@ -243,6 +262,7 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                             settings.max_tokens,
                         )
                     )
+            status = "ready" if chunks else "empty"
             with engine.begin() as conn:
                 owned = conn.execute(
                     sa.text(
@@ -294,12 +314,14 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                 )
                 conn.execute(
                     sa.text(
-                        "UPDATE disclosure_indexes SET status='ready', active=true, "
+                        "UPDATE disclosure_indexes SET status=:status, active=:active, "
                         "attempts=0, owner=NULL, lease_until=NULL WHERE id=:id"
                     ),
-                    {"id": index_id},
+                    {"id": index_id, "status": status, "active": bool(chunks)},
                 )
-            result["ready"] += 1
+            if not chunks:
+                log.info("disclosure_index_empty", index_id=index_id)
+            result[status] += 1
             result["chunks"] += len(chunks)
         except Exception as error:
             with engine.begin() as conn:

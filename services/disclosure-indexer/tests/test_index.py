@@ -123,7 +123,7 @@ def _settings(**overrides):
 
 
 def test_a_document_that_always_fails_reaches_dead_letter(report_engine, monkeypatch):
-    settings = _settings(DISCLOSURE_INDEXER_MAX_ATTEMPTS=3)
+    settings = _settings(max_attempts=3)
     attempts = []
 
     def fail(req, timeout):
@@ -352,3 +352,154 @@ def test_nonperiodic_embedding_metadata_preserves_type_without_inventing_a_fisca
     value = embedding_inputs(report, [_chunk("본문")], 2000)[0]
     assert value.startswith("삼성전자 (005930) F001\n")
     assert "None" not in value
+
+
+def test_parser_other_narrative_is_kept_for_modal_indexing():
+    from disclosure_indexer.index import narrative_groups
+    from news_preprocessor.sources.publishers.opendart.parser import parse_document
+
+    document = parse_document(
+        (
+            "<DOCUMENT><TITLE>유형자산 양도결정</TITLE>"
+            "<P>본사는 토지와 건물을 처분합니다.</P></DOCUMENT>"
+        ).encode(),
+        "asset-disposal.xml",
+    )
+    assert document["sections"][0]["topic"] == "other"
+    chunks, groups = narrative_groups({**REPORT, "documents": [document]}, _settings())
+    assert [chunk["text"] for chunk in chunks] == ["본사는 토지와 건물을 처분합니다."]
+    assert groups[0]["document_id"] == "asset-disposal.xml:0"
+
+
+def test_table_only_modal_index_is_empty_and_search_reports_it_without_gpu(
+    report_engine, monkeypatch
+):
+    from datetime import date
+
+    from disclosure_retrieval.queries import report_rows
+    from disclosure_retrieval.search import SearchRequest, search
+    from disclosure_retrieval.settings import Settings as RetrievalSettings
+
+    settings = _settings(
+        DISCLOSURE_INFERENCE_BACKEND="modal",
+        DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
+        DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,
+        DISCLOSURE_MODAL_DOCUMENT_URL="https://documents.modal.run",
+        DISCLOSURE_MODAL_KEY="key",
+        DISCLOSURE_MODAL_SECRET="secret",
+    )
+    docs = [
+        {
+            "name": "table.xml",
+            "sections": [
+                {
+                    "section": "표",
+                    "topic": "other",
+                    "text": "금액 | 100",
+                    "start": 0,
+                    "end": 8,
+                    "document": "table.xml",
+                    "content_kind": "table",
+                }
+            ],
+        }
+    ]
+    with report_engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "UPDATE disclosure_documents SET documents=CAST(:docs AS jsonb) "
+                "WHERE receipt_id='index-test'"
+            ),
+            {"docs": json.dumps(docs)},
+        )
+    monkeypatch.setattr(
+        "disclosure_indexer.index.embed_documents",
+        lambda *a: pytest.fail("empty content called GPU"),
+    )
+    result = index_documents(report_engine, settings)
+    assert result["ready"] == 0 and result["empty"] == 1
+    assert index_documents(report_engine, settings)["empty"] == 0
+    with report_engine.connect() as conn:
+        state = conn.execute(sa.text("SELECT status,active FROM disclosure_indexes")).one()
+        assert state.status == "empty" and state.active is False
+        reports = report_rows(conn, "990001", 3, date(2026, 1, 1), settings.index_model, 1024)
+        assert reports[0]["index_state"] == "empty"
+    retrieval = RetrievalSettings(
+        DISCLOSURE_INFERENCE_BACKEND="modal",
+        DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
+        DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,
+        DISCLOSURE_MODAL_QUERY_URL="https://query.modal.run",
+        DISCLOSURE_MODAL_RERANK_URL="https://rerank.modal.run",
+        DISCLOSURE_MODAL_KEY="key",
+        DISCLOSURE_MODAL_SECRET="secret",
+    )
+    monkeypatch.setattr(
+        "disclosure_retrieval.inference.embed_query",
+        lambda *a: pytest.fail("empty search called GPU"),
+    )
+    result = search(
+        report_engine, "990001", SearchRequest(query="자산", as_of=date(2026, 1, 1)), retrieval
+    )
+    assert result.reports[0].index_state == "empty"
+    assert result.latest_evidence == [] and result.latest_searched == 0
+
+
+def test_explicit_retry_recovers_dead_letter_once_without_duplicate_chunks(
+    report_engine, monkeypatch
+):
+    settings = _settings(max_attempts=2)
+
+    def fail(*args, **kwargs):
+        raise TimeoutError()
+
+    monkeypatch.setattr("disclosure_indexer.index.embed_vectors", fail)
+    for _ in range(2):
+        assert index_documents(report_engine, settings)["failed"] == 1
+    assert index_documents(report_engine, settings)["failed"] == 0
+    monkeypatch.setattr(
+        "disclosure_indexer.index.embed_vectors",
+        lambda texts, *a: [[1.0] + [0.0] * 1999 for _ in texts],
+    )
+    with report_engine.begin() as conn:
+        conn.execute(
+            sa.text("""
+            INSERT INTO disclosures(receipt_id,stock_code,corp_code,company_name,title,
+                business_year,kind,period_end,published_date,raw_payload,status)
+            SELECT 'unrelated',stock_code,corp_code,company_name,title,business_year,kind,
+                period_end,published_date,raw_payload,status FROM disclosures
+            WHERE receipt_id='index-test'
+        """)
+        )
+        conn.execute(
+            sa.text("""
+            INSERT INTO disclosure_documents(receipt_id,archive_key,source_hash,
+                parser_version,documents)
+            SELECT 'unrelated',archive_key,source_hash,parser_version,documents
+            FROM disclosure_documents WHERE receipt_id='index-test'
+        """)
+        )
+    result = index_documents(report_engine, settings, retry_receipts=("index-test",))
+    assert result["requeued"] == 1 and result["ready"] == 1
+    with report_engine.connect() as conn:
+        state = conn.execute(
+            sa.text("""
+            SELECT i.status,i.attempts FROM disclosure_indexes i
+            JOIN disclosure_documents d ON d.id=i.document_id WHERE d.receipt_id='index-test'
+        """)
+        ).one()
+        assert state.status == "ready" and state.attempts == 0
+        assert (
+            conn.execute(
+                sa.text("""
+            SELECT i.status FROM disclosure_indexes i JOIN disclosure_documents d
+            ON d.id=i.document_id WHERE d.receipt_id='unrelated'
+        """)
+            ).scalar_one()
+            == "pending"
+        )
+        count = conn.execute(sa.text("SELECT count(*) FROM disclosure_chunks")).scalar_one()
+    assert index_documents(report_engine, settings, retry_receipts=("index-test",))["ready"] == 0
+    with report_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT count(*) FROM disclosure_chunks")).scalar_one() == count
+    with report_engine.begin() as conn:
+        conn.execute(sa.text("DELETE FROM disclosures WHERE receipt_id='unrelated'"))
