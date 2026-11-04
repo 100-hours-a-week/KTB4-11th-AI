@@ -5,8 +5,8 @@ Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and se
 Review and merge #441, then #432, then #430. Each PR contains its own final plan.
 Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
 
-The combined branch was verified with **1,496 passed, 49 skipped, 2 subtests passed**
-using a disposable PostgreSQL database. Its 40 inference and deployment CPU tests
+The final accuracy follow-up was verified with **1,535 passed, 49 skipped, 2 subtests passed**
+using disposable PostgreSQL `ktb_disclosure_accuracy_test`. Its 63 inference and deployment CPU tests
 include model-setting propagation through the image, image-build downloads and clean
 worker environments. The actual Modal SDK 1.6.3 app definition loads without importing
 GPU libraries or creating remote resources. No GPU deployment or new inference timing
@@ -313,5 +313,9 @@ and [measurement inputs, raw timings and verification archive](https://drive.goo
   encoding. Integer 1 and string "1" cannot overwrite the same response key.
 - Integrate #432's complete narrative coverage, explicit empty index state, latest financial
   filing reads with provenance, and receipt-scoped dead-letter recovery.
+- Independent review found no further actionable issues in the requested fixes. Ruff,
+  formatting, Tach and diff checks pass. No actual GPU inference or snapshot restoration
+  was executed for this follow-up. Python 3.15 dependency failures can skip that optional
+  compatibility job; its green summary is not evidence of a completed 3.15 test run.
 - Keep #430 based on #432 while both are open. After #432 merges into dev, retarget #430
   to dev and rerun CI. This follow-up performs no merge, deployment or paid inference.
