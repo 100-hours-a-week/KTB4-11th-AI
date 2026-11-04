@@ -22,7 +22,86 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  detect-changes:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      full: ${{ github.event_name == 'push' || steps.filter.outputs.shared == 'true' }}
+      services: ${{ steps.targets.outputs.services }}
+      members: ${{ steps.targets.outputs.members }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Detect changed files
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v4.0.3
+        with:
+          list-files: json
+          filters: |
+            shared:
+              - uv.lock
+              - pyproject.toml
+              - conftest.py
+              - tach.toml
+              - alembic.ini
+              - .python-version
+              - .dockerignore
+              - infrastructure/**
+              - .github/workflows/**
+              - scripts/**
+            members:
+              - packages/**
+              - services/**
+              - docker/*.Dockerfile
+              - docker/requirements/*.txt
+
+      - uses: astral-sh/setup-uv@v10.2.0
+        if: github.event_name == 'pull_request'
+
+      - name: Export affected workspace members
+        id: targets
+        env:
+          FULL: ${{ github.event_name == 'push' || steps.filter.outputs.shared == 'true' }}
+          FILES: ${{ steps.filter.outputs.members_files }}
+        run: |
+          set -euo pipefail
+          if [[ "$FULL" == true ]]; then
+            members=$(printf '%s\n' packages/* services/*)
+          else
+            members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
+            for member in $members; do
+              if [[ -d "$member" ]]; then
+                if [[ "$member" == packages/* ]]; then
+                  package="ktb-${member#packages/}"
+                else
+                  package="${member#services/}"
+                fi
+                tree=$(uv tree --invert --frozen --universal --no-dev --package "$package")
+                if [[ -z "$tree" ]]; then
+                  echo "::error::$member is not the workspace package $package"
+                  exit 1
+                fi
+                members+=$'\n'$(tail -n +2 <<< "$tree" \
+                  | sed -E 's/^[^a-z]*//; s/ v[0-9].*//; /^ktb-/!s#^#services/#; s#^ktb-#packages/#')
+              fi
+            done
+          fi
+          members=$(sort -u <<< "$members" | while read -r member; do if [[ -d "$member" ]]; then echo "$member"; fi; done)
+          echo "members=$(tr '\n' ' ' <<< "$members" | sed 's/ $//')" >> "$GITHUB_OUTPUT"
+          services=$(while read -r member; do
+            if [[ "$member" == services/* && -f "docker/${member#services/}.Dockerfile" ]]; then
+              echo "${member#services/}"
+            fi
+          done <<< "$members" | jq -Rsc 'split("\n") | map(select(length > 0))')
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+
   lint-and-test:
+    needs: detect-changes
     runs-on: ubuntu-24.04
 
     services:
@@ -88,15 +167,28 @@ jobs:
           uv run tach check-external -e services
 
       - name: Check report-builder isolated import
+        if: contains(fromJSON(needs.detect-changes.outputs.services), 'report-builder')
         run: uv run --isolated --package report-builder --locked --no-dev python -c 'import report_builder.__main__'
 
       - name: Apply database migrations
+        if: needs.detect-changes.outputs.members != ''
         run: uv run alembic upgrade head
 
       - name: Run tests
-        run: uv run pytest
+        if: needs.detect-changes.outputs.members != ''
+        env:
+          FULL: ${{ needs.detect-changes.outputs.full }}
+          MEMBERS: ${{ needs.detect-changes.outputs.members }}
+        run: |
+          if [[ "$FULL" == true ]]; then
+            uv run pytest
+          else
+            uv run pytest $MEMBERS
+          fi
 
   dependency-audit:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.members != ''
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -106,10 +198,12 @@ jobs:
       - run: uv sync --all-packages --locked --group migrations
       - name: Inspect declared dependencies per workspace member
         continue-on-error: true
+        env:
+          MEMBERS: ${{ needs.detect-changes.outputs.members }}
         run: |
           set -euo pipefail
           audit_status=0
-          for member in packages/* services/*; do
+          for member in $MEMBERS; do
             echo "::group::$member"
             uv run deptry "$member/src" --config "$member/pyproject.toml" || audit_status=1
             echo "::endgroup::"
@@ -135,23 +229,13 @@ jobs:
           git diff --exit-code -- docker/requirements/
 
   build-images:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.services != '' && needs.detect-changes.outputs.services != '[]'
     runs-on: ubuntu-24.04
 
     strategy:
       matrix:
-        service:
-          - disclosure-indexer
-          - news-preprocessor
-          - news-clusterer
-          - market-syncer
-          - news-graph-builder
-          - news-http
-          - portfolio-builder
-          - market-collector
-          - market-streamer
-          - market-http
-          - portfolio-rebalancer
-          - report-builder
+        service: ${{ fromJSON(needs.detect-changes.outputs.services) }}
 
     steps:
       - uses: actions/checkout@v7
@@ -224,7 +308,7 @@ jobs:
           path: ecs-release.json
           retention-days: 90
 
-  python-314-compatibility:
+  python-315-compatibility:
     runs-on: ubuntu-24.04
     continue-on-error: true
 
@@ -248,16 +332,62 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        id: checkout
+        continue-on-error: true
       - uses: astral-sh/setup-uv@v7
+        id: setup
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
         with:
           enable-cache: true
-      - run: uv sync --all-packages --locked --group migrations --python 3.14
-      - run: uv run --python 3.14 alembic upgrade head
-      - run: uv run --python 3.14 pytest
+      - name: Install dependencies
+        id: install
+        if: steps.setup.outcome == 'success'
+        continue-on-error: true
+        run: uv sync --all-packages --locked --group migrations --python 3.15
+      - name: Apply database migrations
+        id: migrate
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: uv run --python 3.15 alembic upgrade head
+      - name: Run tests
+        id: test
+        if: steps.migrate.outcome == 'success'
+        continue-on-error: true
+        run: uv run --python 3.15 pytest
+      - name: Summarize Python 3.15 compatibility
+        if: always()
+        env:
+          CHECKOUT: ${{ steps.checkout.outcome }}
+          SETUP: ${{ steps.setup.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          MIGRATE: ${{ steps.migrate.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          if [[ "$TEST" == success ]]; then
+            result=PASS
+          elif [[ "$CHECKOUT" == failure || "$SETUP" == failure ]]; then
+            result='NOT RUN (preparation failed)'
+          elif [[ "$INSTALL" == failure || "$MIGRATE" == failure || "$TEST" == failure ]]; then
+            result=FAIL
+          else
+            result='NOT RUN (incomplete)'
+          fi
+          {
+            echo "### Python 3.15 compatibility: $result"
+            echo "- Checkout: ${CHECKOUT:-skipped}"
+            echo "- Setup uv: ${SETUP:-skipped}"
+            echo "- Install dependencies: ${INSTALL:-skipped}"
+            echo "- Apply migrations: ${MIGRATE:-skipped}"
+            echo "- Run tests: ${TEST:-skipped}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$result" != PASS ]]; then
+            echo "::warning::Python 3.15 compatibility: $result; see the job summary for step outcomes."
+          fi
 
   deploy-dev:
-    needs: [lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-314-compatibility]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs: [detect-changes, lint-and-test, dependency-audit, verify-exported-requirements, build-images, build-app-image, python-315-compatibility]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') && needs.build-app-image.result == 'success' && github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
     permissions:
       contents: read
     uses: ./.github/workflows/cd-dev.yaml

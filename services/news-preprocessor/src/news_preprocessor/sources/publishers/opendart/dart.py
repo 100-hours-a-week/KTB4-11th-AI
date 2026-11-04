@@ -1,12 +1,36 @@
 import calendar
+import io
+import json
 import re
 import time
-from datetime import date
+import zipfile
+import zlib
+from datetime import date, datetime
 from typing import Any
 
 import httpx
+from bs4 import BeautifulSoup
+from ktb_core.logging import get_logger
 
 API = "https://opendart.fss.or.kr/api"
+log = get_logger(__name__)
+REQUEST_FIELDS = {
+    "rcept_no": "receipt_id",
+    "corp_code": "corp_code",
+    "bsns_year": "business_year",
+    "reprt_code": "report_code",
+    "fs_div": "scope",
+    "bgn_de": "start_date",
+    "end_de": "end_date",
+    "page_no": "page_no",
+    "pblntf_detail_ty": "detail_type",
+}
+
+
+class DartAPIError(RuntimeError):
+    def __init__(self, status: str):
+        self.status = status
+        super().__init__(f"DART API status {status}")
 
 
 def report_period(
@@ -45,15 +69,23 @@ class DartClient:
         interval: float = 1,
         attempts: int = 3,
         max_bytes: int = 100_000_000,
+        max_uncompressed_bytes: int = 64_000_000,
     ):
         self.client = client
         self.api_key = api_key
         self.interval = interval
         self.attempts = attempts
         self.max_bytes = max_bytes
+        self.max_uncompressed_bytes = max_uncompressed_bytes
         self.last_request = 0.0
 
     def get(self, endpoint: str, params: dict[str, str]) -> bytes:
+        request_log = log.bind(
+            endpoint=endpoint,
+            **{
+                REQUEST_FIELDS[key]: value for key, value in params.items() if key in REQUEST_FIELDS
+            },
+        )
         for attempt in range(self.attempts):
             time.sleep(max(0, self.interval - (time.monotonic() - self.last_request)))
             self.last_request = time.monotonic()
@@ -62,7 +94,7 @@ class DartClient:
                     "GET",
                     f"{API}/{endpoint}",
                     params={"crtfc_key": self.api_key, **params},
-                    timeout=60,
+                    timeout=30 if endpoint == "list.json" else 60,
                 ) as response:
                     response.raise_for_status()
                     data = bytearray()
@@ -70,20 +102,124 @@ class DartClient:
                         data.extend(part)
                         if len(data) > self.max_bytes:
                             raise ValueError("DART response exceeds archive limit")
-                    return bytes(data)
-            except (httpx.HTTPError, ValueError):
-                if attempt + 1 == self.attempts:
+                    content = bytes(data)
+                if endpoint.endswith(".json"):
+                    payload = json.loads(content)
+                    if not isinstance(payload, dict):
+                        raise ValueError("DART JSON response must be an object")
+                    status = payload.get("status", "unknown")
+                    if status not in ("000", "013"):
+                        raise DartAPIError(str(status))
+                    if status == "000":
+                        if endpoint in ("list.json", "fnlttSinglAcntAll.json"):
+                            rows = payload.get("list")
+                            if not isinstance(rows, list) or any(
+                                not isinstance(row, dict) for row in rows
+                            ):
+                                raise ValueError("DART response requires a list of objects")
+                            if endpoint == "list.json":
+                                pages = payload.get("total_page")
+                                if type(pages) is not int or pages < 0 or rows and pages == 0:
+                                    raise ValueError("DART listing requires a valid page count")
+                                for row in rows:
+                                    if (
+                                        any(
+                                            not isinstance(row.get(key), str)
+                                            for key in (
+                                                "corp_code",
+                                                "stock_code",
+                                                "corp_name",
+                                                "report_nm",
+                                                "rcept_no",
+                                                "rcept_dt",
+                                            )
+                                        )
+                                        or not row["rcept_no"]
+                                    ):
+                                        raise ValueError(
+                                            "DART listing has incomplete filing fields"
+                                        )
+                                    datetime.strptime(row["rcept_dt"], "%Y%m%d")
+                            else:
+                                for row in rows:
+                                    if (
+                                        not isinstance(row.get("sj_div"), str)
+                                        or not row["sj_div"].strip()
+                                    ):
+                                        raise ValueError("DART account requires a statement type")
+                                    if any(
+                                        row.get(key) is not None and not isinstance(row[key], str)
+                                        for key in (
+                                            "account_id",
+                                            "account_nm",
+                                            "currency",
+                                            "ord",
+                                            "thstrm_amount",
+                                        )
+                                    ):
+                                        raise ValueError("DART account fields must be strings")
+                        elif endpoint == "company.json":
+                            month = payload.get("acc_mt")
+                            if (
+                                not isinstance(month, str)
+                                or not month.isascii()
+                                or not month.isdigit()
+                                or not 1 <= int(month) <= 12
+                            ):
+                                raise ValueError("DART company requires a valid closing month")
+                elif endpoint == "document.xml" and zipfile.is_zipfile(io.BytesIO(content)):
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                            if not any(not info.is_dir() for info in archive.infolist()):
+                                raise ValueError("DART archive contains no files")
+                            if (
+                                sum(info.file_size for info in archive.infolist())
+                                > self.max_uncompressed_bytes
+                            ):
+                                raise ValueError("DART archive exceeds uncompressed limit")
+                            if archive.testzip() is not None:
+                                raise ValueError("DART archive has corrupt members")
+                    except (zipfile.BadZipFile, zlib.error, RuntimeError, NotImplementedError):
+                        raise ValueError("DART archive cannot be read") from None
+                elif endpoint == "document.xml":
+                    result = BeautifulSoup(content, "xml").find("result")
+                    status = result.find("status") if result is not None else None
+                    if status is None or status.get_text(strip=True) == "000":
+                        raise ValueError("DART document requires a ZIP or no-data status")
+                    if status.get_text(strip=True) != "014":
+                        raise DartAPIError(status.get_text(strip=True))
+                return content
+            except (httpx.HTTPError, ValueError, DartAPIError) as error:
+                exhausted = attempt + 1 == self.attempts
+                (request_log.error if exhausted else request_log.warning)(
+                    "dart_request_failed" if exhausted else "dart_request_retry",
+                    attempt=attempt + 1,
+                    max_attempts=self.attempts,
+                    error_type=type(error).__name__,
+                    http_status=(
+                        error.response.status_code
+                        if isinstance(error, httpx.HTTPStatusError)
+                        else None
+                    ),
+                    dart_status=error.status if isinstance(error, DartAPIError) else None,
+                    reason=(
+                        "api_status"
+                        if isinstance(error, DartAPIError)
+                        else "invalid_response"
+                        if isinstance(error, ValueError)
+                        else "http_error"
+                    ),
+                )
+                if exhausted:
+                    if isinstance(error, DartAPIError):
+                        request_log.error("dart_api_failed", dart_status=error.status)
+                        raise error from None
                     raise RuntimeError("DART request failed") from None
                 time.sleep(min(2**attempt, 8))
         raise RuntimeError("DART request failed")
 
     def json(self, endpoint: str, params: dict[str, str]) -> dict[str, Any]:
-        import json
-
-        data = json.loads(self.get(endpoint, params))
-        if data.get("status") not in ("000", "013"):
-            raise RuntimeError(f"DART API status {data.get('status', 'unknown')}")
-        return data
+        return json.loads(self.get(endpoint, params))
 
     def closing_month(self, corp_code: str) -> int:
         month = int(self.json("company.json", {"corp_code": corp_code})["acc_mt"])

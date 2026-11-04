@@ -11,6 +11,8 @@ from market_http.controllers.rankings import RankingItem, RankingResponse
 from market_http.repositories.bars import Bar
 from market_http.repositories.orderbooks import Orderbook, OrderbookLevel
 from market_http.repositories.prices import Price
+from market_http.repositories.stocks import StockDetail
+from market_http.repositories.themes import StockTheme, Theme, ThemeGroup, ThemeStock
 
 PRICE = Price(
     code="005930",
@@ -63,6 +65,23 @@ RANKING = RankingResponse(
         )
     ],
 )
+THEME = Theme(code="T001", name="반도체")
+THEME_GROUP = ThemeGroup(name="반도체", items=[Theme(code="550", name="생산")])
+THEME_STOCK = ThemeStock(code="005930", name="삼성전자", is_major=True)
+STOCK_THEME = StockTheme(code="T001", name="반도체", is_major=True)
+STOCK_DETAIL = StockDetail(
+    code="005930",
+    name="삼성전자",
+    english_name="SAMSUNG ELECTRONICS CO., LTD.",
+    market="KOSPI",
+    sector_name="전기전자",
+    corp_code="00126380",
+    synced_at=datetime.fromisoformat("2026-11-03T09:00:00+09:00"),
+    themes=[
+        StockTheme(code="515", name="스마트폰_삼성전자관련주", is_major=False),
+        StockTheme(code="550", name="반도체_생산", is_major=True),
+    ],
+)
 HEALTH = HealthResponse(status="ok")
 
 ENTITIES = {
@@ -71,6 +90,11 @@ ENTITIES = {
     "PAGE_EXAMPLE": PAGE,
     "INDEX_EXAMPLE": INDEX,
     "RANKING_EXAMPLE": RANKING,
+    "THEME_EXAMPLE": THEME,
+    "THEME_GROUP_EXAMPLE": THEME_GROUP,
+    "THEME_STOCK_EXAMPLE": THEME_STOCK,
+    "STOCK_THEME_EXAMPLE": STOCK_THEME,
+    "STOCK_DETAIL_EXAMPLE": STOCK_DETAIL,
     "HEALTH_EXAMPLE": HEALTH,
 }
 

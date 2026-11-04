@@ -4,9 +4,9 @@ Date: 2026-10-30
 
 ## Scope and decisions
 
-This follow-up applies the review of PR #432 and separates collection issue #440 / PR #441
-from indexing/retrieval issue #346 and GPU serving issue #431. Collection has its own
-PR, #432 follows that branch, and #430 follows #432. Each PR closes its own issue.
+PR #432 contains DB indexing, disclosure retrieval and portfolio-builder tools.
+Collection PR #441 is merged into dev. This branch uses the current dev conventions
+for Python, CI, packaging and service configuration. GPU deployment belongs to #430.
 The root checkout and running services are not changed.
 
 Portfolio-builder calls the `services/disclosure-retrieval` Python package directly.
@@ -36,8 +36,8 @@ is unchanged.
    are flat under `opendart/`; no staged queue or second collection pass remains.
    Long filings are not embedded during ingestion. A filing type is separate from the content split. Nonperiodic
    filings retain unknown fiscal fields as null, and their tables remain sections.
-   The collection PR owns migrations 0012–0014; the indexing PR adds only 0015.
-   There is no RSS path, separate collector command/timer or historical window loop.
+   Collection migrations 0013–0015 are already in dev; indexing adds only 0016.
+   Collection uses the existing OpenDART API path and its persisted daily state.
    The existing hourly news-preprocessor service starts the DB-only indexer after
    success or final failure. The indexer never fetches RSS, DART or source archives.
 3. Put portfolio-builder's disclosure tools in `tools/disclosure/search.py`,
@@ -102,9 +102,17 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 ## Verification
 
 - Added tests failed first for missing profile parsing, direct-read methods, and tools.
-- Final full suite against the disposable `ktb_typed_disclosure_services_test` PostgreSQL database:
-  **1,364 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+- Final full suite against the disposable `ktb_disclosure432_test` PostgreSQL database:
+  **1,451 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
   account for the skips.
+- The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail
+  changes. Collection revisions 0013–0015 are unchanged; the only index revision is 0016.
+- Python 3.14, existing CI job structure and hash-pinned Docker requirements match dev.
+  CI traverses reverse dependencies for workspace services as well as packages, so a
+  retrieval-only change also tests/builds portfolio-builder. Image jobs include only
+  services with Dockerfiles; indexer requirements are checked against uv.lock.
+  The actual CI shell script was exercised with retrieval-only, indexer-only, core-only
+  and full-workspace inputs. All expected dependent test/build targets were present.
 - Ruff, formatting, Tach internal and external dependencies, and diff checks pass.
 - Retrieval tests call Python functions directly and retain PostgreSQL search,
   correction, source-identity, history, candidate-50, and reranking cases. HTTP endpoint
@@ -126,5 +134,5 @@ or position sizing. The text is not inserted into a model prompt or logged by th
   or separate processing pass remains.
 
 
-No dependency versions changed. No production database, service deployment, GPU deployment,
+The runtime and existing dependency versions follow the current dev Python 3.14 lockfile. No production database, service deployment, GPU deployment,
 model inference, SQS publication, or backend repository modification was performed.

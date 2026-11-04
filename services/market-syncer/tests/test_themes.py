@@ -27,7 +27,7 @@ def sync(engine, themes, members):
 
 def memberships(query, engine):
     return query(
-        engine, "SELECT theme_code, stock_code, is_major FROM theme_companies ORDER BY 1, 2"
+        engine, "SELECT theme_code, stock_code, is_major FROM theme_corporations ORDER BY 1, 2"
     )
 
 

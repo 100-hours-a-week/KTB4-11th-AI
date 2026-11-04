@@ -94,8 +94,10 @@ class FakeDart:
         return httpx.Response(200, json=self.pages[int(params["page_no"]) - 1])
 
     def source(self, stock_codes=frozenset({SAMSUNG, HYNIX})) -> OpenDart:
+        from news_preprocessor.sources.publishers.opendart.settings import Settings
+
         client = httpx.Client(transport=httpx.MockTransport(self.handler))
-        return OpenDart(client, KEY, set(stock_codes))
+        return OpenDart(client, KEY, set(stock_codes), Settings(request_interval=0))
 
     def list_requests(self) -> list[dict[str, str]]:
         return [request for request in self.requests if "rcept_no" not in request]
@@ -179,6 +181,38 @@ def test_window_is_yesterday_and_today_in_kst():
     assert {(r["bgn_de"], r["end_de"]) for r in dart.list_requests()} == {window}
 
 
+def test_historical_range_is_split_without_gaps_or_overlaps(monkeypatch):
+    today = datetime.now(KST).date()
+    earliest = today - timedelta(days=365)
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", earliest.isoformat())
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", today.isoformat())
+    dart = FakeDart()
+    assert dart.source().entries() == []
+    windows = sorted({(r["bgn_de"], r["end_de"]) for r in dart.list_requests()})
+    assert windows[0][0] == earliest.strftime("%Y%m%d")
+    assert windows[-1][1] == today.strftime("%Y%m%d")
+    assert len(windows) == 5
+    previous = earliest - timedelta(days=1)
+    for begin, end in windows:
+        begin_date = datetime.strptime(begin, "%Y%m%d").date()
+        end_date = datetime.strptime(end, "%Y%m%d").date()
+        assert begin_date == previous + timedelta(days=1)
+        assert 0 <= (end_date - begin_date).days <= 89
+        previous = end_date
+        requests = [r for r in dart.list_requests() if r["bgn_de"] == begin]
+        assert len(requests) == 1
+
+
+def test_future_historical_end_date_is_rejected_before_api_call(monkeypatch):
+    future = (datetime.now(KST).date() + timedelta(days=1)).isoformat()
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", future)
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", future)
+    dart = FakeDart()
+    with pytest.raises(ValueError, match="future"):
+        dart.source().entries()
+    assert dart.requests == []
+
+
 def test_no_data_yields_no_entries():
     assert FakeDart().source().entries() == []
 
@@ -205,6 +239,67 @@ def test_a_row_maps_to_a_feed_entry():
     assert entry.published_at == datetime(2026, 9, 28, tzinfo=KST)
     assert json.loads(entry.raw_payload) == row
     assert "SGC에너지" in entry.raw_payload
+
+
+def test_listing_failure_logs_the_failed_window_and_api_status(caplog):
+    dart = FakeDart(pages=[{"status": "020", "message": KEY}])
+    with pytest.raises(RuntimeError, match="020"):
+        dart.source().entries()
+    records = [r for r in caplog.records if r.message == "opendart_listing_failed"]
+    assert len(records) == 1
+    fields = records[0].fields
+    assert fields["endpoint"] == "list.json"
+    assert fields["dart_status"] == "020"
+    assert fields["page_no"] == 1
+    assert fields["start_date"] and fields["end_date"]
+    assert KEY not in str(fields)
+
+
+@pytest.mark.parametrize("endpoint", ["list.json", "document.xml"])
+def test_listing_and_short_document_requests_stop_after_three_failures(monkeypatch, endpoint):
+    from news_preprocessor.sources import FeedEntry
+    from news_preprocessor.sources.publishers.opendart.settings import Settings
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    requests = []
+
+    def fail(request):
+        requests.append(request)
+        return httpx.Response(503)
+
+    with httpx.Client(transport=httpx.MockTransport(fail)) as client:
+        source = OpenDart(client, KEY, {SAMSUNG}, Settings(request_interval=0))
+        with pytest.raises(RuntimeError, match="DART request failed"):
+            if endpoint == "list.json":
+                source.entries()
+            else:
+                source.article(
+                    FeedEntry(
+                        source="opendart",
+                        external_id="20261030000001",
+                        url="https://dart.fss.or.kr/test",
+                        title="short filing",
+                        published_at=datetime.now(KST),
+                        raw_payload="{}",
+                    )
+                )
+    assert len(requests) == 3
+    assert all(r.url.path.endswith(endpoint) for r in requests)
+
+
+def test_listing_api_status_failure_is_retried_three_times(monkeypatch):
+    from news_preprocessor.sources.publishers.opendart.settings import Settings
+
+    monkeypatch.setattr(
+        "news_preprocessor.sources.publishers.opendart.dart.time.sleep", lambda _: None
+    )
+    dart = FakeDart(pages=[{"status": "020", "message": "request limit"}])
+    with httpx.Client(transport=httpx.MockTransport(dart.handler)) as client:
+        with pytest.raises(RuntimeError, match="020"):
+            OpenDart(client, KEY, {SAMSUNG}, Settings(request_interval=0)).entries()
+    assert len(dart.list_requests()) == 3
 
 
 @pytest.mark.parametrize(("document", "body"), [(KRX_HTML, KRX_BODY), (DART4_XML, DART4_BODY)])
@@ -262,7 +357,75 @@ def test_another_document_status_raises():
         _article({"20260928800899": _dart_status("020", "요청 제한을 초과하였습니다.")})
 
 
-def test_publishers_include_opendart():
+def test_publishers_keep_opendart_available_for_late_runs():
     client = httpx.Client(transport=httpx.MockTransport(FakeDart().handler))
+    sources = publishers(client, KEY, {SAMSUNG})
+    assert any(isinstance(source, OpenDart) for source in sources)
+    assert sum(not isinstance(source, OpenDart) for source in sources) == 11
 
-    assert any(isinstance(source, OpenDart) for source in publishers(client, KEY, {SAMSUNG}))
+
+def test_historical_range_older_than_one_year_is_rejected(monkeypatch):
+    today = datetime.now(KST).date()
+    monkeypatch.setenv(
+        "NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", (today - timedelta(days=366)).isoformat()
+    )
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", today.isoformat())
+    dart = FakeDart()
+    with pytest.raises(ValueError, match="365"):
+        dart.source().entries()
+    assert dart.requests == []
+
+
+@pytest.mark.parametrize("initial", [True, False])
+def test_initial_limit_and_uncapped_replay_keep_unique_kospi200_filings(monkeypatch, initial):
+    from news_preprocessor.sources.publishers.opendart.storage import CollectionState
+
+    today = datetime.now(KST).date()
+    if not initial:
+        monkeypatch.setenv(
+            "NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", (today - timedelta(days=365)).isoformat()
+        )
+        monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", today.isoformat())
+    rows = [_row(f"{n:014d}") for n in range(1100, 0, -1)]
+    for row in rows:
+        row["rcept_dt"] = today.strftime("%Y%m%d")
+    outside = _row("outside", stock_code=OUTSIDE)
+    paginated = [outside, rows[0], *rows]
+    pages = [
+        _page(paginated[start : start + 100], start // 100 + 1, 12)
+        for start in range(0, len(paginated), 100)
+    ]
+    dart = FakeDart(pages=pages, long_pages={"A001": _page(rows[::10])})
+
+    def dated_handler(request):
+        params = dict(request.url.params)
+        if not params["bgn_de"] <= today.strftime("%Y%m%d") <= params["end_de"]:
+            params.pop("crtfc_key")
+            dart.requests.append(params)
+            return httpx.Response(200, json=NO_DATA)
+        return dart.handler(request)
+
+    from news_preprocessor.sources.publishers.opendart.settings import Settings
+
+    client = httpx.Client(transport=httpx.MockTransport(dated_handler))
+    source = OpenDart(client, KEY, {SAMSUNG, HYNIX}, Settings(request_interval=0))
+    source.collection_state = CollectionState() if initial else None
+    entries = source.entries()
+    expected = 1000 if initial else 1100
+    assert _ids(entries) == [row["rcept_no"] for row in rows[:expected]]
+    assert sum("pblntf_detail_ty" in json.loads(e.raw_payload) for e in entries) == expected // 10
+    overview = [
+        r
+        for r in dart.list_requests()
+        if "pblntf_detail_ty" not in r and r["end_de"] == today.strftime("%Y%m%d")
+    ]
+    assert len(overview) == (11 if initial else 12)
+    assert all(r["sort_mth"] == "desc" for r in overview)
+    client.close()
+
+
+def test_explicit_history_runs_outside_the_daily_hour(monkeypatch):
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_START_DATE", "2026-10-30")
+    monkeypatch.setenv("NEWS_PREPROCESSOR_DISCLOSURE_END_DATE", "2026-10-30")
+    with httpx.Client() as client:
+        assert any(isinstance(s, OpenDart) for s in publishers(client, KEY, {SAMSUNG}))
