@@ -222,3 +222,19 @@ def test_current_rss_returns_none_when_statm_is_unavailable(monkeypatch):
 
     monkeypatch.setattr("builtins.open", unavailable)
     assert current_rss_bytes() is None
+
+
+def test_observer_logs_uptime_attempt_and_recovery_duration(caplog):
+    observer = SubscriptionObserver(listener_id="listener", task_id=None, queues=None)
+    with caplog.at_level(logging.INFO):
+        observer.ready()
+        observer.transition("reconnect_started", reason="connection_lost", attempt=1)
+        observer.transition("reconnect_started", reason="connection_lost", attempt=2)
+        observer.transition("resubscribing", reason="on_connect")
+        for channel in ("market:prices", "market:orderbooks"):
+            observer.acknowledge(channel)
+    started = records(caplog, "market_subscription_reconnect_started")
+    assert started[0].fields["attempt"] == 1
+    assert started[0].fields["connection_uptime_seconds"] >= 0
+    assert "connection_uptime_seconds" not in started[1].fields
+    assert records(caplog, "market_subscription_recovered")[0].fields["recovery_seconds"] >= 0

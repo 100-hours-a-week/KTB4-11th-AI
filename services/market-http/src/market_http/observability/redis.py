@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import time
 from types import MethodType
 
 from redis.asyncio import Connection
@@ -22,15 +23,38 @@ class SubscriptionObserver:
         self._queues = queues
         self._connection_generation = 0
         self._pending: set[str] | None = None
+        self._connected_at: float | None = None
+        self._reconnect_started_at: float | None = None
 
-    def transition(self, event: str, *, reason: str, error: BaseException | None = None) -> None:
+    def transition(
+        self,
+        event: str,
+        *,
+        reason: str,
+        error: BaseException | None = None,
+        **details: object,
+    ) -> None:
+        now = time.monotonic()
         if event == "reconnect_started":
             self._connection_generation += 1
+            if self._connected_at is not None:
+                details["connection_uptime_seconds"] = round(now - self._connected_at, 3)
+                self._connected_at = None
+            if self._reconnect_started_at is None:
+                self._reconnect_started_at = now
         if event == "resubscribing":
             self._pending = set(CHANNELS)
-        phase = (
-            "connection" if event.startswith("reconnect") or event == "connected" else "resubscribe"
-        )
+        if event in ("ready", "recovered"):
+            self._connected_at = now
+        if event == "recovered" and self._reconnect_started_at is not None:
+            details["recovery_seconds"] = round(now - self._reconnect_started_at, 3)
+            self._reconnect_started_at = None
+        if event.startswith("rotat"):
+            phase = "rotation"
+        elif event.startswith("reconnect") or event == "connected":
+            phase = "connection"
+        else:
+            phase = "resubscribe"
         fields: dict[str, object] = {
             "listener_id": self._listener_id,
             "task_id": self._task_id,
@@ -40,6 +64,7 @@ class SubscriptionObserver:
             "reason": reason,
             "phase": phase,
             "rss_bytes": current_rss_bytes(),
+            **details,
         }
         if self._queues is not None:
             fields.update(self._queues.snapshot())
@@ -97,13 +122,23 @@ def observe_pubsub(pubsub: PubSub, observer: SubscriptionObserver) -> None:
         nonlocal reconnecting
         reconnecting = True
         if error is not None:
-            observer.transition("reconnect_started", reason="connection_lost", error=error)
+            observer.transition(
+                "reconnect_started",
+                reason="connection_lost",
+                error=error,
+                attempt=failure_count,
+            )
         try:
             await original_reconnect(conn, error, failure_count, start_time, command_name)
         except asyncio.CancelledError:
             raise
         except Exception as reconnect_error:
-            observer.transition("reconnect_failed", reason="connect_failed", error=reconnect_error)
+            observer.transition(
+                "reconnect_failed",
+                reason="connect_failed",
+                error=reconnect_error,
+                attempt=failure_count,
+            )
             raise
 
     async def on_connect(self: PubSub, connection: Connection) -> None:
