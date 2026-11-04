@@ -85,14 +85,14 @@ def upgrade() -> None:
         sa.Column(
             "previous_portfolio_id",
             sa.BigInteger,
-            sa.ForeignKey("portfolios.id"),
+            sa.ForeignKey("portfolios.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("status", sa.Text, nullable=False),
         sa.Column(
             "portfolio_id",
             sa.BigInteger,
-            sa.ForeignKey("portfolios.id"),
+            sa.ForeignKey("portfolios.id", ondelete="SET NULL"),
             nullable=True,
         ),
         sa.Column("attempts", sa.Integer, nullable=False, server_default=sa.text("1")),
