@@ -44,7 +44,7 @@ class SubscriptionObserver:
                 self._reconnect_started_at = now
         if event == "resubscribing":
             self._pending = set(CHANNELS)
-        if event in ("ready", "recovered"):
+        if event in ("ready", "recovered", "rotated"):
             self._connected_at = now
         if event == "recovered" and self._reconnect_started_at is not None:
             details["recovery_seconds"] = round(now - self._reconnect_started_at, 3)

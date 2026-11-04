@@ -238,3 +238,12 @@ def test_observer_logs_uptime_attempt_and_recovery_duration(caplog):
     assert started[0].fields["connection_uptime_seconds"] >= 0
     assert "connection_uptime_seconds" not in started[1].fields
     assert records(caplog, "market_subscription_recovered")[0].fields["recovery_seconds"] >= 0
+
+
+def test_rotated_connection_reports_uptime_on_first_reconnect(caplog):
+    observer = SubscriptionObserver(listener_id="listener", task_id=None, queues=None)
+    with caplog.at_level(logging.INFO):
+        observer.transition("rotated", reason="before_iam_expiry")
+        observer.transition("reconnect_started", reason="connection_lost", attempt=1)
+    started = records(caplog, "market_subscription_reconnect_started")
+    assert started[0].fields["connection_uptime_seconds"] >= 0
