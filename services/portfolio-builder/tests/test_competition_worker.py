@@ -430,3 +430,61 @@ def test_classify_uses_an_explicit_confidence_floor_when_set(engine, monkeypatch
 
     assert classified
     assert form["sector"] is None
+
+
+def test_a_classification_failure_does_not_block_generation(engine, monkeypatch, _insert_portfolio):
+    monkeypatch.setattr(worker, "_classify", REAL_CLASSIFY)
+
+    def raising_ask(base_uri, model, api_key, state, questions, timeout=20, client=None):
+        raise RuntimeError("jev is down")
+
+    monkeypatch.setattr(worker.jev, "ask", raising_ask)
+
+    sqs, backend, log = _deps()
+    settings = _settings()
+    portfolio_id = _insert_portfolio(engine)
+    monkeypatch.setattr(
+        worker,
+        "run_agent",
+        Mock(
+            return_value=RunResult(
+                outcome="saved",
+                portfolio_id=portfolio_id,
+                turns=1,
+                usage={},
+                trace=[TraceEntry(turn=1, kind="model", text="생각")],
+            )
+        ),
+    )
+    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    _patch_news(monkeypatch)
+
+    worker.process_message(
+        _message(MESSAGE), sqs, engine, backend, Mock(return_value=Mock()), settings, log
+    )
+
+    with engine.connect() as conn:
+        participant = (
+            conn.execute(
+                sa.text(
+                    "SELECT canonical_form, canonical_version, classified"
+                    " FROM competition_participants WHERE participant_id = :pid"
+                ),
+                {"pid": MESSAGE["participant_id"]},
+            )
+            .mappings()
+            .one()
+        )
+        job_status = conn.execute(sa.text("SELECT status FROM competition_jobs")).scalar_one()
+        linked_portfolio_id = conn.execute(
+            sa.text("SELECT portfolio_id FROM competition_portfolios WHERE participant_id = :pid"),
+            {"pid": MESSAGE["participant_id"]},
+        ).scalar_one()
+
+    assert participant["canonical_form"] == MESSAGE["additional_request"]
+    assert participant["canonical_version"] is None
+    assert not participant["classified"]
+    assert job_status == "succeeded"
+    assert linked_portfolio_id == portfolio_id
+    assert backend.completed.called
+    assert sqs.delete_message.called
