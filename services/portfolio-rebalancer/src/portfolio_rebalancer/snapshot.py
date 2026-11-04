@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Stock(BaseModel):
@@ -27,9 +27,15 @@ class Account(BaseModel):
     pending_orders: list[PendingOrder]
 
 
+class InvestmentProfile(BaseModel):
+    risk_level: int = Field(ge=1, le=5, strict=True)
+    strategy: str = Field(default="", max_length=4000)
+
+
 class User(BaseModel):
     user_id: int
     accounts: list[Account]
+    investment_profile: InvestmentProfile | None = None
 
 
 class Snapshot(BaseModel):

@@ -27,6 +27,9 @@ def test_ta_lib_is_importable():
 def env(monkeypatch):
     for name, value in REQUIRED.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("DISCLOSURE_ENABLED", "true")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://unused/v1")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "test-model")
     monkeypatch.setattr(entry, "NewsClient", lambda uri: object())
     monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: BRIEFING)
     calls = {}
@@ -72,12 +75,17 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
     assert {t.name for t in captured["tools"]} == {
         "get_news_cluster",
         "search_news_cluster",
+        "search_disclosures",
+        "get_disclosure_sections",
+        "get_disclosure_financials",
         "search_graph",
         "find_graph_paths",
         "analyze_technicals",
         "submit_portfolio",
     }
     assert captured["max_turns"] == 150
+    assert captured["disclosure_enabled"] is True
+    assert "search_disclosures" in captured["system_prompt"]
     assert "test-openrouter-key" not in out
     assert env == {"trace": 7, "saved": 7}
 
@@ -235,3 +243,39 @@ def test_evaluation_mode_dumps_the_submission_without_database_writes(
     assert submission["holdings"][0]["weight"] == 0.5
     assert json.loads((tmp_path / "trace.json").read_text())[0]["text"] == "삼성 사요"
     assert _events(capsys.readouterr().out)[-1]["outcome"] == "saved"
+
+
+def test_default_deployment_without_disclosure_config_keeps_portfolio_generation(env, monkeypatch):
+    monkeypatch.delenv("DISCLOSURE_ENABLED", raising=False)
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_BASE_URI")
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_MODEL")
+    monkeypatch.setattr(
+        entry, "DisclosureSettings", lambda: pytest.fail("disabled model settings loaded")
+    )
+    captured = {}
+
+    def run(**kwargs):
+        captured.update(kwargs)
+        return RunResult("saved", 7, 3, {})
+
+    monkeypatch.setattr(entry, "run_agent", run)
+    with pytest.raises(SystemExit) as result:
+        entry.main()
+    assert result.value.code == 0
+    assert captured["disclosure_enabled"] is False
+    assert not any("disclosure" in tool.name for tool in captured["tools"])
+    assert "search_disclosures" not in captured["system_prompt"]
+    assert env == {"trace": 7, "saved": 7}
+
+
+def test_enabled_disclosure_with_missing_endpoint_fails_before_agent(env, monkeypatch):
+    from pydantic import ValidationError
+
+    monkeypatch.setenv("DISCLOSURE_ENABLED", "true")
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_BASE_URI")
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_MODEL")
+    monkeypatch.setattr(
+        entry, "run_agent", lambda **kwargs: pytest.fail("agent ran without model config")
+    )
+    with pytest.raises(ValidationError):
+        entry.main()

@@ -1,4 +1,6 @@
+import pytest
 from portfolio_rebalancer.snapshot import Snapshot
+from pydantic import ValidationError
 
 EXAMPLE = {
     "users": [
@@ -56,3 +58,22 @@ def test_a_market_order_has_no_limit_price():
     pending = Snapshot.model_validate(payload).users[0].accounts[0].pending_orders[0]
 
     assert pending.limit_price is None
+
+
+@pytest.mark.parametrize("risk_level", [1, 2, 3, 4, 5])
+def test_polling_retains_investment_profile_and_free_text(risk_level):
+    profile = {"risk_level": risk_level, "strategy": "배당을 우선하되 반도체는 제외"}
+    user = {**EXAMPLE["users"][0], "investment_profile": profile}
+
+    snapshot = Snapshot.model_validate({"users": [user]})
+
+    assert snapshot.users[0].investment_profile.model_dump() == profile
+    assert Snapshot.model_validate(EXAMPLE).users[0].investment_profile is None
+
+
+@pytest.mark.parametrize("risk_level", [0, 6, True, 1.5, "3"])
+def test_polling_rejects_invalid_risk_levels(risk_level):
+    user = {**EXAMPLE["users"][0], "investment_profile": {"risk_level": risk_level}}
+
+    with pytest.raises(ValidationError):
+        Snapshot.model_validate({"users": [user]})
