@@ -1,10 +1,12 @@
 from ktb_aws.elasticache import ElastiCacheIAMProvider
 from redis.asyncio import Redis
 
+from market_http.observability.pool import observe_pool
+from market_http.observability.prometheus import MarketMetrics
 from market_http.settings import Settings
 
 
-def connect_valkey(settings: Settings) -> Redis:
+def connect_valkey(settings: Settings, metrics: MarketMetrics | None = None) -> Redis:
     provider = None
     if (
         settings.valkey_auth_mode == "iam"
@@ -14,7 +16,7 @@ def connect_valkey(settings: Settings) -> Redis:
         provider = ElastiCacheIAMProvider(
             settings.valkey_username, settings.valkey_cache_name, settings.aws_region
         )
-    return Redis(
+    client = Redis(
         host=settings.valkey_host,
         port=settings.valkey_port,
         max_connections=settings.valkey_max_connections,
@@ -22,3 +24,6 @@ def connect_valkey(settings: Settings) -> Redis:
         credential_provider=provider,
         decode_responses=True,
     )
+    if metrics is not None:
+        observe_pool(client.connection_pool, metrics)
+    return client

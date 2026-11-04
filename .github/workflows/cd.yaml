@@ -26,9 +26,9 @@ jobs:
     # SSH와 SCP 명령을 실행할 GitHub 호스팅 Linux runner입니다.
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    outputs:
-      deployed: ${{ steps.freshness.outputs.deploy }}
-      image_digest: ${{ steps.release.outputs.image_digest }}
+    permissions:
+      contents: read
+      actions: write
     env:
       # Repository Variable과 CI가 방금 push한 커밋 SHA로 ECR 이미지 주소를 만듭니다.
       APP_IMAGE: ${{ vars.PUBLIC_ECR_AI_REPOSITORY_URI }}:${{ github.event.workflow_run.head_sha }}
@@ -58,7 +58,6 @@ jobs:
 
       - name: Verify main release image
         if: steps.freshness.outputs.deploy == 'true'
-        id: release
         env:
           GH_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ github.event.workflow_run.id }}
@@ -72,7 +71,6 @@ jobs:
           jq -e --arg sha "$DEPLOY_SHA" --arg repository "$IMAGE_REPOSITORY" \
             '.sha == $sha and .repository == $repository and (.digest | test("^sha256:[0-9a-f]{64}$"))' \
             "$release_dir/ecs-release.json" > /dev/null
-          echo "image_digest=$(jq -r .digest "$release_dir/ecs-release.json")" >> "$GITHUB_OUTPUT"
 
       - name: Configure SSH
         if: steps.freshness.outputs.deploy == 'true'
@@ -90,11 +88,10 @@ jobs:
       - name: Upload deployment files
         if: steps.freshness.outputs.deploy == 'true'
         env:
-          # 운영 ~/ai/.env 파일 전체를 담은 Repository Secret입니다. (README "배포 Secret · Variable 목록")
-          PROD_AI_ENV: ${{ secrets.PROD_AI_ENV }}
+          AI_ENV: ${{ vars.PROD_AI_ENV }}
         run: |
           set -euo pipefail
-          test -n "$PROD_AI_ENV" || { echo "::error::PROD_AI_ENV secret must be set" >&2; exit 1; }
+          test -n "$AI_ENV" || { echo "::error::Application env variable must be set" >&2; exit 1; }
 
           # systemd 설치에 필요한 비대화형 sudo 권한을 운영 파일 변경 전에 확인합니다.
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -103,15 +100,17 @@ jobs:
           # 시크릿 .env와 분리해 CD가 APP_IMAGE만 안전하게 갱신합니다.
           umask 077
           image_env="$(mktemp)"
-          app_env="$(mktemp)"
-          trap 'rm -f "$image_env" "$app_env"' EXIT
+          base_env="$(mktemp)"
+          trap 'rm -f "$image_env" "$base_env"' EXIT
+          printf '%s\n' "$AI_ENV" > "$base_env"
           printf "APP_IMAGE='%s'\n" "$APP_IMAGE" > "$image_env"
-          printf '%s\n' "$PROD_AI_ENV" > "$app_env"
 
           # 임시 이름으로 전송해 불완전한 파일을 배포 과정에서 읽지 않게 합니다.
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"
           scp "$image_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.image.env.next"
-          scp "$app_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.env.next"
+          scp "$base_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/base.env"
+          scp scripts/ssm_env.py \
+            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/ssm_env.py"
           scp scripts/run-morning-pipeline.sh \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/run-morning-pipeline.sh"
           scp scripts/publish-scheduled-job-metric.sh \
@@ -119,7 +118,7 @@ jobs:
           scp infrastructure/systemd/ktb-*.service.in \
             infrastructure/systemd/ktb-*.timer \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 ~/ai/.image.env.next ~/ai/.env.next'
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 ~/ai/.image.env.next'
 
       # EC2에서 이미지 갱신, DB 마이그레이션, 상시 서비스 교체를 수행합니다.
       - name: Deploy
@@ -128,7 +127,6 @@ jobs:
         run: |
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
           cd ~/ai
-          test -f .env.next || { echo "~/ai/.env.next must exist" >&2; exit 1; }
 
           schedule_stage="$PWD/.schedule.next"
           schedule_render_dir=""
@@ -174,6 +172,11 @@ jobs:
           set -Eeuo pipefail
           trap rollback ERR
 
+          /usr/bin/python3 "$schedule_stage/ssm_env.py" \
+            --environment prod --aws-cli /usr/local/bin/aws fetch \
+            --base-env "$schedule_stage/base.env" \
+            --compose-file compose.prod.yaml.next --output .env.next
+
           # 운영 파일을 건드리기 전에 새 Compose와 환경 변수 조합부터 검증합니다.
           docker compose --env-file .env.next --env-file .image.env.next \
             -f compose.prod.yaml.next config --quiet
@@ -215,7 +218,6 @@ jobs:
 
           deployment_started=true
           mv compose.prod.yaml.next compose.prod.yaml
-          # Secret PROD_AI_ENV로 만든 .env로 교체합니다. 이후 compose·systemd timer가 이 파일을 읽습니다.
           mv .env.next .env
 
           compose() {
@@ -246,9 +248,10 @@ jobs:
             "$schedule_render_dir"/ktb-*.service \
             "$schedule_render_dir"/ktb-*.timer \
             /etc/systemd/system/
+
           sudo -n systemctl daemon-reload
 
-          # 예전 상시 실행 방식의 timer가 남아 있어도 새 단발 스케줄과 중복되지 않게 합니다.
+          # 이전 timer가 남아 있으면 중복 실행을 방지합니다.
           for legacy_timer in \
             ktb-market-collector-start.timer \
             ktb-market-collector-stop.timer; do
@@ -269,14 +272,12 @@ jobs:
           # 모든 운영 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
-            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer
 
           for timer in \
             ktb-market-collector.timer \
-            ktb-market-syncer.timer \
             ktb-news-preprocessor.timer \
             ktb-morning-pipeline.timer \
             ktb-portfolio-rebalancer.timer; do
@@ -293,15 +294,11 @@ jobs:
           trap - ERR
           REMOTE
 
-  deploy-ecs:
-    needs: [deploy]
-    if: ${{ needs.deploy.outputs.deployed == 'true' && github.event.workflow_run.head_branch == 'main' }}
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-    uses: ./.github/workflows/cd-ecs-v2.yaml
-    with:
-      image_tag: ${{ github.event.workflow_run.head_sha }}
-      image_digest: ${{ needs.deploy.outputs.image_digest }}
-    secrets: inherit
+      - name: Trigger ECS CD
+        if: steps.freshness.outputs.deploy == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          gh workflow run cd-ecs-v2.yaml --repo "$GITHUB_REPOSITORY" --ref main \
+            -f image_tag="$DEPLOY_SHA" -f ci_run_id="$CI_RUN_ID"

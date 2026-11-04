@@ -1,7 +1,7 @@
 """create competition participant, portfolio link, and job tables
 
-Revision ID: 0012
-Revises: 0011
+Revision ID: 0016
+Revises: 0015
 Create Date: 2026-11-03
 """
 
@@ -9,8 +9,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision = "0012"
-down_revision = "0011"
+revision = "0016"
+down_revision = "0015"
 branch_labels = None
 depends_on = None
 

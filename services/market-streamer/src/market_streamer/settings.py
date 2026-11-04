@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     valkey_auth_mode: Literal["none", "iam"] = "none"
     aws_region: str = "ap-northeast-2"
     log_level: str = "INFO"
+    prometheus_bind_host: str = Field(default="127.0.0.1", min_length=1)
+    prometheus_port: int = Field(default=9100, gt=0, lt=65536)
 
     @model_validator(mode="after")
     def _iam_needs_identity(self) -> Self:

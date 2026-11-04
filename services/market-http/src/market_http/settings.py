@@ -20,20 +20,32 @@ class Settings(BaseSettings):
     valkey_cache_name: str | None = None
     valkey_tls: bool = False
     valkey_auth_mode: Literal["none", "iam"] = "none"
+    task_id: str | None = None
+    memory_profile_enabled: bool = False
+    memory_profile_start_mode: Literal["startup", "trigger"] = "startup"
+    memory_profile_burst_trigger: bool = False
+    memory_profile_dir: str = "/tmp/market-http-memory"
+    memory_profile_interval_seconds: float = Field(default=10, ge=1)
+    memory_profile_max_snapshots: int = Field(default=12, ge=1, le=120)
     aws_region: str = "ap-northeast-2"
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)
+    prometheus_bind_host: str = Field(default="127.0.0.1", min_length=1)
+    prometheus_port: int = Field(default=9100, gt=0, lt=65536)
     cors_origins: list[str] = []
     cors_headers: list[str] = []
     docs_enabled: bool = True
     docs_path_prefix: str = Field(default="", pattern=r"^$|^/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+)*$")
     log_level: str = "INFO"
+    trace_spans_per_second: int = Field(default=100, ge=0)
     metrics_namespace: str = ""
     metrics_cluster_name: str = ""
     metrics_service_name: str = ""
 
     @model_validator(mode="after")
     def _metrics_need_dimensions(self) -> Self:
+        if self.memory_profile_burst_trigger and self.memory_profile_start_mode != "trigger":
+            raise ValueError("memory_profile_burst_trigger requires trigger start mode")
         if self.metrics_namespace and not (self.metrics_cluster_name and self.metrics_service_name):
             raise ValueError("metrics need metrics_cluster_name and metrics_service_name")
         return self

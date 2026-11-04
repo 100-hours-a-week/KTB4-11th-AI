@@ -76,4 +76,26 @@ RANKING_EXAMPLE = {
     ],
 }
 
+THEME_EXAMPLE = {"code": "T001", "name": "반도체"}
+
+THEME_GROUP_EXAMPLE = {"name": "반도체", "items": [{"code": "550", "name": "생산"}]}
+
+THEME_STOCK_EXAMPLE = {"code": "005930", "name": "삼성전자", "is_major": True}
+
+STOCK_THEME_EXAMPLE = {"code": "T001", "name": "반도체", "is_major": True}
+
+STOCK_DETAIL_EXAMPLE = {
+    "code": "005930",
+    "name": "삼성전자",
+    "english_name": "SAMSUNG ELECTRONICS CO., LTD.",
+    "market": "KOSPI",
+    "sector_name": "전기전자",
+    "corp_code": "00126380",
+    "synced_at": "2026-11-03T09:00:00+09:00",
+    "themes": [
+        {"code": "515", "name": "스마트폰_삼성전자관련주", "is_major": False},
+        {"code": "550", "name": "반도체_생산", "is_major": True},
+    ],
+}
+
 HEALTH_EXAMPLE = {"status": "ok"}

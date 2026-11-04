@@ -179,7 +179,7 @@ def test_exclusion_errors_join_the_other_errors_in_one_rejection(engine, news_cl
 
 def test_a_theme_code_no_longer_in_themes_excludes_nothing(engine):
     with engine.begin() as conn:
-        conn.execute(sa.text("DELETE FROM theme_companies WHERE theme_code = 'T1'"))
+        conn.execute(sa.text("DELETE FROM theme_corporations WHERE theme_code = 'T1'"))
         conn.execute(sa.text("DELETE FROM themes WHERE theme_code = 'T1'"))
 
     assert excluded_company_ids(engine, ["T1"]) == frozenset()

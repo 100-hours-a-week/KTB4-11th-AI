@@ -10,6 +10,7 @@ from news_preprocessor.embed_pending import embed_pending
 from news_preprocessor.scrape import scrape
 from news_preprocessor.settings import Settings
 from news_preprocessor.sources.publishers import publishers
+from news_preprocessor.sources.publishers.opendart import OpenDart
 from news_preprocessor.storage import kospi200_stock_codes
 
 log = get_logger(__name__)
@@ -39,8 +40,12 @@ def main() -> None:
         finally:
             client.close()
             engine.dispose()
-        failed = [result for result in scraped if result.failed] or embedded.failed
-        sys.exit(1 if failed else 0)
+        news_failed = embedded.failed or any(
+            result.failed and not isinstance(source, OpenDart)
+            for source, result in zip(sources, scraped, strict=True)
+        )
+        disclosure_failed = any(result.failed for result in scraped)
+        sys.exit(1 if news_failed else 2 if disclosure_failed else 0)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -16,6 +16,7 @@ COPY services services
 RUN uv pip install --no-deps \
     ./packages/aws \
     ./packages/core \
+    ./packages/telemetry \
     ./services/market-collector \
     ./services/market-http \
     ./services/market-streamer \
@@ -28,7 +29,7 @@ RUN uv pip install --no-deps \
     ./services/portfolio-rebalancer \
     ./services/report-builder
 
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
@@ -38,6 +39,7 @@ COPY --chown=app:app alembic.ini ./
 COPY --chown=app:app infrastructure infrastructure
 ENV PATH="/app/.venv/bin:$PATH"
 
+RUN mkdir -p /app/archive && chown app:app /app/archive
 USER app
 EXPOSE 8000
 CMD ["portfolio-rebalancer"]

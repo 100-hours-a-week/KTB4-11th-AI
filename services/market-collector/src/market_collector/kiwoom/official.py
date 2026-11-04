@@ -127,24 +127,6 @@ class ChartClient:
             "rate": float(body["flu_rt"]),
         }
 
-    def popular_codes(self, universe: set[str]) -> list[str]:
-        self._avoid_rate_limit()
-        body = self._client.fetch_page(
-            api_id="ka00198", path="/api/dostk/stkinfo", body={"qry_tp": "1"}
-        ).body
-        if body.get("return_code") not in (None, 0, "0"):
-            raise RuntimeError(body.get("return_msg") or "popular request failed")
-        rows = body["item_inq_rank"]
-        if not isinstance(rows, list):
-            raise TypeError("item_inq_rank is not a list")
-        return list(
-            dict.fromkeys(
-                row["stk_cd"]
-                for row in sorted(rows, key=lambda row: int(row["bigd_rank"]))
-                if row["stk_cd"] in universe
-            )
-        )
-
     def _avoid_rate_limit(self) -> None:
         delay = self._next_request_at - time.monotonic()
         if delay > 0:

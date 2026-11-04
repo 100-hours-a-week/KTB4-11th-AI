@@ -5,7 +5,6 @@ import pytest
 from kiwoom import Continuation, KiwoomResponse
 from ktb_core.krx import KST
 from market_collector import __main__ as cli
-from market_collector.kiwoom import official
 from market_collector.kiwoom.official import ChartClient
 from market_collector.settings import Settings
 from redis.cluster import key_slot
@@ -23,17 +22,7 @@ class Client:
                 Continuation(False, None, "N"),
                 {},
             )
-        return KiwoomResponse(
-            {
-                "item_inq_rank": [
-                    {"stk_cd": "000660", "bigd_rank": "3"},
-                    {"stk_cd": "035420", "bigd_rank": "1"},
-                    {"stk_cd": "005930", "bigd_rank": "2"},
-                ]
-            },
-            Continuation(False, None, "N"),
-            {},
-        )
+        raise AssertionError(f"unexpected Kiwoom request: {kwargs}")
 
 
 def test_index_quote_uses_kiwoom_sector_price_fields():
@@ -51,55 +40,21 @@ def test_index_quote_uses_kiwoom_sector_price_fields():
     ]
 
 
-def test_popular_codes_keeps_kiwoom_rank_after_kospi200_filter():
-    client = Client()
-
-    codes = ChartClient(client).popular_codes({"000660", "005930"})
-
-    assert codes == ["005930", "000660"]
-    assert client.calls == [
-        {
-            "api_id": "ka00198",
-            "path": "/api/dostk/stkinfo",
-            "body": {"qry_tp": "1"},
-        }
-    ]
-
-
-def test_kiwoom_error_response_does_not_become_an_empty_popular_ranking():
-    class ErrorClient:
-        def fetch_page(self, **kwargs):
-            return KiwoomResponse(
-                {"return_code": 1, "return_msg": "failed", "item_inq_rank": []},
-                Continuation(False, None, "N"),
-                {},
-            )
-
-    with pytest.raises(RuntimeError, match="failed"):
-        ChartClient(ErrorClient()).popular_codes({"005930"})
-
-
-def test_chart_index_and_popularity_share_request_limiter(monkeypatch):
-    clock = [0.0]
-    sleeps = []
-
-    def sleep(seconds):
-        sleeps.append(seconds)
-        clock[0] += seconds
-
-    monkeypatch.setattr(official.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(official.time, "sleep", sleep)
-    client = ChartClient(Client(), interval=1.0)
-
-    client.minute_page("005930", 1)
-    client.index_quote("KOSPI")
-    client.popular_codes({"005930"})
-
-    assert sleeps == [1.0, 1.0]
-
-
 def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monkeypatch):
     events = []
+
+    class Connection:
+        active = False
+
+        def __enter__(self):
+            self.active = True
+            return self
+
+        def __exit__(self, *args):
+            self.active = False
+
+    db = Connection()
+    now = datetime(2026, 10, 15, 10, 0, tzinfo=KST)
 
     class Store:
         def latest_bar_timestamps(self, symbols):
@@ -110,20 +65,21 @@ def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monke
             events.append(name)
             return {"value": 100.0, "change": 1.0, "rate": 1.0}
 
-        def popular_codes(self, universe):
-            events.append("popular")
-            return ["000000"]
-
     class Valkey:
         def __init__(self):
             self.values = {}
             self.ranks = {}
+            self.transactions = []
+            self.executions = 0
 
         def set(self, key, value):
             self.values[key] = value
+            if self.transactions:
+                self.transactions[-1].append(key)
 
         def pipeline(self, transaction):
             assert transaction is True
+            self.transactions.append([])
             return self
 
         def __enter__(self):
@@ -133,15 +89,17 @@ def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monke
             pass
 
         def delete(self, key):
+            self.transactions[-1].append(key)
             self.ranks.pop(key, None)
 
         def zadd(self, key, scores):
+            self.transactions[-1].append(key)
             self.ranks[key] = scores
 
         def execute(self):
-            pass
+            self.executions += 1
 
-    monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(object()))
+    monkeypatch.setattr(cli.questdb, "connect", lambda conf: db)
     monkeypatch.setattr(cli, "Store", lambda db: Store())
     monkeypatch.setattr(
         cli,
@@ -153,71 +111,95 @@ def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monke
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_APP_KEY", "app")
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_SECRET_KEY", "secret")
     monkeypatch.setenv("MARKET_COLLECTOR_VALKEY_HOST", "localhost")
-    symbols = [f"{index:06d}" for index in range(40)]
+    symbols = [f"{index:06d}" for index in range(100)]
+
+    cache = {}
+
+    def popularity(connection, loaded_symbols, at, session_cache):
+        assert session_cache is cache
+        assert connection is db
+        assert db.active
+        assert loaded_symbols is symbols
+        assert at is now
+        events.append("popular")
+        return symbols[::-1]
+
+    monkeypatch.setattr(cli, "popular_codes", popularity, raising=False)
     valkey = Valkey()
 
     written = cli.collect_market_data(
-        Settings(), symbols, MarketClient(), valkey, datetime(2026, 10, 15, 9, 0, tzinfo=KST), False
+        Settings(), symbols, MarketClient(), valkey, now, False, cache
     )
 
-    assert written == 40
-    assert events == symbols[:20] + ["KOSPI", "KOSPI200"] + symbols[20:] + [
-        "KOSPI",
-        "KOSPI200",
-        "popular",
+    assert written == 100
+    expected = []
+    for index, symbol in enumerate(symbols, 1):
+        expected.append(symbol)
+        if index % 20 == 0:
+            expected.extend(["KOSPI", "KOSPI200"])
+    assert events == expected + ["popular"]
+    assert valkey.ranks["ranking:{popular}"] == {
+        code: 100 - index for index, code in enumerate(symbols[::-1])
+    }
+    assert valkey.executions == 1
+    assert len(valkey.transactions) == 1
+    assert valkey.transactions[0] == [
+        "ranking:{popular}",
+        "ranking:{popular}",
+        "ranking:{popular}:updated_at",
     ]
-    assert valkey.ranks["ranking:{popular}"] == {"000000": 1}
-    assert "ranking:{popular}:updated_at" in valkey.values
+    datetime.fromisoformat(valkey.values["ranking:{popular}:updated_at"])
     assert key_slot(b"ranking:{popular}") == key_slot(b"ranking:{popular}:updated_at")
     assert "index:KOSPI" in valkey.values
     assert "index:KOSPI200" in valkey.values
 
 
-def test_failed_index_and_popularity_requests_keep_previous_values(monkeypatch, caplog):
-    events = []
-
+@pytest.mark.parametrize("failure", [False, True])
+def test_empty_or_failed_popularity_keeps_previous_values_and_updates_indices(
+    monkeypatch, caplog, failure
+):
     class Store:
         def latest_bar_timestamps(self, symbols):
             return {}
 
     class MarketClient:
         def index_quote(self, name):
-            raise ConnectionError(name)
-
-        def popular_codes(self, universe):
-            raise ConnectionError("popular")
+            return {"value": 100.0, "change": 1.0, "rate": 1.0}
 
     class Valkey:
         def __init__(self):
-            self.values = {"index:KOSPI": "old", "ranking:{popular}": "old"}
+            self.values = {"ranking:{popular}": "old", "ranking:{popular}:updated_at": "old-time"}
 
         def set(self, key, value):
             self.values[key] = value
 
+    def popularity(*args):
+        if failure:
+            raise ConnectionError("QuestDB unavailable")
+        return []
+
+    monkeypatch.setattr(cli, "popular_codes", popularity, raising=False)
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(object()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
-    monkeypatch.setattr(
-        cli,
-        "reconcile_candles",
-        lambda client, store, symbol, timeframe, base_dt, latest: events.append(symbol) or 1,
-    )
+    monkeypatch.setattr(cli, "reconcile_candles", lambda *args: 1)
     monkeypatch.setenv("MARKET_COLLECTOR_QUESTDB_CONF", "unused")
     monkeypatch.setenv("MARKET_COLLECTOR_POSTGRES_DSN", "unused")
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_APP_KEY", "app")
     monkeypatch.setenv("MARKET_COLLECTOR_KIWOOM_SECRET_KEY", "secret")
     monkeypatch.setenv("MARKET_COLLECTOR_VALKEY_HOST", "localhost")
     valkey = Valkey()
-
     written = cli.collect_market_data(
         Settings(),
         [f"{index:06d}" for index in range(20)],
         MarketClient(),
         valkey,
-        datetime(2026, 10, 15, 9, 0, tzinfo=KST),
+        datetime(2026, 10, 15, 10, 0, tzinfo=KST),
         False,
     )
-
     assert written == 20
-    assert len(events) == 20
-    assert valkey.values == {"index:KOSPI": "old", "ranking:{popular}": "old"}
-    assert sum(record.levelname == "ERROR" for record in caplog.records) == 3
+    assert valkey.values["ranking:{popular}"] == "old"
+    assert valkey.values["ranking:{popular}:updated_at"] == "old-time"
+    assert "index:KOSPI" in valkey.values
+    assert "index:KOSPI200" in valkey.values
+    errors = [record for record in caplog.records if record.getMessage() == "popular_rank_failed"]
+    assert len(errors) == int(failure)

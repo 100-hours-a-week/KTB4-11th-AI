@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.14-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -13,10 +13,11 @@ RUN uv pip install --require-hashes --requirement requirements.txt
 COPY pyproject.toml ./
 COPY packages/aws packages/aws
 COPY packages/core packages/core
+COPY packages/telemetry packages/telemetry
 COPY services/market-http services/market-http
-RUN uv pip install --no-deps ./packages/aws ./packages/core ./services/market-http
+RUN uv pip install --no-deps ./packages/aws ./packages/core ./packages/telemetry ./services/market-http
 
-FROM python:3.13-slim-bookworm AS runtime
+FROM python:3.14-slim-bookworm AS runtime
 
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app

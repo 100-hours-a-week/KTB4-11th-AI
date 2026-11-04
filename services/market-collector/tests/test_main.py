@@ -76,6 +76,7 @@ def test_archive_pass_reads_checkpoints_before_reconciling(monkeypatch):
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -87,9 +88,6 @@ def test_archive_pass_reads_checkpoints_before_reconciling(monkeypatch):
     class Client:
         def index_quote(self, name):
             return {}
-
-        def popular_codes(self, universe):
-            return []
 
     class Valkey:
         def pipeline(self, **kwargs):
@@ -129,6 +127,7 @@ def test_archive_pass_uses_one_client_for_all_symbols(monkeypatch):
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -138,8 +137,7 @@ def test_archive_pass_uses_one_client_for_all_symbols(monkeypatch):
     )
 
     class Client:
-        def popular_codes(self, universe):
-            return []
+        pass
 
     client = Client()
     cli.collect_market_data(settings, symbols, client, _valkey(), NOW, daily=False)
@@ -156,6 +154,7 @@ def test_archive_pass_propagates_worker_exception(monkeypatch):
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(object()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli, "reconcile_candles", lambda *args: (_ for _ in ()).throw(RuntimeError("boom"))
     )
@@ -175,6 +174,7 @@ def test_daily_bars_are_collected_only_when_asked(monkeypatch, daily, timeframes
 
     monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(object()))
     monkeypatch.setattr(cli, "Store", lambda db: Store())
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
     monkeypatch.setattr(
         cli,
         "reconcile_candles",
@@ -182,8 +182,7 @@ def test_daily_bars_are_collected_only_when_asked(monkeypatch, daily, timeframes
     )
 
     class Client:
-        def popular_codes(self, universe):
-            return []
+        pass
 
     cli.collect_market_data(settings, ["005930"], Client(), _valkey(), NOW, daily=daily)
 
@@ -205,7 +204,7 @@ class Day:
         self.sleeps.append(seconds)
         self.now += timedelta(seconds=seconds)
 
-    def archive(self, settings, symbols, client, valkey, now, daily):
+    def archive(self, settings, symbols, client, valkey, now, daily, session_cache=None):
         self.passes.append(now.astimezone(KST))
         self.daily.append(daily)
         self.now += timedelta(seconds=self.work.get(now.astimezone(KST), 50))
@@ -322,7 +321,7 @@ def test_holiday_does_nothing(monkeypatch, start):
 def test_failed_minute_pass_does_not_stop_the_day(monkeypatch):
     day = Day(_kst(15, 29))
 
-    def archive(settings, symbols, client, valkey, now, daily):
+    def archive(settings, symbols, client, valkey, now, daily, session_cache=None):
         if now.astimezone(KST) == _kst(15, 29, 5):
             day.now += timedelta(seconds=1)
             raise RuntimeError("kiwoom timeout")
@@ -336,7 +335,7 @@ def test_failed_minute_pass_does_not_stop_the_day(monkeypatch):
 def test_failed_close_pass_fails_the_run(monkeypatch):
     day = Day(_kst(15, 34))
 
-    def archive(settings, symbols, client, valkey, now, daily):
+    def archive(settings, symbols, client, valkey, now, daily, session_cache=None):
         day.passes.append(now.astimezone(KST))
         raise RuntimeError("questdb down")
 
@@ -344,3 +343,17 @@ def test_failed_close_pass_fails_the_run(monkeypatch):
         _run(monkeypatch, day, archive)
 
     assert day.passes == [_kst(15, 35, 5)]
+
+
+def test_run_shares_one_session_cache_between_passes(monkeypatch):
+    day = Day(_kst(15, 29))
+    caches = []
+
+    def archive(settings, symbols, client, valkey, now, daily, session_cache=None):
+        assert session_cache is not None
+        caches.append(session_cache)
+        return day.archive(settings, symbols, client, valkey, now, daily)
+
+    _run(monkeypatch, day, archive)
+    assert len(caches) == 3
+    assert all(cache is caches[0] for cache in caches)

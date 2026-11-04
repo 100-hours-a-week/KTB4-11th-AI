@@ -19,8 +19,7 @@ the only market is KOSPI and the only index is KOSPI 200. It does not touch OHLC
 | `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | nothing else |
 
 - market-syncer never writes `entities`, `relations` or `cluster_*`, and never writes QuestDB.
-- Trigger: cron, `main()` runs once and exits (same as the other batch services).
-- Runs before `news-graph-builder` and `market-collector` in the schedule.
+- Trigger: `ktb-morning-pipeline.timer` at 06:00 KST on weekdays (Mon–Fri); `scripts/run-morning-pipeline.sh` runs `market-syncer` first before its existing jobs.
 
 ## Schema (Alembic `0006`, Postgres)
 
@@ -68,11 +67,8 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
 `OpenDartReader`.
 
 **Kiwoom (`kiwoom`)**
-- Build the client as `market-collector` does: `KiwoomAuth(mode, StaticSecretProvider(app_key,
-  secret_key), MemoryTokenStore())` and `KiwoomClient(auth)`. The SDK issues and refreshes the
-  token, so `fetch_token` and the hand-written paging loop are deleted.
-- Paging uses `client.iterate_pages(api_id=, path=, body=, max_pages=0, page_delay_seconds=)`, with
-  the `next_key` stall guard that `market-collector`'s `IndexClient` has.
+- `market-syncer` uses the same official Kiwoom authentication primitives used by the current market services: `KiwoomAuth(mode, StaticSecretProvider(app_key, secret_key), MemoryTokenStore())` and `KiwoomClient(auth)`. The SDK issues and refreshes the token, so `fetch_token` and the hand-written paging loop are deleted.
+- Paging uses `client.iterate_pages(api_id=, path=, body=, max_pages=0, page_delay_seconds=)` with a `next_key` stall guard so a broken continuation cannot loop forever.
 - Calls: `ka10099` (KOSPI stocks, `mrkt_tp=0`), `ka20002` (KOSPI 200), `ka90001` (themes),
   `ka90002` (theme members).
 - `KIWOOM_BASE_URI` is replaced by `KIWOOM_MODE` (`real` or `demo`), the SDK's way to choose the
@@ -85,7 +81,7 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
   goes away.
 - The constructor writes a `docs_cache/` pickle into the working directory and reads `.env`. The
   image therefore needs a writable working directory (a `WORKDIR` under `/tmp` or a tmpfs mount),
-  and the cache is harmless because the job runs once a day.
+  and the cache is harmless because the job runs once on each scheduled morning.
 - The existing error handling stays: the DART status error is a `ValueError` holding a
   `{'status', 'message'}` dict and is re-raised as a `RuntimeError` without the key in the message.
 - `stock_code` NaN handling (`fillna("")`) stays.
@@ -129,12 +125,84 @@ No `httpx` in this service. Kiwoom goes through the `kiwoom` package and DART th
 | `DART_API_KEY` | required |
 | `LOG_LEVEL` | `INFO` |
 
+## Schedule and operations
+
+### Cadence decision
+
+The reference datasets do not need hourly refreshes:
+
+| Dataset | Change/fetch shape | Hourly value | Daily failure impact |
+|---|---|---|---|
+| KOSPI corporations | Kiwoom `ka10099` plus one OpenDART corporation-code download | Low. Listing and corporation-code mappings are reference data, not intraday prices. | Existing rows remain usable; a failed sync stops the morning pipeline before downstream jobs. |
+| KOSPI 200 membership | Kiwoom `ka20002`; the table is replaced atomically and rejects an empty fetch | Low. Downstream services need a stable daily universe rather than repeated intraday refreshes. | The previous snapshot remains in PostgreSQL; a failed sync stops downstream pipeline jobs. |
+| Themes | Kiwoom `ka90001` plus one paginated `ka90002` walk per theme | Low. Theme membership is reference data; live intraday market delivery is handled separately by `market-streamer` → Valkey → `market-http`. | The previous theme snapshot remains; a failed sync stops the morning pipeline. |
+
+One sync performs one Kiwoom authentication, the paginated KOSPI/KOSPI 200/theme-list calls, one paginated theme-member call for every returned theme, and one OpenDART corporation-code fetch. The exact request count varies with pagination and the number of themes, so this repository does not claim a fixed monetary API cost. The design already describes the job as making a few hundred sequential calls. Moving from 24 hourly executions every day to one weekday 06:00 morning-pipeline execution reduces scheduled market-sync executions from 168 to 5 per week, about 97%.
+
+### Weekday 06:00 morning pipeline
+
+The intended `ktb-morning-pipeline.timer` schedule is Monday through Friday at `Mon..Fri *-*-* 06:00:00 Asia/Seoul`. The actual timer configuration must match this weekday schedule. `scripts/run-morning-pipeline.sh` starts market-syncer as its first job, then runs the previous stages in order:
+
+```text
+06:00 KST (Mon–Fri) ktb-morning-pipeline.timer
+  -> market-syncer
+  -> news-clusterer
+  -> news-graph-builder
+  -> portfolio-builder
+```
+
+There is **no standalone `ktb-market-syncer.timer`**; the market-syncer service unit remains available for manual troubleshooting. Other services (including market-collector, market-streamer, and news-preprocessor) keep their independent schedules.
+
+### Failure handling
+
+The script retains `set -Eeuo pipefail`; a failed market-syncer stops the script before news-clusterer, news-graph-builder, and portfolio-builder. The existing morning-pipeline systemd unit uses `Restart=no`, so the pipeline reports a failure through its `OnFailure` hook and does **not** automatically retry. The standalone market-syncer service has its own retry policy, but that policy does not apply when the pipeline invokes the Docker Compose job directly. No additional success markers or pre-start gates are introduced.
+
+The timer keeps `Persistent=false` as in the original morning pipeline; if the host is down at 06:00, it does not catch up on boot. A manual recovery can start `ktb-morning-pipeline.service` after the problem is corrected.
+
+Production and development CD both install/enable `ktb-morning-pipeline.timer` and
+verify its enabled and active status in the same loop as other scheduled timers.
+For already deployed production and development hosts, an operator must remove the
+old hourly timer **once before enabling the new morning pipeline schedule**.
+This is an explicit manual deployment prerequisite, not a recurring CD step:
+
+```bash
+# Repeat on both production and development AI hosts.
+sudo systemctl disable --now ktb-market-syncer.timer
+sudo rm -f /etc/systemd/system/ktb-market-syncer.timer
+sudo systemctl daemon-reload
+
+# Confirm the old timer is gone; after deployment confirm the morning timer is active.
+systemctl list-timers --all --no-pager | grep -E 'ktb-(market-syncer|morning-pipeline)\.timer' || true
+systemctl is-enabled ktb-morning-pipeline.timer
+systemctl is-active ktb-morning-pipeline.timer
+```
+
+The PR must not be treated as fully migrated until both hosts have been checked.
+The CD workflows do not repeatedly remove or validate the legacy market-syncer timer.
+
+### Operator commands
+
+```bash
+systemctl list-timers --all --no-pager | grep 'ktb-'
+systemctl cat ktb-morning-pipeline.timer
+systemctl cat ktb-morning-pipeline.service
+journalctl -u ktb-morning-pipeline.service -n 200 --no-pager
+
+# rerun the full pipeline after addressing an error
+sudo systemctl start ktb-morning-pipeline.service
+
+# run market-syncer only for manual troubleshooting
+sudo systemctl start ktb-market-syncer.service
+```
+
+Runtime verification on 2026-10-19 confirmed that production had been continuously booted since 2026-09-27 17:49 KST and development since 2026-10-08 07:19 UTC (16:19 KST), with no daily EC2 start/stop scheduler in the Cloud Terraform repository.
+
 ## Rollout
 
 The migration renames columns that three services read, so migration, market-syncer,
-news-graph-builder and market-collector ship together. They are cron jobs, so the gap is one missed
+news-graph-builder and market-collector ship together. They are scheduled batch jobs, so the gap is one missed
 tick. Run the migration job first, then market-syncer once by hand to confirm the tables, then
-enable the others.
+enable the morning-pipeline timer and later market jobs.
 
 ## Testing
 

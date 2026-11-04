@@ -3,6 +3,8 @@ from typing import Annotated
 from fastapi import Depends, Query, Request
 from redis.asyncio import Redis
 
+from market_http.market_subscription import MarketSubscription
+
 CODE = r"^[0-9A-Z]{6}$"
 
 
@@ -14,6 +16,10 @@ def _questdb_conf(request: Request) -> str:
     return request.app.state.questdb_conf
 
 
+def _market_subscription(request: Request) -> MarketSubscription:
+    return request.app.state.market_subscription
+
+
 def _codes(codes: Annotated[str, Query(pattern=r"^[0-9A-Z]{6}(,[0-9A-Z]{6})*$")]) -> list[str]:
     return list(dict.fromkeys(codes.split(",")))
 
@@ -21,3 +27,4 @@ def _codes(codes: Annotated[str, Query(pattern=r"^[0-9A-Z]{6}(,[0-9A-Z]{6})*$")]
 Valkey = Annotated[Redis, Depends(_valkey)]
 QuestDBConf = Annotated[str, Depends(_questdb_conf)]
 Codes = Annotated[list[str], Depends(_codes)]
+SharedMarketSubscription = Annotated[MarketSubscription, Depends(_market_subscription)]

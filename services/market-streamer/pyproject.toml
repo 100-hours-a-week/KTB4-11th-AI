@@ -2,13 +2,16 @@
 name = "market-streamer"
 version = "0.1.0"
 description = "Kiwoom realtime KOSPI 200 prices into Valkey"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
     "ktb-aws",
+    "ktb-telemetry",
     "kwcli",
+    "opentelemetry-api>=1.45",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.9",
+    "prometheus-client>=0.21.1,<1",
     "pydantic-settings>=2.7",
     "redis>=6.4",
     "sqlalchemy>=2.0.54",
@@ -21,6 +24,7 @@ market-streamer = "market_streamer.__main__:main"
 [tool.uv.sources]
 ktb-core = { workspace = true }
 ktb-aws = { workspace = true }
+ktb-telemetry = { workspace = true }
 
 [tool.deptry.per_rule_ignores]
 DEP002 = ["psycopg"]

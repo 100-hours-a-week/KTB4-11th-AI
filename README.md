@@ -98,7 +98,9 @@ flowchart LR
 ### `news-preprocessor`: 뉴스 가져와서 저장하기
 
 - 경제 뉴스 RSS를 읽고 각 사이트의 본문 구조에 맞게 기사 추출
-- OpenDART에서 `corporation_indices`의 KOSPI 200 종목 공시를 읽어 기사처럼 저장함. 정기보고서·감사보고서·증권신고서처럼 긴 공시는 제외하고, 문서가 비어 있거나 없는 공시는 제목만 저장함
+- OpenDART initially selects the latest 1000 KOSPI200 filings within one year. It then checks new receipts once per daily slot, default 05:00 KST, recording both attempted and successful dates. An unattempted slot may start late; a failed attempt waits until the next daily slot. Other news sources remain hourly.
+- Short filings retain the article storage and embedding flow. Thirteen long filing types, including periodic reports, audit reports and prospectuses, are parsed into document, section and financial tables in one transaction.
+- Only the first automatic selection is capped at 1000; incremental checks and manual date replay are uncapped. Known receipts skip body downloads and duplicate storage. Manual replay accepts paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` values within 365 days and leaves the normal collection dates unchanged. See the [collection plan](docs/superpowers/plans/2026-10-30-disclosure-collection.md).
 - 기사 제목과 본문을 PostgreSQL `articles`에 저장 후 임베딩 시도
 - 임베딩은 OpenAI API와 호완되는 서버로 요청을 보내며 2000차원으로 임베딩
 
@@ -111,7 +113,7 @@ flowchart LR
 ### `market-syncer`: KOSPI 200 종목과 테마 정보 업데이트하기
 
 - 키움의 KOSPI 종목코드와 OpenDART의 기업 고유번호를 연결해 `corporations`, `corporation_aliases`를 업데이트함
-- 키움에서 KOSPI 200 구성 종목과 테마별 종목을 받아 `corporation_indices`, `themes`, `theme_companies`를 업데이트함
+- 키움에서 KOSPI 200 구성 종목과 테마별 종목을 받아 `corporation_indices`, `themes`, `theme_corporations`를 업데이트함
 
 ### `news-graph-builder`: 클러스터링 된 뉴스에서 지식 정보 추출하기
 
@@ -140,8 +142,10 @@ flowchart LR
 
 - market-streamer는 하나의 Kiwoom WebSocket에서 가격 `0B`와 호가 `0D`를 함께 구독함
 - market-http의 `GET /orderbooks?codes=005930,000660`은 저장된 최신 호가를 반환하고, `GET /orderbooks/stream?codes=005930,000660`은 SSE로 초기 스냅샷과 이후 갱신을 전달함
-- 각 호가 스냅샷은 최우선 순서로 매도·매수 각각 10개 가격과 수량을 포함함
+- 각 호가 스냅샷은 최우선 순서로 가격이 양수인 매도·매수 각각 최대 10개 가격과 수량을 포함하며, 빈 단계는 제외함
 - `ts`는 거래일과 Kiwoom 호가 시각을 합친 값으로, 마지막 스냅샷의 신선도를 판단하는 데 사용함
+- `MARKET_HTTP_MEMORY_PROFILE_ENABLED`는 Redis 장애 복구 실험 중 Python 메모리 스냅샷을 로컬에 남기는 선택 설정이며, 기본값은 `false`임
+- 실험 시에만 `true`로 설정하고, 일반 실행에서는 활성화하지 않음
 - 기존 가격 API는 `/prices`, `/prices/stream`임
 
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
@@ -184,8 +188,8 @@ erDiagram
     corporations ||--o{ corporation_aliases : "별칭"
     corporations ||--o{ corporation_indices : "지수 편입"
     corporations ||--o| entities : "기업 노드"
-    corporations ||--o{ theme_companies : ""
-    themes ||--o{ theme_companies : "구성 종목"
+    corporations ||--o{ theme_corporations : ""
+    themes ||--o{ theme_corporations : "구성 종목"
     portfolios ||--o{ portfolio_holdings : "편입 종목"
     portfolios ||--o{ portfolio_exits : "편출 종목"
     portfolios ||--o{ portfolio_reasons : "종목별 설명"
@@ -260,7 +264,7 @@ erDiagram
         text name
         timestamptz synced_at
     }
-    theme_companies {
+    theme_corporations {
         text theme_code PK, FK "ON DELETE CASCADE"
         text stock_code PK, FK "ON DELETE CASCADE"
         boolean is_major "테마 주요종목 여부"
@@ -301,37 +305,8 @@ erDiagram
 | `articles` | `news-preprocessor` | `0001` |
 | `clusters`, `article_clusters` | `news-clusterer` | `0002` |
 | `cluster_summaries`, `entities`, `cluster_entities`, `relations` | `news-graph-builder` | `0003` |
-| `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_companies` | `market-syncer` | `0003`, `0004`, `0006` |
+| `corporations`, `corporation_aliases`, `corporation_indices`, `themes`, `theme_corporations` | `market-syncer` | `0003`, `0004`, `0006` |
 | `portfolios`, `portfolio_holdings`, `portfolio_exits` | `portfolio-builder` | `0005`, `0006` |
 | `portfolio_reasons` | `portfolio-builder` | `0007` |
 | `portfolios.status` | `portfolio-builder` | `0008` |
 | `portfolio_reasons.id` | `portfolio-builder` | `0010` |
-
-## 리밸런서 통신 경로
-
-| 작업 | 경로 |
-|---|---|
-| 사용자·계좌 정보 조회 | 기존 HTTP `GET /api/v1/users/ai-server` |
-| 주문 생성 요청 | AI → Order FIFO 큐; `order.place` |
-| 주문 취소 요청 | AI → 같은 Order FIFO 큐; `order.cancel` |
-| HTTP 조회·응답 검증 실패 | 구조화 로그 기록 후 실패 종료 |
-
-매 실행 시작에 HTTP로 사용자 정보를 한 번 조회합니다. 조회한 잔고·보유량과 남은 실행 횟수로
-범위·수량을 계산하고, 대기 주문 취소 요청 다음에 재주문 요청을 같은 계좌 FIFO 그룹으로 바로 발행합니다.
-취소 반영을 기다리는 HTTP 재조회나 대기 주문 잔존에 따른 보류는 하지 않습니다.
-취소 요청 발행이 실패한 계좌에는 신규 주문을 보내지 않습니다. 편출 종목은 매도만 요청하며
-이번 매도의 예상 대금은 매수 예산에 더하지 않습니다.
-취소 메시지 발행 성공은 취소 완료가 아닙니다. 백엔드는 같은 그룹의 취소 처리를 마친 뒤 다음 주문을 처리해야 합니다.
-조회 실패나 잘못된 응답은 기존 구조화 로그로 기록하고 주문 요청 없이 종료합니다.
-`users: []`는 정상 응답입니다.
-
-주문 생성에는 `reason_id`를 포함하며 계좌 ID를 `MessageGroupId`, `eventId`를
-`MessageDeduplicationId`로 사용합니다. SDK 재시도는 동일 eventId와 본문을 유지합니다.
-FIFO 전송 중복 제거는 SQS의 5분 범위이며, HTTP 실행마다 재계산한 주문은 새 이벤트입니다.
-계정 스냅샷 큐·복구 DB 상태·별도 스냅샷 마이그레이션은 사용하지 않습니다.
-
-HTTP 사용자 조회는 기존 `ktb_core.backend_auth`의 JWT 쿠키를 사용합니다.
-SQS는 SDK 기본 인증 체인과 EC2 IAM Role을 사용하며 Access Key를 직접 지정하지 않습니다.
-기존 `ktb_core.logging`으로 SQS MessageId·eventId·correlationId·처리 결과를 기록합니다.
-리밸런서는 기존 Order FIFO 큐에 주문 생성·취소만 발행하며 소비·DeleteMessage를 수행하지 않습니다.
-DLQ에 직접 발행하거나 일반 소비자를 연결하지 않습니다.

@@ -8,7 +8,7 @@ TABLES = (
     "competition_jobs, competition_portfolios, competition_participants,"
     " portfolio_reasons, portfolio_exits, portfolio_holdings, portfolios, relations,"
     " cluster_entities, entities, cluster_summaries, article_clusters, clusters, articles,"
-    " theme_companies, themes, corporation_indices, corporation_aliases, corporations"
+    " theme_corporations, themes, corporation_indices, corporation_aliases, corporations"
 )
 
 SEED = [
@@ -46,7 +46,7 @@ SEED = [
     " (2, 1, 4, 2, 'used_by', 'HBM은 엔비디아 GPU에 쓰인다'),"
     " (3, 2, 3, 4, 'produces', 'SK하이닉스가 HBM을 생산')",
     "INSERT INTO themes (theme_code, name) VALUES ('T1', 'HBM')",
-    "INSERT INTO theme_companies (theme_code, stock_code, is_major) VALUES"
+    "INSERT INTO theme_corporations (theme_code, stock_code, is_major) VALUES"
     " ('T1', '005930', true), ('T1', '000660', false)",
 ]
 

@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 
 from fastapi import Request
 from ktb_core.logging import get_logger
@@ -21,8 +21,9 @@ class SSEConnectionMetrics:
         self.interval = interval
         self.active_connections = 0
 
-    async def publish(self) -> None:
+    async def publish(self, take_span_counts: Callable[[], tuple[int, int]]) -> None:
         while True:
+            recorded, skipped = take_span_counts()
             get_logger(__name__).info(
                 "active_sse_connections",
                 _aws={
@@ -31,13 +32,19 @@ class SSEConnectionMetrics:
                         {
                             "Namespace": self.namespace,
                             "Dimensions": [["ClusterName", "ServiceName"]],
-                            "Metrics": [{"Name": "ActiveSSEConnections", "Unit": "Count"}],
+                            "Metrics": [
+                                {"Name": "ActiveSSEConnections", "Unit": "Count"},
+                                {"Name": "DeliverSpansRecorded", "Unit": "Count"},
+                                {"Name": "DeliverSpansSkipped", "Unit": "Count"},
+                            ],
                         }
                     ],
                 },
                 ClusterName=self.cluster_name,
                 ServiceName=self.service_name,
                 ActiveSSEConnections=self.active_connections,
+                DeliverSpansRecorded=recorded,
+                DeliverSpansSkipped=skipped,
             )
             await asyncio.sleep(self.interval)
 

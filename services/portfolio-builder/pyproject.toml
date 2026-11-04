@@ -2,14 +2,14 @@
 name = "portfolio-builder"
 version = "0.1.0"
 description = "Cron-triggered model portfolio agent"
-requires-python = ">=3.13,<3.15"
+requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
     "boto3>=1.35",
     "httpx>=0.28",
     "langchain>=1.4.2",
     "langchain-openrouter>=0.2.9",
-    "langgraph>=1.2.12",
+    "langgraph>=1.2.14",
     "langchain-core>=1.6.5",
     "numpy>=2.3",
     "psycopg[binary]>=3.3.6",

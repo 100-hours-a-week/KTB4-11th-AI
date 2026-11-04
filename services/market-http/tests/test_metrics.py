@@ -10,9 +10,10 @@ from fastapi.responses import StreamingResponse
 from ktb_core.logging import JsonFormatter
 from market_http.app import create_app
 from market_http.controllers import orderbooks, prices
-from market_http.metrics import SSEConnectionMetrics, track_sse_connection
+from market_http.observability.metrics import SSEConnectionMetrics, track_sse_connection
 from market_http.settings import Settings
-from redis.asyncio import Redis
+
+from .test_market_subscription import FakeValkey
 
 
 def test_only_stream_routes_count_connections_and_release_on_exit():
@@ -127,7 +128,7 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
         metrics = SSEConnectionMetrics(
             namespace="test", cluster_name="c", service_name="s", interval=0.001
         )
-        app = create_app(Redis(host="127.0.0.1", port=1), "unused", sse_metrics=metrics)
+        app = create_app(FakeValkey(), "unused", sse_metrics=metrics)
         async with app.router.lifespan_context(app):
             await asyncio.sleep(0.005)
             metrics.active_connections = 2
@@ -136,8 +137,10 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
         events = [record for record in caplog.records if record.message == "active_sse_connections"]
         payloads = [json.loads(JsonFormatter("market-http").format(event)) for event in events]
         assert {payload["ActiveSSEConnections"] for payload in payloads} == {0, 2}
-        assert events[0].name == "market_http.metrics"
+        assert events[0].name == "market_http.observability.metrics"
         assert all(payload["ClusterName"] == "c" for payload in payloads)
+        assert all(payload["DeliverSpansRecorded"] == 0 for payload in payloads)
+        assert all(payload["DeliverSpansSkipped"] == 0 for payload in payloads)
         assert all(payload["ServiceName"] == "s" for payload in payloads)
         assert all(isinstance(payload["_aws"]["Timestamp"], int) for payload in payloads)
         assert all(
@@ -146,13 +149,19 @@ def test_publisher_logs_idle_and_active_counts_and_stops_at_shutdown(caplog):
                 {
                     "Namespace": "test",
                     "Dimensions": [["ClusterName", "ServiceName"]],
-                    "Metrics": [{"Name": "ActiveSSEConnections", "Unit": "Count"}],
+                    "Metrics": [
+                        {"Name": "ActiveSSEConnections", "Unit": "Count"},
+                        {"Name": "DeliverSpansRecorded", "Unit": "Count"},
+                        {"Name": "DeliverSpansSkipped", "Unit": "Count"},
+                    ],
                 }
             ]
             for payload in payloads
         )
         await asyncio.sleep(0.005)
-        assert len(caplog.records) == len(events)
+        assert len([r for r in caplog.records if r.message == "active_sse_connections"]) == len(
+            events
+        )
 
     asyncio.run(scenario())
 
@@ -161,7 +170,7 @@ def test_disabled_metrics_start_no_publisher(caplog):
     caplog.set_level(logging.INFO)
 
     async def scenario():
-        app = create_app(Redis(host="127.0.0.1", port=1), "unused")
+        app = create_app(FakeValkey(), "unused")
         async with app.router.lifespan_context(app):
             assert app.state.sse_metrics is None
             dependency = track_sse_connection(Request({"type": "http", "app": app}))

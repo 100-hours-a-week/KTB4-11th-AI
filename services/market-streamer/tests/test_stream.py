@@ -1,9 +1,12 @@
 import asyncio
 import json
+from dataclasses import asdict
 from datetime import date, datetime
 
 import pytest
 from ktb_core.krx import KST
+from market_streamer.dto import Orderbook, OrderbookLevel, Price
+from market_streamer.observability.tracing import traced_publish
 from market_streamer.stream import (
     frame_orderbooks,
     frame_prices,
@@ -12,6 +15,7 @@ from market_streamer.stream import (
     publish,
     publish_orderbooks,
 )
+from opentelemetry.trace import SpanKind
 from redis.asyncio import Redis
 
 TODAY = date(2026, 10, 13)
@@ -100,11 +104,14 @@ FULL_CAPTURE = captured_orderbook(
 
 
 def test_parse_tick_strips_padding_and_direction_signs():
-    assert parse_tick(TICK, TODAY) == PRICE
+    result = parse_tick(TICK, TODAY)
+    assert isinstance(result, Price)
+    assert result.volume == 12345678
+    assert asdict(result) == PRICE
 
 
 def test_parse_orderbook_reads_all_ten_levels():
-    result = parse_orderbook(ORDERBOOK, TODAY)
+    result = asdict(parse_orderbook(ORDERBOOK, TODAY))
 
     assert result == {
         "code": "005930",
@@ -120,8 +127,8 @@ def test_parse_orderbook_reads_all_ten_levels():
     }
 
 
-def test_parse_captured_sparse_orderbook_preserves_empty_levels():
-    result = parse_orderbook(SPARSE_CAPTURE, CAPTURE_DATE)
+def test_parse_captured_sparse_orderbook_excludes_empty_levels():
+    result = asdict(parse_orderbook(SPARSE_CAPTURE, CAPTURE_DATE))
 
     assert result == {
         "code": "005930",
@@ -129,20 +136,18 @@ def test_parse_captured_sparse_orderbook_preserves_empty_levels():
             {"price": 216500, "qty": 3907},
             {"price": 217000, "qty": 42399},
             {"price": 217500, "qty": 4434},
-            *[{"price": 0, "qty": 0}] * 7,
         ],
         "bids": [
             {"price": 216000, "qty": 34242},
             {"price": 215500, "qty": 118496},
             {"price": 215000, "qty": 95265},
-            *[{"price": 0, "qty": 0}] * 7,
         ],
         "timestamp": "2026-10-15T09:00:00+09:00",
     }
 
 
 def test_parse_captured_full_orderbook_reads_all_levels():
-    result = parse_orderbook(FULL_CAPTURE, CAPTURE_DATE)
+    result = asdict(parse_orderbook(FULL_CAPTURE, CAPTURE_DATE))
 
     assert result["asks"] == [
         {"price": price, "qty": qty}
@@ -170,14 +175,20 @@ def test_parse_orderbook_requires_six_digit_time():
         parse_orderbook(entry, TODAY)
 
 
-def test_parse_orderbook_preserves_zero_prices():
-    entry = {**ORDERBOOK, "values": {**ORDERBOOK["values"], "41": "0", "60": "0"}}
+@pytest.mark.parametrize(
+    "ask_fids,bid_fids", [([41], [60, 59]), ([], list(range(51, 61))), (list(range(41, 51)), [])]
+)
+def test_parse_orderbook_excludes_zero_prices_independently(ask_fids, bid_fids):
+    entry = {
+        **ORDERBOOK,
+        "values": {**ORDERBOOK["values"], **{str(fid): "0" for fid in ask_fids + bid_fids}},
+    }
 
-    result = parse_orderbook(entry, TODAY)
+    result = asdict(parse_orderbook(entry, TODAY))
 
-    assert result["asks"][0] == {"price": 0, "qty": 610}
-    assert result["bids"][-1] == {"price": 0, "qty": 800}
-    assert len(result["asks"]) == len(result["bids"]) == 10
+    assert len(result["asks"]) == 10 - len(ask_fids)
+    assert len(result["bids"]) == 10 - len(bid_fids)
+    assert all(level["price"] > 0 for side in ("asks", "bids") for level in result[side])
 
 
 def test_frame_orderbooks_skips_partial_and_malformed_entries():
@@ -200,26 +211,34 @@ def test_parse_orderbook_rejects_negative_quantities():
         parse_orderbook(entry, TODAY)
 
 
-def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url):
+@pytest.mark.parametrize("entry", [ORDERBOOK, SPARSE_CAPTURE])
+def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url, entry):
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         pubsub = valkey.pubsub()
-        await pubsub.subscribe("orderbook:005930")
+        await pubsub.subscribe("market:orderbooks", "orderbook:005930")
         await pubsub.get_message(timeout=1)
-        await publish_orderbooks(valkey, [parse_orderbook(ORDERBOOK, TODAY)])
+        await pubsub.get_message(timeout=1)
+        await publish_orderbooks(valkey, [parse_orderbook(entry, TODAY)])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+        symbol_message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
         stored = await valkey.get("orderbook:005930")
         await pubsub.aclose()
         await valkey.aclose()
-        return message, stored
+        return message, symbol_message, stored
 
-    message, stored = asyncio.run(scenario())
-    expected = parse_orderbook(ORDERBOOK, TODAY)
+    message, symbol_message, stored = asyncio.run(scenario())
+    expected = asdict(parse_orderbook(entry, TODAY))
+    assert all(level["price"] > 0 for side in ("asks", "bids") for level in expected[side])
 
     assert json.loads(stored) == expected
     assert message is not None
-    assert message["channel"] == "orderbook:005930"
+    assert message["channel"] == "market:orderbooks"
     assert json.loads(message["data"]) == expected
+
+    assert symbol_message is not None
+    assert symbol_message["channel"] == "orderbook:005930"
+    assert symbol_message["data"] == message["data"] == stored
 
 
 def test_frame_prices_skips_malformed_entries():
@@ -244,39 +263,47 @@ def test_frame_prices_skips_malformed_entries():
         ],
     }
 
-    assert frame_prices(message, TODAY) == [PRICE]
+    assert frame_prices(message, TODAY) == [Price(**PRICE)]
 
 
 def test_publish_sets_and_publishes_each_price(valkey_url):
     async def scenario():
         valkey = Redis.from_url(valkey_url, decode_responses=True)
         pubsub = valkey.pubsub()
-        await pubsub.subscribe("price:005930")
+        await pubsub.subscribe("market:prices", "price:005930")
         await pubsub.get_message(timeout=1)
-        await publish(valkey, [PRICE])
+        await pubsub.get_message(timeout=1)
+        await publish(valkey, [Price(**PRICE)])
         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+        symbol_message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
         stored = await valkey.get("price:005930")
         await pubsub.aclose()
         await valkey.aclose()
-        return message, stored
+        return message, symbol_message, stored
 
-    message, stored = asyncio.run(scenario())
+    message, symbol_message, stored = asyncio.run(scenario())
 
     assert json.loads(stored) == {
         key: value for key, value in PRICE.items() if key != "trade_value"
     }
     assert message is not None
+    assert message["channel"] == "market:prices"
     assert json.loads(message["data"]) == {
         key: value for key, value in PRICE.items() if key != "trade_value"
     }
 
+    assert symbol_message is not None
+    assert symbol_message["channel"] == "price:005930"
+    assert symbol_message["data"] == message["data"] == stored
 
-def test_publish_uses_dated_keys_and_keeps_newer_tick():
+
+def test_publish_uses_dated_keys_and_keeps_last_received_tick():
     class Valkey:
         def __init__(self):
             self.values = {}
             self.ranks = {}
             self.expirations = {}
+            self.publishes = []
             self.commands = []
 
         def pipeline(self, **kwargs):
@@ -289,7 +316,7 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
             pass
 
         def get(self, key):
-            self.commands.append(("get", key))
+            raise AssertionError("price publication must not read the cache")
 
         def set(self, key, value):
             self.commands.append(("set", key, value))
@@ -310,10 +337,10 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
             results = []
             for command in self.commands:
                 op, key, *args = command
-                if op == "get":
-                    results.append(self.values.get(key))
-                elif op == "set":
+                if op == "set":
                     self.values[key] = args[0]
+                elif op == "publish":
+                    self.publishes.append((key, args[0]))
                 elif op == "zadd":
                     self.ranks.setdefault(key, {}).update(args[0])
                 elif op == "expireat":
@@ -325,24 +352,141 @@ def test_publish_uses_dated_keys_and_keeps_newer_tick():
         valkey = Valkey()
         newer = {**PRICE, "volume": 300, "trade_value": 2000, "rate": 2.5}
         older = {**PRICE, "volume": 100, "trade_value": 1000, "rate": -1.0}
-        await publish(valkey, [newer])
-        await publish(valkey, [older])
+        await publish(valkey, [Price(**newer)])
         await publish(
             valkey,
-            [{**older, "timestamp": "2026-10-13T09:00:23+09:00", "volume": 400}],
+            [
+                Price(**older),
+                Price(**older),
+                Price(**{**older, "timestamp": "2026-10-13T09:00:23+09:00", "volume": 400}),
+            ],
         )
         return valkey
 
     valkey = asyncio.run(scenario())
-    assert json.loads(valkey.values["price:005930"])["volume"] == 300
+    assert json.loads(valkey.values["price:005930"])["volume"] == 400
     assert valkey.ranks == {
-        "ranking:volume:20261013": {"005930": 300},
-        "ranking:trade_value:20261013": {"005930": 2000},
-        "ranking:change_rate:20261013": {"005930": 2.5},
+        "ranking:volume:20261013": {"005930": 400},
+        "ranking:trade_value:20261013": {"005930": 1000},
+        "ranking:change_rate:20261013": {"005930": -1.0},
     }
     assert set(valkey.expirations) == set(valkey.ranks)
+    assert [channel for channel, _ in valkey.publishes] == ["market:prices", "price:005930"] * 4
+    assert [json.loads(payload)["volume"] for _, payload in valkey.publishes] == [
+        300,
+        300,
+        100,
+        100,
+        100,
+        100,
+        400,
+        400,
+    ]
     assert all(options == {"nx": True} for _, options in valkey.expirations.values())
     assert all(
         when == datetime(2026, 10, 27, 23, 59, 59, tzinfo=KST)
         for when, _ in valkey.expirations.values()
     )
+
+
+@pytest.mark.parametrize(
+    "cached",
+    [
+        json.dumps({**PRICE, "volume": 999999999, "timestamp": "2099-01-01T09:00:00+09:00"}),
+        "bad json",
+    ],
+)
+def test_publish_delivers_every_tick_in_order_regardless_of_cache(valkey_url, cached, spans):
+    ticks = [
+        PRICE,
+        {**PRICE, "volume": 1, "price": 81000},
+        {**PRICE, "volume": 1, "price": 81000},
+        {**PRICE, "timestamp": "2026-10-13T09:00:00+09:00", "volume": 2},
+        {**PRICE, "code": "000660"},
+    ]
+
+    async def scenario():
+        async with Redis.from_url(valkey_url, decode_responses=True) as valkey:
+            await valkey.set("price:005930", cached)
+            async with valkey.pubsub() as pubsub:
+                await pubsub.subscribe("market:prices")
+                await pubsub.get_message(timeout=1)
+                await publish(valkey, [Price(**tick) for tick in ticks])
+                received = []
+                for _ in ticks:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1)
+                    assert message is not None
+                    received.append(json.loads(message["data"]))
+                return received, json.loads(await valkey.get("price:005930"))
+
+    received, stored = asyncio.run(scenario())
+    for tick, payload in zip(ticks, received, strict=True):
+        assert {key: payload[key] for key in tick if key != "trade_value"} == {
+            key: value for key, value in tick.items() if key != "trade_value"
+        }
+        assert "trade_value" not in payload
+    assert stored == received[3]
+    (span,) = spans.get_finished_spans()
+    assert span.attributes["prices.received"] == len(ticks)
+    assert span.attributes["prices.published"] == len(ticks)
+
+
+async def _publish_and_capture(valkey_url, prices):
+    valkey = Redis.from_url(valkey_url, decode_responses=True)
+    pubsub = valkey.pubsub()
+    await pubsub.subscribe("market:prices")
+    await pubsub.get_message(timeout=1)
+    await publish(valkey, prices)
+    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5)
+    stored = await valkey.get("price:005930")
+    await pubsub.aclose()
+    await valkey.aclose()
+    return message, stored
+
+
+def test_sampled_publish_adds_trace_fields_from_the_publish_span(valkey_url, spans):
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [Price(**PRICE)]))
+    (span,) = spans.get_finished_spans()
+    context = span.get_span_context()
+    payload = json.loads(message["data"])
+    assert span.name == "publish" and span.kind == SpanKind.PRODUCER
+    assert span.attributes["prices.received"] == 1
+    assert span.attributes["prices.published"] == 1
+    assert (
+        payload["traceparent"]
+        == f"00-{context.trace_id:032x}-{context.span_id:016x}-{context.trace_flags:02x}"
+    )
+    assert datetime.fromisoformat(payload["published_at"]).tzinfo is not None
+    assert json.loads(stored) == payload
+
+
+def test_unsampled_publish_payload_is_unchanged(valkey_url):
+    message, stored = asyncio.run(_publish_and_capture(valkey_url, [Price(**PRICE)]))
+    expected = {k: v for k, v in PRICE.items() if k != "trade_value"}
+    assert message["data"] == json.dumps(expected)
+    assert stored == json.dumps(expected)
+
+
+def test_traced_publish_passes_the_original_typed_batch_and_records_counts(spans):
+    prices = [Price(**PRICE), Price(**{**PRICE, "code": "000660"})]
+    received = []
+
+    @traced_publish
+    async def capture(valkey, batch):
+        received.append(batch)
+
+    asyncio.run(capture(None, prices))
+
+    assert received[0] is prices
+    (span,) = spans.get_finished_spans()
+    assert span.attributes["prices.received"] == 2
+    assert span.attributes["prices.published"] == 2
+
+
+def test_parsed_orderbook_contains_typed_levels():
+    result = parse_orderbook(ORDERBOOK, TODAY)
+
+    assert isinstance(result, Orderbook)
+    assert all(isinstance(level, OrderbookLevel) for level in result.asks + result.bids)
+    assert result.asks[0].price == 81959
+    assert result.bids[0].qty == 710

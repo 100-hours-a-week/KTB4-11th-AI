@@ -54,9 +54,9 @@ def excluded_company_ids(engine: sa.Engine, excluded_theme_codes: Sequence[str])
     if not excluded_theme_codes:
         return frozenset()
     query = sa.text(
-        "SELECT corporations.corp_code FROM theme_companies"
-        " JOIN corporations ON corporations.stock_code = theme_companies.stock_code"
-        " WHERE theme_companies.theme_code IN :theme_codes"
+        "SELECT corporations.corp_code FROM theme_corporations"
+        " JOIN corporations ON corporations.stock_code = theme_corporations.stock_code"
+        " WHERE theme_corporations.theme_code IN :theme_codes"
     ).bindparams(sa.bindparam("theme_codes", expanding=True))
     with engine.connect() as conn:
         rows = conn.execute(query, {"theme_codes": list(excluded_theme_codes)})
