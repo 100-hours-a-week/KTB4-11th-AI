@@ -136,13 +136,13 @@ def test_held_symbol_missing_close_fails_sizing():
 
 def test_no_fill_date_fails():
     sim = make_sim({"005930": [bar(D[6], 1, 1)]})
-    with pytest.raises(EpisodeFailed, match="no fill date before episode end"):
+    with pytest.raises(EpisodeFailed, match="no fill date whose close is before episode end"):
         sim.submit({"005930": 1.0}, START)
 
 
 def test_fill_after_end_fails():
     sim = make_sim(BARS, end=at(7, 8))
-    with pytest.raises(EpisodeFailed, match="no fill date before episode end"):
+    with pytest.raises(EpisodeFailed, match="no fill date whose close is before episode end"):
         sim.submit(HALF, START)
 
 

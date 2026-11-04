@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[3]
 LAYERS = {
@@ -42,7 +43,7 @@ ENV = {
 pytestmark = pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not installed")
 
 
-def render(information: str, decision: str) -> dict:
+def render(information: str, decision: str, extra: dict[str, str] | None = None) -> dict:
     files = ["compose.evaluate.yaml", *(f"evaluations/compose/{f}" for f in LAYERS[information])]
     files.append(f"evaluations/compose/{DECISIONS[decision]}")
     command = ["docker", "compose", "-p", "check"]
@@ -51,7 +52,12 @@ def render(information: str, decision: str) -> dict:
     done = subprocess.run(
         [*command, "config", "--format", "json"],
         cwd=ROOT,
-        env={"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp"), **ENV},
+        env={
+            "PATH": os.environ["PATH"],
+            "HOME": os.environ.get("HOME", "/tmp"),
+            **ENV,
+            **(extra or {}),
+        },
         capture_output=True,
         text=True,
         check=False,
@@ -135,3 +141,22 @@ def test_tool_servers_publish_their_compose_address(information):
         if name in services:
             assert services[name]["environment"][variable] == f"http://{name}:8000"
     assert services["runner"]["environment"]["HARNESS_SUBMISSION_URL"] == "http://runner:8100"
+
+
+def test_the_agent_worker_runs_as_the_secret_owner():
+    agent = render("raw", "docker-agent")["services"]["agent-worker"]
+    assert agent["user"] == "10001:10001"
+    owner = render("raw", "docker-agent", {"EVALUATION_UID": "1234", "EVALUATION_GID": "99"})
+    assert owner["services"]["agent-worker"]["user"] == "1234:99"
+
+
+def test_disclosure_model_identity_matches_production_and_takes_overrides():
+    production = yaml.safe_load((ROOT / "compose.prod.yaml").read_text())
+    identity = production["x-disclosure-model-environment"]
+    services = render("disclosures", "rule")["services"]
+    environment = services["disclosure-http-pit"]["environment"]
+    for name, value in identity.items():
+        assert environment[name] == value.split(":-", 1)[1].rstrip("}"), name
+    custom = render("disclosures", "rule", {"DISCLOSURE_EMBEDDING_ADAPTER_SHA256": "f" * 64})
+    pit = custom["services"]["disclosure-http-pit"]["environment"]
+    assert pit["DISCLOSURE_EMBEDDING_ADAPTER_SHA256"] == "f" * 64

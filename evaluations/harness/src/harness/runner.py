@@ -169,4 +169,5 @@ def evaluate(episode: Episode, rules: MetricRules) -> dict[str, Any]:
         [s.value for s in episode.snapshots],
         episode.failure,
         rules,
+        last_marked=episode.snapshots[-1].day if episode.snapshots else None,
     )

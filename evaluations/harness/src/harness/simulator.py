@@ -55,8 +55,8 @@ class ExecutionSimulator:
                 raise EpisodeFailed("no close for sizing")
             sizing_value = self._value(self._closes(day, "missing close for sizing"))
         fill_day = self._market.fill_date(as_of)
-        if fill_day is None or open_at(fill_day) > self._end:
-            raise EpisodeFailed("no fill date before episode end")
+        if fill_day is None or close_at(fill_day) > self._end:
+            raise EpisodeFailed("no fill date whose close is before episode end")
         if self._pending:
             self.cancellations.append(Cancellation(as_of, self._pending))
         self._pending = {symbol: 0.0 for symbol in self._holdings}

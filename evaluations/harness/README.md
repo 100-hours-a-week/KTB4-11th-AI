@@ -106,7 +106,10 @@ reach the datastores or the harness-only prices.
    | `docker-agent` | `DOCKER_AGENT_URL` and `DOCKER_AGENT_SHA256` (release asset and its checksum), `EVALUATION_MODEL_PROVIDER`, `EVALUATION_MODEL`, `EVALUATION_MODEL_API_KEY_ENV` (such as `OPENROUTER_API_KEY`), `EVALUATION_MODEL_API_KEY_FILE` (a file holding the key) |
 
    The model key goes to the agent as a Compose secret file and never sits in a container
-   environment, the agent config, or the records.
+   environment, the agent config, or the records. Compose mounts the file with its host
+   owner, so the agent worker runs as the user who starts the script. Keep the key file
+   readable by that user; mode `0600` works. The worker reads the key once at start, and an
+   unreadable or empty file stops it before any decision.
 
 3. Run one information variant with one decision system:
 
@@ -162,8 +165,10 @@ A spec is JSON; see [`evaluations/experiments/`](../experiments/).
   `{"every": "day", "start": "2026-07-01", "end": "2026-09-29", "at": "16:00"}`. Schedules
   produce weekdays only, and `"every": "week"` also takes a `weekday`.
 - Every episode starts from `initial_capital`. Holdings carry between decisions within an
-  episode. Fills happen at the open of the first trading day after the decision. A decision
-  without a fill before the episode end fails that episode.
+  episode. Fills happen at the open of the first trading day after the decision, and that
+  day's close must be at or before the episode end so the fill is valued. Otherwise the
+  episode fails (`no fill date whose close is before episode end`), so end episodes after
+  15:30 KST.
 
 ## Results
 

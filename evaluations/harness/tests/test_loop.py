@@ -109,7 +109,7 @@ def test_calendar_gap_is_listed_not_failed():
 def test_no_fill_date_fails_and_keeps_records():
     spec = replace(SPEC, end=at(7, 8))
     episode = run_episode(spec, EqualWeight(), NONE, PRICES, MemoryClock())
-    assert episode.failure == Failure("no fill date before episode end", None, None)
+    assert episode.failure == Failure("no fill date whose close is before episode end", None, None)
     assert len(episode.decisions) == 1
     assert episode.final_state.cash == 1_000_000
 
@@ -153,7 +153,7 @@ def test_missing_close_fails_and_keeps_records():
 
 
 def test_non_kst_end_uses_kst_calendar():
-    end = datetime(2026, 7, 9, 20, tzinfo=timezone(timedelta(hours=-4)))
+    end = datetime(2026, 7, 11, 1, tzinfo=timezone(timedelta(hours=14)))
     spec = replace(SPEC, decision_times=(at(9),), end=end)
     episode = run_episode(spec, EqualWeight(), NONE, PRICES, MemoryClock())
     assert episode.failure is None
@@ -243,3 +243,11 @@ def test_bars_after_the_end_are_never_used():
     later = {"000660": bars(days, 200_000), "005930": bars(days, 70_000)}
     with_later = run_episode(SPEC, EqualWeight(), NONE, InMemoryPriceSource(later), MemoryClock())
     assert with_later == run_episode(SPEC, EqualWeight(), NONE, PRICES, MemoryClock())
+
+
+def test_a_fill_without_a_close_before_the_end_fails_instead_of_scoring():
+    spec = replace(SPEC, decision_times=(at(7, 8),), end=at(7, 12))
+    episode = run_episode(spec, EqualWeight(), NONE, PRICES, MemoryClock())
+    assert episode.failure == Failure("no fill date whose close is before episode end", None, None)
+    assert episode.fills == ()
+    assert episode.final_state.cash == 1_000_000

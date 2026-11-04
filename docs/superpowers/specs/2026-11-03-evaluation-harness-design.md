@@ -91,7 +91,9 @@ class DecisionSystem(Protocol):
   the decision id travels in an `X-Decision-Id` header the toolset adds, not as a tool
   argument). The `agent-worker` container renders a Docker Agent config with one `openapi`
   toolset per information server plus the desk, and the model from settings. The worker
-  runs `docker-agent run --exec --yolo` in a fresh HOME with a timeout.
+  runs `docker-agent run --exec --yolo` in a fresh HOME with a timeout. It runs as the user
+  who starts the run, because Compose mounts the key file with host ownership, and it reads
+  the key once at start.
 - Desk rules: one accepted portfolio per decision. Invalid payloads get 422 with every error
   and may be fixed and resubmitted. A second submission gets 409 `duplicate`. A stale or
   missing decision id gets 409. Completion comes from the desk, never the agent's final text.
@@ -121,7 +123,10 @@ class DecisionSystem(Protocol):
 - The same loop runs single-shot and sequential episodes. A later decision before a fill
   cancels the pending orders (recorded). A holiday or after-close decision fills at the next
   trading open. Buys are cut to affordable cash after sells.
-- A decision with no fill date before the episode end fails the episode explicitly.
+- An order fills only on a day whose close is at or before the episode end, so the next
+  snapshot always values it. A decision without such a day fails the episode
+  (`no fill date whose close is before episode end`) instead of reporting an unvalued fill.
+  The evaluator also refuses to score records with fills after the last marked close.
 - Episode end on a holiday: the harness loads up to 14 days past the end to tell a holiday
   from missing data. It never uses those bars for fills or marks.
 
@@ -157,6 +162,9 @@ class DecisionSystem(Protocol):
   records the commit (`-dirty` when modified) and image ids, and runs
   `up --abort-on-container-exit --exit-code-from runner`. It removes the run's volumes
   afterwards.
+- `information.disclosures.yaml` forwards the same disclosure model identity settings as
+  `compose.prod.yaml`. A test compares them, because a different revision or adapter hash
+  puts queries in another embedding space and the index reports `other_space`.
 - Networks: `dataset` (external, internal) for datastores and data servers; `harness` for
   prices; `information` for PIT and feature servers; `decision` for the desk and worker;
   `egress` only for the worker.

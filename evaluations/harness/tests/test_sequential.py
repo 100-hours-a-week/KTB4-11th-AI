@@ -126,6 +126,7 @@ def test_trading_decisions_and_turnover_are_separate_from_decision_count():
         [s.value for s in episode.snapshots],
         episode.failure,
         MetricRules(),
+        last_marked=episode.snapshots[-1].day,
     )
     assert result["activity"]["decisions"] == 3
     assert result["activity"]["trading_decisions"] == 1
@@ -135,7 +136,7 @@ def test_trading_decisions_and_turnover_are_separate_from_decision_count():
 
 def test_last_decision_without_a_fill_before_the_end_fails_explicitly():
     episode = run(EqualWeight(), (at(6), at(17)), end=at(17, 23))
-    assert episode.failure.reason == "no fill date before episode end"
+    assert episode.failure.reason == "no fill date whose close is before episode end"
     assert len(episode.decisions) == 2
 
 

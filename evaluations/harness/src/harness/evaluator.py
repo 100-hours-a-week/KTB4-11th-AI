@@ -2,6 +2,7 @@ import math
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from statistics import fmean
 from typing import Any, Literal
 
@@ -24,6 +25,7 @@ DEFINITIONS = {
     "turnover": "sum of filled trade values / mean portfolio value",
     "costs": "fees and sell taxes paid, in currency",
     "metrics_withheld": "status failed or no_valid_decision; failures are never scored",
+    "unvalued_fills": "fills after the last marked close fail the episode",
 }
 
 
@@ -113,7 +115,15 @@ def evaluate_episode(
     snapshot_values: Sequence[float],
     failure: Failure | None,
     rules: MetricRules,
+    *,
+    last_marked: date | None,
 ) -> dict[str, Any]:
+    if (
+        failure is None
+        and fills
+        and (last_marked is None or max(f.day for f in fills) > last_marked)
+    ):
+        failure = Failure("fills after the last marked close", None, None)
     result = status(decisions, failure)
     scored = result in ("completed", "partial")
     return {

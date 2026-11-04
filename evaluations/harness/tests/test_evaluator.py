@@ -73,13 +73,20 @@ def test_status_separates_failures_from_scores():
 
 def test_failed_or_unscored_episodes_have_no_metrics():
     failed = evaluate_episode(
-        100, [decision("failed", kind="timeout")], [], 0, [100, 100], None, RULES
+        100, [decision("failed", kind="timeout")], [], 0, [100, 100], None, RULES, last_marked=None
     )
     assert failed["status"] == "no_valid_decision"
     assert failed["metrics"] is None
     assert failed["activity"]["failures"] == {"timeout": 1}
     broken = evaluate_episode(
-        100, [decision("rebalance")], [FILL], 0, [101], Failure("missing close", None, None), RULES
+        100,
+        [decision("rebalance")],
+        [FILL],
+        0,
+        [101],
+        Failure("missing close", None, None),
+        RULES,
+        last_marked=FILL.day,
     )
     assert broken["metrics"] is None
     assert broken["failure"] == "missing close"
@@ -87,7 +94,14 @@ def test_failed_or_unscored_episodes_have_no_metrics():
 
 def test_activity_separates_decisions_from_trades():
     result = evaluate_episode(
-        100, [decision("rebalance"), decision("hold", T2)], [FILL], 2, [100, 101], None, RULES
+        100,
+        [decision("rebalance"), decision("hold", T2)],
+        [FILL],
+        2,
+        [100, 101],
+        None,
+        RULES,
+        last_marked=date(2026, 7, 7),
     )
     assert result["activity"]["decisions"] == 2
     assert result["activity"]["trading_decisions"] == 1
@@ -96,12 +110,33 @@ def test_activity_separates_decisions_from_trades():
 
 
 def test_comparison_and_summary():
-    ours = evaluate_episode(100, [decision("rebalance")], [], 0, [110, 120], None, RULES)
-    theirs = evaluate_episode(100, [decision("rebalance")], [], 0, [105, 100], None, RULES)
+    ours = evaluate_episode(
+        100, [decision("rebalance")], [], 0, [110, 120], None, RULES, last_marked=None
+    )
+    theirs = evaluate_episode(
+        100, [decision("rebalance")], [], 0, [105, 100], None, RULES, last_marked=None
+    )
     assert compare(ours, theirs)["excess_return"] == pytest.approx(0.2)
-    unscored = evaluate_episode(100, [decision("invalid")], [], 0, [], None, RULES)
+    unscored = evaluate_episode(
+        100, [decision("invalid")], [], 0, [], None, RULES, last_marked=None
+    )
     assert compare(unscored, theirs) is None
     summary = summarize({"a": ours, "b": theirs, "c": unscored})
     assert summary["statuses"] == {"completed": 2, "no_valid_decision": 1}
     assert summary["mean_total_return"] == pytest.approx(0.1)
     assert summary["worst_max_drawdown"] == pytest.approx(1 - 100 / 105)
+
+
+def test_fills_after_the_last_marked_close_are_not_scored():
+    later = Fill(date(2026, 7, 7), "005930", "buy", 10, 10.0, 99.0, 0.0, T2)
+    result = evaluate_episode(
+        10_000, [decision("rebalance")], [later], 0, [], None, RULES, last_marked=None
+    )
+    assert result["status"] == "failed"
+    assert result["failure"] == "fills after the last marked close"
+    assert result["metrics"] is None
+    marked = evaluate_episode(
+        10_000, [decision("rebalance")], [later], 0, [9_901], None, RULES,
+        last_marked=date(2026, 7, 7),
+    )  # fmt: skip
+    assert marked["metrics"]["final_value"] == 9_901

@@ -1,5 +1,6 @@
 # Docker Agent decision system. The worker reaches the information servers, the runner's
-# submission desk, and the model API; it never joins the dataset or harness networks.
+# submission desk, and the model API; it never joins the dataset or harness networks. It runs
+# as the user that starts the run, because Compose mounts the key file with host ownership.
 services:
   agent-worker:
     image: ktb4-evaluation/harness-agent:local
@@ -10,6 +11,7 @@ services:
       args:
         DOCKER_AGENT_URL: ${DOCKER_AGENT_URL:?DOCKER_AGENT_URL must be set}
         DOCKER_AGENT_SHA256: ${DOCKER_AGENT_SHA256:?DOCKER_AGENT_SHA256 must be set}
+    user: "${EVALUATION_UID:-10001}:${EVALUATION_GID:-10001}"
     environment:
       HARNESS_AGENT_MODEL_PROVIDER: ${EVALUATION_MODEL_PROVIDER:?EVALUATION_MODEL_PROVIDER must be set}
       HARNESS_AGENT_MODEL: ${EVALUATION_MODEL:?EVALUATION_MODEL must be set}

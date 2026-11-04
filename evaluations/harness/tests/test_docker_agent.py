@@ -196,7 +196,7 @@ def test_run_requests_need_absolute_spec_urls():
 
 
 def test_worker_runs_the_binary_with_a_fresh_home_and_the_key(settings):
-    result = run_agent(settings, "instruction", request())
+    result = run_agent(settings, "instruction", request(), "secret-value")
     assert result.exit_code == 0
     assert not result.timed_out
     first, rest = result.stdout.split("\n", 1)
@@ -206,8 +206,8 @@ def test_worker_runs_the_binary_with_a_fresh_home_and_the_key(settings):
 
 
 def test_worker_reports_exit_codes_and_timeouts(settings):
-    assert run_agent(settings, "i", request("please fail")).exit_code == 3
-    slow = run_agent(settings, "i", request("sleep", timeout=0.5))
+    assert run_agent(settings, "i", request("please fail"), None).exit_code == 3
+    slow = run_agent(settings, "i", request("sleep", timeout=0.5), None)
     assert slow.timed_out and slow.exit_code is None
 
 
@@ -230,3 +230,14 @@ def test_settings_pair_key_file_and_env(monkeypatch):
     monkeypatch.setenv("HARNESS_AGENT_API_KEY_FILE", "/run/secrets/key")
     with pytest.raises(ValueError):
         AgentWorkerSettings()
+
+
+def test_worker_reads_the_key_at_startup(settings, tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "api_key_file", str(tmp_path / "missing"))
+    with pytest.raises(OSError):
+        create_worker_app(settings)
+    empty = tmp_path / "empty"
+    empty.write_text("\n")
+    monkeypatch.setattr(settings, "api_key_file", str(empty))
+    with pytest.raises(ValueError, match="empty"):
+        create_worker_app(settings)

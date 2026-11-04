@@ -84,14 +84,25 @@ def _text(output: str | bytes | None, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + f"\n[truncated {len(text) - limit}]"
 
 
-def run_agent(settings: AgentWorkerSettings, instruction: str, request: RunRequest) -> RunResult:
+def read_api_key(settings: AgentWorkerSettings) -> str | None:
+    if settings.api_key_file is None:
+        return None
+    key = Path(settings.api_key_file).read_text().strip()
+    if not key:
+        raise ValueError(f"model API key file {settings.api_key_file} is empty")
+    return key
+
+
+def run_agent(
+    settings: AgentWorkerSettings, instruction: str, request: RunRequest, api_key: str | None
+) -> RunResult:
     config = json.dumps(agent_config(settings, instruction, request.openapi), ensure_ascii=False)
     with tempfile.TemporaryDirectory(prefix="agent-") as home:
         path = Path(home) / "agent.yaml"
         path.write_text(config)
         env = {**os.environ, "HOME": home, DECISION_ENV: request.decision_id}
-        if settings.api_key_file and settings.api_key_env:
-            env[settings.api_key_env] = Path(settings.api_key_file).read_text().strip()
+        if api_key and settings.api_key_env:
+            env[settings.api_key_env] = api_key
         command = [settings.binary, *shlex.split(settings.run_args), str(path), request.prompt]
         started = monotonic()
         try:
@@ -129,6 +140,7 @@ def _binary_version(settings: AgentWorkerSettings) -> str:
 
 def create_worker_app(settings: AgentWorkerSettings) -> FastAPI:
     instruction = instruction_text(settings)
+    api_key = read_api_key(settings)
     manifest: dict[str, object] = {
         "name": "docker-agent",
         "binary_version": _binary_version(settings),
@@ -147,7 +159,7 @@ def create_worker_app(settings: AgentWorkerSettings) -> FastAPI:
 
     @app.post("/runs")
     def post_run(request: RunRequest) -> RunResult:
-        return run_agent(settings, instruction, request)
+        return run_agent(settings, instruction, request, api_key)
 
     @app.get("/health")
     def health() -> dict[str, str]:
