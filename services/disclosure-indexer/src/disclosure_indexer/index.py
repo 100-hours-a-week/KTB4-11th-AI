@@ -1,4 +1,3 @@
-import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -8,7 +7,7 @@ import sqlalchemy as sa
 from ktb_core.embedding.config import model_identity
 from ktb_core.logging import get_logger
 
-from disclosure_indexer.chunks import CHUNK_VERSION, chunk_sections
+from disclosure_indexer.chunks import chunk_sections
 from disclosure_indexer.embed import embed_vectors
 from disclosure_indexer.inference import embed_documents
 from disclosure_indexer.settings import Settings
@@ -101,26 +100,8 @@ def index_documents(
         raise RuntimeError(
             f"disclosure embedding column mismatch: configured={expected}, database={declared}"
         )
-    config = {
-        "chunker": CHUNK_VERSION,
-        "input_format": "metadata-header-v2",
-        "chunk_bytes": settings.chunk_bytes,
-        "overlap_bytes": settings.overlap_bytes,
-        "input_bytes": settings.input_bytes,
-        "model": settings.index_model,
-        "dimensions": settings.dimensions,
-        "query_instruction": settings.query_instruction,
-    }
     identity = model_identity("embedding") if modal else {}
-    if modal:
-        config.update(
-            identity=identity,
-            grouping="file-byte-context-v1",
-            context_bytes=settings.context_bytes,
-            narrative_rule="content-kind-v2",
-        )
-        config.pop("query_instruction")
-    signature = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+    signature = settings.index_signature
     with engine.begin() as conn:
         conn.execute(
             sa.text(
@@ -170,8 +151,8 @@ def index_documents(
             row = (
                 conn.execute(
                     sa.text("""
-                        SELECT i.id, d.documents, r.company_name, r.stock_code,
-                            r.business_year, r.kind, r.period_end
+                        SELECT i.id, i.status AS previous_status, d.documents, r.company_name,
+                            r.stock_code, r.business_year, r.kind, r.period_end
                         FROM disclosure_indexes i
                         JOIN disclosure_documents d ON d.id = i.document_id
                         JOIN disclosures r ON r.receipt_id = d.receipt_id
@@ -183,11 +164,12 @@ def index_documents(
                             AND i.attempts < :max_attempts
                             AND (
                                 i.status IN ('pending', 'failed')
+                                OR (i.status='ready' AND NOT i.active)
                                 OR (i.status = 'processing' AND i.lease_until < now())
                             )
                             AND NOT (i.id = ANY(CAST(:attempted AS bigint[])))
                         ORDER BY i.id
-                        FOR UPDATE OF i SKIP LOCKED
+                        FOR UPDATE OF i, d SKIP LOCKED
                         LIMIT 1
                     """),
                     {
@@ -204,6 +186,22 @@ def index_documents(
                 break
             index_id = row["id"]
             attempted.append(index_id)
+            if row["previous_status"] == "ready":
+                conn.execute(
+                    sa.text(
+                        "UPDATE disclosure_indexes SET active=false WHERE "
+                        "document_id=(SELECT document_id FROM disclosure_indexes WHERE id=:id) "
+                        "AND dimensions=:dimensions AND id != :id"
+                    ),
+                    {"id": index_id, "dimensions": settings.dimensions},
+                )
+                conn.execute(
+                    sa.text("UPDATE disclosure_indexes SET active=true WHERE id=:id"),
+                    {"id": index_id},
+                )
+                result["ready"] += 1
+                log.info("disclosure_index_reactivated", index_id=index_id)
+                continue
             conn.execute(
                 sa.text(
                     "UPDATE disclosure_indexes SET status='processing', "
@@ -317,9 +315,9 @@ def index_documents(
                         "UPDATE disclosure_indexes SET status=:status, active=:active, "
                         "attempts=0, owner=NULL, lease_until=NULL WHERE id=:id"
                     ),
-                    {"id": index_id, "status": status, "active": bool(chunks)},
+                    {"id": index_id, "status": status, "active": status == "ready"},
                 )
-            if not chunks:
+            if status == "empty":
                 log.info("disclosure_index_empty", index_id=index_id)
             result[status] += 1
             result["chunks"] += len(chunks)

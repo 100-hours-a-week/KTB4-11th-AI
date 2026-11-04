@@ -64,9 +64,13 @@ def seed(
                 sa.text(
                     "INSERT INTO "
                     "disclosure_indexes(document_id,signature,model,dimensions,status,active) "
-                    "VALUES (:doc,'v1',:model,2000,'ready',true) RETURNING id"
+                    "VALUES (:doc,:signature,:model,2000,'ready',true) RETURNING id"
                 ),
-                {"doc": doc, "model": model},
+                {
+                    "doc": doc,
+                    "model": model,
+                    "signature": Settings(DISCLOSURE_EMBEDDING_MODEL=model).index_signature,
+                },
             ).scalar_one()
             conn.execute(
                 sa.text(
@@ -350,10 +354,14 @@ def test_modal_reranks_fifty_candidates_to_five_with_separate_scores(engine, mon
             sa.text(
                 "INSERT INTO disclosure_indexes "
                 "(document_id,signature,model,dimensions,identity,status,active) SELECT "
-                "id,'modal',:model,1024,CAST(:identity AS jsonb),'ready',true FROM "
+                "id,:signature,:model,1024,CAST(:identity AS jsonb),'ready',true FROM "
                 "disclosure_documents WHERE receipt_id='modal-search' RETURNING id"
             ),
-            {"model": settings.index_model, "identity": json.dumps(model_identity("embedding"))},
+            {
+                "model": settings.index_model,
+                "signature": settings.index_signature,
+                "identity": json.dumps(model_identity("embedding")),
+            },
         ).scalar_one()
         conn.execute(
             sa.text(
@@ -432,10 +440,14 @@ def test_ready_empty_narrative_index_returns_empty_without_modal(engine, monkeyp
             sa.text(
                 "INSERT INTO disclosure_indexes "
                 "(document_id,signature,model,dimensions,identity,status,active) SELECT "
-                "id,'modal',:model,1024,CAST(:identity AS jsonb),'ready',true FROM "
+                "id,:signature,:model,1024,CAST(:identity AS jsonb),'ready',true FROM "
                 "disclosure_documents WHERE receipt_id='empty-narrative'"
             ),
-            {"model": settings.index_model, "identity": json.dumps(model_identity("embedding"))},
+            {
+                "model": settings.index_model,
+                "signature": settings.index_signature,
+                "identity": json.dumps(model_identity("embedding")),
+            },
         )
 
     def forbidden(*a, **kw):
@@ -457,7 +469,7 @@ def test_ready_empty_narrative_index_returns_empty_without_modal(engine, monkeyp
     assert response["latest_evidence"] == []
 
 
-def test_legacy_rollback_can_use_same_source_before_parser_upgrade(engine, monkeypatch):
+def test_same_source_parser_upgrade_requires_the_latest_parsed_document(engine, monkeypatch):
     vector = [1.0] + [0.0] * 1999
     seed(
         engine,
@@ -491,8 +503,8 @@ def test_legacy_rollback_can_use_same_source_before_parser_upgrade(engine, monke
         ),
         mode="json",
     )
-    assert response["reports"][0]["index_state"] == "ready"
-    assert response["latest_evidence"][0]["text"] == "기존 파서의 근거"
+    assert response["reports"][0]["index_state"] == "pending"
+    assert response["latest_evidence"] == []
 
 
 def test_legacy_rollback_never_reads_an_obsolete_source(engine, monkeypatch):
@@ -605,3 +617,71 @@ def test_typed_periodic_correction_supersedes_legacy_filing(engine):
     )
     reports = disclosures(engine, "005930", Settings(), as_of=date(2026, 4, 1))
     assert len(reports) == 1 and reports[0].published_date == date(2026, 3, 2)
+
+
+def test_newer_empty_from_another_signature_cannot_hide_ready_index(engine):
+    seed(
+        engine,
+        "005930",
+        "recovered",
+        date(2025, 12, 31),
+        date(2026, 3, 1),
+        "복구한 근거",
+        [1.0] + [0.0] * 1999,
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text("""
+            INSERT INTO disclosure_indexes(document_id,signature,model,dimensions,status,active)
+            SELECT id,'another-config','test-model',2000,'empty',false
+            FROM disclosure_documents WHERE receipt_id='recovered'
+        """)
+        )
+    rows = disclosures(engine, "005930", Settings(), as_of=date(2026, 6, 1))
+    assert rows[0].index_state == "ready"
+
+
+def test_same_model_wrong_signature_is_not_searchable(engine):
+    seed(
+        engine,
+        "005930",
+        "wrong-signature",
+        date(2025, 12, 31),
+        date(2026, 3, 1),
+        "다른 분할 설정",
+        [1.0] + [0.0] * 1999,
+    )
+    with engine.begin() as conn:
+        conn.execute(sa.text("UPDATE disclosure_indexes SET signature='wrong-config'"))
+    rows = disclosures(engine, "005930", Settings(), as_of=date(2026, 6, 1))
+    assert rows[0].index_state == "other_space"
+
+
+def test_current_empty_takes_precedence_over_other_config_ready(engine, monkeypatch):
+    seed(
+        engine,
+        "005930",
+        "current-empty",
+        date(2025, 12, 31),
+        date(2026, 3, 1),
+        "다른 설정의 근거",
+        [1.0] + [0.0] * 1999,
+    )
+    settings = Settings()
+    with engine.begin() as conn:
+        conn.execute(sa.text("UPDATE disclosure_indexes SET signature='other-config'"))
+        conn.execute(
+            sa.text("""
+            INSERT INTO disclosure_indexes(document_id,signature,model,dimensions,status,active)
+            SELECT id,:signature,'test-model',2000,'empty',false
+            FROM disclosure_documents WHERE receipt_id='current-empty'
+        """),
+            {"signature": settings.index_signature},
+        )
+    monkeypatch.setattr(
+        "disclosure_retrieval.search.embed_query",
+        lambda *a: pytest.fail("empty current index called inference"),
+    )
+    result = search(engine, "005930", SearchRequest(query="위험", as_of=date(2026, 6, 1)), settings)
+    assert result.reports[0].index_state == "empty"
+    assert result.latest_evidence == []

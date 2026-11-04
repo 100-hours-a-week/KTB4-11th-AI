@@ -1,7 +1,5 @@
 from typing import Any
 
-CHUNK_VERSION = "sections-byte-budget-v1"
-
 
 def chunk_sections(
     sections: list[dict[str, Any]], max_bytes: int = 2400, overlap_bytes: int = 300
