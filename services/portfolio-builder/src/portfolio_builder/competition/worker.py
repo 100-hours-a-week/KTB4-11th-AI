@@ -37,6 +37,8 @@ from portfolio_builder.tools.technicals import technicals_tool
 
 ModelFactory = Callable[..., BaseChatModel]
 
+JEV_CHOICE_MIN_CONFIDENCE_FALLBACK = 0.5
+
 
 def _deliver(
     sqs: Any,
@@ -124,12 +126,15 @@ def _classify(
         settings.llm_api_key,
         timeout=settings.jev_timeout,
     )
+    choice_min_confidence = settings.jev_choice_min_confidence
+    if choice_min_confidence is None:
+        choice_min_confidence = JEV_CHOICE_MIN_CONFIDENCE_FALLBACK
     return classify_additional_request(
         engine,
         ask,
         settings.jev_model,
         settings.jev_noul_threshold,
-        settings.jev_choice_min_confidence,
+        choice_min_confidence,
         request.additional_request,
         request.effective_interested,
         log,

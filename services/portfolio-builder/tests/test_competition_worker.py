@@ -7,6 +7,7 @@ import sqlalchemy as sa
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.competition import worker
+from portfolio_builder.competition.message import Request
 from portfolio_builder.competition.repository import (
     claim_job,
     generation_key,
@@ -44,13 +45,14 @@ class Recorder:
         self.events.append((event, logging.ERROR, fields))
 
 
-def _settings():
+def _settings(**overrides):
     return Settings(
         postgres_dsn="postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
         market_http_base_uri="http://market-http:8000",
         news_http_base_uri="http://news-http:8000",
         llm_api_key="k",
         llm_model="openai/gpt-5.5",
+        **overrides,
     )
 
 
@@ -64,6 +66,9 @@ def _message(body, receipt="receipt"):
 
 def _deps():
     return Mock(), Mock(), Recorder()
+
+
+REAL_CLASSIFY = worker._classify
 
 
 @pytest.fixture(autouse=True)
@@ -372,3 +377,56 @@ def test_classification_runs_once_at_creation_and_never_again(
     )
 
     assert classify_spy.call_count == 1
+
+
+def _ask_for_sector(confidence):
+    def fake_ask(base_uri, model, api_key, state, questions, timeout=20, client=None):
+        if "sector" in questions:
+            return {
+                "sector": {
+                    "type": "choice",
+                    "choice": "T1",
+                    "probabilities": {},
+                    "confidence": confidence,
+                }
+            }
+        return {
+            "relevant": {"type": "noul", "noul": 0.9},
+            "signals_relevant": {"type": "noul", "noul": 0.1},
+            "themes_relevant": {"type": "noul", "noul": 0.9},
+        }
+
+    return fake_ask
+
+
+def _theme_request():
+    return Request(
+        competition_id=10,
+        participant_id=1,
+        user_id=100,
+        risk_profile="성장형",
+        interested_theme_codes=[],
+        excluded_theme_codes=[],
+        additional_request="아무 테마나 담아줘",
+    )
+
+
+def test_classify_falls_back_to_a_safe_confidence_floor_when_unset(engine, monkeypatch):
+    monkeypatch.setattr(worker.jev, "ask", _ask_for_sector(0.6))
+    settings = _settings()
+    assert settings.jev_choice_min_confidence is None
+
+    form, _, classified = REAL_CLASSIFY(engine, settings, Recorder(), _theme_request())
+
+    assert classified
+    assert form["sector"] == "T1"
+
+
+def test_classify_uses_an_explicit_confidence_floor_when_set(engine, monkeypatch):
+    monkeypatch.setattr(worker.jev, "ask", _ask_for_sector(0.6))
+    settings = _settings(jev_choice_min_confidence=0.9)
+
+    form, _, classified = REAL_CLASSIFY(engine, settings, Recorder(), _theme_request())
+
+    assert classified
+    assert form["sector"] is None
