@@ -83,3 +83,13 @@ def test_disabled_retry_rejects_before_opening_database(monkeypatch):
     )
     with pytest.raises(ValueError, match="Enable disclosure indexing"):
         entry.main(["--retry-receipt", "first"])
+
+
+def test_disabled_job_ignores_missing_dsn_and_invalid_budgets(monkeypatch, capsys):
+    monkeypatch.setenv("DISCLOSURE_ENABLED", "false")
+    monkeypatch.delenv("DISCLOSURE_INDEXER_POSTGRES_DSN", raising=False)
+    monkeypatch.setenv("DISCLOSURE_INDEXER_CHUNK_BYTES", "64")
+    monkeypatch.setenv("DISCLOSURE_INDEXER_OVERLAP_BYTES", "300")
+    monkeypatch.setattr(entry.sa, "create_engine", lambda *a, **k: pytest.fail("opened database"))
+    entry.main([])
+    assert "disclosure_index_skipped" in capsys.readouterr().out

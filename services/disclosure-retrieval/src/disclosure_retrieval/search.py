@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Self
@@ -130,16 +131,35 @@ def search(
     with engine.connect() as conn:
         result = search_reports(conn, stock_code, selected, vector, params)
     if settings.inference_backend == "modal":
-        for attribute, count in (
-            ("latest_evidence", "latest_returned"),
-            ("historical_evidence", "history_returned"),
-        ):
-            candidates = getattr(result, attribute)
-            scores = inference.rerank(
-                body.query,
-                [{"chunk_id": row.chunk_id, "text": row.embedding_text} for row in candidates],
-                settings,
-            )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pending = []
+            for attribute, count in (
+                ("latest_evidence", "latest_returned"),
+                ("historical_evidence", "history_returned"),
+            ):
+                candidates = getattr(result, attribute)
+                if candidates:
+                    pending.append(
+                        (
+                            attribute,
+                            count,
+                            candidates,
+                            executor.submit(
+                                inference.rerank,
+                                body.query,
+                                [
+                                    {"chunk_id": row.chunk_id, "text": row.embedding_text}
+                                    for row in candidates
+                                ],
+                                settings,
+                            ),
+                        )
+                    )
+            scored = [
+                (attribute, count, candidates, future.result())
+                for attribute, count, candidates, future in pending
+            ]
+        for attribute, count, candidates, scores in scored:
             by_id = {row.chunk_id: row for row in candidates}
             ranked = [
                 replace(

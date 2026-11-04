@@ -296,10 +296,17 @@ container. Financial and section tools query PostgreSQL directly. Narrative sear
 over HTTPS for query embedding and reranking, returning DB connections before those calls.
 Neither collection nor retrieval generates answers. Backend polling may include an
 optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
-receiving this field does not change trading behavior.
+receiving this field does not change trading behavior. Invalid optional profiles are ignored
+and logged without rejecting account snapshots.
 
 Disclosure indexing and portfolio disclosure tools require `DISCLOSURE_ENABLED=true`.
 The default false mode preserves portfolio generation without model configuration and
 lets the indexer exit before DB/model work. Enabled mode validates all model settings
 and retains the mandatory successful disclosure search before portfolio submission.
 Deployment environment and SSM ownership stay with the Cloud configuration.
+
+The disclosure indexer records attempts when claiming work; expired final-attempt leases
+become dead-letter work without another inference call. Its systemd unit does not restart
+automatically. Direct disclosure reads accept as_of and select revisions visible at that
+cutoff. Both CPU disclosure services share stdlib inference transport and vector validation
+in ktb_core.embedding.inference; core still has no GPU or third-party dependency.
