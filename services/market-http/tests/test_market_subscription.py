@@ -591,3 +591,97 @@ def test_shutdown_does_not_log_recovery_from_late_subscription_acks(caplog):
 
     with caplog.at_level("INFO"):
         asyncio.run(scenario())
+
+
+def test_rotation_subscribes_new_connection_before_closing_old_one(caplog):
+    async def scenario():
+        valkey = FakeValkey(acknowledge=False)
+        subscription = MarketSubscription(valkey, rotate_after=0.01)
+        lifetime = subscription.run()
+        started = asyncio.create_task(lifetime.__aenter__())
+        while not valkey.pubsubs:
+            await asyncio.sleep(0)
+        old = valkey.pubsubs[0]
+        for channel in ("market:prices", "market:orderbooks"):
+            await old.acks.put({"type": "subscribe", "channel": channel})
+        await started
+        async with subscription.subscribe(["price:005930"]) as messages:
+            while len(valkey.pubsubs) < 2:
+                await asyncio.sleep(0.005)
+            new = valkey.pubsubs[1]
+            await new.subscribed.wait()
+            await old.messages.put(market_message("price:005930", "during rotation"))
+            event = await asyncio.wait_for(messages.get(), 1)
+            assert event is not None and json.loads(event.data)["value"] == "during rotation"
+            assert not old.closed
+            for channel in ("market:prices", "market:orderbooks"):
+                await new.acks.put({"type": "subscribe", "channel": channel})
+            await asyncio.wait_for(old.close_started.wait(), 1)
+            await new.messages.put(market_message("price:005930", "after rotation"))
+            event = await asyncio.wait_for(messages.get(), 1)
+            assert event is not None and json.loads(event.data)["value"] == "after rotation"
+            assert subscription._subscribers == {"price:005930": {messages}}
+        await lifetime.__aexit__(None, None, None)
+        assert all(pubsub.closed for pubsub in valkey.pubsubs)
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+    rotated = [r for r in caplog.records if r.message == "market_subscription_rotated"]
+    assert rotated[0].fields["previous_listener_id"] != rotated[0].fields["listener_id"]
+
+
+def test_failed_rotation_keeps_old_connection_and_retries(monkeypatch, caplog):
+    monkeypatch.setattr("market_http.market_subscription.ROTATION_TIMEOUT_SECONDS", 0.01)
+
+    async def scenario():
+        valkey = FakeValkey()
+        pubsub = valkey.pubsub
+        attempts = 0
+
+        def flaky_pubsub():
+            nonlocal attempts
+            attempts += 1
+            created = pubsub()
+            if attempts == 2:
+
+                async def fail_subscribe(*channels):
+                    raise ConnectionError("rotation failed")
+
+                created.subscribe = fail_subscribe
+            return created
+
+        valkey.pubsub = flaky_pubsub
+        subscription = MarketSubscription(valkey, rotate_after=0.01)
+        async with subscription.run():
+            async with subscription.subscribe(["price:005930"]) as messages:
+                while len(valkey.pubsubs) < 3 or not valkey.pubsubs[0].closed:
+                    await asyncio.sleep(0.005)
+                assert valkey.pubsubs[1].closed
+                await valkey.pubsubs[2].messages.put(market_message("price:005930", "retried"))
+                event = await asyncio.wait_for(messages.get(), 1)
+                assert event is not None
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+    failed = [r for r in caplog.records if r.message == "market_subscription_rotation_failed"]
+    assert failed[0].fields["error_type"] == "ConnectionError"
+
+
+def test_shutdown_during_rotation_closes_both_connections():
+    async def scenario():
+        valkey = FakeValkey(acknowledge=False)
+        subscription = MarketSubscription(valkey, rotate_after=0.01)
+        lifetime = subscription.run()
+        started = asyncio.create_task(lifetime.__aenter__())
+        while not valkey.pubsubs:
+            await asyncio.sleep(0)
+        for channel in ("market:prices", "market:orderbooks"):
+            await valkey.pubsubs[0].acks.put({"type": "subscribe", "channel": channel})
+        await started
+        while len(valkey.pubsubs) < 2:
+            await asyncio.sleep(0.005)
+        await valkey.pubsubs[1].subscribed.wait()
+        await lifetime.__aexit__(None, None, None)
+        assert all(pubsub.closed for pubsub in valkey.pubsubs)
+
+    asyncio.run(scenario())
