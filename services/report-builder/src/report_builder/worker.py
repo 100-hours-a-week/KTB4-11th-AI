@@ -31,7 +31,7 @@ def process_message(
         if not isinstance(body, str):
             raise ValueError("message body must be a string")
         request = Request.model_validate_json(body)
-        evidence = load_evidence(engine, request.portfolio_reason_ids)
+        evidence = load_evidence(engine, request.portfolio_reason_ids, request.participant_id)
         report = build_report(evidence, structured)
         auth.request(
             "POST",
