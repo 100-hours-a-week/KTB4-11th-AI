@@ -12,6 +12,7 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
         env_ignore_empty=True,
     )
+    enabled: bool = Field(default=False, validation_alias="DISCLOSURE_ENABLED")
     postgres_dsn: str
     max_attempts: int = Field(default=5, ge=1, le=5)
     embedding_base_uri: str = Field(default="", validation_alias="DISCLOSURE_EMBEDDING_BASE_URI")
@@ -56,6 +57,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def valid_inference(self):
+        if not self.enabled:
+            return self
         if self.inference_backend == "modal":
             if self.dimensions != 1024 or self.max_tokens != 16384:
                 raise ValueError("Modal requires 1024 dimensions and 16384 tokens")

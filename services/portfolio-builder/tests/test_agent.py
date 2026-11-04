@@ -320,3 +320,26 @@ def test_the_trace_is_kept_when_the_turn_limit_ends_the_run(engine, news_client)
 
     assert result.outcome == "max_turns"
     assert [e.text for e in result.trace] == ["thinking 0", "thinking 1"]
+
+
+def test_disclosure_disabled_allows_technical_only_portfolio_submission(engine, news_client):
+    log = Recorder()
+    result = run_agent(
+        model=ScriptedModel(
+            messages=iter(
+                [
+                    reply("", ("analyze_technicals", {})),
+                    reply("", ("submit_portfolio", VALID)),
+                ]
+            )
+        ),
+        tools=[analyze, submit_tool(engine, frozenset(), "m", news_client, log)],
+        system_prompt="sys",
+        briefing="brief",
+        max_turns=3,
+        log=log,
+        disclosure_enabled=False,
+    )
+    assert result.outcome == "saved"
+    assert _count(engine) == 1
+    assert "disclosure_search_summary" not in log.names()

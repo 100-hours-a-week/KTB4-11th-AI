@@ -9,7 +9,8 @@ Collection PR #441 is merged into dev. This branch uses the current dev conventi
 for Python, CI, packaging and service configuration. GPU deployment belongs to #430.
 The root checkout and running services are not changed.
 
-Portfolio-builder calls the `services/disclosure-retrieval` Python package directly.
+Disclosure processing is disabled by default through `DISCLOSURE_ENABLED=false`.
+Portfolio-builder calls the `services/disclosure-retrieval` Python package directly when enabled.
 Its tools receive the builder's SQLAlchemy engine and component model settings.
 There is no separate retrieval HTTP server, controller, router, client, port,
 healthcheck, console command, or Docker container. The retrieval package declares no FastAPI
@@ -52,7 +53,9 @@ is unchanged.
 4. Remove `portfolio_builder/disclosures.py` and `retrieval_client.py`. Reuse the
    retrieval code's typed `SearchResult` in the submission hook through Pydantic TypeAdapter;
    its three result lists are required, so malformed `{}` cannot count as a search.
-   The existing successful-narrative-search requirement before submission remains.
+   When enabled, a successful narrative search is required before submission.
+   When disabled, disclosure tools, their prompt instructions and their submission
+   middleware are absent; technical analysis remains required.
 5. Receive an optional investment profile in the existing backend polling response.
    Do not add an endpoint, polling loop, model call, or trading rule for this field.
 
@@ -64,6 +67,39 @@ Model overrides must match the GPU serving checkpoint and identity. Changing a C
 environment variable does not deploy different GPU weights. Incompatible serving
 identities are rejected. Changing embedding metadata creates a different index space;
 old vectors are not silently reused.
+
+## Activation and deployment ownership
+
+`DISCLOSURE_ENABLED` is shared by portfolio-builder and disclosure-indexer and defaults
+to false in both Compose configurations and service settings. An existing dev environment
+with no disclosure model settings keeps the previous portfolio-generation path. The
+indexer logs `disclosure_index_skipped` and exits before opening a DB connection or
+calling inference. OpenDART collection continues independently.
+
+When the flag is true, missing or inconsistent model settings remain startup errors.
+There is no fallback to the news model, no fabricated disclosure evidence, and no bypass
+of the enabled search requirement. Both new portfolio creation and enabled indexing
+validate their model configuration before running. Re-explaining an existing portfolio
+does not need a disclosure model.
+
+Before enabling Modal inference, the deployment environment must contain:
+
+| Key | Required value |
+| --- | --- |
+| DISCLOSURE_ENABLED | true |
+| DISCLOSURE_INFERENCE_BACKEND | modal |
+| DISCLOSURE_EMBEDDING_DIMENSIONS | 1024 |
+| DISCLOSURE_EMBEDDING_MAX_TOKENS | 16384 |
+| DISCLOSURE_MODAL_DOCUMENT_URL | Deployed authenticated document endpoint |
+| DISCLOSURE_MODAL_QUERY_URL | Deployed authenticated query endpoint |
+| DISCLOSURE_MODAL_RERANK_URL | Deployed authenticated reranker endpoint |
+| DISCLOSURE_MODAL_KEY / DISCLOSURE_MODAL_SECRET | Workspace proxy credentials |
+
+The existing CD SSM renderer materializes keys named in `DEV_AI_ENV`. The Cloud-owned
+environment/SSM configuration must include the activation keys and credential references;
+AI code owns validation and Compose forwarding. This PR changes neither Cloud resources
+nor repository variables. Deploy and verify #430 endpoints before setting the flag true.
+The false default allows #432 to be deployed before model serving is configured.
 
 ## Backend polling contract
 
@@ -101,9 +137,11 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 
 ## Verification
 
-- Added tests failed first for missing profile parsing, direct-read methods, and tools.
+- Tests reproduce default deployment without disclosure model settings, reject incomplete
+  enabled configuration, and verify a technical-only portfolio can save when disabled.
+  Existing enabled-mode tests still require successful disclosure search.
 - Final full suite against the disposable `ktb_disclosure432_test` PostgreSQL database:
-  **1,451 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+  **1,456 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
   account for the skips.
 - The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail
   changes. Collection revisions 0013–0015 are unchanged; the only index revision is 0016.

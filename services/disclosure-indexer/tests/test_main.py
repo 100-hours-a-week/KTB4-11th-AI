@@ -30,3 +30,33 @@ def test_indexer_reads_stored_documents_without_dart_credentials(monkeypatch, ca
     assert end["indexed"] == result
     assert "collected" not in end
     assert end["outcome"] == ("error" if failed else "ok")
+
+
+def test_default_deployment_without_model_config_skips_indexing(monkeypatch, capsys):
+    monkeypatch.delenv("DISCLOSURE_ENABLED", raising=False)
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_BASE_URI")
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_MODEL")
+    monkeypatch.setenv("DISCLOSURE_INDEXER_POSTGRES_DSN", "sqlite://")
+    monkeypatch.setattr(
+        entry.sa, "create_engine", lambda *args, **kwargs: pytest.fail("disabled indexer opened DB")
+    )
+    monkeypatch.setattr(entry, "index_documents", lambda *args: pytest.fail("disabled indexer ran"))
+    entry.main()
+    events = [
+        json.loads(line) for line in capsys.readouterr().out.splitlines() if line.startswith("{")
+    ]
+    assert any(event["message"] == "disclosure_index_skipped" for event in events)
+
+
+def test_enabled_indexing_with_missing_model_config_fails(monkeypatch):
+    from pydantic import ValidationError
+
+    monkeypatch.setenv("DISCLOSURE_ENABLED", "true")
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_BASE_URI")
+    monkeypatch.delenv("DISCLOSURE_EMBEDDING_MODEL")
+    monkeypatch.setenv("DISCLOSURE_INDEXER_POSTGRES_DSN", "sqlite://")
+    monkeypatch.setattr(
+        entry, "index_documents", lambda *args: pytest.fail("indexing ran without model config")
+    )
+    with pytest.raises(ValidationError):
+        entry.main()

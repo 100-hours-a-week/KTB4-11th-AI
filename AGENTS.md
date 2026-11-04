@@ -297,3 +297,9 @@ over HTTPS for query embedding and reranking, returning DB connections before th
 Neither collection nor retrieval generates answers. Backend polling may include an
 optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
 receiving this field does not change trading behavior.
+
+Disclosure indexing and portfolio disclosure tools require `DISCLOSURE_ENABLED=true`.
+The default false mode preserves portfolio generation without model configuration and
+lets the indexer exit before DB/model work. Enabled mode validates all model settings
+and retains the mandatory successful disclosure search before portfolio submission.
+Deployment environment and SSM ownership stay with the Cloud configuration.
