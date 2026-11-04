@@ -24,21 +24,24 @@ WITH ranked AS (
         r.period_end, r.published_date, r.status, i.id AS index_id,
         CASE
             WHEN i.id IS NULL THEN 'pending'
-            WHEN i.status = 'empty' THEN 'empty'
-            WHEN i.model = :model AND i.dimensions = :dimensions THEN 'ready'
+            WHEN i.status = 'empty' AND i.signature = :signature THEN 'empty'
+            WHEN i.model = :model AND i.dimensions = :dimensions
+                AND i.signature = :signature THEN 'ready'
             ELSE 'other_space'
         END AS index_state
     FROM ranked r
     LEFT JOIN LATERAL (
-        SELECT idx.id, idx.model, idx.dimensions, idx.status
+        SELECT idx.id, idx.model, idx.dimensions, idx.status, idx.signature
         FROM disclosure_indexes idx
         JOIN disclosure_documents d ON d.id = idx.document_id
         WHERE d.receipt_id = r.receipt_id
             AND ((idx.active AND idx.status = 'ready')
-                 OR (idx.status = 'empty' AND idx.model = :model AND idx.dimensions = :dimensions))
-            AND d.source_hash = (SELECT v.source_hash FROM disclosure_documents v
+                 OR (idx.status = 'empty' AND idx.signature = :signature
+                     AND idx.model = :model AND idx.dimensions = :dimensions))
+            AND d.id = (SELECT v.id FROM disclosure_documents v
                         WHERE v.receipt_id = r.receipt_id ORDER BY v.id DESC LIMIT 1)
-        ORDER BY (idx.model = :model AND idx.dimensions = :dimensions) DESC,
+        ORDER BY (idx.signature = :signature AND idx.model = :model
+                  AND idx.dimensions = :dimensions) DESC, idx.active DESC,
                  d.id DESC, idx.id DESC
         LIMIT 1
     ) i ON true
@@ -101,6 +104,7 @@ class SearchParams:
     model: str
     dimensions: int
     max_distance: float | None
+    signature: str
     detail_type: str | None = None
 
 
@@ -162,6 +166,7 @@ def report_rows(
     as_of: date,
     model: str,
     dimensions: int,
+    signature: str,
     detail_type: str | None = None,
 ) -> list[dict[str, object]]:
     rows = conn.execute(
@@ -174,6 +179,7 @@ def report_rows(
             "as_of": as_of,
             "model": model,
             "dimensions": dimensions,
+            "signature": signature,
             "limit": limit,
             "detail_type": detail_type,
         },
@@ -226,6 +232,7 @@ def search_reports(
         "as_of": params.as_of,
         "model": params.model,
         "dimensions": params.dimensions,
+        "signature": params.signature,
         "detail_type": params.detail_type,
         "vector": json.dumps(vector),
         "max_distance": params.max_distance,
@@ -263,6 +270,7 @@ def search_counts(
         "as_of": params.as_of,
         "model": params.model,
         "dimensions": params.dimensions,
+        "signature": params.signature,
         "detail_type": params.detail_type,
         "latest": [r["receipt_id"] for r in selected],
         "start": params.history_start or date.min,

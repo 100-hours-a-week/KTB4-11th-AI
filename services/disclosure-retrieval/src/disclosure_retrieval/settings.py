@@ -1,6 +1,6 @@
 from typing import Literal
 
-from ktb_core.embedding.config import embedding_space
+from ktb_core.embedding.config import disclosure_index_signature, embedding_space
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -40,6 +40,23 @@ class Settings(BaseSettings):
     modal_secret: SecretStr | None = Field(default=None, validation_alias="DISCLOSURE_MODAL_SECRET")
     modal_query_url: str = Field(default="", validation_alias="DISCLOSURE_MODAL_QUERY_URL")
     modal_rerank_url: str = Field(default="", validation_alias="DISCLOSURE_MODAL_RERANK_URL")
+
+    chunk_bytes: int = Field(
+        default=2400, ge=64, le=10000, validation_alias="DISCLOSURE_INDEXER_CHUNK_BYTES"
+    )
+    overlap_bytes: int = Field(
+        default=300, ge=0, validation_alias="DISCLOSURE_INDEXER_OVERLAP_BYTES"
+    )
+    input_bytes: int = Field(
+        default=12000, ge=256, le=16384, validation_alias="DISCLOSURE_INDEXER_INPUT_BYTES"
+    )
+    context_bytes: int = Field(
+        default=12000, ge=256, le=15000, validation_alias="DISCLOSURE_INDEXER_CONTEXT_BYTES"
+    )
+
+    @property
+    def index_signature(self) -> str:
+        return disclosure_index_signature(self)
 
     @property
     def index_model(self) -> str:

@@ -80,6 +80,24 @@ It creates no vectors, makes no inference call, and is not reported as ready. Re
 returns its `empty` state and no narrative candidates. Repeating the job does not retry
 these documents. Migration 0016 includes this state; collection revisions are unchanged.
 
+Index selection uses the exact signature computed by the same core function in the
+indexer and retrieval settings. It includes chunk/input/context budgets, query prefix,
+token budget and the model identity. Both Compose files forward the same budget settings
+to indexer and builder. The signature now includes `max_tokens`; older signatures require
+indexing before retrieval uses them. A same-model index with another signature is not
+searchable. An empty index from another signature cannot hide recovered ready evidence;
+a current-signature empty index still reports an intentional empty result.
+
+Only the newest parsed document ID for a receipt is eligible. Matching original bytes
+alone no longer permits an older parser's output after a parser upgrade. Until the newest
+parsed document is indexed, retrieval reports pending and makes no inference call.
+
+For A → B → A configuration rollback, the job reactivates the existing ready A index
+without regenerating vectors. The activation and deactivation are one transaction under
+row locks. An interrupted activation rolls back both changes and retains the ready vectors
+for retry. PostgreSQL tests cover model, chunk budget, query prefix, token budget and Modal
+context-budget rollback, including interruption with inference forbidden.
+
 Financial reads select the latest stored filing in each company/year/report-type/period
 family before filtering accounts and consolidation scope. The family normalizes legacy
 periodic detail codes. An unavailable, failed, or not-yet-parsed latest filing does not
@@ -175,7 +193,7 @@ or position sizing. The text is not inserted into a model prompt or logged by th
   enabled configuration, and verify a technical-only portfolio can save when disabled.
   Existing enabled-mode tests still require successful disclosure search.
 - Final accuracy follow-up suite against disposable `ktb_disclosure_accuracy_test` PostgreSQL:
-  **1,472 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
+  **1,481 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
   upgraded in this test DB to verify the explicit empty state. Unconfigured optional integrations
   account for the skips.
 - The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail

@@ -422,7 +422,15 @@ def test_table_only_modal_index_is_empty_and_search_reports_it_without_gpu(
     with report_engine.connect() as conn:
         state = conn.execute(sa.text("SELECT status,active FROM disclosure_indexes")).one()
         assert state.status == "empty" and state.active is False
-        reports = report_rows(conn, "990001", 3, date(2026, 1, 1), settings.index_model, 1024)
+        reports = report_rows(
+            conn,
+            "990001",
+            3,
+            date(2026, 1, 1),
+            settings.index_model,
+            1024,
+            settings.index_signature,
+        )
         assert reports[0]["index_state"] == "empty"
     retrieval = RetrievalSettings(
         DISCLOSURE_INFERENCE_BACKEND="modal",
@@ -503,3 +511,130 @@ def test_explicit_retry_recovers_dead_letter_once_without_duplicate_chunks(
         assert conn.execute(sa.text("SELECT count(*) FROM disclosure_chunks")).scalar_one() == count
     with report_engine.begin() as conn:
         conn.execute(sa.text("DELETE FROM disclosures WHERE receipt_id='unrelated'"))
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"embedding_model": "model-b"},
+        {"chunk_bytes": 1200},
+        {"max_tokens": 8192},
+        {"query_instruction": "different prefix"},
+    ],
+)
+def test_model_rollback_reactivates_existing_vectors_without_inference(
+    report_engine, monkeypatch, changed
+):
+    from datetime import date
+
+    from disclosure_retrieval.search import disclosures
+    from disclosure_retrieval.settings import Settings as RetrievalSettings
+
+    calls = []
+
+    def embed(texts, *args):
+        calls.append(texts)
+        return [[1.0] + [0.0] * 1999 for _ in texts]
+
+    monkeypatch.setattr("disclosure_indexer.index.embed_vectors", embed)
+    a = _settings()
+    b = a.model_copy(update=changed)
+    assert index_documents(report_engine, a)["ready"] == 1
+    assert index_documents(report_engine, b)["ready"] == 1
+    assert len(calls) == 2
+    settings = RetrievalSettings(
+        DISCLOSURE_EMBEDDING_MODEL="test-model", DISCLOSURE_EMBEDDING_BASE_URI="http://model/v1"
+    )
+    rows = disclosures(report_engine, "990001", settings, as_of=date(2026, 1, 1))
+    assert rows[0].index_state == "other_space"
+    result = index_documents(report_engine, a)
+    assert result["ready"] == 1
+    assert len(calls) == 2
+    settings = RetrievalSettings(
+        DISCLOSURE_EMBEDDING_MODEL="test-model", DISCLOSURE_EMBEDDING_BASE_URI="http://model/v1"
+    )
+    rows = disclosures(report_engine, "990001", settings, as_of=date(2026, 1, 1))
+    assert rows[0].index_state == "ready"
+    with report_engine.connect() as conn:
+        assert conn.execute(sa.text("SELECT count(*) FROM disclosure_indexes")).scalar_one() == 2
+        assert (
+            conn.execute(sa.text("SELECT model FROM disclosure_indexes WHERE active")).scalar_one()
+            == "test-model"
+        )
+
+
+def test_interrupted_reactivation_keeps_ready_vectors_for_retry(report_engine, monkeypatch):
+    monkeypatch.setattr(
+        "disclosure_indexer.index.embed_vectors",
+        lambda texts, *a: [[1.0] + [0.0] * 1999 for _ in texts],
+    )
+    a = _settings()
+    b = a.model_copy(update={"embedding_model": "model-b"})
+    index_documents(report_engine, a)
+    index_documents(report_engine, b)
+    monkeypatch.setattr(
+        "disclosure_indexer.index.embed_vectors",
+        lambda *a: pytest.fail("rollback must not call inference"),
+    )
+
+    def interrupt(conn, cursor, statement, parameters, context, executemany):
+        if statement.startswith("UPDATE disclosure_indexes SET active=true"):
+            raise SystemExit("interrupted")
+
+    sa.event.listen(report_engine, "after_cursor_execute", interrupt)
+    try:
+        with pytest.raises(SystemExit, match="interrupted"):
+            index_documents(report_engine, a)
+    finally:
+        sa.event.remove(report_engine, "after_cursor_execute", interrupt)
+    with report_engine.connect() as conn:
+        rows = conn.execute(
+            sa.text("SELECT model,status,active FROM disclosure_indexes ORDER BY id")
+        ).all()
+        assert rows == [("test-model", "ready", False), ("model-b", "ready", True)]
+    assert index_documents(report_engine, a)["ready"] == 1
+
+
+def test_modal_context_rollback_restores_existing_vectors(report_engine, monkeypatch):
+    from datetime import date
+
+    from disclosure_retrieval.search import disclosures
+    from disclosure_retrieval.settings import Settings as RetrievalSettings
+
+    with report_engine.begin() as conn:
+        docs = conn.execute(sa.text("SELECT documents FROM disclosure_documents")).scalar_one()
+        docs[0]["sections"][0]["content_kind"] = "narrative"
+        conn.execute(
+            sa.text("UPDATE disclosure_documents SET documents=CAST(:docs AS jsonb)"),
+            {"docs": json.dumps(docs)},
+        )
+    calls = []
+
+    def embed(groups, settings):
+        calls.append(groups)
+        return {c["chunk_id"]: [1.0] + [0.0] * 1023 for g in groups for c in g["chunks"]}
+
+    monkeypatch.setattr("disclosure_indexer.index.embed_documents", embed)
+    shared = dict(
+        DISCLOSURE_INFERENCE_BACKEND="modal",
+        DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
+        DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,
+        DISCLOSURE_MODAL_KEY="key",
+        DISCLOSURE_MODAL_SECRET="secret",
+    )
+    a = _settings(**shared, DISCLOSURE_MODAL_DOCUMENT_URL="https://document.modal.run")
+    b = a.model_copy(update={"context_bytes": 11000})
+    assert index_documents(report_engine, a)["ready"] == 1
+    assert index_documents(report_engine, b)["ready"] == 1
+    assert index_documents(report_engine, a)["ready"] == 1
+    assert len(calls) == 2
+    retrieval = RetrievalSettings(
+        **shared,
+        DISCLOSURE_MODAL_QUERY_URL="https://query.modal.run",
+        DISCLOSURE_MODAL_RERANK_URL="https://rerank.modal.run",
+    )
+    assert a.index_signature == retrieval.index_signature
+    assert (
+        disclosures(report_engine, "990001", retrieval, as_of=date(2026, 1, 1))[0].index_state
+        == "ready"
+    )

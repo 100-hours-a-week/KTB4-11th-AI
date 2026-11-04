@@ -60,6 +60,7 @@ class SearchRequest(BaseModel):
             detail_type=self.detail_type,
             model=settings.index_model,
             dimensions=settings.dimensions,
+            signature=settings.index_signature,
             max_distance=self.max_distance
             if self.max_distance is not None
             else settings.max_distance,
@@ -80,7 +81,13 @@ def disclosures(
     cutoff = as_of or datetime.now(ZoneInfo("Asia/Seoul")).date()
     with engine.connect() as conn:
         rows = report_rows(
-            conn, stock_code, limit, cutoff, settings.index_model, settings.dimensions
+            conn,
+            stock_code,
+            limit,
+            cutoff,
+            settings.index_model,
+            settings.dimensions,
+            settings.index_signature,
         )
     return [to_report(row) for row in rows]
 
@@ -99,6 +106,7 @@ def search(
             body.as_of,
             settings.index_model,
             settings.dimensions,
+            settings.index_signature,
             body.detail_type,
         )
         counts = search_counts(conn, stock_code, selected, params) if selected else (0, 0)
