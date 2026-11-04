@@ -1,6 +1,6 @@
 import hashlib
 from dataclasses import dataclass, fields
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -125,9 +125,13 @@ def claim_job(
         if inserted is not None:
             return Claim(mine=True, portfolio_id=None)
 
+        stale_before = sa.func.now() - timedelta(seconds=stale_after_seconds)
         row = (
             conn.execute(
-                sa.select(competition_jobs)
+                sa.select(
+                    competition_jobs,
+                    (competition_jobs.c.started_at < stale_before).label("is_stale"),
+                )
                 .where(competition_jobs.c.generation_key == key)
                 .with_for_update()
             )
@@ -140,9 +144,7 @@ def claim_job(
                 return None
             return Claim(mine=False, portfolio_id=row["portfolio_id"])
 
-        is_stale = datetime.now(timezone.utc) - row["started_at"] > timedelta(
-            seconds=stale_after_seconds
-        )
+        is_stale = row["is_stale"]
         reclaimable = (
             row["status"] == "failed" or (row["status"] == "running" and is_stale)
         ) and row["attempts"] < max_attempts
