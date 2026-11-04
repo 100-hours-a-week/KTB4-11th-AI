@@ -175,3 +175,35 @@ def test_ndcg_uses_all_ideal_top_five_even_for_short_or_duplicate_results(ids, e
 
     question = {"evidence_units": ["a", "b"], "relevance": {"a": 3, "b": 3}}
     assert retrieval_metrics(question, ids)["nDCG@5"] == pytest.approx(expected)
+
+
+def test_duplicate_results_do_not_promote_sixth_place_into_top_five():
+    from benchmark import retrieval_metrics
+
+    question = {"evidence_units": ["gold"], "relevance": {"gold": 3}}
+    assert retrieval_metrics(question, ["x", "x", "y", "z", "w", "gold"]) == {
+        "recall@5": 0,
+        "MRR": 0,
+        "nDCG@5": 0,
+    }
+    scores = retrieval_metrics(question, ["x", "x", "gold"])
+    assert scores["MRR"] == pytest.approx(1 / 3)
+    assert scores["nDCG@5"] == pytest.approx(1 / math.log2(4))
+
+
+@pytest.mark.parametrize(
+    ("actual", "reference", "expected"),
+    [([1, 0], [1, 100], 1 / math.sqrt(10001)), ([2, 0], [10, 0], 1)],
+)
+def test_query_parity_uses_cosine(actual, reference, expected):
+    from benchmark import query_cosine
+
+    assert query_cosine(actual, reference) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("bad", [[0, 0], [float("nan"), 1], [float("inf"), 1], [1]])
+def test_query_parity_rejects_invalid_vectors(bad):
+    from benchmark import query_cosine
+
+    with pytest.raises(ValueError):
+        query_cosine(bad, [1, 0])

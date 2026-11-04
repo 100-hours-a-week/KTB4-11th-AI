@@ -10,10 +10,15 @@ from pathlib import Path
 
 
 def retrieval_metrics(question: dict, ids: list[str]) -> dict[str, float]:
-    ranked = list(dict.fromkeys(ids))[:5]
+    ranked = ids[:5]
     gold = set(question["evidence_units"])
     relevance = question["relevance"]
-    dcg = sum((2 ** relevance.get(cid, 0) - 1) / math.log2(i + 2) for i, cid in enumerate(ranked))
+    seen = set()
+    dcg = 0.0
+    for i, cid in enumerate(ranked):
+        if cid not in seen:
+            dcg += (2 ** relevance.get(cid, 0) - 1) / math.log2(i + 2)
+            seen.add(cid)
     ideal = sum(
         (2**value - 1) / math.log2(i + 2)
         for i, value in enumerate(sorted(relevance.values(), reverse=True)[:5])
@@ -23,6 +28,19 @@ def retrieval_metrics(question: dict, ids: list[str]) -> dict[str, float]:
         "MRR": next((1 / (i + 1) for i, cid in enumerate(ranked) if cid in gold), 0),
         "nDCG@5": dcg / ideal if ideal else 0,
     }
+
+
+def query_cosine(actual, reference) -> float:
+    import numpy as np
+
+    a = np.asarray(actual, dtype=np.float64)
+    b = np.asarray(reference, dtype=np.float64)
+    if a.ndim != 1 or a.shape != b.shape or not np.isfinite(a).all() or not np.isfinite(b).all():
+        raise ValueError("Invalid query compatibility vectors")
+    a_norm, b_norm = np.linalg.norm(a), np.linalg.norm(b)
+    if not (0 < a_norm < math.inf and 0 < b_norm < math.inf):
+        raise ValueError("Query compatibility requires finite nonzero norms")
+    return float(np.clip((a / a_norm) @ (b / b_norm), -1, 1))
 
 
 def main() -> None:
@@ -80,7 +98,7 @@ def main() -> None:
         "document_vectors_sha256": hashlib.sha256(vectors.tobytes()).hexdigest(),
         "embedding": embedding,
         "vectors_file_sha256": vectors_sha256,
-        "metrics_version": "retrieval-v2-ideal-top5",
+        "metrics_version": "retrieval-v3-ranked-top5-cosine",
         "reranker": model_identity("reranker"),
         "policy": "calibration-narrative-positive-full-report-metadata-v1",
         "candidate_count": 50,
@@ -172,7 +190,7 @@ def main() -> None:
             if response["identity"] != payload["identity"]:
                 raise ValueError("Query identity mismatch")
             query = np.array(response["vector"], dtype=np.float32)
-            parity = float(query @ queries[qi])
+            parity = query_cosine(query, queries[qi])
             if parity < 0.999:
                 raise ValueError(f"Query compatibility tolerance failed: {question['id']}")
             embedding_seconds = time.perf_counter() - embedding_start

@@ -319,3 +319,16 @@ and [measurement inputs, raw timings and verification archive](https://drive.goo
   compatibility job; its green summary is not evidence of a completed 3.15 test run.
 - Keep #430 based on #432 while both are open. After #432 merges into dev, retarget #430
   to dev and rerun CI. This follow-up performs no merge, deployment or paid inference.
+
+## 11. Index rollback and metric correction
+
+The serving branch includes #432's exact-signature and latest-parser document selection,
+plus atomic reuse of ready vectors on configuration rollback. Another configuration's
+empty index cannot hide restored evidence.
+
+Query parity now divides by both vector norms and rejects invalid shape, nonfinite or
+zero-norm vectors. Top-5 metrics preserve the original five ranked slots. Repeated IDs
+contribute relevance once without shifting later documents forward; a sixth-place
+answer cannot enter Top-5 by deduplication. The metric version is now
+`retrieval-v3-ranked-top5-cosine`, preventing resume of earlier results. No historical
+quality score was recomputed in this code-review follow-up.

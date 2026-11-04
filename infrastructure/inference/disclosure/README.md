@@ -235,8 +235,10 @@ calls. Do not fill missing producer metadata from today's model settings. Recove
 original producer record independently or regenerate the cache with recorded provenance.
 
 nDCG@5 uses the five highest relevance labels for ideal DCG even when fewer than five
-results are returned. Duplicate result IDs count once. Run identity records
-`metrics_version=retrieval-v2-ideal-top5` and the cache-file hash, preventing resume into
+results are returned. Only the original first five slots are evaluated. Duplicate IDs contribute once without
+compressing ranks or promoting a sixth-place result into Top-5. Query-vector parity uses normalized cosine with shape, finite-value and nonzero-norm
+checks; an unnormalized dot product is not a compatibility score. Run identity records
+`metrics_version=retrieval-v3-ranked-top5-cosine` and the cache-file hash, preventing resume into
 results produced by the previous metric or a different cache. Select a fresh output
 directory when either changes. Earlier cached-corpus accuracy results are historical,
 unaudited measurements pending provenance recovery and recomputation; they do not validate
