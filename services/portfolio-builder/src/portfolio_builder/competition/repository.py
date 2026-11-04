@@ -44,14 +44,14 @@ class ParticipantSettings:
 ClassifyFn = Callable[[Request], tuple[Any, str | None, bool]]
 
 
-def _no_classification(request: Request) -> tuple[Any, str | None, bool]:
-    return None, None, False
+def _unclassified(request: Request) -> tuple[Any, str | None, bool]:
+    return request.additional_request, None, False
 
 
 def store_settings(
     engine: sa.Engine,
     request: Request,
-    classify: ClassifyFn = _no_classification,
+    classify: ClassifyFn = _unclassified,
 ) -> tuple[ParticipantSettings, list[str]]:
     with engine.begin() as conn:
         inserted = conn.execute(

@@ -63,12 +63,21 @@ def test_an_identical_later_message_reports_no_difference(engine, _request):
     assert not changed
 
 
-def test_without_an_injected_classifier_the_row_is_stored_unclassified(engine, _request):
+def test_without_an_injected_classifier_the_raw_text_becomes_the_canonical_form(engine, _request):
     settings, _ = store_settings(engine, _request())
 
-    assert settings.canonical_form is None
+    assert settings.canonical_form == "원문"
     assert settings.canonical_version is None
     assert not settings.classified
+
+
+def test_without_an_injected_classifier_different_prompts_still_produce_different_keys(
+    engine, _request
+):
+    a, _ = store_settings(engine, _request(participant_id=1, additional_request="반도체"))
+    b, _ = store_settings(engine, _request(participant_id=2, additional_request="2차전지"))
+
+    assert generation_key(a, None, MODEL) != generation_key(b, None, MODEL)
 
 
 def test_classification_happens_only_on_the_message_that_creates_the_row(engine, _request):
