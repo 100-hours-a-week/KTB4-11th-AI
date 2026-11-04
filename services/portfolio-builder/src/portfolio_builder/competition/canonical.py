@@ -120,25 +120,19 @@ class CanonicalisationError(Exception):
 
 @dataclass(frozen=True)
 class CanonicalForm:
-    relevant: bool
-    signals_relevant: bool
-    themes_relevant: bool
     signals: tuple[str, ...] = ()
     theme_codes: tuple[str, ...] = ()
     sector: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "relevant": self.relevant,
-            "signals_relevant": self.signals_relevant,
-            "themes_relevant": self.themes_relevant,
             "signals": sorted(self.signals),
             "theme_codes": sorted(self.theme_codes),
             "sector": self.sector,
         }
 
 
-EMPTY_CANONICAL_FORM = CanonicalForm(relevant=False, signals_relevant=False, themes_relevant=False)
+EMPTY_CANONICAL_FORM = CanonicalForm()
 
 
 def _noul(instructions: str) -> dict[str, Any]:
@@ -248,14 +242,7 @@ def _classify_text(
         else ((), None)
     )
 
-    return CanonicalForm(
-        relevant=True,
-        signals_relevant=signals_relevant,
-        themes_relevant=themes_relevant,
-        signals=signals,
-        theme_codes=theme_codes,
-        sector=sector,
-    )
+    return CanonicalForm(signals=signals, theme_codes=theme_codes, sector=sector)
 
 
 def classify_additional_request(

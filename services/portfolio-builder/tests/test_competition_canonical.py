@@ -99,10 +99,36 @@ def test_an_open_gate_with_both_detail_gates_closed_costs_one_call(engine):
     form, _, _ = _classify(engine, ask)
 
     assert len(ask.calls) == 1
-    assert form["relevant"] is True
     assert form["signals"] == []
     assert form["theme_codes"] == []
     assert form["sector"] is None
+
+
+def test_a_closed_signals_gate_and_an_open_gate_matching_nothing_share_identity(engine):
+    closed_ask = FakeAsk(
+        {
+            "relevant": _noul(0.9),
+            "signals_relevant": _noul(0.1),
+            "themes_relevant": _noul(0.1),
+        }
+    )
+    open_answers = {
+        "relevant": _noul(0.9),
+        "signals_relevant": _noul(0.9),
+        "themes_relevant": _noul(0.1),
+    }
+    for name in SIGNAL_NAMES:
+        open_answers[name] = _noul(0.1)
+    open_ask = FakeAsk(open_answers)
+
+    closed_form, version, _ = _classify(engine, closed_ask, text="아무 말")
+    open_form, _, _ = _classify(engine, open_ask, text="또 다른 말")
+
+    assert closed_form == open_form
+
+    a = _settings(canonical_form=closed_form, canonical_version=version)
+    b = _settings(canonical_form=open_form, canonical_version=version)
+    assert generation_key(a, None, "openrouter/m") == generation_key(b, None, "openrouter/m")
 
 
 def test_an_open_signals_gate_asks_all_nine_signals_and_thresholds_each(engine):
