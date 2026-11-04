@@ -5,55 +5,47 @@ import httpx
 import pytest
 from harness.contracts import DailyBar, NewsArticle, UnsupportedCapability
 from harness.information import (
+    DISCLOSURES,
     FEATURES,
     MARKET,
     NEWS,
     HttpInformationProvider,
     NoInformation,
+    openapi_entry,
     technicals,
 )
 from harness.memory import InMemoryInformationProvider
 from ktb_core.krx import KST
 
-ENDPOINTS = {MARKET: "http://market/", NEWS: "http://news", FEATURES: "http://features"}
+ENDPOINTS = {
+    MARKET: "http://market/",
+    NEWS: "http://news",
+    FEATURES: "http://features",
+    DISCLOSURES: "http://disclosures",
+}
+OPERATIONS = {
+    "market": "get_daily_bars",
+    "news": "search_news",
+    "features": "get_technicals",
+    "disclosures": "search_disclosures",
+}
 
 
 def bar(day, close, volume=1):
     return DailyBar(day, close, close, close, close, volume)
 
 
-def test_raw_and_enriched_differ_only_in_capabilities_and_tools():
-    raw = HttpInformationProvider("raw", ENDPOINTS, None, "1")
-    enriched = HttpInformationProvider("enriched", ENDPOINTS, None, "1")
-    assert raw.capabilities == {MARKET, NEWS}
-    assert enriched.capabilities == {MARKET, NEWS, FEATURES}
-    assert raw.manifest["tools"] == ["get_daily_bars", "search_news"]
-    assert enriched.manifest["tools"] == ["get_daily_bars", "search_news", "get_technicals"]
-    assert raw.manifest["endpoints"] == {MARKET: "http://market", NEWS: "http://news"}
-
-
-def test_unknown_variant_or_missing_endpoint_is_rejected():
-    with pytest.raises(ValueError):
-        HttpInformationProvider("graph", ENDPOINTS, None, "1")
-    with pytest.raises(ValueError):
-        HttpInformationProvider("enriched", {MARKET: "http://m", NEWS: "http://n"}, None, "1")
-
-
-def test_tools_point_at_the_pit_endpoints():
-    session = HttpInformationProvider("enriched", ENDPOINTS, None, "1").open(datetime.now(UTC))
-    urls = {tool.name: tool.url for tool in session.tools}
-    assert urls["get_daily_bars"] == "http://market/bars/${code}?timeframe=1d&limit=${limit}"
-    assert urls["search_news"].startswith("http://news/news/articles?days=${days}")
-    assert urls["get_technicals"] == "http://features/technicals/${code}"
-    assert all(set(tool.required) <= set(tool.args) for tool in session.tools)
-
-
-def test_http_session_reads_pit_servers_and_hides_unsupported_capabilities():
-    seen = []
-
+def server(seen=None, servers=True):
     def handler(request):
-        seen.append(str(request.url))
-        if request.url.host == "market":
+        if seen is not None:
+            seen.append(str(request.url))
+        host = request.url.host
+        if request.url.path == "/openapi.json":
+            spec = {"paths": {"/x": {"get": {"operationId": OPERATIONS[host]}}}}
+            if servers:
+                spec["servers"] = [{"url": f"http://{host}"}]
+            return httpx.Response(200, json=spec)
+        if host == "market":
             items = [
                 {"timestamp": "2026-07-07T00:00:00Z", "open": 2, "high": 2, "low": 2, "close": 2,
                  "volume": 3},
@@ -61,24 +53,75 @@ def test_http_session_reads_pit_servers_and_hides_unsupported_capabilities():
                  "volume": 3},
             ]  # fmt: skip
             return httpx.Response(200, json={"items": items, "next_cursor": None})
+        if host == "disclosures":
+            return httpx.Response(200, json={"reports": [], "latest_evidence": []})
         article = {"id": 1, "source": "s", "title": "t", "body": "b", "url": "u",
                    "published_at": "2026-07-06T01:00:00+00:00"}  # fmt: skip
         return httpx.Response(200, json={"items": [article], "next_cursor": None})
 
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    session = HttpInformationProvider("raw", ENDPOINTS, client, "1").open(datetime.now(UTC))
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_variants_differ_only_in_capabilities_and_openapi_tools():
+    raw = HttpInformationProvider("raw", ENDPOINTS, server(), "1")
+    enriched = HttpInformationProvider("enriched", ENDPOINTS, server(), "1")
+    disclosures = HttpInformationProvider("disclosures", ENDPOINTS, server(), "1")
+    assert raw.capabilities == {MARKET, NEWS}
+    assert enriched.capabilities == {MARKET, NEWS, FEATURES}
+    assert disclosures.capabilities == {MARKET, NEWS, DISCLOSURES}
+    assert raw.manifest["endpoints"] == {MARKET: "http://market", NEWS: "http://news"}
+    assert raw.manifest["openapi"][MARKET] == {
+        "spec": "http://market/openapi.json",
+        "server": "http://market",
+        "operations": ["get_daily_bars"],
+    }
+    assert disclosures.manifest["openapi"][DISCLOSURES]["operations"] == ["search_disclosures"]
+
+
+def test_unknown_variant_or_missing_endpoint_is_rejected():
+    with pytest.raises(ValueError):
+        HttpInformationProvider("graph", ENDPOINTS, server(), "1")
+    with pytest.raises(ValueError):
+        HttpInformationProvider("enriched", {MARKET: "http://m", NEWS: "http://n"}, server(), "1")
+
+
+def test_a_spec_without_servers_is_an_error():
+    with pytest.raises(ValueError, match="http://market/openapi.json has no servers entry"):
+        HttpInformationProvider("market", ENDPOINTS, server(servers=False), "1")
+    assert openapi_entry(server(), "http://news/openapi.json")["server"] == "http://news"
+
+
+def test_sessions_hand_agents_the_openapi_specs():
+    session = HttpInformationProvider("enriched", ENDPOINTS, server(), "1").open(datetime.now(UTC))
+    assert session.openapi == (
+        "http://features/openapi.json",
+        "http://market/openapi.json",
+        "http://news/openapi.json",
+    )
+
+
+def test_http_session_reads_pit_servers_and_hides_unsupported_capabilities():
+    seen = []
+    provider = HttpInformationProvider("disclosures", ENDPOINTS, server(seen), "1")
+    session = provider.open(datetime.now(UTC))
+    seen.clear()
     bars = session.daily_bars("005930", 2)
     assert [b.trading_date for b in bars] == [date(2026, 7, 6), date(2026, 7, 7)]
     news = session.news(7, "반도체", 5)
     assert news[0].title == "t"
-    assert seen[1] == "http://news/news/articles?days=7&limit=5&q=%EB%B0%98%EB%8F%84%EC%B2%B4"
+    assert session.disclosures("005930", "리스크", True) == {"reports": [], "latest_evidence": []}
+    assert seen[1:] == [
+        "http://news/news/articles?days=7&limit=5&q=%EB%B0%98%EB%8F%84%EC%B2%B4",
+        "http://disclosures/disclosures/005930/search?query=%EB%A6%AC%EC%8A%A4%ED%81%AC"
+        "&include_history=true",
+    ]
     with pytest.raises(UnsupportedCapability):
         session.technicals("005930")
 
 
 def test_no_information_supports_nothing():
     session = NoInformation().open(datetime.now(UTC))
-    assert session.tools == ()
+    assert session.openapi == ()
     with pytest.raises(UnsupportedCapability):
         session.daily_bars("005930", 1)
 

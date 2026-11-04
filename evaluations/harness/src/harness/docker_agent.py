@@ -12,22 +12,21 @@ from harness.contracts import (
     InformationSession,
     PortfolioProposal,
 )
-from harness.submission import SubmissionDesk, submission_tools
+from harness.information import SPEC_PATH, openapi_entry
+from harness.submission import SubmissionDesk
 
 PROMPT = """Decision time: {as_of} (KST).
 Universe ({count} stocks): {universe}
-Information tools: {tools}
 
 Read your account with get_portfolio, research the universe with the information tools, then
 call submit_portfolio exactly once with target weights for the next trading session."""
 
 
-def render_prompt(context: DecisionContext, tool_names: list[str]) -> str:
+def render_prompt(context: DecisionContext) -> str:
     return PROMPT.format(
         as_of=context.as_of.astimezone(KST).isoformat(timespec="minutes"),
         count=len(context.universe),
         universe=", ".join(context.universe),
-        tools=", ".join(tool_names) or "none",
     )
 
 
@@ -40,11 +39,13 @@ class DockerAgent:
         desk: SubmissionDesk,
         submission_url: str,
         timeout_seconds: float,
+        http: httpx.Client,
     ):
         self._worker = worker
         self._desk = desk
-        self._submission_tools = submission_tools(submission_url)
+        self._desk_spec = submission_url.rstrip("/") + SPEC_PATH
         self._timeout = timeout_seconds
+        self._http = http
         self._manifest: Mapping[str, object] | None = None
 
     @property
@@ -52,18 +53,20 @@ class DockerAgent:
         if self._manifest is None:
             response = self._worker.get("/manifest")
             response.raise_for_status()
-            template = hashlib.sha256(PROMPT.encode()).hexdigest()
-            self._manifest = {**response.json(), "prompt_sha256": template}
+            self._manifest = {
+                **response.json(),
+                "prompt_sha256": hashlib.sha256(PROMPT.encode()).hexdigest(),
+                "submission": openapi_entry(self._http, self._desk_spec),
+            }
         return self._manifest
 
     def decide(
         self, context: DecisionContext, information: InformationSession, audit: dict[str, object]
     ) -> PortfolioProposal:
         decision_id = uuid4().hex
-        info_tools = list(information.tools)
-        prompt = render_prompt(context, [tool.name for tool in info_tools])
-        tools = [*info_tools, *self._submission_tools]
-        audit.update(decision_id=decision_id, prompt=prompt, tools=[t.name for t in tools])
+        prompt = render_prompt(context)
+        openapi = [*information.openapi, self._desk_spec]
+        audit.update(decision_id=decision_id, prompt=prompt, openapi=openapi)
         run: dict[str, object] | None = None
         error = None
         self._desk.open(decision_id, context)
@@ -73,7 +76,7 @@ class DockerAgent:
                 json={
                     "decision_id": decision_id,
                     "prompt": prompt,
-                    "tools": [asdict(tool) for tool in tools],
+                    "openapi": openapi,
                     "timeout_seconds": self._timeout,
                 },
                 timeout=self._timeout + 60,

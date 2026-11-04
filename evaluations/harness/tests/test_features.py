@@ -16,7 +16,7 @@ def test_technicals_are_computed_from_the_pit_market():
         return httpx.Response(200, json={"items": items, "next_cursor": None})
 
     market = httpx.Client(base_url="http://market-pit", transport=httpx.MockTransport(handler))
-    client = TestClient(create_features_app(market))
+    client = TestClient(create_features_app(market, "http://features:8000"))
     body = client.get("/technicals/005930").json()
     assert seen == ["http://market-pit/bars/005930?timeframe=1d&limit=300"]
     assert body["close"] == 10
@@ -29,4 +29,12 @@ def test_market_errors_are_bad_gateway():
     market = httpx.Client(
         base_url="http://market-pit", transport=httpx.MockTransport(lambda r: httpx.Response(503))
     )
-    assert TestClient(create_features_app(market)).get("/technicals/005930").status_code == 502
+    app = create_features_app(market, "http://features:8000")
+    assert TestClient(app).get("/technicals/005930").status_code == 502
+
+
+def test_openapi_names_the_server_and_the_tool():
+    market = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(503)))
+    spec = TestClient(create_features_app(market, "http://features:8000")).get("/openapi.json")
+    assert spec.json()["servers"] == [{"url": "http://features:8000"}]
+    assert list(spec.json()["paths"]) == ["/technicals/{code}"]

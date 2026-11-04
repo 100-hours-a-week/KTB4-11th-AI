@@ -14,18 +14,19 @@ class RunnerSettings(BaseSettings):
     run_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._-]+$")
     prices_url: str
     clock_file: str
-    information_variant: Literal["none", "market", "raw", "enriched"] = "none"
+    information_variant: Literal["none", "market", "raw", "enriched", "disclosures"] = "none"
     information_version: str = "1"
     market_url: str | None = None
     news_url: str | None = None
     features_url: str | None = None
+    disclosures_url: str | None = None
     decision_system: Literal["equal-weight", "buy-and-hold", "jev-stub", "docker-agent"] = (
         "equal-weight"
     )
     agent_worker_url: str | None = None
     submission_host: str = "0.0.0.0"
     submission_port: int = Field(default=8100, gt=0, lt=65536)
-    submission_url: str | None = None
+    submission_url: str | None = Field(default=None, pattern=r"^https?://")
     decision_timeout_seconds: float = Field(default=900, gt=0)
     http_timeout_seconds: float = Field(default=30, gt=0)
     code_commit: str | None = None
@@ -73,6 +74,7 @@ class FeaturesSettings(BaseSettings):
     )
 
     market_url: str
+    public_url: str = Field(pattern=r"^https?://")
     timeout_seconds: float = Field(default=30, gt=0)
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)

@@ -60,7 +60,9 @@ def clock(tmp_path):
 
 @pytest.fixture
 def pit(clock):
-    with TestClient(create_evaluation_app("conf", str(clock))) as client:
+    with TestClient(
+        create_evaluation_app("conf", str(clock), "http://market-http-pit:8000")
+    ) as client:
         yield client
 
 
@@ -132,6 +134,9 @@ def test_settings_tie_the_clock_to_pit_access(monkeypatch):
     with pytest.raises(ValidationError):
         EvaluationSettings()
     monkeypatch.setenv("MARKET_HTTP_EVALUATION_CLOCK_FILE", "/clock/as_of")
+    with pytest.raises(ValidationError):
+        EvaluationSettings()
+    monkeypatch.setenv("MARKET_HTTP_EVALUATION_PUBLIC_URL", "http://market-http-pit:8000")
     assert EvaluationSettings().evaluation_clock_file == "/clock/as_of"
     monkeypatch.setenv("MARKET_HTTP_EVALUATION_ACCESS", "harness")
     with pytest.raises(ValidationError):
@@ -141,3 +146,11 @@ def test_settings_tie_the_clock_to_pit_access(monkeypatch):
     monkeypatch.delenv("MARKET_HTTP_EVALUATION_ACCESS")
     with pytest.raises(ValidationError):
         EvaluationSettings()
+
+
+def test_openapi_names_the_server_and_the_tool(pit):
+    spec = pit.get("/openapi.json").json()
+    assert spec["servers"] == [{"url": "http://market-http-pit:8000"}]
+    assert [op["operationId"] for path in spec["paths"].values() for op in path.values()] == [
+        "get_daily_bars"
+    ]

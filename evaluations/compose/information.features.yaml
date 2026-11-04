@@ -10,6 +10,7 @@ services:
     command: ["harness-features"]
     environment:
       HARNESS_FEATURES_MARKET_URL: http://market-http-pit:8000
+      HARNESS_FEATURES_PUBLIC_URL: http://features:8000
       HARNESS_FEATURES_LOG_LEVEL: ${EVALUATION_LOG_LEVEL:-INFO}
     networks: [information]
     depends_on:

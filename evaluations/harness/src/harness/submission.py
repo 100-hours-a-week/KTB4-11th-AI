@@ -2,13 +2,13 @@ import json
 import threading
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
-from fastapi import FastAPI, Header, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
-from harness.contracts import DecisionContext, HttpTool, PortfolioProposal
+from harness.contracts import DecisionContext, PortfolioProposal
 from harness.validation import validate
 
 DECISION_HEADER = "X-Decision-Id"
@@ -101,52 +101,47 @@ def _parse(
     return (None, tuple(errors)) if errors else (proposal, ())
 
 
-def submission_tools(base_url: str) -> tuple[HttpTool, ...]:
-    base = base_url.rstrip("/")
-    return (
-        HttpTool(
-            "get_portfolio",
-            "Your account at the current decision time: decision time, universe, cash, share"
-            " quantities held, and pending order target values. No prices.",
-            "GET",
-            f"{base}/portfolio",
-        ),
-        HttpTool(
-            "submit_portfolio",
-            "Submit the target portfolio once. Weights are relative and non-negative; the"
-            " harness scales holdings and cash_weight to sum to 1. Held stocks you omit are"
-            " sold. Invalid submissions return every error; fix them and submit again.",
-            "POST",
-            f"{base}/portfolio",
-            {
-                "holdings": {
-                    "type": "array",
-                    "description": "target holdings",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string", "description": "6-character stock code"},
-                            "weight": {"type": "number", "description": "relative weight >= 0"},
-                            "reason": {"type": "string", "description": "why it is held"},
-                        },
-                        "required": ["code", "weight"],
-                    },
+SUBMISSION_SCHEMA = {
+    "type": "object",
+    "required": ["holdings", "cash_weight"],
+    "properties": {
+        "holdings": {
+            "type": "array",
+            "description": "target holdings; held stocks you omit are sold",
+            "items": {
+                "type": "object",
+                "required": ["code", "weight"],
+                "properties": {
+                    "code": {"type": "string", "description": "6-character stock code"},
+                    "weight": {"type": "number", "description": "relative weight >= 0"},
+                    "reason": {"type": "string", "description": "why it is held"},
                 },
-                "cash_weight": {"type": "number", "description": "relative cash weight >= 0"},
-                "commentary": {"type": "string", "description": "overall reasoning"},
             },
-            ("holdings", "cash_weight"),
-        ),
+        },
+        "cash_weight": {"type": "number", "description": "relative cash weight >= 0"},
+        "commentary": {"type": "string", "description": "overall reasoning"},
+    },
+}
+
+
+def create_submission_app(desk: SubmissionDesk, public_url: str) -> FastAPI:
+    app = FastAPI(
+        title="harness-submission",
+        description="The account at the decision time and the single portfolio submission.",
+        servers=[{"url": public_url}],
+        docs_url=None,
+        redoc_url=None,
     )
 
-
-def create_submission_app(desk: SubmissionDesk) -> FastAPI:
-    app = FastAPI(title="harness-submission", docs_url=None, redoc_url=None)
-    DecisionId = Annotated[str | None, Header(alias=DECISION_HEADER)]
-
-    @app.get("/portfolio")
-    def get_portfolio(decision_id: DecisionId = None) -> JSONResponse:
-        context = desk.context(decision_id)
+    @app.get(
+        "/portfolio",
+        operation_id="get_portfolio",
+        summary="Your account at the decision time",
+        description="Decision time, universe, cash, share quantities held, and pending order"
+        " target values. No prices.",
+    )
+    def get_portfolio(request: Request) -> JSONResponse:
+        context = desk.context(request.headers.get(DECISION_HEADER))
         if context is None:
             return JSONResponse({"errors": ["no open decision has this id"]}, 409)
         return JSONResponse(
@@ -159,16 +154,29 @@ def create_submission_app(desk: SubmissionDesk) -> FastAPI:
             }
         )
 
-    @app.post("/portfolio")
-    async def submit_portfolio(request: Request, decision_id: DecisionId = None) -> JSONResponse:
+    @app.post(
+        "/portfolio",
+        operation_id="submit_portfolio",
+        summary="Submit the target portfolio once",
+        description="Weights are relative and non-negative; the harness scales holdings and"
+        " cash_weight to sum to 1. Invalid submissions return every error; fix them and"
+        " submit again. A second accepted submission is refused.",
+        openapi_extra={
+            "requestBody": {
+                "required": True,
+                "content": {"application/json": {"schema": SUBMISSION_SCHEMA}},
+            }
+        },
+    )
+    async def submit_portfolio(request: Request) -> JSONResponse:
         try:
             payload = json.loads(await request.body())
         except ValueError:
             payload = None
-        status, body = desk.submit(decision_id, payload)
+        status, body = desk.submit(request.headers.get(DECISION_HEADER), payload)
         return JSONResponse(body, status)
 
-    @app.get("/health")
+    @app.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:
         return {"status": "ok"}
 

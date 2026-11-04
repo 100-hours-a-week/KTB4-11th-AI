@@ -1,11 +1,12 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from ktb_core.krx import last_closed_date
 
-from harness.contracts import DailyBar, HttpTool, NewsArticle, UnsupportedCapability
-from harness.information import FEATURE_BARS, FEATURES, MARKET, NEWS, technicals
+from harness.contracts import DailyBar, NewsArticle, UnsupportedCapability
+from harness.information import DISCLOSURES, FEATURE_BARS, FEATURES, MARKET, NEWS, technicals
 
 
 class InMemoryPriceSource:
@@ -47,7 +48,7 @@ class InMemorySession:
     capabilities: frozenset[str]
     bars: Mapping[str, Sequence[DailyBar]]
     articles: Sequence[NewsArticle]
-    tools: tuple[HttpTool, ...] = ()
+    openapi: tuple[str, ...] = ()
 
     def _require(self, capability: str) -> None:
         if capability not in self.capabilities:
@@ -80,3 +81,6 @@ class InMemorySession:
     def technicals(self, symbol: str) -> Mapping[str, float | None]:
         self._require(FEATURES)
         return technicals(self._visible(symbol, FEATURE_BARS))
+
+    def disclosures(self, symbol: str, query: str, include_history: bool) -> Mapping[str, Any]:
+        raise UnsupportedCapability(DISCLOSURES)

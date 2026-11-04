@@ -1,7 +1,7 @@
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 
 @dataclass(frozen=True)
@@ -49,16 +49,6 @@ class DecisionContext:
     universe: tuple[str, ...]
 
 
-@dataclass(frozen=True)
-class HttpTool:
-    name: str
-    description: str
-    method: Literal["GET", "POST"]
-    url: str
-    args: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
-    required: tuple[str, ...] = ()
-
-
 FailureKind = Literal["no_submission", "invalid_submission", "timeout", "tool_error", "error"]
 
 
@@ -86,13 +76,15 @@ class InformationSession(Protocol):
     def as_of(self) -> datetime: ...
 
     @property
-    def tools(self) -> tuple[HttpTool, ...]: ...
+    def openapi(self) -> tuple[str, ...]: ...
 
     def daily_bars(self, symbol: str, limit: int) -> list[DailyBar]: ...
 
     def news(self, days: int, query: str | None, limit: int) -> list[NewsArticle]: ...
 
     def technicals(self, symbol: str) -> Mapping[str, float | None]: ...
+
+    def disclosures(self, symbol: str, query: str, include_history: bool) -> Mapping[str, Any]: ...
 
 
 class InformationProvider(Protocol):

@@ -46,7 +46,9 @@ def clock(tmp_path):
 
 
 def make_client(engine, clock, availability="published"):
-    return TestClient(create_evaluation_app(engine, str(clock), availability))
+    return TestClient(
+        create_evaluation_app(engine, str(clock), availability, "http://news-http-pit:8000")
+    )
 
 
 @pytest.fixture
@@ -136,4 +138,15 @@ def test_settings_require_a_clock(monkeypatch):
     with pytest.raises(ValidationError):
         EvaluationSettings()
     monkeypatch.setenv("NEWS_HTTP_EVALUATION_CLOCK_FILE", "/clock/as_of")
+    with pytest.raises(ValidationError):
+        EvaluationSettings()
+    monkeypatch.setenv("NEWS_HTTP_EVALUATION_PUBLIC_URL", "http://news-http-pit:8000")
     assert EvaluationSettings().evaluation_availability == "published"
+
+
+def test_openapi_names_the_server_and_the_tool(client):
+    spec = client.get("/openapi.json").json()
+    assert spec["servers"] == [{"url": "http://news-http-pit:8000"}]
+    assert [op["operationId"] for path in spec["paths"].values() for op in path.values()] == [
+        "search_news"
+    ]

@@ -106,3 +106,20 @@ def test_only_pit_servers_read_the_clock_and_only_the_runner_writes_it(informati
             assert service["environment"].get("MARKET_HTTP_EVALUATION_ACCESS", "pit") == "pit"
         else:
             assert "/clock" not in mounts, name
+
+
+PUBLIC_URLS = {
+    "market-http-pit": "MARKET_HTTP_EVALUATION_PUBLIC_URL",
+    "news-http-pit": "NEWS_HTTP_EVALUATION_PUBLIC_URL",
+    "features": "HARNESS_FEATURES_PUBLIC_URL",
+    "disclosure-http-pit": "DISCLOSURE_HTTP_PUBLIC_URL",
+}
+
+
+@pytest.mark.parametrize("information", ["market", "raw", "enriched"])
+def test_tool_servers_publish_their_compose_address(information):
+    services = render(information, "docker-agent")["services"]
+    for name, variable in PUBLIC_URLS.items():
+        if name in services:
+            assert services[name]["environment"][variable] == f"http://{name}:8000"
+    assert services["runner"]["environment"]["HARNESS_SUBMISSION_URL"] == "http://runner:8100"

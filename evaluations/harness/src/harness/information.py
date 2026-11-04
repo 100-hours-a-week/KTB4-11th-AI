@@ -7,22 +7,24 @@ from typing import Any
 
 import httpx
 
-from harness.contracts import DailyBar, HttpTool, NewsArticle, UnsupportedCapability
+from harness.contracts import DailyBar, NewsArticle, UnsupportedCapability
 from harness.market_http import parse_bar
 
 MARKET = "market.daily_bars"
 NEWS = "news.articles"
 FEATURES = "features.technicals"
+DISCLOSURES = "disclosures.search"
 
 VARIANTS: Mapping[str, frozenset[str]] = {
     "none": frozenset(),
     "market": frozenset({MARKET}),
     "raw": frozenset({MARKET, NEWS}),
     "enriched": frozenset({MARKET, NEWS, FEATURES}),
+    "disclosures": frozenset({MARKET, NEWS, DISCLOSURES}),
 }
 
 FEATURE_BARS = 300
-CODE_ARG = {"type": "string", "description": "6-character stock code, e.g. 005930"}
+SPEC_PATH = "/openapi.json"
 
 
 def technicals(bars: Sequence[DailyBar]) -> dict[str, float | None]:
@@ -59,51 +61,22 @@ def _rsi(returns: Sequence[float]) -> float:
     return 100.0 if losses == 0 else 100 - 100 / (1 + gains / losses)
 
 
-def tools_for(capabilities: frozenset[str], endpoints: Mapping[str, str]) -> tuple[HttpTool, ...]:
-    tools = []
-    if MARKET in capabilities:
-        tools.append(
-            HttpTool(
-                "get_daily_bars",
-                "Daily OHLCV bars for one stock, newest first. Only sessions whose close is at"
-                " or before the current decision time are returned.",
-                "GET",
-                endpoints[MARKET] + "/bars/${code}?timeframe=1d&limit=${limit}",
-                {"code": CODE_ARG, "limit": {"type": "integer", "description": "1 to 1000"}},
-                ("code", "limit"),
-            )
-        )
-    if NEWS in capabilities:
-        tools.append(
-            HttpTool(
-                "search_news",
-                "Raw news articles published within the last `days` days before the current"
-                " decision time, newest first. `query` filters title and body; use an empty"
-                " string for all articles.",
-                "GET",
-                endpoints[NEWS]
-                + "/news/articles?days=${days}&q=${encodeURIComponent(query)}&limit=${limit}",
-                {
-                    "days": {"type": "integer", "description": "1 to 90"},
-                    "query": {"type": "string", "description": "keyword, or empty"},
-                    "limit": {"type": "integer", "description": "1 to 50"},
-                },
-                ("days", "query", "limit"),
-            )
-        )
-    if FEATURES in capabilities:
-        tools.append(
-            HttpTool(
-                "get_technicals",
-                "Returns, volatility, moving-average gaps, RSI and volume ratio computed from"
-                " the daily bars available at the current decision time.",
-                "GET",
-                endpoints[FEATURES] + "/technicals/${code}",
-                {"code": CODE_ARG},
-                ("code",),
-            )
-        )
-    return tuple(tools)
+def openapi_entry(client: httpx.Client, spec_url: str) -> dict[str, object]:
+    response = client.get(spec_url)
+    response.raise_for_status()
+    spec = response.json()
+    servers = spec.get("servers")
+    if not (isinstance(servers, list) and servers and isinstance(servers[0], dict)):
+        raise ValueError(f"{spec_url} has no servers entry")
+    server = servers[0].get("url")
+    if not (isinstance(server, str) and server.startswith(("http://", "https://"))):
+        raise ValueError(f"{spec_url} has no servers entry with an absolute URL")
+    paths = spec.get("paths", {})
+    return {
+        "spec": spec_url,
+        "server": server,
+        "operations": sorted(op["operationId"] for path in paths.values() for op in path.values()),
+    }
 
 
 class NoInformation:
@@ -119,7 +92,7 @@ class HttpInformationProvider:
         self,
         variant: str,
         endpoints: Mapping[str, str],
-        client: httpx.Client | None,
+        client: httpx.Client,
         version: str,
     ):
         if variant not in VARIANTS:
@@ -128,14 +101,17 @@ class HttpInformationProvider:
         missing = sorted(c for c in self.capabilities if not endpoints.get(c))
         if missing:
             raise ValueError(f"variant {variant!r} needs endpoints for {', '.join(missing)}")
-        self._endpoints = {c: endpoints[c].rstrip("/") for c in self.capabilities}
+        self._endpoints = {c: endpoints[c].rstrip("/") for c in sorted(self.capabilities)}
         self._client = client
         self.manifest = {
             "variant": variant,
             "version": version,
             "capabilities": sorted(self.capabilities),
-            "endpoints": dict(sorted(self._endpoints.items())),
-            "tools": [tool.name for tool in tools_for(self.capabilities, self._endpoints)],
+            "endpoints": self._endpoints,
+            "openapi": {
+                capability: openapi_entry(client, url + SPEC_PATH)
+                for capability, url in self._endpoints.items()
+            },
         }
 
     def open(self, as_of: datetime) -> "HttpInformationSession":
@@ -150,8 +126,8 @@ class HttpInformationSession:
     client: httpx.Client | None
 
     @property
-    def tools(self) -> tuple[HttpTool, ...]:
-        return tools_for(self.capabilities, self.endpoints)
+    def openapi(self) -> tuple[str, ...]:
+        return tuple(url + SPEC_PATH for url in self.endpoints.values())
 
     def _get(self, capability: str, path: str, params: Mapping[str, str | int]) -> Any:
         if capability not in self.capabilities or self.client is None:
@@ -180,5 +156,8 @@ class HttpInformationSession:
         ]
 
     def technicals(self, symbol: str) -> Mapping[str, float | None]:
-        body = self._get(FEATURES, f"/technicals/{symbol}", {})
-        return body
+        return self._get(FEATURES, f"/technicals/{symbol}", {})
+
+    def disclosures(self, symbol: str, query: str, include_history: bool) -> Mapping[str, Any]:
+        params = {"query": query, "include_history": str(include_history).lower()}
+        return self._get(DISCLOSURES, f"/disclosures/{symbol}/search", params)

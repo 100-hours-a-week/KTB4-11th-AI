@@ -32,19 +32,28 @@ def _until(request: Request) -> datetime | None:
 Until = Annotated[datetime | None, Depends(_until)]
 
 
-def create_evaluation_app(questdb_conf: str, clock_file: str | None) -> FastAPI:
+def create_evaluation_app(
+    questdb_conf: str, clock_file: str | None, public_url: str | None = None
+) -> FastAPI:
     app = FastAPI(
         title="market-http-evaluation",
         description="Daily bars that end at the last market close at or before the clock."
         if clock_file
         else "Daily bars for the evaluation harness only.",
+        servers=[{"url": public_url}] if public_url else None,
         docs_url=None,
         redoc_url=None,
     )
     app.state.questdb_conf = questdb_conf
     app.state.clock_file = clock_file
 
-    @app.get("/bars/{code}")
+    @app.get(
+        "/bars/{code}",
+        operation_id="get_daily_bars",
+        summary="Daily OHLCV bars for one stock, newest first",
+        description="Only sessions whose 15:30 KST close is at or before the decision time are"
+        " returned. Pass next_cursor as cursor for older bars.",
+    )
     def list_daily_bars(
         code: Code,
         timeframe: Literal["1d"],
@@ -55,7 +64,7 @@ def create_evaluation_app(questdb_conf: str, clock_file: str | None) -> FastAPI:
     ) -> Page:
         return page(find_bars(conf, code, timeframe, limit + 1, before, until), limit)
 
-    @app.get("/health")
+    @app.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
@@ -65,6 +74,8 @@ def create_evaluation_app(questdb_conf: str, clock_file: str | None) -> FastAPI:
 def main() -> None:
     settings = EvaluationSettings()
     setup_logging(settings.log_level, service_name="market-http-evaluation")
-    app = create_evaluation_app(settings.questdb_conf, settings.evaluation_clock_file)
+    app = create_evaluation_app(
+        settings.questdb_conf, settings.evaluation_clock_file, settings.evaluation_public_url
+    )
     with tracing("market-http-evaluation"):
         uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)

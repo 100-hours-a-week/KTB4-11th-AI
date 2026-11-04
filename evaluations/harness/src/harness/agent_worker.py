@@ -11,28 +11,25 @@ from time import monotonic
 import uvicorn
 from fastapi import FastAPI
 from ktb_core.logging import setup_logging
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from harness.contracts import HttpTool
 from harness.settings import AgentWorkerSettings
 
 DECISION_ENV = "HARNESS_DECISION_ID"
 
 
-class ToolIn(BaseModel):
-    name: str
-    description: str
-    method: str
-    url: str
-    args: dict[str, dict[str, object]] = {}
-    required: list[str] = []
-
-
 class RunRequest(BaseModel):
     decision_id: str = Field(pattern=r"^[A-Za-z0-9-]+$")
     prompt: str
-    tools: list[ToolIn]
+    openapi: list[str] = Field(min_length=1)
     timeout_seconds: float = Field(gt=0)
+
+    @field_validator("openapi")
+    @classmethod
+    def absolute_urls(cls, urls: list[str]) -> list[str]:
+        if not all(url.startswith(("http://", "https://")) for url in urls):
+            raise ValueError("OpenAPI specs need absolute http(s) URLs")
+        return urls
 
 
 class RunResult(BaseModel):
@@ -51,7 +48,7 @@ def instruction_text(settings: AgentWorkerSettings) -> str:
 
 
 def agent_config(
-    settings: AgentWorkerSettings, instruction: str, tools: list[ToolIn] | list[HttpTool]
+    settings: AgentWorkerSettings, instruction: str, openapi: list[str]
 ) -> dict[str, object]:
     model: dict[str, object] = {"provider": settings.model_provider, "model": settings.model}
     if settings.model_base_url:
@@ -60,26 +57,15 @@ def agent_config(
         model["max_tokens"] = settings.max_tokens
     if settings.api_key_env:
         model["token_key"] = settings.api_key_env
-    toolsets = []
-    for tool in tools:
-        headers = {"X-Decision-Id": "${env." + DECISION_ENV + "}"}
-        if tool.method == "POST":
-            headers["Content-Type"] = "application/json"
-        toolsets.append(
-            {
-                "type": "api",
-                "allow_private_ips": True,
-                "api_config": {
-                    "name": tool.name,
-                    "method": tool.method,
-                    "endpoint": tool.url,
-                    "instruction": tool.description,
-                    "args": dict(tool.args),
-                    "required": list(tool.required),
-                    "headers": headers,
-                },
-            }
-        )
+    toolsets = [
+        {
+            "type": "openapi",
+            "url": url,
+            "headers": {"X-Decision-Id": "${env." + DECISION_ENV + "}"},
+            "allow_private_ips": True,
+        }
+        for url in openapi
+    ]
     return {
         "models": {"decision": model},
         "agents": {
@@ -99,7 +85,7 @@ def _text(output: str | bytes | None, limit: int) -> str:
 
 
 def run_agent(settings: AgentWorkerSettings, instruction: str, request: RunRequest) -> RunResult:
-    config = json.dumps(agent_config(settings, instruction, request.tools), ensure_ascii=False)
+    config = json.dumps(agent_config(settings, instruction, request.openapi), ensure_ascii=False)
     with tempfile.TemporaryDirectory(prefix="agent-") as home:
         path = Path(home) / "agent.yaml"
         path.write_text(config)

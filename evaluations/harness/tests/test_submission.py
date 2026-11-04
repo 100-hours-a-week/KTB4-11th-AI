@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from harness.contracts import DecisionContext, DecisionFailed, PortfolioProposal, PortfolioState
 from harness.production import proposal_from_production
-from harness.submission import SubmissionDesk, create_submission_app, submission_tools
+from harness.submission import SubmissionDesk, create_submission_app
 from ktb_core.krx import KST
 
 CONTEXT = DecisionContext(
@@ -22,7 +22,7 @@ def desk():
 
 @pytest.fixture
 def client(desk):
-    return TestClient(create_submission_app(desk))
+    return TestClient(create_submission_app(desk, "http://runner:8100"))
 
 
 def post(client, body, decision_id="d1"):
@@ -98,11 +98,19 @@ def test_only_one_window_is_open(desk):
         desk.close()
 
 
-def test_submission_tools_carry_the_desk_url():
-    get, submit = submission_tools("http://runner:8100/")
-    assert (get.method, get.url) == ("GET", "http://runner:8100/portfolio")
-    assert (submit.method, submit.url) == ("POST", "http://runner:8100/portfolio")
-    assert set(submit.required) <= set(submit.args)
+def test_openapi_describes_the_desk_tools_and_server(client):
+    spec = client.get("/openapi.json").json()
+    assert spec["servers"] == [{"url": "http://runner:8100"}]
+    operations = {op["operationId"]: op for path in spec["paths"].values() for op in path.values()}
+    assert set(operations) == {"get_portfolio", "submit_portfolio"}
+    body = operations["submit_portfolio"]["requestBody"]["content"]["application/json"]["schema"]
+    assert body["required"] == ["holdings", "cash_weight"]
+    assert set(body["properties"]["holdings"]["items"]["properties"]) == {
+        "code",
+        "weight",
+        "reason",
+    }
+    assert all("parameters" not in op for op in operations.values())
 
 
 def test_production_submissions_map_to_stock_codes():

@@ -28,18 +28,29 @@ AsOf = Annotated[datetime, Depends(_as_of)]
 
 
 def create_evaluation_app(
-    engine: sa.Engine, clock_file: str, availability: Literal["published", "fetched"]
+    engine: sa.Engine,
+    clock_file: str,
+    availability: Literal["published", "fetched"],
+    public_url: str,
 ) -> FastAPI:
     app = FastAPI(
         title="news-http-evaluation",
         description="Raw articles published at or before the evaluation clock.",
+        servers=[{"url": public_url}],
         docs_url=None,
         redoc_url=None,
     )
     app.state.engine = engine
     app.state.clock_file = clock_file
 
-    @app.get("/news/articles")
+    @app.get(
+        "/news/articles",
+        operation_id="search_news",
+        summary="Raw news articles published before the decision time, newest first",
+        description="Articles published within the last `days` days before the decision time."
+        " `q` filters title and body, for example by company or theme name. Pass next_cursor"
+        " as cursor for older articles.",
+    )
     def list_articles(
         conn: DbConnection,
         as_of: AsOf,
@@ -59,7 +70,7 @@ def create_evaluation_app(
         )
         return paginate(rows, limit, lambda article: (article.published_at, article.id))
 
-    @app.get("/health")
+    @app.get("/health", include_in_schema=False)
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
@@ -71,7 +82,10 @@ def main() -> None:
     setup_logging(settings.log_level, service_name="news-http-evaluation")
     engine = sa.create_engine(settings.postgres_dsn, pool_pre_ping=True)
     app = create_evaluation_app(
-        engine, settings.evaluation_clock_file, settings.evaluation_availability
+        engine,
+        settings.evaluation_clock_file,
+        settings.evaluation_availability,
+        settings.evaluation_public_url,
     )
     try:
         uvicorn.run(app, host=settings.host, port=settings.port, log_config=None)

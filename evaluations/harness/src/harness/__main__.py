@@ -18,7 +18,14 @@ from ktb_core.logging import setup_logging
 from harness.clock import FileClock
 from harness.contracts import DecisionSystem, InformationProvider
 from harness.docker_agent import DockerAgent
-from harness.information import FEATURES, MARKET, NEWS, HttpInformationProvider, NoInformation
+from harness.information import (
+    DISCLOSURES,
+    FEATURES,
+    MARKET,
+    NEWS,
+    HttpInformationProvider,
+    NoInformation,
+)
 from harness.market_http import MarketHttpPriceSource
 from harness.recorder import RunDirectory, dumps
 from harness.replay import recompute, replay_run
@@ -39,6 +46,7 @@ def information_provider(settings: RunnerSettings, client: httpx.Client) -> Info
         MARKET: settings.market_url,
         NEWS: settings.news_url,
         FEATURES: settings.features_url,
+        DISCLOSURES: settings.disclosures_url,
     }
     return HttpInformationProvider(
         settings.information_variant,
@@ -48,7 +56,9 @@ def information_provider(settings: RunnerSettings, client: httpx.Client) -> Info
     )
 
 
-def decision_system(settings: RunnerSettings, desk: SubmissionDesk) -> DecisionSystem:
+def decision_system(
+    settings: RunnerSettings, desk: SubmissionDesk, client: httpx.Client
+) -> DecisionSystem:
     match settings.decision_system:
         case "equal-weight":
             return EqualWeight()
@@ -65,17 +75,18 @@ def decision_system(settings: RunnerSettings, desk: SubmissionDesk) -> DecisionS
                 desk,
                 settings.submission_url,
                 settings.decision_timeout_seconds,
+                client,
             )
 
 
 @contextmanager
 def submission_server(settings: RunnerSettings, desk: SubmissionDesk) -> Iterator[None]:
-    if settings.decision_system != "docker-agent":
+    if settings.decision_system != "docker-agent" or settings.submission_url is None:
         yield
         return
     server = uvicorn.Server(
         uvicorn.Config(
-            create_submission_app(desk),
+            create_submission_app(desk, settings.submission_url),
             host=settings.submission_host,
             port=settings.submission_port,
             log_config=None,
@@ -110,7 +121,7 @@ def run(_: argparse.Namespace) -> int:
     ):
         outcome = run_experiment(
             spec,
-            decision_system(settings, desk),
+            decision_system(settings, desk, client),
             information_provider(settings, client),
             MarketHttpPriceSource(prices),
             FileClock(settings.clock_file),

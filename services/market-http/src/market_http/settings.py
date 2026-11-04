@@ -65,6 +65,7 @@ class EvaluationSettings(BaseSettings):
     questdb_conf: str
     evaluation_access: Literal["pit", "harness"]
     evaluation_clock_file: str | None = None
+    evaluation_public_url: str | None = Field(default=None, pattern=r"^https?://")
     host: str = "0.0.0.0"
     port: int = Field(default=8000, gt=0, lt=65536)
     log_level: str = "INFO"
@@ -75,4 +76,6 @@ class EvaluationSettings(BaseSettings):
             raise ValueError(
                 "pit access needs evaluation_clock_file; harness access must not set it"
             )
+        if self.evaluation_access == "pit" and self.evaluation_public_url is None:
+            raise ValueError("pit access needs evaluation_public_url for the OpenAPI servers")
         return self

@@ -86,11 +86,11 @@ def run_experiment(
     run_dir: Path,
     versions: Mapping[str, str | None],
 ) -> RunOutcome:
+    information_manifest = dict(information.manifest)
+    decision_manifest = dict(decision_system.manifest)
     directory = RunDirectory(run_dir)
     directory.create()
     episodes = spec.episode_specs()
-    information_manifest = dict(information.manifest)
-    decision_manifest = dict(decision_system.manifest)
     all_versions = {
         "harness": version("harness"),
         **versions,
