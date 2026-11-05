@@ -5,7 +5,7 @@ import pytest
 from ktb_core.krx import KST
 from market_collector.kiwoom.official import Page
 from market_collector.reconcile import reconcile_candles
-from market_collector.store import Store
+from market_collector.store import BarBatch, Store
 
 BASE_DT = "20260922"
 ANCHOR = datetime(2026, 9, 22, 15, 29, tzinfo=KST)
@@ -73,12 +73,22 @@ class FakeSink:
         return nullcontext(self)
 
 
+class Batch(BarBatch):
+    def __init__(self, sink: FakeSink):
+        super().__init__(Store(sink))
+
+    def write_candles(self, timeframe, rows):
+        written = super().write_candles(timeframe, rows)
+        self.flush()
+        return written
+
+
 def test_reconcile_selects_daily_and_one_minute_endpoints():
     daily_client = FakeClient([Page([_daily_row(BASE_DT, 100)], None, False)])
     minute_client = FakeClient([Page([_minute_row(100)], None, False)])
 
-    reconcile_candles(daily_client, Store(FakeSink()), "005930", "1d", BASE_DT, None)
-    reconcile_candles(minute_client, Store(FakeSink()), "005930", "1m", BASE_DT, None)
+    reconcile_candles(daily_client, Batch(FakeSink()), "005930", "1d", BASE_DT, None)
+    reconcile_candles(minute_client, Batch(FakeSink()), "005930", "1m", BASE_DT, None)
 
     assert daily_client.daily_calls == [("005930", BASE_DT, None)]
     assert daily_client.minute_calls == []
@@ -93,7 +103,7 @@ def test_reconcile_without_checkpoint_exhausts_pages_and_writes_unique_rows_olde
     ]
     sink = FakeSink()
 
-    written = reconcile_candles(FakeClient(pages), Store(sink), "005930", "1m", BASE_DT, None)
+    written = reconcile_candles(FakeClient(pages), Batch(sink), "005930", "1m", BASE_DT, None)
 
     assert written == 3
     assert [row[3] for row in sink.rows] == sorted(row[3] for row in sink.rows)
@@ -114,7 +124,7 @@ def test_initial_collection_caps_unique_bars_and_keeps_latest_in_chronological_o
     )
     sink = FakeSink()
 
-    written = reconcile_candles(client, Store(sink), "005930", timeframe, BASE_DT, None)
+    written = reconcile_candles(client, Batch(sink), "005930", timeframe, BASE_DT, None)
 
     anchor = ANCHOR.astimezone(UTC) if timeframe == "1m" else datetime(2026, 9, 22, tzinfo=UTC)
     step = timedelta(minutes=1) if timeframe == "1m" else timedelta(days=1)
@@ -141,7 +151,7 @@ def test_incremental_collection_exceeds_initial_limit_and_reaches_old_checkpoint
     )
     sink = FakeSink()
 
-    written = reconcile_candles(client, Store(sink), "005930", timeframe, BASE_DT, latest)
+    written = reconcile_candles(client, Batch(sink), "005930", timeframe, BASE_DT, latest)
 
     assert written == limit + 2
     assert [row[3] for row in sink.rows] == [
@@ -162,7 +172,7 @@ def test_reconcile_with_checkpoint_rewrites_it_and_stops_at_boundary_page():
     client = FakeClient(pages)
     sink = FakeSink()
 
-    written = reconcile_candles(client, Store(sink), "005930", "1m", BASE_DT, latest)
+    written = reconcile_candles(client, Batch(sink), "005930", "1m", BASE_DT, latest)
 
     assert written == 3
     assert [row[3] for row in sink.rows] == [
@@ -193,7 +203,7 @@ def test_forming_minute_is_rewritten_by_the_next_run():
     first = FakeSink()
     reconcile_candles(
         FakeClient([Page([_minute_at(nine, 101, 10)], None, False)]),
-        Store(first),
+        Batch(first),
         "005930",
         "1m",
         BASE_DT,
@@ -211,7 +221,7 @@ def test_forming_minute_is_rewritten_by_the_next_run():
                 )
             ]
         ),
-        Store(second),
+        Batch(second),
         "005930",
         "1m",
         BASE_DT,
@@ -233,7 +243,7 @@ def test_close_run_rewrites_the_last_minute_and_writes_today_daily_bar():
 
     reconcile_candles(
         FakeClient([Page([_minute_at(last, 105, 70)], None, False)]),
-        Store(minute),
+        Batch(minute),
         "005930",
         "1m",
         BASE_DT,
@@ -241,7 +251,7 @@ def test_close_run_rewrites_the_last_minute_and_writes_today_daily_bar():
     )
     written = reconcile_candles(
         FakeClient([Page([_daily_row("20260922", 105), _daily_row("20260919", 99)], None, False)]),
-        Store(daily),
+        Batch(daily),
         "005930",
         "1d",
         BASE_DT,
@@ -260,7 +270,7 @@ def test_reconcile_terminal_empty_first_page_writes_zero_and_returns():
     sink = FakeSink()
 
     written = reconcile_candles(
-        FakeClient([Page([], None, False)]), Store(sink), "005930", "1m", BASE_DT, None
+        FakeClient([Page([], None, False)]), Batch(sink), "005930", "1m", BASE_DT, None
     )
 
     assert written == 0
@@ -276,7 +286,7 @@ def test_reconcile_rejects_repeated_continuation_with_symbol_and_timeframe_conte
     )
 
     with pytest.raises(RuntimeError, match=r"005930/1m.*NK1"):
-        reconcile_candles(client, Store(FakeSink()), "005930", "1m", BASE_DT, None)
+        reconcile_candles(client, Batch(FakeSink()), "005930", "1m", BASE_DT, None)
 
 
 def test_reconcile_propagates_write_failure_without_side_checkpoint():
