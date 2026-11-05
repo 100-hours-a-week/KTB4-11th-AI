@@ -92,26 +92,27 @@ Proposed snapshot shape, extending `portfolio_rebalancer/snapshot.py`:
 ```python
 class Account(BaseModel):
     account_id: int
-    agent_id: int | None                               # null -> follows the common portfolio
-    agent_status: Literal["running", "ended"] | None   # null exactly when agent_id is null
+    participant_id: int | None                               # null -> follows the common portfolio
+    participant_status: Literal["running", "ended"] | None   # null exactly when participant_id is null
     is_active: bool
     cash_balance: int
     stocks: list[Stock]
     pending_orders: list[PendingOrder]
 ```
 
-`agent_status` is explicit rather than reusing `is_active` because the two answer different
-questions. `is_active=false` already means "do not trade this account", which an ended
-competition also implies — but it equally covers an account the user disabled or the Backend
-suspended. Generation needs to know that *the competition is over*, which is a statement about
-the agent, not about the account's tradability. Overloading one flag would make "stop
-regenerating" depend on a field whose meaning can change for unrelated reasons.
+`participant_status` is explicit rather than reusing `is_active` because the two answer
+different questions. `is_active=false` already means "do not trade this account", which an
+ended competition also implies — but it equally covers an account the user disabled or the
+Backend suspended. Generation needs to know that *the competition is over*, which is a
+statement about the participant, not about the account's tradability. Overloading one flag
+would make "stop regenerating" depend on a field whose meaning can change for unrelated
+reasons.
 
 On our side, one nullable column:
 
 ```
-competition_agents
-  ended_at  timestamptz NULL   -- set when a snapshot first reports agent_status = "ended"
+competition_participants
+  ended_at  timestamptz NULL   -- set when a snapshot first reports participant_status = "ended"
 ```
 
 A timestamp rather than a boolean: it records *when*, which the end-of-competition report wants
@@ -142,16 +143,27 @@ Shipping regeneration in stage 1 would mean building a second source for "still 
 then discarding it, or accepting that every finished competition keeps costing an agent run per
 agent per day.
 
-## Identifiers
+## Identifiers — two ids, two meanings
 
-The Backend and frontend have standardised on `agent_id`. `report-builder` already consumes
-`participant_id` from a contract that predates this work
-(`2315d69`, 2026-10-08), so aligning means changing that service too; it is tracked as its own
-schema-alignment issue rather than folded in here. Until that lands, this document uses
-`agent_id` for the new surfaces and leaves `report-builder` as it is.
+They are **not** the same thing, which an earlier draft of this document assumed:
 
-Confirm before implementing that `agent_id` and `participant_id` identify the same thing. They
-appear side by side in the Backend's response, which is what raises the question.
+| Id | Identifies |
+|---|---|
+| `participant_id` | the competition participant |
+| `agent_id` | that participant's **strategy setting**, which the Backend uses to tell settings apart |
+
+So `report-builder`'s existing `participant_id` is correct and needs no alignment: a report is
+about a participant, not about a strategy record.
+
+**Key on `participant_id`** and store `agent_id` alongside it. `participant_id` is what the
+account snapshot links to, what the completion notification addresses, and what
+`report-builder` already consumes, so it is the identifier every surface agrees on.
+`agent_id` is stored because it is how the Backend names the setting, which matters when
+reconciling a disagreement about what a participant was configured with — and it costs one
+column.
+
+They are one-to-one for a competition's lifetime, since settings are frozen at the
+participant's first message. Nothing here depends on that holding beyond it.
 
 ## Risk level
 
@@ -187,10 +199,14 @@ cover companies the user never excluded.
 
 A name that resolves to nothing fails validation rather than being dropped. Dropping it would
 silently discard a theme the user chose, and for `excluded_themes` that means holding something
-they asked to avoid. Note that the Backend's documented example includes `"금융"`, which matches
-neither a group nor a standalone theme — the financial sector is split across 은행, 증권, 보험
-and 창투. Either the example is illustrative, or the frontend's list differs from
-`/market/themes`; that needs confirming, because a mismatch makes every such message fail.
+they asked to avoid.
+
+The frontend is built directly against `/market/themes` — a user opens a group and picks
+detailed themes inside it — so that endpoint is the authoritative vocabulary and both received
+forms are expected. The Backend's documented example includes `"금융"`, which matches neither a
+group nor a standalone theme there (the financial sector is split across 은행, 증권, 보험 and
+창투), so that example value is illustrative rather than something the frontend can produce.
+The validation failure above is the right response if one ever arrives.
 
 The resolved codes are what gets stored, hashed, and enforced, so everything downstream — the
 two-hop exclusion join, `generation_key`, the briefing — is unchanged. Jev's theme questions
