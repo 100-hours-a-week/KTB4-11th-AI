@@ -189,6 +189,38 @@ def test_raises_when_a_choice_answer_is_missing_confidence(server):
         )
 
 
+def test_raises_when_a_noul_answer_is_a_bool(server):
+    _, responses, client = server
+    responses.append((200, {"answers": {"q": {"type": "noul", "noul": True}}}))
+
+    with pytest.raises(JevError):
+        ask(
+            BASE_URI,
+            MODEL,
+            SecretStr("sk"),
+            "x",
+            {"q": {"type": "noul", "instructions": "a"}},
+            client=client,
+        )
+
+
+def test_raises_when_a_choice_confidence_is_a_bool(server):
+    _, responses, client = server
+    responses.append(
+        (200, {"answers": {"q": {"type": "choice", "choice": "550", "confidence": True}}})
+    )
+
+    with pytest.raises(JevError):
+        ask(
+            BASE_URI,
+            MODEL,
+            SecretStr("sk"),
+            "x",
+            {"q": {"type": "choice", "instructions": "a", "criteria": {"550": "x"}}},
+            client=client,
+        )
+
+
 def test_raises_when_an_answer_type_does_not_match_the_question(server):
     _, responses, client = server
     responses.append((200, {"answers": {"q": {"type": "choice", "choice": "x", "confidence": 1}}}))

@@ -44,11 +44,15 @@ def ask(
         if not isinstance(answer, dict) or answer.get("type") != question_type:
             raise JevError(f"{name}: unexpected answer shape")
         if question_type == "noul":
-            if not isinstance(answer.get("noul"), int | float):
+            noul = answer.get("noul")
+            if isinstance(noul, bool) or not isinstance(noul, int | float):
                 raise JevError(f"{name}: noul answer missing a probability")
         elif question_type == "choice":
-            if answer.get("choice") is None or not isinstance(
-                answer.get("confidence"), int | float
+            confidence = answer.get("confidence")
+            if (
+                answer.get("choice") is None
+                or isinstance(confidence, bool)
+                or not isinstance(confidence, int | float)
             ):
                 raise JevError(f"{name}: choice answer missing choice or confidence")
         else:
