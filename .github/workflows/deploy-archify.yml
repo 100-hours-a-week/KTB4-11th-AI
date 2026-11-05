@@ -44,7 +44,7 @@ jobs:
           ARTIFACT_DIGEST: ${{ inputs.digest }}
         run: |
           printf '%s' "$GH_TOKEN" | oras login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          oras pull "ghcr.io/100-hours-a-week/ktb4-11th-ai@$ARTIFACT_DIGEST" \
+          oras pull "ghcr.io/100-hours-a-week/ktb4-11th-ai-archify@$ARTIFACT_DIGEST" \
             --output "$RUNNER_TEMP/archify-site"
       - name: Extract and verify site
         shell: python
