@@ -1,11 +1,12 @@
 import uuid
 
 import sqlalchemy as sa
+from disclosure_retrieval.settings import Settings as DisclosureSettings
 from ktb_core.logging import get_logger, setup_logging, start_logging
 from langchain_openrouter import ChatOpenRouter
 
 from portfolio_builder.agent.run import run_agent
-from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
+from portfolio_builder.agent.system_prompt import DISCLOSURE_PROMPT, SYSTEM_PROMPT
 from portfolio_builder.briefing import load_briefing
 from portfolio_builder.explain import (
     Explanations,
@@ -18,6 +19,7 @@ from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
 from portfolio_builder.settings import Settings
+from portfolio_builder.tools.disclosure.tool import disclosure_tools
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
 from portfolio_builder.tools.submit import submit_tool
@@ -41,6 +43,10 @@ def main() -> None:
         try:
             unexplained = load_unexplained(engine)
             if unexplained is None:
+                disclosure_settings = DisclosureSettings() if settings.disclosure_enabled else None
+                system_prompt = SYSTEM_PROMPT + (
+                    DISCLOSURE_PROMPT if settings.disclosure_enabled else ""
+                )
                 briefing = load_briefing(engine, news_client, settings.news_window_days)
                 log.info(
                     "ingestion",
@@ -53,7 +59,7 @@ def main() -> None:
                     theme_count=briefing.theme_count,
                     briefing_chars=len(briefing.text),
                 )
-                log.info("prompt", system_prompt=SYSTEM_PROMPT, briefing=briefing.text)
+                log.info("prompt", system_prompt=system_prompt, briefing=briefing.text)
                 model = ChatOpenRouter(
                     model=settings.llm_model,
                     api_key=settings.llm_api_key,
@@ -61,6 +67,7 @@ def main() -> None:
                 )
                 tools = [
                     *news_tools(news_client),
+                    *(disclosure_tools(engine, disclosure_settings) if disclosure_settings else []),
                     *graph_tools(news_client),
                     technicals_tool(engine, HttpMarket(settings.market_http_base_uri, engine)),
                     submit_tool(
@@ -74,10 +81,11 @@ def main() -> None:
                 result = run_agent(
                     model=model,
                     tools=tools,
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=system_prompt,
                     briefing=briefing.text,
                     max_turns=settings.max_turns,
                     log=log,
+                    disclosure_enabled=settings.disclosure_enabled,
                 )
                 end.update(turns=result.turns, usage=result.usage)
                 outcome, portfolio_id, trace, error = (

@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from portfolio_builder.agent.hooks.nudge import Nudge
+from portfolio_builder.agent.hooks.require_disclosures import RequireDisclosures
 from portfolio_builder.agent.hooks.require_technicals import RequireTechnicals
 from portfolio_builder.agent.hooks.run_log import run_log
 from portfolio_builder.agent.hooks.stop_on_save import StopOnSave
@@ -39,8 +40,10 @@ def run_agent(
     briefing: str,
     max_turns: int,
     log: StructuredLogger,
+    disclosure_enabled: bool = False,
 ) -> RunResult:
     required_technicals = RequireTechnicals(log)
+    required_disclosures = RequireDisclosures(log) if disclosure_enabled else None
     agent = create_agent(
         model=model,
         tools=tools,
@@ -53,6 +56,7 @@ def run_agent(
             ModelCallLimitMiddleware(run_limit=max_turns, exit_behavior="error"),
             *run_log(log, tools),
             required_technicals,
+            *([required_disclosures] if required_disclosures else []),
             ToolErrorMiddleware(
                 lambda error, _: str(error) if isinstance(error, ToolError) else None
             ),
@@ -78,6 +82,8 @@ def run_agent(
         outcome = "error"
         message = message or "agent stopped without a portfolio"
     log.info("technical_analysis_summary", **required_technicals.counts)
+    if required_disclosures:
+        log.info("disclosure_search_summary", **required_disclosures.counts)
     return RunResult(
         outcome,
         portfolio_id,
