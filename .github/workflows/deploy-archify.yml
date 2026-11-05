@@ -1,0 +1,60 @@
+name: Deploy Archify
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    if: startsWith(github.event.release.tag_name, 'archify-')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: archify-pages-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download release site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern archify-site.tar.gz --dir "$RUNNER_TEMP/archify-release"
+      - name: Extract and verify site
+        shell: python
+        run: |
+          import json
+          import os
+          import tarfile
+          from pathlib import Path
+
+          site = Path("_site")
+          site.mkdir()
+          archive = Path(os.environ["RUNNER_TEMP"]) / "archify-release/archify-site.tar.gz"
+          with tarfile.open(archive, "r:gz") as bundle:
+              members = bundle.getmembers()
+              if any(not (member.isfile() or member.isdir()) for member in members):
+                  raise ValueError("Site archive must contain only regular files and directories")
+              bundle.extractall(site, members=members, filter="data")
+          for name in ("index.html", "architecture.json"):
+              path = site / name
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise ValueError(f"Missing or empty site file: {name}")
+          json.loads((site / "architecture.json").read_text(encoding="utf-8"))
+      - uses: actions/configure-pages@v6.0.0
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: _site
+      - name: Publish architecture to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5.0.1
