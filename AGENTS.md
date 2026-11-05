@@ -265,10 +265,18 @@ failures are logged without another same-day collection run. A delayed startup a
 06:00 runs only if that daily slot has not yet been attempted.
 The daily hour remains configurable through `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR`.
 
-Normal checks resume inclusively from the last successful date. Existing receipt and
-parser-version checks skip stored documents before downloading. No new receipts means
+Original and corrected disclosures keep their distinct receipt IDs and publication dates.
+Collection stores a receipt's parsed document, sections and financial facts once. Writers
+lock the disclosure row before checking for an existing document in a fresh statement;
+a repeated or concurrent save returns False without replacing stored data. A metadata row
+with no document may finish its first complete save. Existing legacy parser rows are not
+deleted by this collection change; no new parser versions are accumulated automatically.
+
+Normal checks resume inclusively from the last successful date. A stored document marks
+its receipt as collected independently of parser version or legacy status, so it is
+skipped before downloading. No new receipts means
 no document fetch, and no filing list means no classification/financial request. Set
 paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` for manual replay within
 365 days; it does not update automatic progress. Remove date overrides after replay.
-The collection-state table belongs to the unmerged 0013; collection still owns three
+The collection-state table belongs to 0013; collection still owns three
 migration revisions and no standalone collector, extra timer or pending-work queue.

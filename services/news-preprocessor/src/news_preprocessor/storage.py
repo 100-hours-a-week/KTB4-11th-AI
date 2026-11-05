@@ -8,7 +8,6 @@ from sqlalchemy.dialects.postgresql import insert
 
 from news_preprocessor.sources import NewsItem
 from news_preprocessor.sources.publishers.opendart.opendart import DisclosureItem
-from news_preprocessor.sources.publishers.opendart.parser import PARSER_VERSION
 from news_preprocessor.sources.publishers.opendart.storage import insert_disclosure
 
 metadata = sa.MetaData()
@@ -83,11 +82,10 @@ def known_external_ids(conn: sa.Connection, source: str, external_ids: list[str]
             conn.execute(
                 sa.text(
                     "SELECT r.receipt_id FROM disclosures r WHERE r.receipt_id = ANY(:ids) "
-                    "AND r.status IN ('ready','unavailable') AND (SELECT parser_version "
-                    "FROM disclosure_documents WHERE receipt_id=r.receipt_id "
-                    "ORDER BY id DESC LIMIT 1)=:parser"
+                    "AND EXISTS (SELECT 1 "
+                    "FROM disclosure_documents WHERE receipt_id=r.receipt_id)"
                 ),
-                {"ids": external_ids, "parser": PARSER_VERSION},
+                {"ids": external_ids},
             ).scalars()
         )
     return known
