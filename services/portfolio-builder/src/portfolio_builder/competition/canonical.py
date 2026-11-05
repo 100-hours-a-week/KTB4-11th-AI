@@ -1,6 +1,6 @@
 import json
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import sqlalchemy as sa
@@ -20,7 +20,7 @@ SIGNAL_NAMES = (
     "short_term_rank",
 )
 
-QUESTION_SET_VERSION = "v1"
+QUESTION_SET_VERSION = "v2"
 MAX_CHOICE_OPTIONS = 255
 
 GATE_RELEVANT_INSTRUCTIONS = (
@@ -35,7 +35,8 @@ GATE_SIGNALS_INSTRUCTIONS = (
     " Does this text mention or imply a preference about a stock's price action or trading"
     " activity -- for example its trend, a recent sharp move, a breakout above its recent"
     " trading range, its position within its 52-week range, its volatility, its trading volume,"
-    " or its liquidity? Answer with the probability that it does."
+    " its liquidity, or how its returns rank against other stocks? Answer with the probability"
+    " that it does."
 )
 
 GATE_THEMES_INSTRUCTIONS = (
@@ -44,66 +45,85 @@ GATE_THEMES_INSTRUCTIONS = (
     " should emphasize or avoid? Answer with the probability that it does."
 )
 
+SIGNAL_POLARITY_CRITERIA: dict[str, str] = {
+    "favor": "The text wants the portfolio to favor (prefer, hold more of) stocks with this"
+    " attribute.",
+    "avoid": "The text wants the portfolio to avoid (exclude, hold less of) stocks with this"
+    " attribute.",
+    "neither": "The text expresses no preference either way about this attribute.",
+}
+
 SIGNAL_INSTRUCTIONS: dict[str, str] = {
     "trend": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks based on their price"
-        " trend -- for example being in an established uptrend, an established downtrend, or"
-        " trading sideways? Answer with the probability that it does."
+        " portfolio. Classify its stance toward stocks based on their price trend -- for"
+        " example being in an established uptrend, an established downtrend, or trading"
+        " sideways. Pick favor, avoid, or neither."
     ),
     "short_term_move": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks that have moved sharply"
-        " in price over the last few trading days -- a sudden rally, sell-off, or other abrupt"
-        ' move ("급등락")? Answer with the probability that it does.'
+        " portfolio. Classify its stance toward stocks that have moved sharply in price over"
+        ' the last few trading days -- a sudden rally, sell-off, or other abrupt move ("급등락").'
+        " Pick favor, avoid, or neither."
     ),
     "breakout": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks that have broken out"
-        " above, or are trading near, their recent trading-range high? Answer with the"
-        " probability that it does."
+        " portfolio. Classify its stance toward stocks that have broken out above, or are"
+        " trading near, their recent trading-range high. Pick favor, avoid, or neither."
     ),
     "year_range": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks based on where their"
-        " price sits within its 52-week range -- for example near a 52-week high or far below"
-        " one? Answer with the probability that it does."
+        " portfolio. Classify its stance toward stocks based on where their price sits within"
+        " its 52-week range -- for example near a 52-week high or far below one. Pick favor,"
+        " avoid, or neither."
     ),
     "volatility": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks based on how volatile"
-        " their own price has been? Answer with the probability that it does."
+        " portfolio. Classify its stance toward stocks based on how volatile their own price"
+        " has been. Pick favor, avoid, or neither."
     ),
     "volume": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks based on their trading"
-        ' volume -- for example a surge or a drop in volume ("거래량")? Answer with the'
-        " probability that it does."
+        " portfolio. Classify its stance toward stocks based on their trading volume -- for"
+        ' example a surge or a drop in volume ("거래량"). Pick favor, avoid, or neither.'
     ),
     "liquidity": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks based on how liquid or"
-        " easy to trade they are? Answer with the probability that it does."
+        " portfolio. Classify its stance toward stocks based on how liquid or easy to trade"
+        " they are. Pick favor, avoid, or neither."
     ),
     "relative_strength": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks based on their price"
-        " momentum relative to the other KOSPI 200 stocks over the last year? Answer with the"
-        " probability that it does."
+        " portfolio. Classify its stance toward stocks based on their price momentum relative"
+        " to the other KOSPI 200 stocks over the last year. Pick favor, avoid, or neither."
     ),
     "short_term_rank": (
         "The state is free text a user wrote when asking an AI to build them a stock"
-        " portfolio. Does it ask the portfolio to favor or avoid stocks based on how their very"
-        " recent (few-day) return ranks against the other KOSPI 200 stocks? Answer with the"
-        " probability that it does."
+        " portfolio. Classify its stance toward stocks based on how their very recent"
+        " (few-day) return ranks against the other KOSPI 200 stocks. Pick favor, avoid, or"
+        " neither."
     ),
 }
 
+THEME_POLARITY_CRITERIA: dict[str, str] = {
+    "emphasize": "The text wants the portfolio to emphasize (favor, prefer) this theme.",
+    "avoid": "The text wants the portfolio to avoid (exclude) this theme.",
+    "neither": "The text expresses no preference either way about this theme.",
+}
+
+THEME_CODE_INSTRUCTIONS_SINGLE_TEMPLATE = (
+    "The state is free text a user wrote when asking an AI to build them a stock portfolio."
+    ' The user already chose the theme "{name}" (code {code}) as their one selected interest.'
+    " Classify the text's stance toward that theme. Pick emphasize, avoid, or neither."
+)
+
 THEME_CODE_INSTRUCTIONS_TEMPLATE = (
     "The state is free text a user wrote when asking an AI to build them a stock portfolio."
-    ' The user already chose the theme "{name}" (code {code}) as one of their interests. Does'
-    " this text specifically call out or emphasize that theme more than the user's other chosen"
-    " interests? Answer with the probability that it does."
+    ' The user already chose the theme "{name}" (code {code}) as one of several interests.'
+    " Classify the text's stance toward that theme specifically, as distinct from the user's"
+    " other chosen interests. Pick emphasize if the text calls out or asks to emphasize that"
+    " theme more than the others, avoid if it asks to avoid or exclude that theme, or neither"
+    " if it does not single that theme out either way."
 )
 
 SECTOR_CHOICE_INSTRUCTIONS = (
@@ -113,6 +133,13 @@ SECTOR_CHOICE_INSTRUCTIONS = (
     " report low confidence."
 )
 
+SECTOR_POLARITY_INSTRUCTIONS = (
+    "The state is free text a user wrote when asking an AI to build them a stock portfolio."
+    " The user chose no specific theme from the menu; a separate question already picked"
+    " which theme this text most concerns. Classify this text's stance toward that theme. Pick"
+    " emphasize, avoid, or neither."
+)
+
 
 class CanonicalisationError(Exception):
     pass
@@ -120,15 +147,17 @@ class CanonicalisationError(Exception):
 
 @dataclass(frozen=True)
 class CanonicalForm:
-    signals: tuple[str, ...] = ()
-    theme_codes: tuple[str, ...] = ()
+    signal_polarity: dict[str, str] = field(default_factory=dict)
+    theme_polarity: dict[str, str] = field(default_factory=dict)
     sector: str | None = None
+    sector_polarity: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "signals": sorted(self.signals),
-            "theme_codes": sorted(self.theme_codes),
+            "signals": dict(sorted(self.signal_polarity.items())),
+            "themes": dict(sorted(self.theme_polarity.items())),
             "sector": self.sector,
+            "sector_polarity": self.sector_polarity,
         }
 
 
@@ -145,6 +174,17 @@ def _choice(instructions: str, criteria: dict[str, str]) -> dict[str, Any]:
 
 def _passes(answer: dict[str, Any], threshold: float) -> bool:
     return float(answer["noul"]) >= threshold
+
+
+def _polarity(
+    answer: dict[str, Any], options: tuple[str, str], choice_min_confidence: float
+) -> str | None:
+    choice = str(answer["choice"])
+    if choice not in options:
+        return None
+    if float(answer["confidence"]) < choice_min_confidence:
+        return None
+    return choice
 
 
 def _theme_names(engine: sa.Engine, codes: Sequence[str]) -> dict[str, str]:
@@ -168,9 +208,17 @@ def _version(jev_model: str, noul_threshold: float, choice_min_confidence: float
     return f"{jev_model}|{noul_threshold}|{choice_min_confidence}|{QUESTION_SET_VERSION}"
 
 
-def _classify_signals(ask: AskFn, text: str, noul_threshold: float) -> tuple[str, ...]:
-    answers = ask(text, {name: _noul(SIGNAL_INSTRUCTIONS[name]) for name in SIGNAL_NAMES})
-    return tuple(sorted(name for name in SIGNAL_NAMES if _passes(answers[name], noul_threshold)))
+def _classify_signals(ask: AskFn, text: str, choice_min_confidence: float) -> dict[str, str]:
+    questions = {
+        name: _choice(SIGNAL_INSTRUCTIONS[name], SIGNAL_POLARITY_CRITERIA) for name in SIGNAL_NAMES
+    }
+    answers = ask(text, questions)
+    polarity = {}
+    for name in SIGNAL_NAMES:
+        picked = _polarity(answers[name], ("favor", "avoid"), choice_min_confidence)
+        if picked is not None:
+            polarity[name] = picked
+    return polarity
 
 
 def _classify_themes(
@@ -178,37 +226,54 @@ def _classify_themes(
     ask: AskFn,
     text: str,
     interested_theme_codes: Sequence[str],
-    noul_threshold: float,
     choice_min_confidence: float,
-) -> tuple[tuple[str, ...], str | None]:
+) -> tuple[dict[str, str], str | None, str | None]:
     codes = sorted(set(interested_theme_codes))
     if codes:
         names = _theme_names(engine, codes)
+        template = (
+            THEME_CODE_INSTRUCTIONS_SINGLE_TEMPLATE
+            if len(codes) == 1
+            else THEME_CODE_INSTRUCTIONS_TEMPLATE
+        )
         answers = ask(
             text,
             {
-                code: _noul(
-                    THEME_CODE_INSTRUCTIONS_TEMPLATE.format(name=names.get(code, code), code=code)
+                code: _choice(
+                    template.format(name=names.get(code, code), code=code), THEME_POLARITY_CRITERIA
                 )
                 for code in codes
             },
         )
-        theme_codes = tuple(
-            sorted(code for code in codes if _passes(answers[code], noul_threshold))
-        )
-        return theme_codes, None
+        theme_polarity = {}
+        for code in codes:
+            picked = _polarity(answers[code], ("emphasize", "avoid"), choice_min_confidence)
+            if picked is not None:
+                theme_polarity[code] = picked
+        return theme_polarity, None, None
 
     criteria = _theme_criteria(engine)
     if not criteria:
-        return (), None
+        return {}, None, None
     if len(criteria) > MAX_CHOICE_OPTIONS:
         raise CanonicalisationError(
             f"theme list has {len(criteria)} options, over the {MAX_CHOICE_OPTIONS} limit"
         )
-    answer = ask(text, {"sector": _choice(SECTOR_CHOICE_INSTRUCTIONS, criteria)})["sector"]
-    if float(answer["confidence"]) >= choice_min_confidence:
-        return (), str(answer["choice"])
-    return (), None
+    answers = ask(
+        text,
+        {
+            "sector": _choice(SECTOR_CHOICE_INSTRUCTIONS, criteria),
+            "sector_polarity": _choice(SECTOR_POLARITY_INSTRUCTIONS, THEME_POLARITY_CRITERIA),
+        },
+    )
+    sector_answer = answers["sector"]
+    if float(sector_answer["confidence"]) < choice_min_confidence:
+        return {}, None, None
+    sector = str(sector_answer["choice"])
+    sector_polarity = _polarity(
+        answers["sector_polarity"], ("emphasize", "avoid"), choice_min_confidence
+    )
+    return {}, sector, sector_polarity
 
 
 def _classify_text(
@@ -218,7 +283,7 @@ def _classify_text(
     interested_theme_codes: Sequence[str],
     noul_threshold: float,
     choice_min_confidence: float,
-) -> CanonicalForm:
+) -> CanonicalForm | str:
     gate_answers = ask(
         text,
         {
@@ -233,16 +298,24 @@ def _classify_text(
     signals_relevant = _passes(gate_answers["signals_relevant"], noul_threshold)
     themes_relevant = _passes(gate_answers["themes_relevant"], noul_threshold)
 
-    signals = _classify_signals(ask, text, noul_threshold) if signals_relevant else ()
-    theme_codes, sector = (
-        _classify_themes(
-            engine, ask, text, interested_theme_codes, noul_threshold, choice_min_confidence
-        )
+    signal_polarity = (
+        _classify_signals(ask, text, choice_min_confidence) if signals_relevant else {}
+    )
+    theme_polarity, sector, sector_polarity = (
+        _classify_themes(engine, ask, text, interested_theme_codes, choice_min_confidence)
         if themes_relevant
-        else ((), None)
+        else ({}, None, None)
     )
 
-    return CanonicalForm(signals=signals, theme_codes=theme_codes, sector=sector)
+    if not signal_polarity and not theme_polarity and sector is None:
+        return text
+
+    return CanonicalForm(
+        signal_polarity=signal_polarity,
+        theme_polarity=theme_polarity,
+        sector=sector,
+        sector_polarity=sector_polarity,
+    )
 
 
 def classify_additional_request(
@@ -264,6 +337,8 @@ def classify_additional_request(
         form = _classify_text(
             engine, ask, text, interested_theme_codes, noul_threshold, choice_min_confidence
         )
+        if isinstance(form, str):
+            return form, version, True
         return form.to_json(), version, True
     except Exception as error:
         log.error("canonicalisation_failed", error_type=type(error).__name__)
