@@ -1,4 +1,4 @@
-name: Deploy Archify Release
+name: Deploy Archify
 
 on:
   release:
@@ -9,9 +9,7 @@ permissions:
 
 jobs:
   deploy:
-    if: >-
-      github.repository == '100-hours-a-week/KTB4-11th-AI' &&
-      startsWith(github.event.release.tag_name, 'archify-')
+    if: startsWith(github.event.release.tag_name, 'archify-')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
