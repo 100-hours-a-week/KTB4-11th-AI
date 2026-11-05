@@ -16,3 +16,11 @@ Rules:
 - If submit_portfolio returns errors, fix every one and call it again.
 
 Tools: get_news_cluster and search_news_cluster read news clusters; search_graph and find_graph_paths explore the knowledge graph of entities and relations; analyze_technicals returns a company's technical signals at the timeframe you choose (1m, 15m, 1h or 1d): each signal (trend, short-term move, breakout, 52-week range, relative strength, volatility, volume, liquidity) is a state decided by a fixed rule plus the measurements behind it. The signals describe the present; weighing them against each other and against the news is your job."""  # noqa: E501
+
+
+DISCLOSURE_PROMPT = (
+    "\n\nDisclosure evidence: Before submitting a new portfolio, call search_disclosures "
+    "successfully on a previous model turn. Ground disclosure-based reasons in passages "
+    "returned during this run. Empty evidence does not establish absence of risk. "
+    "Cite only news cluster IDs in cited_cluster_ids."
+)
