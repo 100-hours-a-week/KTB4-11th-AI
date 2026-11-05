@@ -388,7 +388,13 @@ def _ask_for_sector(confidence):
                     "choice": "T1",
                     "probabilities": {},
                     "confidence": confidence,
-                }
+                },
+                "sector_polarity": {
+                    "type": "choice",
+                    "choice": "neither",
+                    "probabilities": {},
+                    "confidence": 0.9,
+                },
             }
         return {
             "relevant": {"type": "noul", "noul": 0.9},
@@ -429,7 +435,7 @@ def test_classify_uses_an_explicit_confidence_floor_when_set(engine, monkeypatch
     form, _, classified = REAL_CLASSIFY(engine, settings, Recorder(), _theme_request())
 
     assert classified
-    assert form["sector"] is None
+    assert form == "아무 테마나 담아줘"
 
 
 def test_a_classification_failure_does_not_block_generation(engine, monkeypatch, _insert_portfolio):
