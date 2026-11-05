@@ -102,6 +102,7 @@ competition_participants = sa.Table(
     sa.Column("participant_id", sa.BigInteger, primary_key=True),
     sa.Column("competition_id", sa.BigInteger, nullable=False),
     sa.Column("user_id", sa.BigInteger, nullable=False),
+    sa.Column("agent_id", sa.BigInteger, nullable=True),
     sa.Column("risk_profile", sa.Text, nullable=False),
     sa.Column(
         "interested_theme_codes",
@@ -111,6 +112,18 @@ competition_participants = sa.Table(
     ),
     sa.Column(
         "excluded_theme_codes",
+        postgresql.ARRAY(sa.Text),
+        nullable=False,
+        server_default=sa.text("'{}'"),
+    ),
+    sa.Column(
+        "interested_theme_names",
+        postgresql.ARRAY(sa.Text),
+        nullable=False,
+        server_default=sa.text("'{}'"),
+    ),
+    sa.Column(
+        "excluded_theme_names",
         postgresql.ARRAY(sa.Text),
         nullable=False,
         server_default=sa.text("'{}'"),
@@ -192,6 +205,13 @@ competition_jobs = sa.Table(
 )
 
 
+def _escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def like_contains(text: str) -> str:
-    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"%{_escape_like(text)}%"
+
+
+def like_group_prefix(text: str) -> str:
+    return f"{_escape_like(text)}\\_%"
