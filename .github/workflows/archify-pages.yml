@@ -106,6 +106,9 @@ jobs:
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: archify-pages-deploy
+      cancel-in-progress: false
     permissions:
       contents: read
       pages: write
