@@ -49,3 +49,16 @@ def test_an_explicit_confidence_floor_lets_the_worker_pass_the_startup_check(env
 
     assert exit_.value.code == 0
     assert sqs.receive_message.called
+
+
+def test_a_confidence_floor_of_zero_lets_the_worker_pass_the_startup_check(env, monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_BUILDER_JEV_CHOICE_MIN_CONFIDENCE", "0.0")
+    sqs = Mock()
+    sqs.receive_message.side_effect = SystemExit(0)
+    monkeypatch.setattr(entry.boto3, "client", lambda *args, **kwargs: sqs)
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    assert sqs.receive_message.called

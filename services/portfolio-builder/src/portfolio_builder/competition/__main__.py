@@ -19,7 +19,6 @@ REQUIRED_SETTINGS = (
     "competition_queue_url",
     "backend_base_uri",
     "backend_jwt_issuer",
-    "jev_choice_min_confidence",
 )
 
 
@@ -27,6 +26,8 @@ def main() -> None:
     settings = Settings()
     setup_logging(settings.log_level, service_name="competition-portfolio-builder")
     missing = [name for name in REQUIRED_SETTINGS if not getattr(settings, name)]
+    if settings.jev_choice_min_confidence is None:
+        missing.append("jev_choice_min_confidence")
     if not settings.backend_jwt_secret.get_secret_value():
         missing.append("backend_jwt_secret")
     if missing:
