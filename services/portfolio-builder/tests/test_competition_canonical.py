@@ -253,22 +253,38 @@ def test_polarity_differing_in_one_signal_among_several_still_differs(engine):
     assert generation_key(a, None, "openrouter/m") != generation_key(b, None, "openrouter/m")
 
 
-def test_selected_interested_themes_ask_one_choice_per_code(engine):
+def test_selected_interested_themes_ask_one_choice_per_received_name(engine):
     answers = {
         "relevant": _noul(0.9),
         "signals_relevant": _noul(0.1),
         "themes_relevant": _noul(0.9),
-        "T1": _choice("emphasize", 0.9),
-        "T2": _choice("neither", 0.9),
+        "반도체": _choice("emphasize", 0.9),
+        "2차전지": _choice("neither", 0.9),
     }
     ask = FakeAsk(answers)
 
-    form, _, _ = _classify(engine, ask, interested=("T1", "T2"))
+    form, _, _ = _classify(engine, ask, interested=("반도체", "2차전지"))
 
     assert len(ask.calls) == 2
-    assert ask.calls[1][1] == {"T1", "T2"}
-    assert form["themes"] == {"T1": "emphasize"}
+    assert ask.calls[1][1] == {"반도체", "2차전지"}
+    assert form["themes"] == {"반도체": "emphasize"}
     assert form["sector"] is None
+
+
+def test_a_group_name_selection_asks_one_question_not_one_per_resolved_code(engine):
+    answers = {
+        "relevant": _noul(0.9),
+        "signals_relevant": _noul(0.1),
+        "themes_relevant": _noul(0.9),
+        "반도체": _choice("emphasize", 0.9),
+    }
+    ask = FakeAsk(answers)
+
+    form, _, _ = _classify(engine, ask, interested=("반도체",))
+
+    assert len(ask.calls) == 2
+    assert ask.calls[1][1] == {"반도체"}
+    assert form["themes"] == {"반도체": "emphasize"}
 
 
 def test_theme_emphasise_and_theme_avoid_produce_different_generation_keys(engine):
@@ -277,16 +293,16 @@ def test_theme_emphasise_and_theme_avoid_produce_different_generation_keys(engin
             "relevant": _noul(0.9),
             "signals_relevant": _noul(0.1),
             "themes_relevant": _noul(0.9),
-            "T1": _choice(choice, 0.9),
+            "반도체": _choice(choice, 0.9),
         }
 
     emphasise_ask = FakeAsk(_answers("emphasize"))
     avoid_ask = FakeAsk(_answers("avoid"))
 
     emphasise_form, version, _ = _classify(
-        engine, emphasise_ask, text="HBM 관련 요청", interested=("T1",)
+        engine, emphasise_ask, text="HBM 관련 요청", interested=("반도체",)
     )
-    avoid_form, _, _ = _classify(engine, avoid_ask, text="HBM 관련 요청", interested=("T1",))
+    avoid_form, _, _ = _classify(engine, avoid_ask, text="HBM 관련 요청", interested=("반도체",))
 
     assert emphasise_form != avoid_form
 
@@ -493,9 +509,12 @@ def _settings(**overrides):
         "participant_id": 1,
         "competition_id": 10,
         "user_id": 100,
+        "agent_id": 9001,
         "risk_profile": "성장형",
         "interested_theme_codes": (),
         "excluded_theme_codes": (),
+        "interested_theme_names": (),
+        "excluded_theme_names": (),
         "additional_request": "x",
         "canonical_form": None,
         "canonical_version": "v1",

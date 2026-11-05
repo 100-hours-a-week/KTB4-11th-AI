@@ -24,6 +24,7 @@ from portfolio_builder.competition.repository import (
     link_portfolio,
     store_settings,
 )
+from portfolio_builder.competition.themes import ResolvedAgent, UnresolvedTheme, resolve_agent
 from portfolio_builder.database import portfolios
 from portfolio_builder.explain import Explanations, explain_and_save
 from portfolio_builder.market import HttpMarket
@@ -40,19 +41,13 @@ ModelFactory = Callable[..., BaseChatModel]
 JEV_CHOICE_MIN_CONFIDENCE_FALLBACK = 0.5
 
 
-def _deliver(
-    sqs: Any,
-    queue_url: str,
-    receipt_handle: str,
-    log: StructuredLogger,
-    notify: Callable[[], None],
-) -> None:
+def _notify(log: StructuredLogger, notify: Callable[[], None]) -> bool:
     try:
         notify()
+        return True
     except Exception as error:
         log.error("notify_failed", error_type=type(error).__name__)
-        return
-    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        return False
 
 
 def _explain(
@@ -117,7 +112,7 @@ def _classify(
     engine: sa.Engine,
     settings: Settings,
     log: StructuredLogger,
-    request: Request,
+    resolved: ResolvedAgent,
 ) -> tuple[Any, str | None, bool]:
     ask = partial(
         jev.ask,
@@ -135,33 +130,22 @@ def _classify(
         settings.jev_model,
         settings.jev_noul_threshold,
         choice_min_confidence,
-        request.additional_request,
-        request.effective_interested,
+        resolved.additional_request,
+        resolved.interested_theme_names,
         log,
     )
 
 
-def process_message(
-    message: dict[str, object],
-    sqs: Any,
+def _process_agent(
+    resolved: ResolvedAgent,
     engine: sa.Engine,
     backend: Backend,
     model_factory: ModelFactory,
     settings: Settings,
     log: StructuredLogger,
-) -> None:
-    queue_url = str(message["_queue_url"])
-    receipt_handle = str(message["ReceiptHandle"])
-
-    try:
-        request = Request.model_validate_json(str(message["Body"]))
-    except ValidationError as error:
-        log.error("invalid_message", error_type=type(error).__name__)
-        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
-        return
-
+) -> bool:
     participant, differing_fields = store_settings(
-        engine, request, partial(_classify, engine, settings, log)
+        engine, resolved, partial(_classify, engine, settings, log)
     )
     if differing_fields:
         log.warning(
@@ -182,14 +166,7 @@ def process_message(
                 ).scalar_one()
             trace = [TraceEntry.model_validate(entry) for entry in trace_rows]
             _explain(engine, model_factory, settings, log, portfolio_id, trace)
-            _deliver(
-                sqs,
-                queue_url,
-                receipt_handle,
-                log,
-                lambda: backend.completed(participant, portfolio_id),
-            )
-            return
+            return _notify(log, lambda: backend.completed(participant, portfolio_id))
 
     key = generation_key(participant, previous_portfolio_id, settings.llm_model)
     claim = claim_job(
@@ -201,18 +178,11 @@ def process_message(
         settings.competition_max_attempts,
     )
     if claim is None:
-        return
+        return False
 
     if not claim.mine:
         link_portfolio(engine, participant.participant_id, claim.portfolio_id)
-        _deliver(
-            sqs,
-            queue_url,
-            receipt_handle,
-            log,
-            lambda: backend.completed(participant, claim.portfolio_id),
-        )
-        return
+        return _notify(log, lambda: backend.completed(participant, claim.portfolio_id))
 
     excluded = excluded_company_ids(engine, participant.excluded_theme_codes)
     log.info(
@@ -238,17 +208,48 @@ def process_message(
     if result.portfolio_id is None:
         error = result.error or f"agent ended with outcome {result.outcome}"
         fail_job(engine, key, error)
-        _deliver(sqs, queue_url, receipt_handle, log, lambda: backend.failed(participant, error))
-        return
+        return _notify(log, lambda: backend.failed(participant, error))
 
     save_trace(engine, result.portfolio_id, result.trace)
     link_portfolio(engine, participant.participant_id, result.portfolio_id)
     finish_job(engine, key, result.portfolio_id)
     _explain(engine, model_factory, settings, log, result.portfolio_id, result.trace)
-    _deliver(
-        sqs,
-        queue_url,
-        receipt_handle,
-        log,
-        lambda: backend.completed(participant, result.portfolio_id),
-    )
+    return _notify(log, lambda: backend.completed(participant, result.portfolio_id))
+
+
+def process_message(
+    message: dict[str, object],
+    sqs: Any,
+    engine: sa.Engine,
+    backend: Backend,
+    model_factory: ModelFactory,
+    settings: Settings,
+    log: StructuredLogger,
+) -> None:
+    queue_url = str(message["_queue_url"])
+    receipt_handle = str(message["ReceiptHandle"])
+
+    try:
+        request = Request.model_validate_json(str(message["Body"]))
+    except ValidationError as error:
+        log.error("invalid_message", error_type=type(error).__name__)
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        return
+
+    try:
+        resolved_agents = [
+            resolve_agent(engine, request.competition_id, request.user_id, agent)
+            for agent in request.agents
+        ]
+    except UnresolvedTheme as error:
+        log.error("unresolved_theme", error_type=type(error).__name__, error=str(error))
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        return
+
+    all_notified = True
+    for resolved in resolved_agents:
+        if not _process_agent(resolved, engine, backend, model_factory, settings, log):
+            all_notified = False
+
+    if all_notified:
+        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)

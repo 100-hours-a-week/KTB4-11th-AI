@@ -1,7 +1,7 @@
 import pytest
 import sqlalchemy as sa
-from portfolio_builder.competition.message import Request
 from portfolio_builder.competition.repository import ParticipantSettings
+from portfolio_builder.competition.themes import ResolvedAgent
 from portfolio_builder.database import portfolios
 
 TABLES = (
@@ -75,13 +75,16 @@ def news_client():
     return Stub()
 
 
-_REQUEST_DEFAULTS = {
+_RESOLVED_DEFAULTS = {
     "competition_id": 10,
-    "participant_id": 1,
     "user_id": 100,
+    "agent_id": 9001,
+    "participant_id": 1,
     "risk_profile": "성장형",
     "interested_theme_codes": ["T1"],
     "excluded_theme_codes": [],
+    "interested_theme_names": ["HBM"],
+    "excluded_theme_names": [],
     "additional_request": "원문",
 }
 
@@ -89,9 +92,12 @@ _SETTINGS_DEFAULTS = {
     "participant_id": 1,
     "competition_id": 10,
     "user_id": 100,
+    "agent_id": 9001,
     "risk_profile": "성장형",
     "interested_theme_codes": ("T1",),
     "excluded_theme_codes": (),
+    "interested_theme_names": ("HBM",),
+    "excluded_theme_names": (),
     "additional_request": "원문",
 }
 
@@ -104,8 +110,8 @@ _PORTFOLIO_DEFAULTS = {
 
 @pytest.fixture
 def _request():
-    def make(**changes) -> Request:
-        return Request(**{**_REQUEST_DEFAULTS, **changes})
+    def make(**changes) -> ResolvedAgent:
+        return ResolvedAgent(**{**_RESOLVED_DEFAULTS, **changes})
 
     return make
 

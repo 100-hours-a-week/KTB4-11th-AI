@@ -20,7 +20,7 @@ SIGNAL_NAMES = (
     "short_term_rank",
 )
 
-QUESTION_SET_VERSION = "v2"
+QUESTION_SET_VERSION = "v3"
 MAX_CHOICE_OPTIONS = 255
 
 GATE_RELEVANT_INSTRUCTIONS = (
@@ -111,15 +111,15 @@ THEME_POLARITY_CRITERIA: dict[str, str] = {
     "neither": "The text expresses no preference either way about this theme.",
 }
 
-THEME_CODE_INSTRUCTIONS_SINGLE_TEMPLATE = (
+THEME_NAME_INSTRUCTIONS_SINGLE_TEMPLATE = (
     "The state is free text a user wrote when asking an AI to build them a stock portfolio."
-    ' The user already chose the theme "{name}" (code {code}) as their one selected interest.'
+    ' The user already chose the theme "{name}" as their one selected interest.'
     " Classify the text's stance toward that theme. Pick emphasize, avoid, or neither."
 )
 
-THEME_CODE_INSTRUCTIONS_TEMPLATE = (
+THEME_NAME_INSTRUCTIONS_TEMPLATE = (
     "The state is free text a user wrote when asking an AI to build them a stock portfolio."
-    ' The user already chose the theme "{name}" (code {code}) as one of several interests.'
+    ' The user already chose the theme "{name}" as one of several interests.'
     " Classify the text's stance toward that theme specifically, as distinct from the user's"
     " other chosen interests. Pick emphasize if the text calls out or asks to emphasize that"
     " theme more than the others, avoid if it asks to avoid or exclude that theme, or neither"
@@ -187,17 +187,6 @@ def _polarity(
     return choice
 
 
-def _theme_names(engine: sa.Engine, codes: Sequence[str]) -> dict[str, str]:
-    if not codes:
-        return {}
-    query = sa.text("SELECT theme_code, name FROM themes WHERE theme_code IN :codes").bindparams(
-        sa.bindparam("codes", expanding=True)
-    )
-    with engine.connect() as conn:
-        rows = conn.execute(query, {"codes": list(codes)})
-        return {row[0]: row[1] for row in rows}
-
-
 def _theme_criteria(engine: sa.Engine) -> dict[str, str]:
     with engine.connect() as conn:
         rows = conn.execute(sa.text("SELECT theme_code, name FROM themes ORDER BY theme_code"))
@@ -225,31 +214,25 @@ def _classify_themes(
     engine: sa.Engine,
     ask: AskFn,
     text: str,
-    interested_theme_codes: Sequence[str],
+    interested_theme_names: Sequence[str],
     choice_min_confidence: float,
 ) -> tuple[dict[str, str], str | None, str | None]:
-    codes = sorted(set(interested_theme_codes))
-    if codes:
-        names = _theme_names(engine, codes)
+    names = sorted(set(interested_theme_names))
+    if names:
         template = (
-            THEME_CODE_INSTRUCTIONS_SINGLE_TEMPLATE
-            if len(codes) == 1
-            else THEME_CODE_INSTRUCTIONS_TEMPLATE
+            THEME_NAME_INSTRUCTIONS_SINGLE_TEMPLATE
+            if len(names) == 1
+            else THEME_NAME_INSTRUCTIONS_TEMPLATE
         )
         answers = ask(
             text,
-            {
-                code: _choice(
-                    template.format(name=names.get(code, code), code=code), THEME_POLARITY_CRITERIA
-                )
-                for code in codes
-            },
+            {name: _choice(template.format(name=name), THEME_POLARITY_CRITERIA) for name in names},
         )
         theme_polarity = {}
-        for code in codes:
-            picked = _polarity(answers[code], ("emphasize", "avoid"), choice_min_confidence)
+        for name in names:
+            picked = _polarity(answers[name], ("emphasize", "avoid"), choice_min_confidence)
             if picked is not None:
-                theme_polarity[code] = picked
+                theme_polarity[name] = picked
         return theme_polarity, None, None
 
     criteria = _theme_criteria(engine)
@@ -280,7 +263,7 @@ def _classify_text(
     engine: sa.Engine,
     ask: AskFn,
     text: str,
-    interested_theme_codes: Sequence[str],
+    interested_theme_names: Sequence[str],
     noul_threshold: float,
     choice_min_confidence: float,
 ) -> CanonicalForm | str:
@@ -302,7 +285,7 @@ def _classify_text(
         _classify_signals(ask, text, choice_min_confidence) if signals_relevant else {}
     )
     theme_polarity, sector, sector_polarity = (
-        _classify_themes(engine, ask, text, interested_theme_codes, choice_min_confidence)
+        _classify_themes(engine, ask, text, interested_theme_names, choice_min_confidence)
         if themes_relevant
         else ({}, None, None)
     )
@@ -325,7 +308,7 @@ def classify_additional_request(
     noul_threshold: float,
     choice_min_confidence: float,
     additional_request: str,
-    interested_theme_codes: Sequence[str],
+    interested_theme_names: Sequence[str],
     log: StructuredLogger,
 ) -> tuple[Any, str | None, bool]:
     version = _version(jev_model, noul_threshold, choice_min_confidence)
@@ -335,7 +318,7 @@ def classify_additional_request(
 
     try:
         form = _classify_text(
-            engine, ask, text, interested_theme_codes, noul_threshold, choice_min_confidence
+            engine, ask, text, interested_theme_names, noul_threshold, choice_min_confidence
         )
         if isinstance(form, str):
             return form, version, True

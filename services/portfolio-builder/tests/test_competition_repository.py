@@ -33,6 +33,21 @@ def test_first_message_stores_the_snapshot(engine, _request):
     assert settings.additional_request == "원문"
 
 
+def test_agent_id_is_stored_alongside_the_participant_id_key(engine, _request):
+    settings, _ = store_settings(engine, _request(agent_id=4242))
+
+    assert settings.agent_id == 4242
+    assert settings.participant_id == 1
+
+
+def test_a_later_message_with_a_different_agent_id_is_flagged_as_drift(engine, _request):
+    store_settings(engine, _request(agent_id=1))
+
+    _, changed = store_settings(engine, _request(agent_id=2))
+
+    assert "agent_id" in changed
+
+
 def test_later_message_keeps_the_stored_snapshot_and_reports_the_difference(engine, _request):
     store_settings(engine, _request())
 
@@ -121,7 +136,7 @@ def test_a_classification_failure_stores_the_raw_text_and_leaves_it_unclassified
             0.5,
             0.5,
             request.additional_request,
-            request.effective_interested,
+            request.interested_theme_names,
             _NullLog(),
         )
 
