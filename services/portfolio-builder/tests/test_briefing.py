@@ -176,6 +176,29 @@ def test_the_settings_section_carries_every_value_and_the_free_text_verbatim(eng
     assert "한 종목에 몰리지 않게 해줘" in briefing.text
 
 
+def test_a_classified_participants_briefing_carries_the_raw_text_not_the_structure(
+    engine, _settings
+):
+    participant = _settings(
+        additional_request="최대 5종목만 담아줘",
+        canonical_form={
+            "signals": {"volatility": "favor"},
+            "themes": {},
+            "sector": None,
+            "sector_polarity": None,
+        },
+        canonical_version="v2",
+        classified=True,
+    )
+
+    briefing = load_briefing(engine, NewsClientStub(), 7, participant=participant)
+
+    assert "최대 5종목만 담아줘" in briefing.text
+    assert "signals" not in briefing.text
+    assert "volatility" not in briefing.text
+    assert "sector_polarity" not in briefing.text
+
+
 def test_an_empty_free_text_omits_its_block(engine, _settings):
     briefing = load_briefing(
         engine, NewsClientStub(), 7, participant=_settings(additional_request="")
