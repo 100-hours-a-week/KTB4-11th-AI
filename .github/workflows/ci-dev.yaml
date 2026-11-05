@@ -8,7 +8,6 @@ on:
       - "docs/**"
 
   pull_request:
-    branches: [dev]
     paths-ignore:
       - "**/*.md"
       - "docs/**"
@@ -73,6 +72,7 @@ jobs:
           if [[ "$FULL" == true ]]; then
             members=$(printf '%s\n' packages/* services/*)
           else
+            exclusions=$(python3 -c 'import tomllib; print("\n".join(tomllib.load(open("pyproject.toml", "rb"))["tool"]["uv"]["workspace"].get("exclude", [])))')
             members=$(jq -r '.[] | split("/") | if .[0] == "docker" then "services/" + (.[-1] | sub("\\.(Dockerfile|txt)$"; "")) else .[:2] | join("/") end' <<< "$FILES")
             for member in $members; do
               if [[ -d "$member" ]]; then
@@ -83,6 +83,16 @@ jobs:
                 fi
                 tree=$(uv tree --invert --frozen --universal --no-dev --package "$package")
                 if [[ -z "$tree" ]]; then
+                  excluded=false
+                  while IFS= read -r pattern; do
+                    if [[ -n "$pattern" && "$member" == $pattern ]]; then
+                      excluded=true
+                      break
+                    fi
+                  done <<< "$exclusions"
+                  if [[ "$excluded" == true ]]; then
+                    continue
+                  fi
                   echo "::error::$member is not the workspace package $package"
                   exit 1
                 fi

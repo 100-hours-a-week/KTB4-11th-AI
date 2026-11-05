@@ -1,0 +1,363 @@
+# Disclosure RAG: Final Implementation Plan
+
+Finalized: 2026-10-29; model configuration and CI integration updated 2026-11-04.
+Scope: GPU serving issue #431 / PR #430, following collection #440 / #441 and services #346 / #432.
+Review and merge #441, then #432, then #430. Each PR contains its own final plan.
+Intermediate designs, plans, handoffs and raw measurement files are maintained outside Git.
+
+The final accuracy follow-up was verified with **1,648 passed, 49 skipped, 2 subtests passed**
+using disposable PostgreSQL `ktb_disclosure_accuracy_test`. Its 115 inference and deployment CPU tests
+include model-setting propagation through the image, image-build downloads and clean
+worker environments. The actual Modal SDK 1.6.3 app definition loads without importing
+GPU libraries or creating remote resources. No GPU deployment or new inference timing
+is part of this verification.
+
+CI keeps the excluded GPU project in CPU test selection while skipping its workspace
+dependency expansion. Inference-only, mixed inference/retrieval, core-only and full
+change inputs were checked with the actual target-selection script. The same CPU CI
+also runs for the serving PR while its base is the services branch.
+
+The source includes #432's default-disabled rollout. `DISCLOSURE_ENABLED=false` keeps
+legacy portfolio generation and skips indexing until the model configuration is ready.
+Enabled mode retains strict model validation and the disclosure-search requirement.
+
+## 1. Service boundaries
+
+| Component | Responsibility |
+| --- | --- |
+| news-preprocessor | Collect short and long filings through the existing API publisher; archive originals and store parsed documents, sections and supported financial facts |
+| disclosure-indexer | Read stored documents from PostgreSQL, embed narrative passages and store vectors in pgvector |
+| disclosure-retrieval library (inside portfolio-builder) | Read financial facts and sections directly; return ranked narrative evidence without answer generation |
+| disclosure-inference | Load and warm up the selected models, embed ordered document groups and queries, score candidates and validate requests and adapters |
+| Modal deployment | Build model images, configure GPUs, snapshots and scaling, and expose authenticated inference endpoints |
+| portfolio-builder | Use disclosure evidence and technical analysis before saving a new portfolio |
+
+The existing hourly news command uses `opendart/opendart.py` as its single API intake.
+Long filings retain official `detail_type` codes. `OpenDart.article` fetches and parses
+them before standard scraping stores metadata, documents, sections and accounts in one
+transaction. OpenDART modules are flat, and there is no pending-record readback. There is no RSS path or separate collector command/timer. Collection preserves
+its bounded initial history and daily completion state. The DB-only indexer embeds eligible stored narrative content. It never
+calls OpenDART or opens source archives. News-http remains read-only.
+
+The existing news pipeline keeps its own model and configuration. CPU services call Modal
+through authenticated HTTPS and do not import Colab code, Modal SDK or GPU libraries.
+
+## 2. Storage and incremental indexing
+
+- [x] Keep source ZIP/XML archives outside the repository and retain receipt IDs, filing
+  periods, correction families, source hashes, physical file names and parsed text offsets.
+- [x] Recheck new/corrected/replaced sources and eligible retries without duplicating data.
+  Bound attempts, distinguish collection/parsing/embedding failures and recover expired leases.
+- [x] Store financial facts separately, preserving consolidated/separate scope, source strings
+  and normalized NUMERIC values. Missing values remain null. Store named sections for direct reads.
+- [x] Embed recognized narrative sections. Tables and unclassified sections remain accessible
+  through section storage. Context groups preserve source order and never cross physical files.
+- [x] Keep the three collection migrations in PR #441: 0013 filing metadata/originals,
+  0014 sections, and 0015 financial facts plus completion metadata.
+  PR #432 adds vector migration 0016. GPU serving owns no schema revision. Store narrative vectors in
+  halfvec(1024), preserving legacy halfvec(2000) data. Enforce parent-index dimensions and identity.
+- [x] Activate indexes atomically. During rollback, accept an older parser's index only when
+  its source hash matches the latest document. Never serve an index from a replaced source.
+
+Run migrations through the existing dedicated migration job, then build the new index before
+switching callers. To roll back, restore the previous provider/model/prefix and 2000 dimensions;
+no schema downgrade is required. Downgrading 0016 to 0015 removes vector indexes and chunks
+while retaining collected sources. Downgrading the collection revisions to 0012 removes
+stored documents and financial facts; provider rollback does not require either operation.
+
+## 3. Model contracts and Modal deployment
+
+The model configuration is `packages/core/src/ktb_core/embedding/config.py`. It contains
+the existing news settings and the pinned disclosure model configuration. Modal copies
+this same Python file into its images as `/root/model_config.py`; CPU services import
+its identity functions. Deployment resolves all selected fields into the non-secret
+`DISCLOSURE_MODEL_MANIFEST` JSON image environment before downloading weights.
+Image-build and worker imports prefer that resolved manifest, so local overrides
+cannot disappear when the worker's environment is different. Environment layers also
+invalidate image-build caches when the selected model changes. Separate disclosure model JSON/Python files are unnecessary.
+External inference HTTP requests and 303 result polling stay in the indexer and retrieval library;
+core shares stdlib inference transport and vector validation between the two CPU services;
+it has no GPU or third-party HTTP dependency.
+
+Inference implementation lives in `services/disclosure-inference/src/disclosure_inference`.
+Its `runtime.py` owns Context and Qwen loading, warmup, embedding, reranking, token limits
+and measurement methods. `contracts.py`, `transform.py` and `verification.py` own request
+validation, prompts, embedding transforms and adapter checks. None imports Modal or FastAPI.
+
+`infrastructure/inference/disclosure/app.py` owns Modal images, GPU preferences,
+snapshot lifecycle, scale settings, proxy authentication and HTTP error mapping.
+The Modal lifecycle hook constructs the service runtime before taking a snapshot;
+endpoint and measurement methods delegate to that runtime. `weights.py` downloads the
+pinned revisions during image build and uses the service's adapter verification.
+
+The GPU project's own `pyproject.toml` declares its dependencies and Python 3.12–3.14
+support. It is explicitly excluded from the CPU uv workspace. The Modal image installs
+these dependencies, copies the package with `add_local_python_source(copy=True)`, and
+includes the project metadata before building either model layer. The CPU lockfile and
+production image requirements remain unchanged. Root pytest includes the service source
+for CPU tests; it does not install or load GPU libraries.
+
+| Role | Model and selected adapter |
+| --- | --- |
+| Embedding | perplexity-ai/pplx-embed-v2-context-9b-preview; score10 adapter SHA256 starts 1f5d4367 |
+| Reranking | Qwen/Qwen3-Reranker-4B; verified last adapter SHA256 starts 7d43c402 |
+
+- [x] Pin base and adapter revisions, verify hashes and finite/nonzero LoRA tensors, and
+  refuse mismatched response identities, dimensions, chunk IDs or nonfinite outputs.
+- [x] Use the checkpoint's document/query encoding paths and prefixes. Apply the evaluated
+  INT8 output transform, retain the first 1024 dimensions and L2-normalize. Embedding weights
+  remain bf16. Enforce 16,384 tokens using the checkpoint tokenizer without truncation.
+- [x] Use the financial yes/no chat template, NF4 double quantization, float32 preparation,
+  no KV cache and last-token logits for reranking.
+- [x] Bake weights into separate Modal images and load them offline. Warm up inside
+  `@modal.enter(snap=True)` with GPU memory snapshots enabled.
+- [x] Use a five-second idle window, zero minimum/buffer containers and at most two
+  containers per model: two embedding plus two reranking workers, four in total. Default GPU
+  preference is L4,A10 after an observed L4 capacity shortage; both are 24GB options.
+- [x] Complete Modal redeployment and authenticated live GPU checks. The validated deployment
+  version is v7. Temporary validation credentials were revoked after measurement.
+
+Deployment command from the repository root:
+
+```bash
+PYTHONPATH=services/disclosure-inference/src \
+  modal deploy infrastructure/inference/disclosure/app.py
+```
+
+GPU snapshots reduce repeated initialization but do not guarantee allocation availability or
+a restore hit. The observed initial L4 wait must not be treated as model compute time.
+
+## 4. Retrieval and builder integration
+
+Retrieval code is under `services/disclosure-retrieval`. Builder
+tools pass their existing database engine directly. There is no retrieval FastAPI app,
+router, HTTP client, port or container. Only external model inference uses HTTPS.
+
+- [x] Apply company/report/date filters and compute exact cosine distance across every
+  eligible chunk. Do not use HNSW or IVFFlat candidate pruning.
+- [x] Select 50 candidates per latest/history scope, rerank and return five by default.
+  Keep cosine, reranker score and logit margin separate; include source IDs, URL and offsets.
+- [x] Return valid empty results without GPU calls when no searchable chunks exist. Keep
+  model failures, input-budget rejections and successful empty searches distinct through tool errors.
+- [x] Require successful technical analysis and disclosure search before new portfolio
+  submission. A valid empty search completes the tool call but does not prove risk is absent.
+- [x] Follow same-origin HTTP 303 result URLs with GET without resubmitting inference.
+  Budget redirect waits and apply socket timeouts. Arbitrary slow streaming body reads are
+  not subject to hard wall-clock cancellation by the standard-library client.
+
+## 5. Configuration and scheduling
+
+Both Compose files pass environment-only model URLs and workspace proxy tokens. The Modal
+endpoints are separate web functions rather than one OpenAI-compatible base URL. Legacy
+OpenAI-compatible configuration remains available for the preserved 2000-dimensional path.
+
+Set these values together for the Modal path:
+
+```dotenv
+DISCLOSURE_INFERENCE_BACKEND=modal
+DISCLOSURE_EMBEDDING_DIMENSIONS=1024
+DISCLOSURE_EMBEDDING_MAX_TOKENS=16384
+DISCLOSURE_MODAL_DOCUMENT_URL=https://<document-endpoint>.modal.run
+DISCLOSURE_MODAL_QUERY_URL=https://<query-endpoint>.modal.run
+DISCLOSURE_MODAL_RERANK_URL=https://<rerank-endpoint>.modal.run
+DISCLOSURE_MODAL_KEY=<workspace-proxy-token-id>
+DISCLOSURE_MODAL_SECRET=<workspace-proxy-token-secret>
+DISCLOSURE_INDEXER_TIMEOUT=150
+DISCLOSURE_INDEXER_LEASE_SECONDS=600
+DISCLOSURE_RETRIEVAL_TIMEOUT=150
+```
+
+- [x] The existing hourly news-preprocessor service starts the DB-only indexer through
+  `OnSuccess` or final `OnFailure`. The indexer never starts collection. No separate
+  collection command, collector timer or indexing timer remains. Previously stored
+  documents can still be indexed after collection failure. News and the weekday
+  06:00 portfolio pipeline retain their schedules.
+- [x] Pass DART credentials through `NEWS_PREPROCESSOR_DART_API_KEY`; configure collection
+  with `NEWS_PREPROCESSOR_DISCLOSURE_*`. Mount archives only in news-preprocessor.
+  The indexer needs neither DART credentials nor filesystem access to originals.
+- [x] Run no inference when there is no eligible work; retain retries when no new filing appears.
+- [x] Build indexer and portfolio-builder CPU images; install the retrieval library in builder and the shared app image.
+  Keep GPU dependencies only in Modal images.
+
+## 6. Verification results
+
+- [x] Unified API intake, typed retrieval and model-contract full suite on the disposable
+  `ktb_typed_disclosure_services_test` database: **1,394 passed, 49 skipped, two subtests passed**.
+  The collection branch passed 1,226 tests; the indexing/tools branch passed 1,364.
+  These CPU checks do not deploy GPU workers or recompute model quality scores.
+- [x] Upgrade fresh test databases through collection 0015 and vector 0016. Offline migration tests verify
+  object ownership and reversed downgrade operations. Type metadata and nullable fiscal
+  periods support nonperiodic filings; no collection-window table remains.
+- [x] Build news-preprocessor, portfolio-builder and shared application images, then import
+  them with networking disabled. Verify the RSS module, separate collector command and
+  retrieval HTTP server are absent. Compose passes the same model settings to indexer
+  and builder. Ruff lint/format, dependency boundaries and whitespace checks passed.
+- [x] The earlier implementation passed CI Dev, including Python 3.14 compatibility,
+  requirements verification, dependency audit and image builds. The updated PR commits
+  must complete their own CI checks before merge. PR CI does not deploy the CPU services.
+- [x] Validate document/query embedding and 50-candidate reranking on actual GPUs. A
+  16,003-token document encoded in 8.634 seconds, with peak allocated/reserved VRAM of
+  19.04/21.34 GiB; reported free memory was 0.42 GiB. Concurrency remains one input per container.
+- [x] Recompute GPU query vectors and reranking for 34 answerable narrative calibration
+  questions. Historical run reused full-report document vectors without the now-required producer-identity check: 9,101 eligible chunks from five reports.
+
+| Metric | Result |
+| --- | ---: |
+| Recall@5 | 1.0000 |
+| nDCG@5 | 0.978290 |
+| MRR | 0.970588 |
+| Combined retrieval p50 | 14.540 seconds |
+| Combined retrieval p95 | 19.656 seconds |
+
+These historical scores are withdrawn as validation of the current model. The cached document
+vectors did not pass the producer-identity checks now required, and the previous nDCG
+implementation overestimated results when fewer than five documents were returned. Recover
+cache provenance and recompute before citing quality scores. They also do not evaluate the new
+production parser/classification/context grouping policy. The benchmark uses evaluation
+metadata and preceding context; production reranking input differs. The DB measurements use
+a local temporary test table. Labels have not completed SME review. No answer-generation F1
+or RAGAS run is claimed. Raw datasets, training artifacts and measurement records stay outside Git.
+
+## 7. Remaining checks before production cutover
+
+- Evaluate the actual narrative classification, metadata and context groups built by the indexer.
+- Freeze configuration/labels before separately evaluating the final 178 questions.
+- Collect a larger snapshot/allocation sample and random 100-requests/day latency and billing data.
+- Configure permanent deployment credentials, apply production migrations and deploy CPU services.
+
+Official references: [GPU snapshots](https://modal.com/docs/guide/memory-snapshots),
+[GPU preferences](https://modal.com/docs/guide/gpu),
+[303 result URLs](https://modal.com/docs/guide/webhook-timeouts),
+[proxy authentication](https://modal.com/docs/guide/webhook-proxy-auth).
+
+## 8. Local execution and configuration changes
+
+Migrate with `KTB_POSTGRES_DSN` through the dedicated migration job, not service startup.
+After market-syncer has stored the corporation universe, run collection and indexing:
+
+```bash
+docker compose -f compose.local.yaml run --rm news-preprocessor
+docker compose -f compose.local.yaml --profile jobs run --rm disclosure-indexer
+```
+
+The first command stores long-disclosure source documents, sections and supported
+structured accounts without embedding those disclosures. Existing news article embedding
+is unchanged. The second reads stored documents and calls the configured
+embedding endpoint only when eligible work exists. Retrieval returns evidence without
+generating an answer. SQL financial and section reads do not require GPU inference.
+
+Configure `NEWS_PREPROCESSOR_DART_API_KEY` and the `NEWS_PREPROCESSOR_DISCLOSURE_*`
+parsing/archive limits on news-preprocessor. Keep indexing options such as
+chunk size, batch size, embedding timeout and lease duration under `DISCLOSURE_INDEXER_*`.
+Mount the archive volume only on news-preprocessor.
+
+## 9. Final hourly-batch settings and parallel measurements
+
+Apply two embedding workers plus two reranking workers as the app's combined maximum
+of four. Both pools have zero minimum/buffer containers and a five-second scaledown
+window. Each worker accepts one input at a time. This limit is independent of SQS
+publisher concurrency. Four is a limit, not a permanent allocation.
+
+The existing v7 deployment received these settings through Modal's supported autoscaler
+API. An unnecessary image rebuild was interrupted before publication; model images and
+weights were not replaced. Source settings now match the live overrides, so a future
+deployment preserves the same policy. A five-second idle setting is not an exact
+observable container-termination deadline.
+
+The CPU server owns 09:00 through 15:00 KST polling on operating days and should call
+inference only for nonempty batches that need narrative retrieval. Modal has no backend
+poller or hourly cron. The current hourly rebalancer polls account data; connecting a
+backend batch of narrative queries requires its own request contract and CPU caller.
+That integration is not implemented by these autoscaler changes. Existing account
+polling, order publication and the morning/indexing schedules are unchanged.
+
+The same query was submitted fourteen times per condition. Each reranking call received
+fifty synthetic financial passages, 1,016 characters each. SDK submission, queueing,
+inference and result transfer are timed; polling, pgvector, generation and post-result
+shutdown are excluded. Warm cases exclude preparing the second worker. Zero-worker
+cases confirm zero runners and running inputs before timing starts.
+
+| Model and state | Sequential seconds | Parallel seconds | Reduction |
+| --- | ---: | ---: | ---: |
+| Embedding, warm | 9.71 | 4.28 | 55.94% |
+| Embedding, zero workers | 17.21 | 12.07 | 29.86% |
+| Reranker, warm | 192.32 | 102.06 | 46.93% |
+| Reranker, zero workers | 201.94 | 122.75 | 39.22% |
+
+These are eight single-batch observations, not percentiles or an end-to-end RAG benchmark.
+All 112 timed calls matched provider history. Execution overlap was one for sequential
+calls and two for parallel calls, with distinct parallel containers. Some containers
+were replaced during a batch; this is a deployed-service comparison, not a fixed-card
+microbenchmark. An initial pilot that included tracing queries in the timed loop was
+excluded and retained only in raw evidence. Additional GPUs reduce latency without
+reducing cost by the same percentage.
+
+After the change, the targeted inference/client suite passed **37 tests**; Ruff lint,
+formatting, SDK app-definition loading and live autoscaler settings checks passed.
+Final verification found zero runners, zero running inputs and an empty container list.
+Temporary benchmark minimums and caps were restored to zero minimum, two maximum,
+zero buffer and five-second scaledown for both models. No accuracy scores were recomputed.
+
+[Current comparison and hourly cost assumptions](https://docs.google.com/document/d/1cKUcbLhc1Sn4ez6XCdgt6y82BnTneBzy_a9JDEf8h9c/edit)
+and [measurement inputs, raw timings and verification archive](https://drive.google.com/file/d/1jgeZQow5ZiD-v93Ix4ynj2wU_7oSFjHl/view).
+
+## 10. Accuracy review follow-up
+
+- Verify the cached document vectors' complete producing embedding identity, corpus hash,
+  NPZ file hash, array shapes and finite values before any benchmark output or remote call.
+  Missing provenance must be recovered from the original producer record or regenerated;
+  current model settings cannot establish how an old cache was produced.
+- Calculate ideal DCG from the best five labelled documents independently of returned count.
+  Short, empty and duplicate-result examples are covered. New metric/cache identities reject
+  resuming old outputs; historical quality scores above are not current verification.
+- Reject noninteger, boolean, negative and repeated chunk IDs across all groups before
+  encoding. Integer 1 and string "1" cannot overwrite the same response key.
+- Integrate #432's complete narrative coverage, explicit empty index state, latest financial
+  filing reads with provenance, and receipt-scoped dead-letter recovery.
+- Independent review found no further actionable issues in the requested fixes. Ruff,
+  formatting, Tach and diff checks pass. No actual GPU inference or snapshot restoration
+  was executed for this follow-up. Python 3.15 dependency failures can skip that optional
+  compatibility job; its green summary is not evidence of a completed 3.15 test run.
+- Keep #430 based on #432 while both are open. After #432 merges into dev, retarget #430
+  to dev and rerun CI. This follow-up performs no merge, deployment or paid inference.
+
+## 11. Index rollback and metric correction
+
+The serving branch includes #432's exact-signature and latest-parser document selection,
+plus atomic reuse of ready vectors on configuration rollback. Another configuration's
+empty index cannot hide restored evidence.
+
+Query parity now divides by both vector norms and rejects invalid shape, nonfinite or
+zero-norm vectors. Top-5 metrics preserve the original five ranked slots. Repeated IDs
+contribute relevance once without shifting later documents forward; a sixth-place
+answer cannot enter Top-5 by deduplication. The metric version is now
+`retrieval-v3-ranked-top5-cosine`, preventing resume of earlier results. No historical
+quality score was recomputed in this code-review follow-up.
+
+## 12. Request validation and benchmark recovery review
+
+Explicit invalid requests receive sanitized 422 responses; identity mismatch receives
+409. Unexpected runtime errors remain 503 and are logged internally with tracebacks.
+Internal exception text is never returned to callers. `_reject` has NoReturn semantics.
+The frozen-manifest test uses an absent temporary config file to prove the image snapshot
+works without a host `/root/model_config.py` file. Resolving model settings before image
+build and requiring a rebuild to change weights are deliberate identity guarantees.
+
+Benchmark endpoints are required CLI arguments and part of run identity. SQLAlchemy URL
+parsing enforces the exact test database while allowing SSL parameters; an empty selected
+scope fails early. Resume repairs only a truncated final record in place and preserves
+completed rows. Latency summaries cover one invocation's session ID, while retrieval
+quality can include prior completed questions. No historical latency is silently mixed
+into current percentiles. Regression tests include all byte prefixes of representative
+JSON, including exponent numbers, literals, escaped text and UTF-8 characters.
+
+CI no longer names the temporary services branch in its pull-request trigger. Workspace
+exclusion patterns remain Bash glob comparisons by design, and inference CPU tests remain
+in the root test selection. Container caps stay two plus two and idle timeout stays five
+seconds, matching the selected cost policy; no new latency/cost claim is made.
+
+The serving branch also includes the latest direct-section fix from #432: only the newest
+parsed document ID contributes sections, with no fallback from empty or failed extraction.
+Index claim and activation use filing-first locks. A coordinated PostgreSQL test reproduced
+40P01 before the fix and now completes both signatures with one active index. This base sync
+changes no GPU serving settings and performs no remote model call.
