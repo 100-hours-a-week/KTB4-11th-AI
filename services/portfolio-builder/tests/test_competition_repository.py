@@ -333,13 +333,22 @@ def test_one_participant_spending_its_budget_leaves_another_participants_intact(
     assert _participant_attempts(engine) == {1: 2, 2: 1}
 
 
-def test_a_refused_claim_still_leaves_the_participant_a_notification_row(engine, _request):
+def test_a_participant_refused_while_another_works_is_owed_an_outcome_next_cycle(
+    engine, _request, _insert_portfolio
+):
     first, _ = store_settings(engine, _request(participant_id=1))
     second, _ = store_settings(engine, _request(participant_id=2))
     key = generation_key(first, None, MODEL)
     claim_job(engine, key, first, None, 3600, 3)
 
     assert claim_job(engine, key, second, None, 3600, 3) is None
+    assert _participant_attempts(engine) == {1: 1}
+
+    portfolio_id = _insert_portfolio(engine)
+    finish_job(engine, key, portfolio_id)
+    retry = claim_job(engine, key, second, None, 3600, 3)
+
+    assert (retry.mine, retry.portfolio_id) == (False, portfolio_id)
     assert _participant_attempts(engine) == {1: 1, 2: 0}
 
 
@@ -381,7 +390,55 @@ def test_two_workers_claiming_the_same_key_at_once_produce_one_generation(engine
     mine = [claim for claim in claims.values() if claim is not None and claim.mine]
     assert len(mine) == 1
     assert _job_attempts(engine) == 1
-    assert sorted(_participant_attempts(engine)) == [1, 2]
+    assert list(_participant_attempts(engine).values()) == [1]
+
+
+def test_two_workers_reclaiming_one_failed_key_at_once_do_not_deadlock(engine, _request):
+    opener, _ = store_settings(engine, _request(participant_id=9))
+    racers = [store_settings(engine, _request(participant_id=number))[0] for number in (1, 2, 3, 4)]
+    key = generation_key(opener, None, MODEL)
+    claim_job(engine, key, opener, None, 3600, 99)
+    fail_job(engine, key, "boom")
+    barrier = threading.Barrier(len(racers))
+    outcomes = {}
+
+    def claim(participant):
+        barrier.wait()
+        try:
+            outcomes[participant.participant_id] = claim_job(
+                engine, key, participant, None, 3600, 99
+            )
+        except Exception as error:
+            outcomes[participant.participant_id] = error
+
+    threads = [threading.Thread(target=claim, args=(p,)) for p in racers]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert [value for value in outcomes.values() if isinstance(value, Exception)] == []
+    assert len([value for value in outcomes.values() if value is not None and value.mine]) == 1
+
+
+def test_a_key_succeeding_twice_does_not_rearm_an_already_sent_notice(
+    engine, _request, _insert_portfolio
+):
+    settings, _ = store_settings(engine, _request())
+    key = generation_key(settings, None, MODEL)
+    claim_job(engine, key, settings, None, 3600, 3)
+    portfolio_id = _insert_portfolio(engine)
+    finish_job(engine, key, portfolio_id)
+    with engine.begin() as conn:
+        conn.execute(sa.text("UPDATE competition_notifications SET notified_at = now()"))
+
+    finish_job(engine, key, portfolio_id)
+
+    with engine.connect() as conn:
+        stamped = conn.execute(
+            sa.text("SELECT notified_at FROM competition_notifications")
+        ).scalar_one()
+    assert stamped is not None
 
 
 def test_the_latest_participant_portfolio_ignores_status(engine, _request, _insert_portfolio):

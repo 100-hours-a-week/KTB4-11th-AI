@@ -191,22 +191,26 @@ def claim_job(
             .returning(competition_jobs.c.generation_key)
         ).first()
 
-        conn.execute(
-            pg_insert(competition_notifications)
-            .values(participant_id=participant.participant_id, generation_key=key)
-            .on_conflict_do_nothing(index_elements=["participant_id", "generation_key"])
-        )
-        spend_attempt = (
-            sa.update(competition_notifications)
-            .where(
-                competition_notifications.c.participant_id == participant.participant_id,
-                competition_notifications.c.generation_key == key,
+        def owe_outcome() -> None:
+            conn.execute(
+                pg_insert(competition_notifications)
+                .values(participant_id=participant.participant_id, generation_key=key)
+                .on_conflict_do_nothing(index_elements=["participant_id", "generation_key"])
             )
-            .values(attempts=competition_notifications.c.attempts + 1)
-        )
+
+        def spend_attempt() -> None:
+            owe_outcome()
+            conn.execute(
+                sa.update(competition_notifications)
+                .where(
+                    competition_notifications.c.participant_id == participant.participant_id,
+                    competition_notifications.c.generation_key == key,
+                )
+                .values(attempts=competition_notifications.c.attempts + 1)
+            )
 
         if inserted is not None:
-            conn.execute(spend_attempt)
+            spend_attempt()
             return Claim(mine=True, portfolio_id=None)
 
         stale_before = sa.func.now() - timedelta(seconds=stale_after_seconds)
@@ -215,10 +219,12 @@ def claim_job(
                 sa.select(
                     competition_jobs,
                     (competition_jobs.c.started_at < stale_before).label("is_stale"),
-                    competition_notifications.c.attempts.label("participant_attempts"),
+                    sa.func.coalesce(competition_notifications.c.attempts, 0).label(
+                        "participant_attempts"
+                    ),
                 )
                 .select_from(
-                    competition_jobs.join(
+                    competition_jobs.outerjoin(
                         competition_notifications,
                         sa.and_(
                             competition_notifications.c.generation_key
@@ -237,6 +243,7 @@ def claim_job(
         if row["status"] == "succeeded":
             if row["portfolio_id"] is None:
                 return None
+            owe_outcome()
             return Claim(mine=False, portfolio_id=row["portfolio_id"])
         reclaimable = row["status"] == "failed" or (row["status"] == "running" and row["is_stale"])
         if not reclaimable or row["participant_attempts"] >= max_attempts:
@@ -253,17 +260,23 @@ def claim_job(
                 portfolio_id=None,
             )
         )
-        conn.execute(spend_attempt)
+        spend_attempt()
         return Claim(mine=True, portfolio_id=None)
 
 
 def finish_job(engine: sa.Engine, key: str, portfolio_id: int) -> None:
     with engine.begin() as conn:
-        conn.execute(
+        newly_succeeded = conn.execute(
             sa.update(competition_jobs)
-            .where(competition_jobs.c.generation_key == key)
+            .where(
+                competition_jobs.c.generation_key == key,
+                competition_jobs.c.status != "succeeded",
+            )
             .values(status="succeeded", portfolio_id=portfolio_id, finished_at=sa.func.now())
-        )
+            .returning(competition_jobs.c.generation_key)
+        ).first()
+        if newly_succeeded is None:
+            return
         conn.execute(
             sa.update(competition_notifications)
             .where(competition_notifications.c.generation_key == key)
