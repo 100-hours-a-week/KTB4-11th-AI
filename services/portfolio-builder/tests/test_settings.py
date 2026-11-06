@@ -86,10 +86,6 @@ def test_competition_settings_default_to_unset(monkeypatch):
     assert settings.competition_visibility_timeout == 300
     assert settings.competition_stale_running_seconds == 3600
     assert settings.competition_max_attempts == 3
-    assert settings.backend_base_uri == ""
-    assert settings.backend_jwt_secret.get_secret_value() == ""
-    assert settings.backend_jwt_issuer == ""
-    assert settings.backend_timeout == 10
 
 
 def test_aws_region_defaults_to_ap_northeast_2(monkeypatch):
@@ -151,15 +147,9 @@ def test_competition_variables_are_read_from_the_environment(monkeypatch):
         monkeypatch,
         PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL="q",
         PORTFOLIO_BUILDER_COMPETITION_MAX_ATTEMPTS="5",
-        PORTFOLIO_BUILDER_BACKEND_BASE_URI="http://backend:8000",
-        PORTFOLIO_BUILDER_BACKEND_JWT_SECRET="s",
-        PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER="issuer",
     )
 
     settings = Settings()
 
     assert settings.competition_queue_url == "q"
     assert settings.competition_max_attempts == 5
-    assert settings.backend_base_uri == "http://backend:8000"
-    assert settings.backend_jwt_secret.get_secret_value() == "s"
-    assert settings.backend_jwt_issuer == "issuer"

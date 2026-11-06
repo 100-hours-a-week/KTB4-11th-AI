@@ -209,8 +209,8 @@ competition_jobs = sa.Table(
     sa.Index("competition_jobs_participant_id_idx", "participant_id"),
 )
 
-competition_notifications = sa.Table(
-    "competition_notifications",
+competition_attempts = sa.Table(
+    "competition_attempts",
     metadata,
     sa.Column(
         "participant_id",
@@ -224,7 +224,6 @@ competition_notifications = sa.Table(
         sa.ForeignKey("competition_jobs.generation_key"),
         primary_key=True,
     ),
-    sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     sa.Column("attempts", sa.Integer, nullable=False, server_default=sa.text("0")),
 )
 

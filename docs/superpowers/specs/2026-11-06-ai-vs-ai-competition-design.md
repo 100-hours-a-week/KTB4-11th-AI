@@ -79,12 +79,12 @@ Reversing any of these changes the structure.
 | Excluded themes | Filtered and verified in code, not merely asked of the model. |
 | Risk profile values | `성장형` / `성장추구형` / `위험중립형` / `안정추구형` / `안정형`, no spaces. |
 
-## Three Passes, and Why
+## Two Passes, and Why
 
-The worker is a loop over three passes, not a receive-and-generate handler:
+The worker is a loop over two passes, not a receive-and-generate handler:
 
 ```
-intake  →  generation  →  notification
+intake  →  generation
 ```
 
 **Intake** receives one SQS message and does only idempotent database writes:
@@ -111,9 +111,8 @@ work is derived, not queued: a participant whose latest linked portfolio is abse
 of truth about what work exists, able to disagree with the join that answers the same question,
 and the retry budget already lives where it belongs (below).
 
-**Notification** tells the Backend each participant's outcome. Separating it is what makes a
-failed notification cheap: it is retried from its own pass with no message, no key computation,
-and no agent run.
+Nothing follows generation. There is no notification pass, because there is no callback — see
+*No Callback* below.
 
 ## Sharing: The Link Table and the Key
 
@@ -293,9 +292,9 @@ appears to pass.
 
 `competition_jobs.attempts` reads naturally as "how many times do we retry this generation", but
 because several participants share one key, a per-key budget is spent by **sharers rather than by
-retries**. Four participants at a limit of three left the fourth with no claim, no notification,
+retries**. Four participants at a limit of three left the fourth with no claim, no log line,
 and no portfolio. So the budget is counted per participant, on
-`competition_notifications.attempts`; `competition_jobs.attempts` stays as the total, for
+`competition_attempts.attempts`; `competition_jobs.attempts` stays as the total, for
 observability.
 
 **Insert that row after the row lock, never before.** Its foreign key to `competition_jobs` takes
@@ -310,22 +309,37 @@ derived work query, and is handed the result on a later cycle; the participant's
 spent, which means its row already exists; or the job is `succeeded` with no portfolio, which is
 corrupt data.
 
-## Notifying the Backend
+## No Callback: The Outcome Is a Log Line
 
-A participant is owed exactly one notice per key, recorded on its own
-`competition_notifications` row. Notification happens only when the job's state **cannot change
-any more**: `succeeded`, or `failed` with that participant's attempts exhausted. Notifying a
-failure that is still reclaimable would mean telling the Backend a participant failed and then,
-after a successful retry, telling it the opposite.
+The worker tells the Backend nothing. There is no success or failure callback, so
+`portfolio-builder` makes **no Backend HTTP call at all** — generation reads our own PostgreSQL and
+writes to it, and that is the whole of its I/O besides the queue and the model providers.
 
-If a key later succeeds through another participant, everyone on it gets a link row and
-`completed`. A participant already told `failed` then also receives `completed`, in that order.
-That is accepted: it reports what happened, and a shared portfolio is a valid result for a
-participant whose settings are identical by construction.
+The Backend does not need telling. What a generated portfolio produces that anyone outside can
+observe is **orders**, and those reach the Backend from `portfolio-rebalancer`, which reads the
+portfolio from our database on its own schedule. A callback would have been a second, weaker
+statement of something the orders already say.
 
-A job stranded `running` past the staleness window with no participant budget left counts as
-terminal, so a killed process does not leave every sharer on its key unnotified. Such a job has no
-stored error, so the notice carries a constant reason rather than an empty string.
+Removing it takes a surprising amount with it: an HTTP client and its JWT auth, four settings, two
+modules, a `notified_at` column, and a retry pass whose failure mode — tell the Backend `failed`,
+then retry successfully and have to tell it the opposite — needed its own correctness argument.
+None of that had a consumer.
+
+What replaces it is the structured log, which goes to CloudWatch through `ktb_core.logging`. Every
+outcome a participant can reach is a line there:
+
+| Event | Means |
+|---|---|
+| `generated` | the agent finished — carries `outcome`, `portfolio_id`, `turns`, `usage` |
+| `shared` | this participant linked another's portfolio instead of generating |
+| `generation_skipped` | no claim: another worker holds the key, or this participant's budget is spent |
+| `generation_failed` | the run raised; the job is failed and reclaimable within its budget |
+| `explained` / `explain_failed` | the reasons were written, or were not |
+| `intake` | a message was accepted — carries `request_id` and the participant ids |
+
+`shared` and `generation_skipped` exist only because the callback went away: both paths previously
+said what happened by notifying, and without a log line a shared or skipped participant would
+leave no trace at all.
 
 ## Message Contract
 
@@ -369,7 +383,7 @@ stance, so all five values are pinned by a test.
 
 `participant_id` and `agent_id` are **different things** — the participant, and the Backend's
 identifier for that participant's strategy setting. Key on `participant_id`: it is what the
-account snapshot links to, what the notification addresses, and what `report-builder` already
+account snapshot links to and what `report-builder` already
 consumes. Store `agent_id` beside it for reconciling a disagreement about what a participant was
 configured with.
 
@@ -427,14 +441,14 @@ One migration, `0017`, creating four tables and adding two columns to `portfolio
 | `competition_participants` | `participant_id` | the frozen settings: risk profile, theme codes, received theme names, raw prompt, canonical form, `agent_id` |
 | `competition_jobs` | `generation_key` | one generation; **this key's uniqueness is the concurrency guard** |
 | `competition_portfolios` | `participant_id`, `portfolio_id` | which portfolio a participant follows — where sharing happens |
-| `competition_notifications` | `participant_id`, `generation_key` | what a participant is owed, and its own retry budget |
+| `competition_attempts` | `participant_id`, `generation_key` | how many times this participant has tried this key |
 
 `portfolios` gains `acknowledged_constraints` (the constraints the model reports at submission)
 and `explanation_attempts` (which bounds explanation retries; without it a permanently failing
 explanation costs an LLM call on every loop).
 
 `risk_profile` carries a `CHECK` constraint for the five values. The composite key on
-`competition_notifications` matters: from stage 2 a participant takes part in a new key each
+`competition_attempts` matters: from stage 2 a participant takes part in a new key each
 round, so keying on the participant alone would collide.
 
 ## Boundaries With the Rest of the System
@@ -510,7 +524,7 @@ on a user re-enabling an account, and there is no `activate()` anywhere in the B
 that is the label `/market/themes` hands the frontend. Reading `market-http`'s own grouping code
 settled it; the HTTP examples did not.
 
-**The notification row was inserted before the row lock** because a ruling said to insert it
+**The attempt row was inserted before the row lock** because a ruling said to insert it
 before deciding reclaimability. Its foreign key takes `FOR KEY SHARE`, so that produced a deadlock
 under concurrent reclaim.
 
@@ -547,8 +561,6 @@ so a different valid kind would land in the DLQ.
 | `PORTFOLIO_BUILDER_COMPETITION_VISIBILITY_TIMEOUT` | `300` |
 | `PORTFOLIO_BUILDER_COMPETITION_STALE_RUNNING_SECONDS` | `3600` |
 | `PORTFOLIO_BUILDER_COMPETITION_MAX_ATTEMPTS` | `3` |
-| `PORTFOLIO_BUILDER_BACKEND_BASE_URI` | required |
-| `PORTFOLIO_BUILDER_BACKEND_JWT_SECRET` / `_ISSUER` | required |
 | `PORTFOLIO_BUILDER_JEV_BASE_URI` | `https://openrouter.ai/api/v1` |
 | `PORTFOLIO_BUILDER_JEV_MODEL` | `typesafe/jev-1.14` — pinned, never an alias |
 | `PORTFOLIO_BUILDER_JEV_TIMEOUT` | `20` |
@@ -569,7 +581,7 @@ The ones that must never regress:
   not deadlock.
 - A key that already succeeded gives every later participant a shared result and triggers no extra
   generation.
-- Generation succeeds, notification fails, the same message is redelivered: the agent ran **once**
+- Generation succeeds and the same message is redelivered: the agent ran **once**
   and no second job row exists.
 - All five `risk_level` values map to the right profile.
 - A bare suffix resolves to one code; an ambiguous suffix fails validation; an unescaped `LIKE`

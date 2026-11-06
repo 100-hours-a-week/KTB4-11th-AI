@@ -2,27 +2,19 @@ import functools
 import time
 
 import boto3
-import httpx
 import sqlalchemy as sa
 from botocore.config import Config
 from ktb_aws.sqs import SqsQueue
-from ktb_core.backend_auth import BackendAuth
 from ktb_core.logging import get_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
 
-from portfolio_builder.competition.backend import Backend
 from portfolio_builder.competition.generation import generate_missing_portfolios
 from portfolio_builder.competition.intake import process_message
-from portfolio_builder.competition.notification import notify_finished_jobs
 from portfolio_builder.settings import Settings
 
 logger = get_logger(__name__)
 
-REQUIRED_SETTINGS = (
-    "competition_queue_url",
-    "backend_base_uri",
-    "backend_jwt_issuer",
-)
+REQUIRED_SETTINGS = ("competition_queue_url",)
 
 
 def main() -> None:
@@ -31,8 +23,6 @@ def main() -> None:
     missing = [name for name in REQUIRED_SETTINGS if not getattr(settings, name)]
     if settings.jev_choice_min_confidence is None:
         missing.append("jev_choice_min_confidence")
-    if not settings.backend_jwt_secret.get_secret_value():
-        missing.append("backend_jwt_secret")
     if missing:
         logger.error("missing_required_settings", missing=missing)
         raise SystemExit(f"missing required settings: {', '.join(missing)}")
@@ -50,29 +40,17 @@ def main() -> None:
     model_factory = functools.partial(
         ChatOpenRouter, model=settings.llm_model, api_key=settings.llm_api_key
     )
-    with httpx.Client(
-        base_url=settings.backend_base_uri, timeout=settings.backend_timeout
-    ) as client:
-        auth = BackendAuth(
-            client, settings.backend_jwt_secret.get_secret_value(), settings.backend_jwt_issuer
-        )
-        backend = Backend(auth)
-        try:
-            while True:
-                try:
-                    for message in queue.receive(
-                        visibility=settings.competition_visibility_timeout
-                    ):
-                        process_message(message, queue, engine, settings, logger)
-                    generate_missing_portfolios(engine, model_factory, settings, logger)
-                    notify_finished_jobs(engine, backend, logger, settings)
-                except Exception as error:
-                    logger.error(
-                        "sqs_poll_failed", error_type=type(error).__name__, error=str(error)
-                    )
-                    time.sleep(1)
-        finally:
-            engine.dispose()
+    try:
+        while True:
+            try:
+                for message in queue.receive(visibility=settings.competition_visibility_timeout):
+                    process_message(message, queue, engine, settings, logger)
+                generate_missing_portfolios(engine, model_factory, settings, logger)
+            except Exception as error:
+                logger.error("sqs_poll_failed", error_type=type(error).__name__, error=str(error))
+                time.sleep(1)
+    finally:
+        engine.dispose()
 
 
 if __name__ == "__main__":

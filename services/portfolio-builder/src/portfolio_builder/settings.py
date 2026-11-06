@@ -25,10 +25,6 @@ class Settings(BaseSettings):
     competition_visibility_timeout: int = Field(default=300, gt=0)
     competition_stale_running_seconds: int = Field(default=3600, gt=0)
     competition_max_attempts: int = Field(default=3, gt=0)
-    backend_base_uri: str = ""
-    backend_jwt_secret: SecretStr = SecretStr("")
-    backend_jwt_issuer: str = ""
-    backend_timeout: int = Field(default=10, gt=0)
     aws_region: str = "ap-northeast-2"
     jev_base_uri: str = "https://openrouter.ai/api/v1"
     jev_model: str = "typesafe/jev-1.14"

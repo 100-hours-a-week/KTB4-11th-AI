@@ -33,9 +33,7 @@ def _job_attempts(engine):
 
 def _participant_attempts(engine):
     with engine.connect() as conn:
-        rows = conn.execute(
-            sa.text("SELECT participant_id, attempts FROM competition_notifications")
-        )
+        rows = conn.execute(sa.text("SELECT participant_id, attempts FROM competition_attempts"))
         return {row[0]: row[1] for row in rows}
 
 
@@ -419,26 +417,6 @@ def test_two_workers_reclaiming_one_failed_key_at_once_do_not_deadlock(engine, _
 
     assert [value for value in outcomes.values() if isinstance(value, Exception)] == []
     assert len([value for value in outcomes.values() if value is not None and value.mine]) == 1
-
-
-def test_a_key_succeeding_twice_does_not_rearm_an_already_sent_notice(
-    engine, _request, _insert_portfolio
-):
-    settings, _ = store_settings(engine, _request())
-    key = generation_key(settings, None, MODEL)
-    claim_job(engine, key, settings, None, 3600, 3)
-    portfolio_id = _insert_portfolio(engine)
-    finish_job(engine, key, portfolio_id)
-    with engine.begin() as conn:
-        conn.execute(sa.text("UPDATE competition_notifications SET notified_at = now()"))
-
-    finish_job(engine, key, portfolio_id)
-
-    with engine.connect() as conn:
-        stamped = conn.execute(
-            sa.text("SELECT notified_at FROM competition_notifications")
-        ).scalar_one()
-    assert stamped is not None
 
 
 def test_the_latest_participant_portfolio_ignores_status(engine, _request, _insert_portfolio):

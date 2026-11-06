@@ -130,10 +130,17 @@ def _generate_for(
         settings.competition_max_attempts,
     )
     if claim is None:
+        log.info("generation_skipped", participant_id=participant.participant_id, key=key)
         return
 
     if not claim.mine:
         link_portfolio(engine, participant.participant_id, claim.portfolio_id)
+        log.info(
+            "shared",
+            participant_id=participant.participant_id,
+            portfolio_id=claim.portfolio_id,
+            key=key,
+        )
         return
 
     try:

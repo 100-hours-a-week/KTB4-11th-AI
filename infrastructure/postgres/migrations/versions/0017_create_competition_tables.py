@@ -1,4 +1,4 @@
-"""create the competition participant, portfolio link, job and notification tables
+"""create the competition participant, portfolio link, job and attempt tables
 
 Revision ID: 0017
 Revises: 0016
@@ -137,7 +137,7 @@ def upgrade() -> None:
         ["participant_id"],
     )
     op.create_table(
-        "competition_notifications",
+        "competition_attempts",
         sa.Column(
             "participant_id",
             sa.BigInteger,
@@ -150,7 +150,6 @@ def upgrade() -> None:
             sa.ForeignKey("competition_jobs.generation_key"),
             primary_key=True,
         ),
-        sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("attempts", sa.Integer, nullable=False, server_default=sa.text("0")),
     )
     op.add_column(
@@ -165,7 +164,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_column("portfolios", "explanation_attempts")
     op.drop_column("portfolios", "acknowledged_constraints")
-    op.drop_table("competition_notifications")
+    op.drop_table("competition_attempts")
     op.drop_index("competition_jobs_participant_id_idx", table_name="competition_jobs")
     op.drop_constraint("competition_jobs_status_check", "competition_jobs", type_="check")
     op.drop_table("competition_jobs")

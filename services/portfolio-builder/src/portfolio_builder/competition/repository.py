@@ -10,8 +10,8 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from portfolio_builder.competition.canonical import canonical_form_part
 from portfolio_builder.competition.themes import ResolvedAgent
 from portfolio_builder.database import (
+    competition_attempts,
     competition_jobs,
-    competition_notifications,
     competition_participants,
     competition_portfolios,
     portfolios,
@@ -193,7 +193,7 @@ def claim_job(
 
         def owe_outcome() -> None:
             conn.execute(
-                pg_insert(competition_notifications)
+                pg_insert(competition_attempts)
                 .values(participant_id=participant.participant_id, generation_key=key)
                 .on_conflict_do_nothing(index_elements=["participant_id", "generation_key"])
             )
@@ -201,12 +201,12 @@ def claim_job(
         def spend_attempt() -> None:
             owe_outcome()
             conn.execute(
-                sa.update(competition_notifications)
+                sa.update(competition_attempts)
                 .where(
-                    competition_notifications.c.participant_id == participant.participant_id,
-                    competition_notifications.c.generation_key == key,
+                    competition_attempts.c.participant_id == participant.participant_id,
+                    competition_attempts.c.generation_key == key,
                 )
-                .values(attempts=competition_notifications.c.attempts + 1)
+                .values(attempts=competition_attempts.c.attempts + 1)
             )
 
         if inserted is not None:
@@ -219,18 +219,17 @@ def claim_job(
                 sa.select(
                     competition_jobs,
                     (competition_jobs.c.started_at < stale_before).label("is_stale"),
-                    sa.func.coalesce(competition_notifications.c.attempts, 0).label(
+                    sa.func.coalesce(competition_attempts.c.attempts, 0).label(
                         "participant_attempts"
                     ),
                 )
                 .select_from(
                     competition_jobs.outerjoin(
-                        competition_notifications,
+                        competition_attempts,
                         sa.and_(
-                            competition_notifications.c.generation_key
+                            competition_attempts.c.generation_key
                             == competition_jobs.c.generation_key,
-                            competition_notifications.c.participant_id
-                            == participant.participant_id,
+                            competition_attempts.c.participant_id == participant.participant_id,
                         ),
                     )
                 )
@@ -266,21 +265,13 @@ def claim_job(
 
 def finish_job(engine: sa.Engine, key: str, portfolio_id: int) -> None:
     with engine.begin() as conn:
-        newly_succeeded = conn.execute(
+        conn.execute(
             sa.update(competition_jobs)
             .where(
                 competition_jobs.c.generation_key == key,
                 competition_jobs.c.status != "succeeded",
             )
             .values(status="succeeded", portfolio_id=portfolio_id, finished_at=sa.func.now())
-            .returning(competition_jobs.c.generation_key)
-        ).first()
-        if newly_succeeded is None:
-            return
-        conn.execute(
-            sa.update(competition_notifications)
-            .where(competition_notifications.c.generation_key == key)
-            .values(notified_at=None)
         )
 
 
@@ -362,85 +353,3 @@ def participants_without_ready_portfolio(
             .all()
         )
     return [_participant(row) for row in rows]
-
-
-@dataclass(frozen=True)
-class Notification:
-    participant: ParticipantSettings
-    generation_key: str
-    portfolio_id: int | None
-    error: str | None
-
-
-def unnotified_notifications(
-    engine: sa.Engine, max_attempts: int, stale_after_seconds: int
-) -> list[Notification]:
-    stale_before = sa.func.now() - timedelta(seconds=stale_after_seconds)
-    with engine.connect() as conn:
-        rows = (
-            conn.execute(
-                sa.select(
-                    competition_participants,
-                    competition_notifications.c.generation_key,
-                    competition_jobs.c.status,
-                    competition_jobs.c.portfolio_id,
-                    competition_jobs.c.error,
-                )
-                .select_from(
-                    competition_notifications.join(
-                        competition_participants,
-                        competition_participants.c.participant_id
-                        == competition_notifications.c.participant_id,
-                    ).join(
-                        competition_jobs,
-                        competition_jobs.c.generation_key
-                        == competition_notifications.c.generation_key,
-                    )
-                )
-                .where(
-                    competition_notifications.c.notified_at.is_(None),
-                    sa.or_(
-                        sa.and_(
-                            competition_jobs.c.status == "succeeded",
-                            competition_jobs.c.portfolio_id.isnot(None),
-                        ),
-                        sa.and_(
-                            sa.or_(
-                                competition_jobs.c.status == "failed",
-                                sa.and_(
-                                    competition_jobs.c.status == "running",
-                                    competition_jobs.c.started_at < stale_before,
-                                ),
-                            ),
-                            competition_notifications.c.attempts >= max_attempts,
-                        ),
-                    ),
-                )
-                .order_by(competition_notifications.c.participant_id)
-            )
-            .mappings()
-            .all()
-        )
-    return [
-        Notification(
-            _participant(row),
-            row["generation_key"],
-            row["portfolio_id"] if row["status"] == "succeeded" else None,
-            row["error"],
-        )
-        for row in rows
-    ]
-
-
-def mark_notified(engine: sa.Engine, notification: Notification) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            sa.update(competition_notifications)
-            .where(
-                competition_notifications.c.participant_id
-                == notification.participant.participant_id,
-                competition_notifications.c.generation_key == notification.generation_key,
-                competition_notifications.c.notified_at.is_(None),
-            )
-            .values(notified_at=sa.func.now())
-        )
