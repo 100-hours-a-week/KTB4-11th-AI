@@ -54,6 +54,24 @@ def _unclassified(resolved: ResolvedAgent) -> tuple[Any, str | None, bool]:
     return resolved.additional_request, None, False
 
 
+def _participant(row: sa.RowMapping) -> ParticipantSettings:
+    return ParticipantSettings(
+        participant_id=row["participant_id"],
+        competition_id=row["competition_id"],
+        user_id=row["user_id"],
+        agent_id=row["agent_id"],
+        risk_profile=row["risk_profile"],
+        interested_theme_codes=tuple(row["interested_theme_codes"]),
+        excluded_theme_codes=tuple(row["excluded_theme_codes"]),
+        interested_theme_names=tuple(row["interested_theme_names"]),
+        excluded_theme_names=tuple(row["excluded_theme_names"]),
+        additional_request=row["additional_request"],
+        canonical_form=row["canonical_form"],
+        canonical_version=row["canonical_version"],
+        classified=row["classified"],
+    )
+
+
 def store_settings(
     engine: sa.Engine,
     resolved: ResolvedAgent,
@@ -103,21 +121,7 @@ def store_settings(
             .one()
         )
 
-    stored = ParticipantSettings(
-        participant_id=row["participant_id"],
-        competition_id=row["competition_id"],
-        user_id=row["user_id"],
-        agent_id=row["agent_id"],
-        risk_profile=row["risk_profile"],
-        interested_theme_codes=tuple(row["interested_theme_codes"]),
-        excluded_theme_codes=tuple(row["excluded_theme_codes"]),
-        interested_theme_names=tuple(row["interested_theme_names"]),
-        excluded_theme_names=tuple(row["excluded_theme_names"]),
-        additional_request=row["additional_request"],
-        canonical_form=row["canonical_form"],
-        canonical_version=row["canonical_version"],
-        classified=row["classified"],
-    )
+    stored = _participant(row)
     from_request = ParticipantSettings(
         participant_id=resolved.participant_id,
         competition_id=resolved.competition_id,
@@ -278,3 +282,108 @@ def latest_participant_portfolio(
     if row is None:
         return None
     return row.id, row.status, row.has_trace
+
+
+def participants_without_ready_portfolio(engine: sa.Engine) -> list[ParticipantSettings]:
+    latest = (
+        sa.select(
+            competition_portfolios.c.participant_id,
+            sa.func.max(competition_portfolios.c.portfolio_id).label("portfolio_id"),
+        )
+        .group_by(competition_portfolios.c.participant_id)
+        .subquery()
+    )
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(
+                sa.select(competition_participants)
+                .select_from(
+                    competition_participants.outerjoin(
+                        latest,
+                        latest.c.participant_id == competition_participants.c.participant_id,
+                    ).outerjoin(portfolios, portfolios.c.id == latest.c.portfolio_id)
+                )
+                .where(sa.or_(portfolios.c.status.is_(None), portfolios.c.status != "ready"))
+                .order_by(competition_participants.c.participant_id)
+            )
+            .mappings()
+            .all()
+        )
+    return [_participant(row) for row in rows]
+
+
+@dataclass(frozen=True)
+class FinishedJob:
+    generation_key: str
+    status: str
+    portfolio_id: int | None
+    error: str | None
+    participants: tuple[ParticipantSettings, ...]
+
+
+def _job_participants(conn: sa.Connection, job: sa.RowMapping) -> list[ParticipantSettings]:
+    if job["status"] == "succeeded":
+        statement = (
+            sa.select(competition_participants)
+            .select_from(
+                competition_participants.join(
+                    competition_portfolios,
+                    competition_portfolios.c.participant_id
+                    == competition_participants.c.participant_id,
+                )
+            )
+            .where(competition_portfolios.c.portfolio_id == job["portfolio_id"])
+            .order_by(competition_participants.c.participant_id)
+        )
+    else:
+        statement = sa.select(competition_participants).where(
+            competition_participants.c.participant_id == job["participant_id"]
+        )
+    return [_participant(row) for row in conn.execute(statement).mappings()]
+
+
+def unnotified_finished_jobs(engine: sa.Engine) -> list[FinishedJob]:
+    with engine.connect() as conn:
+        jobs = (
+            conn.execute(
+                sa.select(competition_jobs)
+                .where(
+                    competition_jobs.c.status.in_(("succeeded", "failed")),
+                    competition_jobs.c.notified_at.is_(None),
+                )
+                .order_by(competition_jobs.c.finished_at, competition_jobs.c.generation_key)
+            )
+            .mappings()
+            .all()
+        )
+        return [
+            FinishedJob(
+                generation_key=job["generation_key"],
+                status=job["status"],
+                portfolio_id=job["portfolio_id"],
+                error=job["error"],
+                participants=tuple(_job_participants(conn, job)),
+            )
+            for job in jobs
+        ]
+
+
+def clear_notified(engine: sa.Engine, key: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(competition_jobs)
+            .where(competition_jobs.c.generation_key == key)
+            .values(notified_at=None)
+        )
+
+
+def mark_notified(engine: sa.Engine, key: str) -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            sa.update(competition_jobs)
+            .where(
+                competition_jobs.c.generation_key == key,
+                competition_jobs.c.notified_at.is_(None),
+            )
+            .values(notified_at=sa.func.now())
+        )
