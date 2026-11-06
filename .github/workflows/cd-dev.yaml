@@ -250,6 +250,16 @@ jobs:
               -f compose.prod.yaml rm -f market-collector
           fi
 
+          # report-builder가 systemd 밖에서 직접 떠 있으면 중복 워커가 되므로 먼저 정리합니다.
+          legacy_report_builder_id="$(docker compose --env-file .env --env-file .image.env \
+            -f compose.prod.yaml ps -q report-builder)"
+          if [[ -n "$legacy_report_builder_id" ]]; then
+            docker compose --env-file .env --env-file .image.env \
+              -f compose.prod.yaml stop report-builder
+            docker compose --env-file .env --env-file .image.env \
+              -f compose.prod.yaml rm -f report-builder
+          fi
+
           # 모든 개발 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
@@ -267,6 +277,13 @@ jobs:
             systemctl is-enabled --quiet "$timer"
             systemctl is-active --quiet "$timer"
           done
+
+          # report-builder는 상시 실행 서비스라 timer가 아니라 직접 활성화하고,
+          # 이미 떠 있던 경우에도 재시작해 새 이미지로 갱신합니다.
+          sudo -n systemctl enable ktb-report-builder.service
+          sudo -n systemctl restart ktb-report-builder.service
+          systemctl is-enabled --quiet ktb-report-builder.service
+          systemctl is-active --quiet ktb-report-builder.service
 
           test -x "$deploy_dir/scripts/run-morning-pipeline.sh"
           test -x "$deploy_dir/scripts/publish-scheduled-job-metric.sh"

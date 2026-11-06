@@ -206,7 +206,6 @@ services:
     command: ["report-builder"]
     env_file: /etc/stockspoon/ai.env
     mem_limit: 512m
-    restart: unless-stopped
     environment:
       <<: *postgres-environment
     depends_on:
