@@ -122,6 +122,14 @@ def _job(engine):
         )
 
 
+def _notified_at(engine, participant_id):
+    with engine.connect() as conn:
+        return conn.execute(
+            sa.text("SELECT notified_at FROM competition_portfolios WHERE participant_id = :pid"),
+            {"pid": participant_id},
+        ).scalar_one()
+
+
 def _count(engine, table):
     with engine.connect() as conn:
         return conn.execute(sa.text(f"SELECT count(*) FROM {table}")).scalar_one()
@@ -480,7 +488,7 @@ def test_a_failed_notification_does_not_cause_a_second_agent_run(
 
     assert run_agent_stub.call_count == 1
     assert _count(engine, "competition_jobs") == 1
-    assert _job(engine)["notified_at"] is None
+    assert _notified_at(engine, 1) is None
 
 
 def test_a_failed_notification_is_retried_by_the_notification_pass_alone(
@@ -496,14 +504,14 @@ def test_a_failed_notification_is_retried_by_the_notification_pass_alone(
     _patch_news(monkeypatch)
 
     _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
-    assert _job(engine)["notified_at"] is None
+    assert _notified_at(engine, 1) is None
 
     backend.completed.side_effect = None
     notification.notify_finished_jobs(engine, backend, log)
 
     assert run_agent_stub.call_count == 1
     assert backend.completed.call_args.args[1] == portfolio_id
-    assert _job(engine)["notified_at"] is not None
+    assert _notified_at(engine, 1) is not None
 
 
 def test_an_already_notified_job_is_not_notified_again(engine, monkeypatch, _insert_portfolio):
@@ -515,13 +523,62 @@ def test_an_already_notified_job_is_not_notified_again(engine, monkeypatch, _ins
     _patch_news(monkeypatch)
 
     _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
-    stamped = _job(engine)["notified_at"]
+    stamped = _notified_at(engine, 1)
     assert stamped is not None
 
     notification.notify_finished_jobs(engine, backend, log)
 
     assert backend.completed.call_count == 1
-    assert _job(engine)["notified_at"] == stamped
+    assert _notified_at(engine, 1) == stamped
+
+
+def test_one_participants_failed_notification_leaves_the_other_notified_once(
+    engine, monkeypatch, _insert_portfolio
+):
+    sqs, backend, log = _deps()
+    settings = _settings()
+    portfolio_id = _insert_portfolio(engine)
+    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
+    monkeypatch.setattr(generation, "explain_and_save", _explains_and_marks_ready(engine))
+    _patch_news(monkeypatch)
+    model_factory = Mock(return_value=Mock())
+
+    def unreachable_for_the_second_participant(participant, _portfolio_id):
+        if participant.participant_id == 2:
+            raise RuntimeError("backend is down")
+
+    backend.completed.side_effect = unreachable_for_the_second_participant
+
+    _cycle(_message(_body()), sqs, engine, backend, model_factory, settings, log)
+    _cycle(
+        _message(_body(_agent(agent_id=9002, participant_id=2))),
+        sqs,
+        engine,
+        backend,
+        model_factory,
+        settings,
+        log,
+    )
+
+    assert {call.args[0].participant_id for call in backend.completed.call_args_list} == {1, 2}
+    stamped = _notified_at(engine, 1)
+    assert stamped is not None
+    assert _notified_at(engine, 2) is None
+
+    backend.completed.reset_mock()
+    notification.notify_finished_jobs(engine, backend, log)
+
+    assert [call.args[0].participant_id for call in backend.completed.call_args_list] == [2]
+    assert _notified_at(engine, 1) == stamped
+    assert _notified_at(engine, 2) is None
+
+    backend.completed.side_effect = None
+    backend.completed.reset_mock()
+    notification.notify_finished_jobs(engine, backend, log)
+
+    assert [call.args[0].participant_id for call in backend.completed.call_args_list] == [2]
+    assert _notified_at(engine, 1) == stamped
+    assert _notified_at(engine, 2) is not None
 
 
 def test_classification_runs_once_at_creation_and_never_again(

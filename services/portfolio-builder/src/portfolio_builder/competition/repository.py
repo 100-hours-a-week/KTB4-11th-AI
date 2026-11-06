@@ -313,42 +313,53 @@ def participants_without_ready_portfolio(engine: sa.Engine) -> list[ParticipantS
 
 
 @dataclass(frozen=True)
-class FinishedJob:
-    generation_key: str
-    status: str
+class Notification:
+    participant: ParticipantSettings
     portfolio_id: int | None
     error: str | None
-    participants: tuple[ParticipantSettings, ...]
+    generation_key: str | None
 
 
-def _job_participants(conn: sa.Connection, job: sa.RowMapping) -> list[ParticipantSettings]:
-    if job["status"] == "succeeded":
-        statement = (
-            sa.select(competition_participants)
-            .select_from(
-                competition_participants.join(
-                    competition_portfolios,
-                    competition_portfolios.c.participant_id
-                    == competition_participants.c.participant_id,
-                )
-            )
-            .where(competition_portfolios.c.portfolio_id == job["portfolio_id"])
-            .order_by(competition_participants.c.participant_id)
-        )
-    else:
-        statement = sa.select(competition_participants).where(
-            competition_participants.c.participant_id == job["participant_id"]
-        )
-    return [_participant(row) for row in conn.execute(statement).mappings()]
-
-
-def unnotified_finished_jobs(engine: sa.Engine) -> list[FinishedJob]:
+def unnotified_notifications(engine: sa.Engine) -> list[Notification]:
     with engine.connect() as conn:
-        jobs = (
+        linked = (
             conn.execute(
-                sa.select(competition_jobs)
+                sa.select(competition_participants, competition_portfolios.c.portfolio_id)
+                .select_from(
+                    competition_portfolios.join(
+                        competition_participants,
+                        competition_participants.c.participant_id
+                        == competition_portfolios.c.participant_id,
+                    ).join(
+                        competition_jobs,
+                        competition_jobs.c.portfolio_id == competition_portfolios.c.portfolio_id,
+                    )
+                )
                 .where(
-                    competition_jobs.c.status.in_(("succeeded", "failed")),
+                    competition_portfolios.c.notified_at.is_(None),
+                    competition_jobs.c.status == "succeeded",
+                )
+                .order_by(competition_portfolios.c.participant_id)
+            )
+            .mappings()
+            .all()
+        )
+        failed = (
+            conn.execute(
+                sa.select(
+                    competition_participants,
+                    competition_jobs.c.generation_key,
+                    competition_jobs.c.error,
+                )
+                .select_from(
+                    competition_jobs.join(
+                        competition_participants,
+                        competition_participants.c.participant_id
+                        == competition_jobs.c.participant_id,
+                    )
+                )
+                .where(
+                    competition_jobs.c.status == "failed",
                     competition_jobs.c.notified_at.is_(None),
                 )
                 .order_by(competition_jobs.c.finished_at, competition_jobs.c.generation_key)
@@ -356,34 +367,30 @@ def unnotified_finished_jobs(engine: sa.Engine) -> list[FinishedJob]:
             .mappings()
             .all()
         )
-        return [
-            FinishedJob(
-                generation_key=job["generation_key"],
-                status=job["status"],
-                portfolio_id=job["portfolio_id"],
-                error=job["error"],
-                participants=tuple(_job_participants(conn, job)),
+    return [Notification(_participant(row), row["portfolio_id"], None, None) for row in linked] + [
+        Notification(_participant(row), None, row["error"], row["generation_key"]) for row in failed
+    ]
+
+
+def mark_notified(engine: sa.Engine, notification: Notification) -> None:
+    if notification.portfolio_id is not None:
+        statement = (
+            sa.update(competition_portfolios)
+            .where(
+                competition_portfolios.c.participant_id == notification.participant.participant_id,
+                competition_portfolios.c.portfolio_id == notification.portfolio_id,
+                competition_portfolios.c.notified_at.is_(None),
             )
-            for job in jobs
-        ]
-
-
-def clear_notified(engine: sa.Engine, key: str) -> None:
-    with engine.begin() as conn:
-        conn.execute(
-            sa.update(competition_jobs)
-            .where(competition_jobs.c.generation_key == key)
-            .values(notified_at=None)
+            .values(notified_at=sa.func.now())
         )
-
-
-def mark_notified(engine: sa.Engine, key: str) -> None:
-    with engine.begin() as conn:
-        conn.execute(
+    else:
+        statement = (
             sa.update(competition_jobs)
             .where(
-                competition_jobs.c.generation_key == key,
+                competition_jobs.c.generation_key == notification.generation_key,
                 competition_jobs.c.notified_at.is_(None),
             )
             .values(notified_at=sa.func.now())
         )
+    with engine.begin() as conn:
+        conn.execute(statement)

@@ -162,6 +162,7 @@ competition_portfolios = sa.Table(
         nullable=False,
         server_default=sa.text("now()"),
     ),
+    sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     sa.Index("competition_portfolios_portfolio_id_idx", "portfolio_id"),
 )
 

@@ -12,7 +12,6 @@ from portfolio_builder.briefing import load_briefing
 from portfolio_builder.competition.repository import (
     ParticipantSettings,
     claim_job,
-    clear_notified,
     fail_job,
     finish_job,
     generation_key,
@@ -132,7 +131,6 @@ def _generate_for(
 
     if not claim.mine:
         link_portfolio(engine, participant.participant_id, claim.portfolio_id)
-        clear_notified(engine, key)
         return
 
     excluded = excluded_company_ids(engine, participant.excluded_theme_codes)

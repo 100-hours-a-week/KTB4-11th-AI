@@ -1,4 +1,4 @@
-"""add notified_at to competition_jobs
+"""record notification on the participant link, and on the job for a failed generation
 
 Revision ID: 0020
 Revises: 0019
@@ -16,6 +16,10 @@ depends_on = None
 
 def upgrade() -> None:
     op.add_column(
+        "competition_portfolios",
+        sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.add_column(
         "competition_jobs",
         sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     )
@@ -23,3 +27,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_column("competition_jobs", "notified_at")
+    op.drop_column("competition_portfolios", "notified_at")
