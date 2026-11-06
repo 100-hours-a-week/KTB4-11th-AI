@@ -3,12 +3,16 @@ from ktb_core.logging import StructuredLogger
 
 from portfolio_builder.competition.backend import Backend
 from portfolio_builder.competition.repository import mark_notified, unnotified_notifications
+from portfolio_builder.settings import Settings
 
 
 def notify_finished_jobs(
-    engine: sa.Engine, backend: Backend, log: StructuredLogger, max_attempts: int
+    engine: sa.Engine, backend: Backend, log: StructuredLogger, settings: Settings
 ) -> None:
-    for notification in unnotified_notifications(engine, max_attempts):
+    pending = unnotified_notifications(
+        engine, settings.competition_max_attempts, settings.competition_stale_running_seconds
+    )
+    for notification in pending:
         try:
             if notification.portfolio_id is not None:
                 backend.completed(notification.participant, notification.portfolio_id)

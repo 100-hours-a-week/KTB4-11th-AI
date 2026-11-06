@@ -86,7 +86,7 @@ def _deps():
 def _cycle(message, sqs, engine, backend, model_factory, settings, log):
     intake.process_message(message, sqs, engine, settings, log)
     generation.generate_missing_portfolios(engine, model_factory, settings, log)
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
 
 def _saved(portfolio_id, text="생각"):
@@ -444,7 +444,7 @@ def test_a_failed_job_notifies_the_backend_with_the_stored_error(engine, _reques
     )
     fail_job(engine, key, "에이전트 실패")
 
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert not backend.completed.called
     assert backend.failed.call_args.args[1] == "에이전트 실패"
@@ -468,7 +468,7 @@ def test_a_failed_job_with_attempts_remaining_is_not_notified_until_it_is_termin
     )
     fail_job(engine, key, "에이전트 실패")
 
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert not backend.failed.called
     assert _notified_at(engine, 1) is None
@@ -571,6 +571,34 @@ def test_a_participant_told_failed_is_told_completed_when_the_key_later_succeeds
     assert latest_participant_portfolio(engine, 2)[0] == portfolio_id
 
 
+def test_a_stale_running_job_with_no_budget_left_is_notified_as_failed(engine, _request):
+    _, backend, log = _deps()
+    settings = _settings(competition_max_attempts=1)
+    participant, _ = store_settings(engine, _request())
+    key = generation_key(participant, None, settings.llm_model)
+    claim_job(
+        engine,
+        key,
+        participant,
+        None,
+        settings.competition_stale_running_seconds,
+        settings.competition_max_attempts,
+    )
+
+    notification.notify_finished_jobs(engine, backend, log, settings)
+
+    assert not backend.failed.called
+    assert _notified_at(engine, 1) is None
+
+    with engine.begin() as conn:
+        conn.execute(sa.text("UPDATE competition_jobs SET started_at = now() - interval '2 hours'"))
+
+    notification.notify_finished_jobs(engine, backend, log, settings)
+
+    assert backend.failed.call_args.args[0].participant_id == 1
+    assert _notified_at(engine, 1) is not None
+
+
 def test_two_participants_sharing_an_exhausted_key_are_each_notified_once(engine, monkeypatch):
     sqs, backend, log = _deps()
     settings = _settings(competition_max_attempts=2)
@@ -594,7 +622,7 @@ def test_two_participants_sharing_an_exhausted_key_are_each_notified_once(engine
     assert _notified_at(engine, 1) is not None
     assert _notified_at(engine, 2) is not None
 
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert backend.failed.call_count == 2
 
@@ -731,7 +759,7 @@ def test_a_failed_notification_is_retried_by_the_notification_pass_alone(
     assert _notified_at(engine, 1) is None
 
     backend.completed.side_effect = None
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert run_agent_stub.call_count == 1
     assert backend.completed.call_args.args[1] == portfolio_id
@@ -750,7 +778,7 @@ def test_an_already_notified_job_is_not_notified_again(engine, monkeypatch, _ins
     stamped = _notified_at(engine, 1)
     assert stamped is not None
 
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert backend.completed.call_count == 1
     assert _notified_at(engine, 1) == stamped
@@ -790,7 +818,7 @@ def test_one_participants_failed_notification_leaves_the_other_notified_once(
     assert _notified_at(engine, 2) is None
 
     backend.completed.reset_mock()
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert [call.args[0].participant_id for call in backend.completed.call_args_list] == [2]
     assert _notified_at(engine, 1) == stamped
@@ -798,7 +826,7 @@ def test_one_participants_failed_notification_leaves_the_other_notified_once(
 
     backend.completed.side_effect = None
     backend.completed.reset_mock()
-    notification.notify_finished_jobs(engine, backend, log, settings.competition_max_attempts)
+    notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert [call.args[0].participant_id for call in backend.completed.call_args_list] == [2]
     assert _notified_at(engine, 1) == stamped

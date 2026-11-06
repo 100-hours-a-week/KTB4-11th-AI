@@ -359,7 +359,10 @@ class Notification:
     error: str | None
 
 
-def unnotified_notifications(engine: sa.Engine, max_attempts: int) -> list[Notification]:
+def unnotified_notifications(
+    engine: sa.Engine, max_attempts: int, stale_after_seconds: int
+) -> list[Notification]:
+    stale_before = sa.func.now() - timedelta(seconds=stale_after_seconds)
     with engine.connect() as conn:
         rows = (
             conn.execute(
@@ -389,7 +392,13 @@ def unnotified_notifications(engine: sa.Engine, max_attempts: int) -> list[Notif
                             competition_jobs.c.portfolio_id.isnot(None),
                         ),
                         sa.and_(
-                            competition_jobs.c.status == "failed",
+                            sa.or_(
+                                competition_jobs.c.status == "failed",
+                                sa.and_(
+                                    competition_jobs.c.status == "running",
+                                    competition_jobs.c.started_at < stale_before,
+                                ),
+                            ),
                             competition_notifications.c.attempts >= max_attempts,
                         ),
                     ),
