@@ -369,7 +369,7 @@ def test_a_low_confidence_sector_choice_with_nothing_else_matched_returns_the_ra
     assert classified
 
 
-def test_a_low_confidence_sector_choice_alongside_a_matched_signal_omits_only_the_sector(engine):
+def test_a_low_confidence_sector_choice_alongside_a_matched_signal_returns_the_raw_text(engine):
     answers = {
         "relevant": _noul(0.9),
         "signals_relevant": _noul(0.9),
@@ -382,11 +382,90 @@ def test_a_low_confidence_sector_choice_alongside_a_matched_signal_omits_only_th
     answers["trend"] = _choice("favor", 0.9)
     ask = FakeAsk(answers)
 
-    form, _, _ = _classify(engine, ask, interested=())
+    form, _, classified = _classify(engine, ask, interested=(), text="반도체 비중 높이고 상승추세")
 
-    assert form["sector"] is None
-    assert form["sector_polarity"] is None
-    assert form["signals"] == {"trend": "favor"}
+    assert form == "반도체 비중 높이고 상승추세"
+    assert classified
+
+
+def test_two_prompts_naming_different_sectors_produce_different_generation_keys(engine):
+    def _answers():
+        answers = {
+            "relevant": _noul(0.9),
+            "signals_relevant": _noul(0.9),
+            "themes_relevant": _noul(0.9),
+            "sector": _choice("T2", CHOICE_MIN_CONFIDENCE - 0.01),
+            "sector_polarity": _choice("emphasize", 0.9),
+        }
+        for name in SIGNAL_NAMES:
+            answers[name] = _choice("neither", 0.9)
+        answers["trend"] = _choice("favor", 0.9)
+        return answers
+
+    semiconductor_form, version, _ = _classify(
+        engine, FakeAsk(_answers()), text="반도체 비중 높이고 상승추세 종목 담아줘"
+    )
+    battery_form, _, _ = _classify(
+        engine, FakeAsk(_answers()), text="배터리 비중 높이고 상승추세 종목 담아줘"
+    )
+
+    assert semiconductor_form != battery_form
+
+    a = _settings(canonical_form=semiconductor_form, canonical_version=version)
+    b = _settings(canonical_form=battery_form, canonical_version=version)
+    assert generation_key(a, None, "openrouter/m") != generation_key(b, None, "openrouter/m")
+
+
+def test_a_theme_named_only_in_the_free_text_cannot_merge_two_participants(engine):
+    def _answers():
+        answers = {
+            "relevant": _noul(0.9),
+            "signals_relevant": _noul(0.9),
+            "themes_relevant": _noul(0.9),
+            "HBM": _choice("neither", 0.9),
+        }
+        for name in SIGNAL_NAMES:
+            answers[name] = _choice("neither", 0.9)
+        answers["trend"] = _choice("favor", 0.9)
+        return answers
+
+    semiconductor_form, version, _ = _classify(
+        engine,
+        FakeAsk(_answers()),
+        text="반도체 비중 높이고 상승추세 종목 담아줘",
+        interested=("HBM",),
+    )
+    battery_form, _, _ = _classify(
+        engine,
+        FakeAsk(_answers()),
+        text="배터리 비중 높이고 상승추세 종목 담아줘",
+        interested=("HBM",),
+    )
+
+    assert semiconductor_form == "반도체 비중 높이고 상승추세 종목 담아줘"
+    assert battery_form == "배터리 비중 높이고 상승추세 종목 담아줘"
+
+    a = _settings(canonical_form=semiconductor_form, canonical_version=version)
+    b = _settings(canonical_form=battery_form, canonical_version=version)
+    assert generation_key(a, None, "openrouter/m") != generation_key(b, None, "openrouter/m")
+
+
+def test_an_open_signals_gate_matching_nothing_returns_the_raw_text(engine):
+    answers = {
+        "relevant": _noul(0.9),
+        "signals_relevant": _noul(0.9),
+        "themes_relevant": _noul(0.9),
+        "sector": _choice("T2", 0.9),
+        "sector_polarity": _choice("emphasize", 0.9),
+    }
+    for name in SIGNAL_NAMES:
+        answers[name] = _choice("neither", 0.9)
+    ask = FakeAsk(answers)
+
+    form, _, classified = _classify(engine, ask, interested=(), text="반도체 비중 높여줘")
+
+    assert form == "반도체 비중 높여줘"
+    assert classified
 
 
 def test_a_sector_confidence_exactly_at_the_floor_is_trusted(engine):

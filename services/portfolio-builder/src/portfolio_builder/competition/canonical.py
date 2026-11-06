@@ -290,7 +290,10 @@ def _classify_text(
         else ({}, None, None)
     )
 
-    if not signal_polarity and not theme_polarity and sector is None:
+    nothing_matched = not signal_polarity and not theme_polarity and sector is None
+    signals_unclassified = signals_relevant and not signal_polarity
+    themes_unclassified = themes_relevant and not theme_polarity and sector is None
+    if nothing_matched or signals_unclassified or themes_unclassified:
         return text
 
     return CanonicalForm(
