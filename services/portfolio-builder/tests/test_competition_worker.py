@@ -5,6 +5,7 @@ from unittest.mock import Mock
 import pytest
 import sqlalchemy as sa
 from portfolio_builder.agent.run import RunResult
+from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT, DISCLOSURE_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.competition import generation, intake, notification, repository
 from portfolio_builder.competition.repository import (
@@ -653,3 +654,58 @@ def test_a_classification_failure_does_not_block_generation(engine, monkeypatch,
     assert linked_portfolio_id == portfolio_id
     assert backend.completed.called
     assert sqs.delete_message.called
+
+
+def test_an_enabled_disclosure_deployment_gives_the_competition_agent_the_disclosure_tools(
+    engine, monkeypatch, _insert_portfolio
+):
+    monkeypatch.setenv("DISCLOSURE_ENABLED", "true")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_BASE_URI", "http://unused/v1")
+    monkeypatch.setenv("DISCLOSURE_EMBEDDING_MODEL", "test-model")
+    sqs, backend, log = _deps()
+    settings = _settings()
+    portfolio_id = _insert_portfolio(engine)
+    run_agent_stub = Mock(return_value=_saved(portfolio_id))
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", Mock(return_value=1))
+    _patch_news(monkeypatch)
+
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+
+    captured = run_agent_stub.call_args.kwargs
+    assert {tool.name for tool in captured["tools"]} == {
+        "get_news_cluster",
+        "search_news_cluster",
+        "search_disclosures",
+        "get_disclosure_sections",
+        "get_disclosure_financials",
+        "search_graph",
+        "find_graph_paths",
+        "analyze_technicals",
+        "submit_portfolio",
+    }
+    assert captured["disclosure_enabled"] is True
+    assert captured["system_prompt"] == COMPETITION_SYSTEM_PROMPT + DISCLOSURE_PROMPT
+
+
+def test_a_deployment_without_disclosure_config_keeps_competition_generation(
+    engine, monkeypatch, _insert_portfolio
+):
+    monkeypatch.delenv("DISCLOSURE_ENABLED", raising=False)
+    monkeypatch.setattr(
+        generation, "DisclosureSettings", lambda: pytest.fail("disabled model settings loaded")
+    )
+    sqs, backend, log = _deps()
+    settings = _settings()
+    portfolio_id = _insert_portfolio(engine)
+    run_agent_stub = Mock(return_value=_saved(portfolio_id))
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", Mock(return_value=1))
+    _patch_news(monkeypatch)
+
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+
+    captured = run_agent_stub.call_args.kwargs
+    assert not any("disclosure" in tool.name for tool in captured["tools"])
+    assert captured["disclosure_enabled"] is False
+    assert captured["system_prompt"] == COMPETITION_SYSTEM_PROMPT

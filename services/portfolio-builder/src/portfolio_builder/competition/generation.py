@@ -1,11 +1,12 @@
 from collections.abc import Callable
 
 import sqlalchemy as sa
+from disclosure_retrieval.settings import Settings as DisclosureSettings
 from ktb_core.logging import StructuredLogger
 from langchain_core.language_models import BaseChatModel
 
 from portfolio_builder.agent.run import RunResult, run_agent
-from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT
+from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT, DISCLOSURE_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.briefing import load_briefing
 from portfolio_builder.competition.repository import (
@@ -25,6 +26,7 @@ from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import excluded_company_ids, mark_explanation_failed, save_trace
 from portfolio_builder.settings import Settings
+from portfolio_builder.tools.disclosure.tool import disclosure_tools
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
 from portfolio_builder.tools.submit import submit_tool
@@ -67,8 +69,10 @@ def _generate(
 ) -> RunResult:
     market = HttpMarket(settings.market_http_base_uri, engine)
     model = model_factory(reasoning={"effort": settings.thinking_level})
+    disclosure_settings = DisclosureSettings() if settings.disclosure_enabled else None
     tools = [
         *news_tools(news_client),
+        *(disclosure_tools(engine, disclosure_settings) if disclosure_settings else []),
         *graph_tools(news_client),
         technicals_tool(engine, market),
         submit_tool(
@@ -84,10 +88,12 @@ def _generate(
     return run_agent(
         model=model,
         tools=tools,
-        system_prompt=COMPETITION_SYSTEM_PROMPT,
+        system_prompt=COMPETITION_SYSTEM_PROMPT
+        + (DISCLOSURE_PROMPT if settings.disclosure_enabled else ""),
         briefing=briefing_text,
         max_turns=settings.max_turns,
         log=log,
+        disclosure_enabled=settings.disclosure_enabled,
     )
 
 
