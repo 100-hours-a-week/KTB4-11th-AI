@@ -90,7 +90,7 @@ intake  →  generation
 **Intake** receives one SQS message and does only idempotent database writes:
 
 ```
-validate  →  resolve theme names  →  upsert participants  →  delete the message
+validate  →  look up theme codes  →  upsert participants  →  delete the message
 ```
 
 It computes no `generation_key`, claims no job, calls no Backend, and runs no agent. That is a
@@ -208,39 +208,32 @@ sources for one fact needs one named authoritative before a second is added. Buy
 take-profit prices have nowhere to go, since competition portfolios carry no prices. Add each when
 its consumer lands.
 
-## Theme Names
+## Theme Codes
 
-`preferred_themes` and `excluded_themes` arrive as **names**, not codes, and resolve against
-`themes.name` in four forms, in this precedence:
+`preferred_themes` and `excluded_themes` carry `themes.theme_code` values. The Backend sends
+codes, which is the safest of the three things it could have sent, and the reason is worth keeping:
 
-| Received | Resolves to |
-|---|---|
-| exact `themes.name` | that one code — covers both `"반도체_생산"` and `"은행"` |
-| group name | every code whose name begins `<name>_` |
-| bare suffix matching exactly one leaf | that one code |
-| anything else | **validation failure** |
+Kiwoom owns the theme vocabulary, and `market-http` derives the grouping the frontend displays
+rather than storing it — `_group_by_prefix` partitions `themes.name` on `_` and rewrites each
+member's name to the part after the underscore, so `/market/themes` hands the frontend
+`{"name": "반도체", "items": [{"code": "550", "name": "생산"}, …]}`. A user who opens 반도체 and
+picks 생산 is therefore looking at the string `생산`, while the stored name is `반도체_생산`. Any
+name-based contract has to pick among those spellings and stays correct only while they remain
+unambiguous: a future `자동차_생산` would make `생산` match two themes. **A code does not drift when
+a name changes and can never be ambiguous.**
 
-The grouping is not a table. `market-http`'s `_group_by_prefix` partitions `themes.name` on `_`
-and rewrites each member's name to **the part after the underscore**, so `/market/themes` hands
-the frontend `{"name": "반도체", "items": [{"name": "생산"}, …]}`. The label a user sees inside a
-group is therefore the bare suffix, which is why that form has to resolve. The endpoint currently
-exposes 21 groups and 36 standalone themes, with no suffix repeated across groups.
+So resolution is one lookup: every received code must exist in `themes`, and the row's `name` comes
+back with it. The name is then stored beside the code and is what the briefing and Jev read, so the
+model sees `반도체_생산` rather than `550`, **taken from the authoritative table rather than from
+the message.**
 
-Two rules are not negotiable:
+**An unknown code fails validation.** Not dropped — dropping it would silently discard a theme the
+user chose, and for `excluded_themes` they would be holding exactly what they asked to avoid. The
+message is left for the dead-letter queue so the mismatch is visible rather than silent.
 
-**The prefix match escapes `_`.** In SQL `LIKE`, `_` matches any single character, so an
-unescaped `LIKE '반도체_%'` also matches names that merely begin with 반도체 plus one character.
-`database.py` already has `like_contains` doing this escaping.
-
-**Never guess.** A name that resolves to nothing, or a suffix that matches more than one theme,
-fails validation. Kiwoom owns these names, and a future `자동차_생산` would make `"생산"`
-ambiguous; silently picking one candidate in `excluded_themes` would cover companies the user
-never excluded. Dropping an unresolvable name is just as bad — the user's chosen theme would
-vanish silently, and for an exclusion they would be holding what they asked to avoid.
-
-Jev's theme questions ask at the level the **user selected**, not at the expanded code level: a
-user who picked "반도체" chose one thing, and asking separately about 생산, 후공정장비 and
-시스템반도체 is both finer than their intent and liable to exceed the per-request question limit.
+Codes are what gets stored, hashed into `generation_key`, and enforced through the two-hop
+exclusion join, so nothing downstream had to change when the contract moved from names to codes —
+only the resolution step did, and it shrank.
 
 ## Injecting Settings, and the Authority Boundary
 
@@ -425,7 +418,7 @@ reach the DLQ:
 | Cause | Resolution |
 |---|---|
 | Schema violation | never becomes valid; fix the payload and republish |
-| A theme name that resolves to nothing | most likely case; align the vocabulary and redrive |
+| A theme code that is not in `themes` | align the vocabulary and redrive |
 | Database unreachable | recover and redrive |
 
 A malformed message is **left for the DLQ rather than deleted**, even though retrying it cannot
@@ -438,7 +431,7 @@ One migration, `0017`, creating four tables and adding two columns to `portfolio
 
 | Table | Key | Holds |
 |---|---|---|
-| `competition_participants` | `participant_id` | the frozen settings: risk profile, theme codes, received theme names, raw prompt, canonical form, `agent_id` |
+| `competition_participants` | `participant_id` | the frozen settings: risk profile, theme codes and their names, raw prompt, canonical form, `agent_id` |
 | `competition_jobs` | `generation_key` | one generation; **this key's uniqueness is the concurrency guard** |
 | `competition_portfolios` | `participant_id`, `portfolio_id` | which portfolio a participant follows — where sharing happens |
 | `competition_attempts` | `participant_id`, `generation_key` | how many times this participant has tried this key |
@@ -520,9 +513,12 @@ left to ride on. The accompanying argument against reusing `is_active` was also 
 on a user re-enabling an account, and there is no `activate()` anywhere in the Backend.
 `deactivate()` has exactly three callers and all are terminal.
 
-**Theme names were assumed to arrive as full names.** They can arrive as the bare suffix, because
-that is the label `/market/themes` hands the frontend. Reading `market-http`'s own grouping code
-settled it; the HTTP examples did not.
+**Themes were assumed to arrive as names.** The design resolved three name spellings, including
+the bare suffix `/market/themes` hands the frontend, with an ambiguity rule to keep it safe. Asking
+the Backend which spelling it sends produced a better answer than any of them: it sends codes, so
+the spelling question disappears and the resolution step is one lookup. The lesson is not about
+names — it is that a contract question worth asking is cheaper than the branch built to survive
+not asking it.
 
 **The attempt row was inserted before the row lock** because a ruling said to insert it
 before deciding reclaimability. Its foreign key takes `FOR KEY SHARE`, so that produced a deadlock
@@ -584,8 +580,8 @@ The ones that must never regress:
 - Generation succeeds and the same message is redelivered: the agent ran **once**
   and no second job row exists.
 - All five `risk_level` values map to the right profile.
-- A bare suffix resolves to one code; an ambiguous suffix fails validation; an unescaped `LIKE`
-  pattern would match a lookalike and the escaped one does not.
+- An unknown theme code fails validation rather than being dropped, and a theme *name* sent where
+  a code belongs is rejected too.
 - An excluded theme's companies are rejected at submission through the two-hop join.
 - A competition portfolio never appears in the rebalancer's `LATEST` or `LEFTOVERS`.
 - Migration and `database.py` metadata agree for all four competition tables.

@@ -10,7 +10,7 @@ from portfolio_builder.competition import jev
 from portfolio_builder.competition.canonical import classify_additional_request
 from portfolio_builder.competition.message import Request
 from portfolio_builder.competition.repository import store_settings
-from portfolio_builder.competition.themes import ResolvedAgent, UnresolvedTheme, resolve_agent
+from portfolio_builder.competition.themes import ResolvedAgent, UnknownTheme, resolve_agent
 from portfolio_builder.settings import Settings
 
 JEV_CHOICE_MIN_CONFIDENCE_FALLBACK = 0.5
@@ -62,9 +62,9 @@ def process_message(
             resolve_agent(engine, request.competition_id, request.user_id, agent)
             for agent in request.agents
         ]
-    except UnresolvedTheme as error:
+    except UnknownTheme as error:
         log.error(
-            "unresolved_theme",
+            "unknown_theme",
             request_id=request.request_id,
             competition_id=request.competition_id,
             error_type=type(error).__name__,

@@ -4,10 +4,9 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 
 from portfolio_builder.competition.message import AgentSettings
-from portfolio_builder.database import like_group_prefix, like_group_suffix
 
 
-class UnresolvedTheme(Exception):
+class UnknownTheme(Exception):
     pass
 
 
@@ -25,72 +24,33 @@ class ResolvedAgent:
     additional_request: str
 
 
-def _codes_matching(conn: sa.Connection, pattern: str) -> list[str]:
-    rows = conn.execute(
-        sa.text(
-            "SELECT theme_code FROM themes WHERE name LIKE :pattern ESCAPE '\\' ORDER BY theme_code"
-        ),
-        {"pattern": pattern},
-    )
-    return list(rows.scalars())
-
-
-def resolve_theme_codes(engine: sa.Engine, names: Sequence[str]) -> dict[str, list[str]]:
-    unique_names = list(dict.fromkeys(names))
-    if not unique_names:
+def theme_names(engine: sa.Engine, codes: Sequence[str]) -> dict[str, str]:
+    unique_codes = list(dict.fromkeys(codes))
+    if not unique_codes:
         return {}
 
-    resolved: dict[str, list[str]] = {}
     with engine.connect() as conn:
-        exact_rows = conn.execute(
-            sa.text(
-                "SELECT name, theme_code FROM themes WHERE name IN :names ORDER BY theme_code"
-            ).bindparams(sa.bindparam("names", expanding=True)),
-            {"names": unique_names},
+        rows = conn.execute(
+            sa.text("SELECT theme_code, name FROM themes WHERE theme_code IN :codes").bindparams(
+                sa.bindparam("codes", expanding=True)
+            ),
+            {"codes": unique_codes},
         )
-        for name, code in exact_rows:
-            resolved.setdefault(name, []).append(code)
+        name_by_code = {code: name for code, name in rows}
 
-        for name in unique_names:
-            if name in resolved:
-                continue
-            codes = _codes_matching(conn, like_group_prefix(name))
-            if codes:
-                resolved[name] = codes
-
-        for name in unique_names:
-            if name in resolved:
-                continue
-            codes = _codes_matching(conn, like_group_suffix(name))
-            if len(codes) == 1:
-                resolved[name] = codes
-
-    missing = [name for name in unique_names if name not in resolved]
+    missing = [code for code in unique_codes if code not in name_by_code]
     if missing:
-        raise UnresolvedTheme(f"unresolved theme name(s): {', '.join(missing)}")
-    return resolved
+        raise UnknownTheme(f"unknown theme code(s): {', '.join(missing)}")
+    return name_by_code
 
 
 def resolve_agent(
     engine: sa.Engine, competition_id: int, user_id: int, agent: AgentSettings
 ) -> ResolvedAgent:
-    code_by_name = resolve_theme_codes(engine, [*agent.preferred_themes, *agent.excluded_themes])
+    name_by_code = theme_names(engine, [*agent.preferred_themes, *agent.excluded_themes])
 
-    excluded_codes = sorted({code for name in agent.excluded_themes for code in code_by_name[name]})
-    excluded_code_set = set(excluded_codes)
-    interested_codes = sorted(
-        {
-            code
-            for name in agent.preferred_themes
-            for code in code_by_name[name]
-            if code not in excluded_code_set
-        }
-    )
-
-    excluded_names = set(agent.excluded_themes)
-    interested_names = sorted(
-        {name for name in agent.preferred_themes if name not in excluded_names}
-    )
+    excluded_codes = sorted(set(agent.excluded_themes))
+    interested_codes = sorted(set(agent.preferred_themes) - set(excluded_codes))
 
     return ResolvedAgent(
         competition_id=competition_id,
@@ -100,7 +60,7 @@ def resolve_agent(
         risk_profile=agent.risk_profile,
         interested_theme_codes=tuple(interested_codes),
         excluded_theme_codes=tuple(excluded_codes),
-        interested_theme_names=tuple(interested_names),
-        excluded_theme_names=tuple(sorted(excluded_names)),
+        interested_theme_names=tuple(name_by_code[code] for code in interested_codes),
+        excluded_theme_names=tuple(name_by_code[code] for code in excluded_codes),
         additional_request=agent.additional_request,
     )

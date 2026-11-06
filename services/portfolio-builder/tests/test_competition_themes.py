@@ -2,53 +2,31 @@ import pytest
 import sqlalchemy as sa
 from portfolio_builder.competition.message import AgentSettings
 from portfolio_builder.competition.repository import generation_key, store_settings
-from portfolio_builder.competition.themes import (
-    UnresolvedTheme,
-    resolve_agent,
-    resolve_theme_codes,
-)
+from portfolio_builder.competition.themes import UnknownTheme, resolve_agent, theme_names
 from portfolio_builder.errors import PortfolioRejected
 from portfolio_builder.portfolio import excluded_company_ids
 from portfolio_builder.tools.submit import submit_tool
 
 LGES = "01515323"
 
-GROUP_THEMES = [
+THEMES = [
     ("SG", "반도체_생산"),
     ("SH", "반도체_후공정장비"),
     ("SS", "반도체_시스템반도체"),
+    ("BK", "은행"),
 ]
-STANDALONE_THEME = ("BK", "은행")
-LOOKALIKE_THEME = ("SX", "반도체X")
-SUFFIX_TWIN_THEME = ("CG", "자동차_생산")
 
 
-def _seed_group_themes(engine):
+def _seed_themes(engine):
     with engine.begin() as conn:
         conn.execute(
             sa.text("INSERT INTO themes (theme_code, name) VALUES (:code, :name)"),
-            [{"code": code, "name": name} for code, name in [*GROUP_THEMES, STANDALONE_THEME]],
+            [{"code": code, "name": name} for code, name in THEMES],
         )
         conn.execute(
             sa.text(
                 "INSERT INTO theme_corporations (theme_code, stock_code) VALUES ('SG', '373220')"
             )
-        )
-
-
-def _seed_lookalike_theme(engine):
-    with engine.begin() as conn:
-        conn.execute(
-            sa.text("INSERT INTO themes (theme_code, name) VALUES (:code, :name)"),
-            {"code": LOOKALIKE_THEME[0], "name": LOOKALIKE_THEME[1]},
-        )
-
-
-def _seed_theme(engine, code, name):
-    with engine.begin() as conn:
-        conn.execute(
-            sa.text("INSERT INTO themes (theme_code, name) VALUES (:code, :name)"),
-            {"code": code, "name": name},
         )
 
 
@@ -79,125 +57,63 @@ def _call(args, call_id="c1"):
     return {"name": "submit_portfolio", "args": args, "id": call_id, "type": "tool_call"}
 
 
-def test_an_exact_leaf_name_resolves_to_its_own_code(engine):
-    _seed_group_themes(engine)
+def test_theme_names_reads_the_name_for_every_code(engine):
+    _seed_themes(engine)
 
-    resolved = resolve_theme_codes(engine, ["반도체_생산"])
-
-    assert resolved == {"반도체_생산": ["SG"]}
+    assert theme_names(engine, ["SG", "BK"]) == {"SG": "반도체_생산", "BK": "은행"}
 
 
-def test_an_exact_standalone_name_resolves_to_its_own_code(engine):
-    _seed_group_themes(engine)
-
-    resolved = resolve_theme_codes(engine, ["은행"])
-
-    assert resolved == {"은행": ["BK"]}
+def test_theme_names_of_nothing_queries_nothing(engine):
+    assert theme_names(engine, []) == {}
 
 
-def test_a_group_name_resolves_to_every_code_in_the_group(engine):
-    _seed_group_themes(engine)
+def test_a_repeated_code_is_read_once(engine):
+    _seed_themes(engine)
 
-    resolved = resolve_theme_codes(engine, ["반도체"])
-
-    assert resolved == {"반도체": ["SG", "SH", "SS"]}
+    assert theme_names(engine, ["SG", "SG"]) == {"SG": "반도체_생산"}
 
 
-def test_the_prefix_match_escapes_the_underscore_and_skips_the_lookalike_name(engine):
-    _seed_group_themes(engine)
-    _seed_lookalike_theme(engine)
+def test_an_unknown_code_is_rejected_rather_than_dropped(engine):
+    _seed_themes(engine)
 
-    resolved = resolve_theme_codes(engine, ["반도체"])
+    with pytest.raises(UnknownTheme) as unknown:
+        theme_names(engine, ["SG", "NOPE"])
 
-    assert resolved == {"반도체": ["SG", "SH", "SS"]}
-
-
-def test_a_lookalike_name_resolves_only_to_itself(engine):
-    _seed_group_themes(engine)
-    _seed_lookalike_theme(engine)
-
-    resolved = resolve_theme_codes(engine, ["반도체X"])
-
-    assert resolved == {"반도체X": ["SX"]}
+    assert "NOPE" in str(unknown.value)
 
 
-def test_a_bare_group_member_suffix_resolves_to_its_single_code(engine):
-    _seed_group_themes(engine)
+def test_a_theme_name_sent_instead_of_a_code_is_rejected(engine):
+    _seed_themes(engine)
 
-    resolved = resolve_theme_codes(engine, ["후공정장비"])
-
-    assert resolved == {"후공정장비": ["SH"]}
-
-
-def test_a_suffix_shared_by_two_groups_is_refused_rather_than_guessed(engine):
-    _seed_group_themes(engine)
-    _seed_theme(engine, *SUFFIX_TWIN_THEME)
-
-    with pytest.raises(UnresolvedTheme):
-        resolve_theme_codes(engine, ["생산"])
+    with pytest.raises(UnknownTheme):
+        theme_names(engine, ["반도체_생산"])
 
 
-def test_an_exact_name_wins_over_the_same_string_as_a_suffix(engine):
-    _seed_group_themes(engine)
-    _seed_theme(engine, "PR", "생산")
+def test_resolve_agent_stores_the_codes_and_their_names(engine):
+    _seed_themes(engine)
+    agent = _agent(preferred_themes=["SG", "SH"], excluded_themes=["BK"])
 
-    resolved = resolve_theme_codes(engine, ["생산"])
+    resolved = resolve_agent(engine, 10, 100, agent)
 
-    assert resolved == {"생산": ["PR"]}
-
-
-def test_a_group_name_wins_over_the_same_string_as_a_suffix(engine):
-    _seed_group_themes(engine)
-    _seed_theme(engine, "GB", "은행_반도체")
-
-    resolved = resolve_theme_codes(engine, ["반도체"])
-
-    assert resolved == {"반도체": ["SG", "SH", "SS"]}
+    assert resolved.interested_theme_codes == ("SG", "SH")
+    assert resolved.excluded_theme_codes == ("BK",)
+    assert resolved.interested_theme_names == ("반도체_생산", "반도체_후공정장비")
+    assert resolved.excluded_theme_names == ("은행",)
 
 
-def test_a_suffix_match_escapes_the_underscore_and_the_wildcard(engine):
-    _seed_group_themes(engine)
-    _seed_theme(engine, "PC", "소재_100%생산")
-    _seed_theme(engine, "PD", "소재_1000생산")
-
-    resolved = resolve_theme_codes(engine, ["100%생산"])
-
-    assert resolved == {"100%생산": ["PC"]}
-
-
-def test_an_unresolvable_name_raises(engine):
-    _seed_group_themes(engine)
-
-    with pytest.raises(UnresolvedTheme):
-        resolve_theme_codes(engine, ["금융"])
-
-
-def test_resolve_agent_excludes_a_group_resolved_name_from_interested(engine):
-    _seed_group_themes(engine)
-    agent = _agent(preferred_themes=["반도체"], excluded_themes=["반도체_생산"])
+def test_a_code_in_both_lists_is_excluded_only(engine):
+    _seed_themes(engine)
+    agent = _agent(preferred_themes=["SG", "SH"], excluded_themes=["SG"])
 
     resolved = resolve_agent(engine, 10, 100, agent)
 
     assert resolved.excluded_theme_codes == ("SG",)
-    assert resolved.interested_theme_codes == ("SH", "SS")
-    assert resolved.interested_theme_names == ("반도체",)
-    assert resolved.excluded_theme_names == ("반도체_생산",)
-
-
-def test_resolve_agent_carries_the_theme_fields_as_tuples(engine):
-    _seed_group_themes(engine)
-    agent = _agent(preferred_themes=["반도체"], excluded_themes=["은행"])
-
-    resolved = resolve_agent(engine, 10, 100, agent)
-
-    assert resolved.interested_theme_codes == ("SG", "SH", "SS")
-    assert resolved.excluded_theme_codes == ("BK",)
-    assert resolved.interested_theme_names == ("반도체",)
-    assert resolved.excluded_theme_names == ("은행",)
+    assert resolved.interested_theme_codes == ("SH",)
+    assert resolved.interested_theme_names == ("반도체_후공정장비",)
 
 
 def test_resolve_agent_keeps_agent_and_participant_ids_distinct(engine):
-    _seed_group_themes(engine)
+    _seed_themes(engine)
     agent = _agent(agent_id=77, participant_id=88)
 
     resolved = resolve_agent(engine, 10, 100, agent)
@@ -206,31 +122,24 @@ def test_resolve_agent_keeps_agent_and_participant_ids_distinct(engine):
     assert resolved.participant_id == 88
 
 
-def test_group_selection_and_leaf_selection_produce_the_same_generation_key(engine):
-    _seed_group_themes(engine)
-    by_group = resolve_agent(engine, 10, 100, _agent(participant_id=1, excluded_themes=["반도체"]))
-    by_leaves = resolve_agent(
-        engine,
-        10,
-        100,
-        _agent(
-            participant_id=2,
-            excluded_themes=["반도체_생산", "반도체_후공정장비", "반도체_시스템반도체"],
-        ),
+def test_the_order_codes_arrive_in_does_not_change_the_generation_key(engine):
+    _seed_themes(engine)
+    forwards = resolve_agent(
+        engine, 10, 100, _agent(participant_id=1, excluded_themes=["SG", "SH", "SS"])
+    )
+    backwards = resolve_agent(
+        engine, 10, 100, _agent(participant_id=2, excluded_themes=["SS", "SH", "SG"])
     )
 
-    assert sorted(by_group.excluded_theme_codes) == sorted(by_leaves.excluded_theme_codes)
-
-    a, _ = store_settings(engine, by_group)
-    b, _ = store_settings(engine, by_leaves)
+    a, _ = store_settings(engine, forwards)
+    b, _ = store_settings(engine, backwards)
 
     assert generation_key(a, None, "openrouter/m") == generation_key(b, None, "openrouter/m")
 
 
-def test_a_holding_in_a_group_resolved_excluded_theme_is_rejected(engine, news_client):
-    _seed_group_themes(engine)
-    agent = _agent(excluded_themes=["반도체"])
-    resolved = resolve_agent(engine, 10, 100, agent)
+def test_a_holding_in_an_excluded_theme_is_rejected(engine, news_client):
+    _seed_themes(engine)
+    resolved = resolve_agent(engine, 10, 100, _agent(excluded_themes=["SG"]))
     excluded = excluded_company_ids(engine, resolved.excluded_theme_codes)
     assert LGES in excluded
 

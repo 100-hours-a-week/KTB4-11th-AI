@@ -24,7 +24,7 @@ AGENT = {
     "agent_id": 9001,
     "participant_id": 1,
     "risk_level": 5,
-    "preferred_themes": ["HBM"],
+    "preferred_themes": ["T1"],
     "excluded_themes": [],
     "additional_request": "원문",
 }
@@ -208,13 +208,13 @@ def test_an_invalid_message_is_left_for_the_dead_letter_queue(engine, monkeypatc
     assert any(event == "invalid_message" for event, _, _ in log.events)
 
 
-def test_an_unresolvable_theme_name_leaves_the_message_and_stores_nothing(engine, monkeypatch):
+def test_an_unknown_theme_code_leaves_the_message_and_stores_nothing(engine, monkeypatch):
     queue, log = _deps()
     run_agent_stub = Mock()
     monkeypatch.setattr(generation, "run_agent", run_agent_stub)
 
     _cycle(
-        _message(_body(_agent(preferred_themes=["금융"]))),
+        _message(_body(_agent(preferred_themes=["NOPE"]))),
         queue,
         engine,
         Mock(return_value=Mock()),
@@ -225,7 +225,7 @@ def test_an_unresolvable_theme_name_leaves_the_message_and_stores_nothing(engine
     assert not queue.delete.called
     assert not run_agent_stub.called
     assert _count(engine, "competition_participants") == 0
-    assert any(event == "unresolved_theme" for event, _, _ in log.events)
+    assert any(event == "unknown_theme" for event, _, _ in log.events)
 
 
 def test_intake_never_computes_a_generation_key(engine, monkeypatch):
