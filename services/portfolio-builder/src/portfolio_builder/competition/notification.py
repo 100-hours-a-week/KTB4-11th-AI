@@ -5,6 +5,8 @@ from portfolio_builder.competition.backend import Backend
 from portfolio_builder.competition.repository import mark_notified, unnotified_notifications
 from portfolio_builder.settings import Settings
 
+INTERRUPTED_ERROR = "generation was interrupted before it reported an outcome"
+
 
 def notify_finished_jobs(
     engine: sa.Engine, backend: Backend, log: StructuredLogger, settings: Settings
@@ -17,7 +19,7 @@ def notify_finished_jobs(
             if notification.portfolio_id is not None:
                 backend.completed(notification.participant, notification.portfolio_id)
             else:
-                backend.failed(notification.participant, notification.error or "")
+                backend.failed(notification.participant, notification.error or INTERRUPTED_ERROR)
         except Exception as error:
             log.error(
                 "notify_failed",

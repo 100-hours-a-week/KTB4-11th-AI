@@ -596,6 +596,7 @@ def test_a_stale_running_job_with_no_budget_left_is_notified_as_failed(engine, _
     notification.notify_finished_jobs(engine, backend, log, settings)
 
     assert backend.failed.call_args.args[0].participant_id == 1
+    assert backend.failed.call_args.args[1] == notification.INTERRUPTED_ERROR
     assert _notified_at(engine, 1) is not None
 
 
