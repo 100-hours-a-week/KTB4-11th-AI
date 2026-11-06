@@ -1,97 +1,68 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 cd "${1:-$HOME/ai}"
-exec /usr/bin/python3 - <<'PYTHON'
-import fcntl
-import json
-import re
-import subprocess
-import sys
-from pathlib import Path
+trap 'echo "cleanup-images: failed at line $LINENO (status $?)" >&2' ERR
 
+# CD와 같은 잠금을 사용해 배포 도중 이미지가 정리되지 않도록 보호
+exec 9>>.deploy.lock
+if ! flock -n 9; then
+  echo 'cleanup-images: skipped; deployment or cleanup is active'
+  exit 0
+fi
+# 파일 전송이 시작됐지만 배포 잠금은 아직 잡히지 않은 구간도 건너뜀 (잠금은 배포 스크립트에서 잡음)
+if [[ -e .image.env.next || -e compose.prod.yaml.next || -e .schedule.next ]]; then
+  echo 'cleanup-images: skipped; deployment is staged'
+  exit 0
+fi
 
-def log(message):
-    print(f"cleanup-images: {message}", file=sys.stderr, flush=True)
+# 조회 결과는 임시 파일에 작성, 성공·실패와 관계없이 종료 시 제거
+work_dir=$(mktemp -d)
+trap 'rm -rf "$work_dir"' EXIT
 
+# 현재&롤백 Compose의 모든 프로필에서 예약 배치를 포함한 이미지 목록 조회
+# (첫 배포에는 롤백 파일이 없을 수 있지만 일부만 존재 시 안전하게 중단)
+for suffix in '' '.rollback'; do
+  if [[ "$suffix" == '.rollback' && ! -e .env.rollback &&
+        ! -e .image.env.rollback && ! -e compose.prod.yaml.rollback ]]; then
+    continue
+  fi
+  for file in .env .image.env compose.prod.yaml; do
+    [[ -f "$file$suffix" ]] || { echo "cleanup-images: missing $file$suffix" >&2; exit 1; }
+  done
+  docker compose --profile '*' \
+    --env-file ".env$suffix" --env-file ".image.env$suffix" \
+    -f "compose.prod.yaml$suffix" config --images >> "$work_dir/refs"
+done
+[[ -s "$work_dir/refs" ]] || { echo 'cleanup-images: no Compose images found' >&2; exit 1; }
 
-def docker(*args):
-    result = subprocess.run(["docker", *args], capture_output=True, text=True)
-    if result.returncode:
-        raise RuntimeError(f"Docker {args[0]} {args[1]} failed (status {result.returncode})")
-    return result.stdout
+# 태그·digest가 달라도 같은 이미지라면 하나의 로컬 ID로 합침
+# (필요한 이미지가 로컬에 없을 경우 보존 컨테이너를 바꾸기 전에 중단)
+while IFS= read -r image; do
+  docker image inspect --format '{{.Id}}' "$image" >> "$work_dir/images"
+done < "$work_dir/refs"
+sort -u "$work_dir/images" -o "$work_dir/images"
 
+# 이 배포 경로에서 만든 보존 컨테이너만 관리하도록 소유 라벨을 구분
+owner=$(printf '%s' "$PWD" | sha256sum)
+label="com.ktb.image-keep-owner=${owner:0:16}"
+previous=$(docker container ls -aq --filter "label=$label")
 
-def image_id(ref):
-    return json.loads(docker("image", "inspect", ref))[0]["Id"]
+# 컨테이너를 실행하지 않고 생성만 진행하여 필요한 이미지를 prune 대상에서 제외
+# 새 보존 컨테이너가 모두 생성되기 전에는 이전 보존 컨테이너를 제거하지 않습니다.
+while IFS= read -r image; do
+  docker container create --pull never \
+    --name "ktb-image-keep-${work_dir##*/}-${image#sha256:}" \
+    --label "$label" --network none --entrypoint /bin/true "$image"
+done < "$work_dir/images"
 
+# 이전 보존 컨테이너만 제거, 실행 중이면 강제로 제거하지 않고 중단
+while IFS= read -r container; do
+  [[ -n "$container" ]] || continue
+  docker container rm "$container"
+done <<< "$previous"
 
-def release(suffix):
-    compose = Path("compose.prod.yaml" + suffix)
-    env = Path(".env" + suffix)
-    image = Path(".image.env" + suffix)
-    if not compose.is_file() or not env.is_file() or not image.is_file():
-        raise RuntimeError(f"Incomplete release files: {suffix or 'current'}")
-    args = ("compose", "--env-file", str(env), "--env-file", str(image),
-            "-f", str(compose))
-    environment = docker(*args, "config", "--environment")
-    refs = [line.partition("=")[2] for line in environment.splitlines()
-            if line.startswith("APP_IMAGE=")]
-    if len(refs) != 1 or not re.fullmatch(
-        r"[a-z0-9][a-z0-9./:_-]*(?::[0-9a-f]{40}|@sha256:[0-9a-f]{64})", refs[0]
-    ):
-        raise RuntimeError("APP_IMAGE must identify an immutable SHA or digest")
-    config = json.loads(docker(*args, "config", "--format", "json"))
-    refs_in_use = {service["image"] for service in config["services"].values()
-                   if "image" in service}
-    if refs[0] not in refs_in_use:
-        raise RuntimeError("APP_IMAGE is absent from rendered Compose")
-    return refs[0], {image_id(ref) for ref in refs_in_use}
-
-
-def main():
-    lock = Path(".deploy.lock").open("a")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        log("skipped: deployment or cleanup is active")
-        return 0
-    if any(Path(name).exists() for name in
-           (".image.env.next", "compose.prod.yaml.next", ".schedule.next")):
-        log("skipped: deployment is staged")
-        return 0
-    current, protected = release("")
-    rollback_files = [Path(name + ".rollback") for name in
-                      ("compose.prod.yaml", ".env", ".image.env")]
-    if any(path.exists() for path in rollback_files):
-        _, rollback_ids = release(".rollback")
-        protected.update(rollback_ids)
-    repository = current.split("@", 1)[0] if "@" in current else current.rsplit(":", 1)[0]
-    containers = docker("container", "ls", "--all", "--quiet").split()
-    for container in containers:
-        protected.add(json.loads(docker("container", "inspect", container))[0]["Image"])
-    rows = docker("image", "ls", "--no-trunc", "--format", "{{json .}}").splitlines()
-    candidates = set()
-    for row in rows:
-        entry = json.loads(row)
-        if entry["Repository"] == repository and re.fullmatch(r"[0-9a-f]{40}", entry["Tag"]):
-            candidates.add(f"{repository}:{entry['Tag']}")
-    failed = False
-    for ref in sorted(candidates):
-        if image_id(ref) in protected:
-            continue
-        try:
-            docker("image", "rm", "--no-prune", ref)
-            log(f"removed {ref}")
-        except RuntimeError as error:
-            log(f"failed to remove {ref}: {error}")
-            failed = True
-    log(f"completed: checked {len(candidates)} SHA tags; protected {len(protected)} image IDs")
-    return int(failed)
-
-
-try:
-    sys.exit(main())
-except Exception as error:
-    log(f"aborted safely: {error}")
-    sys.exit(1)
-PYTHON
+# (이전까지는 점검 단계, 여기가 실제 정리 단계)
+# 생성 후 7일이 지났고 앱 라벨이 있으며, 어떤 컨테이너도 참조하지 않는 이미지만 정리
+docker image prune -a -f \
+  --filter 'until=168h' \
+  --filter 'label=com.ktb.app=ai'
