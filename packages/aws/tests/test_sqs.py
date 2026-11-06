@@ -41,7 +41,7 @@ def test_send_passes_the_group_and_dedup_ids_and_returns_the_message_id():
 def test_receive_maps_the_sqs_shape_and_long_polls():
     client = FakeSqs([{"Messages": [{"MessageId": "m9", "Body": "{}", "ReceiptHandle": "r9"}]}])
 
-    messages = SqsQueue(client, "https://q/accounts.fifo").receive(limit=5, wait=1)
+    messages = SqsQueue(client, "https://q/accounts.fifo").receive(visibility=300, limit=5, wait=1)
 
     assert [(m.id, m.body, m.receipt) for m in messages] == [("m9", "{}", "r9")]
     assert client.received == [
@@ -49,12 +49,13 @@ def test_receive_maps_the_sqs_shape_and_long_polls():
             "QueueUrl": "https://q/accounts.fifo",
             "MaxNumberOfMessages": 5,
             "WaitTimeSeconds": 1,
+            "VisibilityTimeout": 300,
         }
     ]
 
 
 def test_an_empty_response_has_no_messages_key():
-    assert SqsQueue(FakeSqs(), "https://q/accounts.fifo").receive() == []
+    assert SqsQueue(FakeSqs(), "https://q/accounts.fifo").receive(visibility=300) == []
 
 
 def test_delete_acknowledges_by_receipt():
