@@ -555,8 +555,8 @@ so a different valid kind would land in the DLQ.
 | `PORTFOLIO_BUILDER_JEV_NOUL_THRESHOLD` | `0.5` |
 | `PORTFOLIO_BUILDER_JEV_CHOICE_MIN_CONFIDENCE` | no default; the worker refuses to start without it |
 
-Thirteen of `Settings`' twenty-six fields are competition-only, which is the strongest argument
-for eventually splitting this out; see *Known Structural Debt*.
+Thirteen of `Settings`' twenty-six fields are competition-only; the common pipeline reads none of
+them.
 
 ## Testing
 
@@ -577,25 +577,3 @@ The ones that must never regress:
 - An excluded theme's companies are rejected at submission through the two-hop join.
 - A competition portfolio never appears in the rebalancer's `LATEST` or `LEFTOVERS`.
 - Migration and `database.py` metadata agree for all four competition tables.
-
-## Known Structural Debt
-
-`portfolio-builder` is now 4,501 lines: a **2,922-line generation engine** (agent runtime, tools,
-measurement and interpretation, briefing, persistence, clients), a **121-line cron driver**, and a
-**1,458-line SQS driver** under `competition/`. The competition path imports nearly all of the
-engine.
-
-So the natural seam is engine versus drivers, not competition versus common — splitting
-`competition/` out as a service today would leave a 121-line service beside a 2,922-line library
-and relabel an import graph rather than separate anything. Two things point the other way and are
-real: thirteen of twenty-six `Settings` fields are competition-only, and the engine already
-contains competition-specific code in six places (`COMPETITION_SYSTEM_PROMPT`,
-`excluded_company_ids`, `submit_tool`'s `excluded`/`participant_id` arguments, the briefing's
-participant rendering, `database.py`'s four competition tables, and `Settings` itself).
-
-The order that works: give the competition path its own settings; declare
-`portfolio_builder.competition` a tach submodule with explicit edges, which is what
-`news_graph_builder` already does with `.database`/`.cluster`/`.graph` and which makes the tool
-enumerate the seam instead of guessing it; then extract the engine, at which point the split is
-mechanical. `packages/` is available for that — only `packages/core` is reserved — though the
-engine would be five times the size of everything there today.
