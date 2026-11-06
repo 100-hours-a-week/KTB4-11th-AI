@@ -3,7 +3,8 @@ import time
 import boto3
 import httpx
 import sqlalchemy as sa
-from ktb_aws.sqs import POLL_CONFIG, SqsQueue
+from botocore.config import Config
+from ktb_aws.sqs import SqsQueue
 from ktb_core.backend_auth import BackendAuth
 from ktb_core.logging import get_logger, setup_logging
 
@@ -19,7 +20,11 @@ def main() -> None:
     setup_logging(settings.log_level, service_name="report-builder")
     logger.info("worker_started")
     queue = SqsQueue(
-        boto3.client("sqs", region_name=settings.aws_region, config=POLL_CONFIG),
+        boto3.client(
+            "sqs",
+            region_name=settings.aws_region,
+            config=Config(connect_timeout=10, read_timeout=25, retries={"max_attempts": 1}),
+        ),
         settings.sqs_queue_url,
     )
     engine = sa.create_engine(settings.postgres_dsn)
@@ -39,7 +44,7 @@ def main() -> None:
         try:
             while True:
                 try:
-                    for message in queue.receive(limit=1, wait=20, visibility=300):
+                    for message in queue.receive(visibility=300):
                         process_message(message, queue, auth, engine, structured)
                 except Exception as error:
                     logger.error("sqs_poll_failed", error_type=type(error).__name__)

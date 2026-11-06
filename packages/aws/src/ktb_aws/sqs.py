@@ -1,10 +1,6 @@
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from botocore.config import Config
-
-POLL_CONFIG = Config(connect_timeout=10, read_timeout=25, retries={"max_attempts": 1})
-
 
 @dataclass(frozen=True)
 class Message:
@@ -14,11 +10,9 @@ class Message:
 
 
 class Queue(Protocol):
-    def send(self, body: str, *, group: str | None = ..., dedup: str | None = ...) -> str: ...
+    def send(self, body: str, *, group: str, dedup: str) -> str: ...
 
-    def receive(
-        self, *, limit: int = ..., wait: int = ..., visibility: int | None = ...
-    ) -> list[Message]: ...
+    def receive(self, *, visibility: int, limit: int = 1, wait: int = 20) -> list[Message]: ...
 
     def delete(self, receipt: str) -> None: ...
 
@@ -32,29 +26,22 @@ class SqsQueue:
             else client.get_queue_url(QueueName=url_or_name)["QueueUrl"]
         )
 
-    @property
-    def url(self) -> str:
-        return self._url
+    def send(self, body: str, *, group: str, dedup: str) -> str:
+        response = self._client.send_message(
+            QueueUrl=self._url,
+            MessageBody=body,
+            MessageGroupId=group,
+            MessageDeduplicationId=dedup,
+        )
+        return response["MessageId"]
 
-    def send(self, body: str, *, group: str | None = None, dedup: str | None = None) -> str:
-        arguments: dict[str, Any] = {"QueueUrl": self._url, "MessageBody": body}
-        if group is not None:
-            arguments["MessageGroupId"] = group
-        if dedup is not None:
-            arguments["MessageDeduplicationId"] = dedup
-        return self._client.send_message(**arguments)["MessageId"]
-
-    def receive(
-        self, *, limit: int = 10, wait: int = 20, visibility: int | None = None
-    ) -> list[Message]:
-        arguments: dict[str, Any] = {
-            "QueueUrl": self._url,
-            "MaxNumberOfMessages": limit,
-            "WaitTimeSeconds": wait,
-        }
-        if visibility is not None:
-            arguments["VisibilityTimeout"] = visibility
-        response = self._client.receive_message(**arguments)
+    def receive(self, *, visibility: int, limit: int = 1, wait: int = 20) -> list[Message]:
+        response = self._client.receive_message(
+            QueueUrl=self._url,
+            MaxNumberOfMessages=limit,
+            WaitTimeSeconds=wait,
+            VisibilityTimeout=visibility,
+        )
         return [
             Message(message["MessageId"], message["Body"], message["ReceiptHandle"])
             for message in response.get("Messages", ())
