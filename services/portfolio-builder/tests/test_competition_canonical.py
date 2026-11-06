@@ -260,15 +260,17 @@ def test_selected_interested_themes_ask_one_choice_per_received_name(engine):
         "themes_relevant": _noul(0.9),
         "반도체": _choice("emphasize", 0.9),
         "2차전지": _choice("neither", 0.9),
+        "sector": _choice("T2", 0.9),
+        "sector_polarity": _choice("emphasize", 0.9),
     }
     ask = FakeAsk(answers)
 
     form, _, _ = _classify(engine, ask, interested=("반도체", "2차전지"))
 
     assert len(ask.calls) == 2
-    assert ask.calls[1][1] == {"반도체", "2차전지"}
+    assert ask.calls[1][1] == {"반도체", "2차전지", "sector", "sector_polarity"}
     assert form["themes"] == {"반도체": "emphasize"}
-    assert form["sector"] is None
+    assert form["sector"] == "T2"
 
 
 def test_a_group_name_selection_asks_one_question_not_one_per_resolved_code(engine):
@@ -277,13 +279,15 @@ def test_a_group_name_selection_asks_one_question_not_one_per_resolved_code(engi
         "signals_relevant": _noul(0.1),
         "themes_relevant": _noul(0.9),
         "반도체": _choice("emphasize", 0.9),
+        "sector": _choice("T2", 0.9),
+        "sector_polarity": _choice("emphasize", 0.9),
     }
     ask = FakeAsk(answers)
 
     form, _, _ = _classify(engine, ask, interested=("반도체",))
 
     assert len(ask.calls) == 2
-    assert ask.calls[1][1] == {"반도체"}
+    assert ask.calls[1][1] == {"반도체", "sector", "sector_polarity"}
     assert form["themes"] == {"반도체": "emphasize"}
 
 
@@ -294,6 +298,8 @@ def test_theme_emphasise_and_theme_avoid_produce_different_generation_keys(engin
             "signals_relevant": _noul(0.1),
             "themes_relevant": _noul(0.9),
             "반도체": _choice(choice, 0.9),
+            "sector": _choice("T2", 0.9),
+            "sector_polarity": _choice("emphasize", 0.9),
         }
 
     emphasise_ask = FakeAsk(_answers("emphasize"))
@@ -416,38 +422,78 @@ def test_two_prompts_naming_different_sectors_produce_different_generation_keys(
     assert generation_key(a, None, "openrouter/m") != generation_key(b, None, "openrouter/m")
 
 
-def test_a_theme_named_only_in_the_free_text_cannot_merge_two_participants(engine):
-    def _answers():
-        answers = {
-            "relevant": _noul(0.9),
-            "signals_relevant": _noul(0.9),
-            "themes_relevant": _noul(0.9),
-            "HBM": _choice("neither", 0.9),
-        }
-        for name in SIGNAL_NAMES:
-            answers[name] = _choice("neither", 0.9)
-        answers["trend"] = _choice("favor", 0.9)
-        return answers
+def _selected_theme_answers(sector, sector_confidence=0.9):
+    answers = {
+        "relevant": _noul(0.9),
+        "signals_relevant": _noul(0.9),
+        "themes_relevant": _noul(0.9),
+        "HBM": _choice("emphasize", 0.9),
+        "sector": _choice(sector, sector_confidence),
+        "sector_polarity": _choice("emphasize", 0.9),
+    }
+    for name in SIGNAL_NAMES:
+        answers[name] = _choice("neither", 0.9)
+    answers["trend"] = _choice("favor", 0.9)
+    return answers
 
+
+def test_a_theme_named_only_in_the_free_text_cannot_merge_two_participants(engine):
     semiconductor_form, version, _ = _classify(
         engine,
-        FakeAsk(_answers()),
-        text="반도체 비중 높이고 상승추세 종목 담아줘",
+        FakeAsk(_selected_theme_answers("T2")),
+        text="HBM 비중 늘리고 반도체 위주로 상승추세 종목 담아줘",
         interested=("HBM",),
     )
     battery_form, _, _ = _classify(
         engine,
-        FakeAsk(_answers()),
-        text="배터리 비중 높이고 상승추세 종목 담아줘",
+        FakeAsk(_selected_theme_answers("T1")),
+        text="HBM 비중 늘리고 배터리 위주로 상승추세 종목 담아줘",
         interested=("HBM",),
     )
 
-    assert semiconductor_form == "반도체 비중 높이고 상승추세 종목 담아줘"
-    assert battery_form == "배터리 비중 높이고 상승추세 종목 담아줘"
+    assert semiconductor_form["themes"] == battery_form["themes"] == {"HBM": "emphasize"}
+    assert semiconductor_form["sector"] == "T2"
+    assert battery_form["sector"] == "T1"
 
     a = _settings(canonical_form=semiconductor_form, canonical_version=version)
     b = _settings(canonical_form=battery_form, canonical_version=version)
     assert generation_key(a, None, "openrouter/m") != generation_key(b, None, "openrouter/m")
+
+
+def test_selected_themes_naming_the_same_sector_still_share_one_generation_key(engine):
+    a_form, version, _ = _classify(
+        engine,
+        FakeAsk(_selected_theme_answers("T2")),
+        text="HBM 비중 늘리고 반도체 위주로 상승추세 종목 담아줘",
+        interested=("HBM",),
+    )
+    b_form, _, _ = _classify(
+        engine,
+        FakeAsk(_selected_theme_answers("T2")),
+        text="반도체 중심으로 HBM 늘려서 추세 좋은 종목 담아줘",
+        interested=("HBM",),
+    )
+
+    assert a_form == b_form
+
+    a = _settings(canonical_form=a_form, canonical_version=version)
+    b = _settings(canonical_form=b_form, canonical_version=version)
+    assert generation_key(a, None, "openrouter/m") == generation_key(b, None, "openrouter/m")
+
+
+def test_a_low_confidence_sector_beside_a_resolved_selected_theme_returns_the_raw_text(engine):
+    ask = FakeAsk(_selected_theme_answers("T2", CHOICE_MIN_CONFIDENCE - 0.01))
+
+    form, version, classified = _classify(
+        engine,
+        ask,
+        text="HBM 비중 늘리고 상승추세 종목 담아줘",
+        interested=("HBM",),
+    )
+
+    assert form == "HBM 비중 늘리고 상승추세 종목 담아줘"
+    assert classified
+    assert version
 
 
 def test_an_open_signals_gate_matching_nothing_returns_the_raw_text(engine):
@@ -559,6 +605,8 @@ def test_at_most_three_calls_are_ever_made(engine):
         "signals_relevant": _noul(0.9),
         "themes_relevant": _noul(0.9),
         "T1": _choice("emphasize", 0.9),
+        "sector": _choice("T2", 0.9),
+        "sector_polarity": _choice("emphasize", 0.9),
     }
     for name in SIGNAL_NAMES:
         answers[name] = _choice("neither", 0.9)

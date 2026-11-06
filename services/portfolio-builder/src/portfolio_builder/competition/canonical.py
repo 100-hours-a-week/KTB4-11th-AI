@@ -20,7 +20,7 @@ SIGNAL_NAMES = (
     "short_term_rank",
 )
 
-QUESTION_SET_VERSION = "v3"
+QUESTION_SET_VERSION = "v4"
 MAX_CHOICE_OPTIONS = 255
 
 GATE_RELEVANT_INSTRUCTIONS = (
@@ -128,16 +128,15 @@ THEME_NAME_INSTRUCTIONS_TEMPLATE = (
 
 SECTOR_CHOICE_INSTRUCTIONS = (
     "The state is free text a user wrote when asking an AI to build them a stock portfolio."
-    " The user chose no specific theme from the menu. Pick whichever theme in criteria this"
-    " text most concerns. If the text does not concern any of them, pick your best guess and"
-    " report low confidence."
+    " Pick whichever theme in criteria this text itself most concerns, whether or not the user"
+    " also chose themes from a menu -- those are asked about separately. If the text does not"
+    " concern any of them, pick your best guess and report low confidence."
 )
 
 SECTOR_POLARITY_INSTRUCTIONS = (
     "The state is free text a user wrote when asking an AI to build them a stock portfolio."
-    " The user chose no specific theme from the menu; a separate question already picked"
-    " which theme this text most concerns. Classify this text's stance toward that theme. Pick"
-    " emphasize, avoid, or neither."
+    " A separate question already picked which theme this text most concerns. Classify this"
+    " text's stance toward that theme. Pick emphasize, avoid, or neither."
 )
 
 
@@ -217,24 +216,6 @@ def _classify_themes(
     interested_theme_names: Sequence[str],
     choice_min_confidence: float,
 ) -> tuple[dict[str, str], str | None, str | None]:
-    names = sorted(set(interested_theme_names))
-    if names:
-        template = (
-            THEME_NAME_INSTRUCTIONS_SINGLE_TEMPLATE
-            if len(names) == 1
-            else THEME_NAME_INSTRUCTIONS_TEMPLATE
-        )
-        answers = ask(
-            text,
-            {name: _choice(template.format(name=name), THEME_POLARITY_CRITERIA) for name in names},
-        )
-        theme_polarity = {}
-        for name in names:
-            picked = _polarity(answers[name], ("emphasize", "avoid"), choice_min_confidence)
-            if picked is not None:
-                theme_polarity[name] = picked
-        return theme_polarity, None, None
-
     criteria = _theme_criteria(engine)
     if not criteria:
         return {}, None, None
@@ -242,21 +223,33 @@ def _classify_themes(
         raise CanonicalisationError(
             f"theme list has {len(criteria)} options, over the {MAX_CHOICE_OPTIONS} limit"
         )
-    answers = ask(
-        text,
-        {
-            "sector": _choice(SECTOR_CHOICE_INSTRUCTIONS, criteria),
-            "sector_polarity": _choice(SECTOR_POLARITY_INSTRUCTIONS, THEME_POLARITY_CRITERIA),
-        },
+
+    names = sorted(set(interested_theme_names))
+    template = (
+        THEME_NAME_INSTRUCTIONS_SINGLE_TEMPLATE
+        if len(names) == 1
+        else THEME_NAME_INSTRUCTIONS_TEMPLATE
     )
+    questions = {
+        name: _choice(template.format(name=name), THEME_POLARITY_CRITERIA) for name in names
+    }
+    questions["sector"] = _choice(SECTOR_CHOICE_INSTRUCTIONS, criteria)
+    questions["sector_polarity"] = _choice(SECTOR_POLARITY_INSTRUCTIONS, THEME_POLARITY_CRITERIA)
+    answers = ask(text, questions)
+
+    theme_polarity = {}
+    for name in names:
+        picked = _polarity(answers[name], ("emphasize", "avoid"), choice_min_confidence)
+        if picked is not None:
+            theme_polarity[name] = picked
+
     sector_answer = answers["sector"]
     if float(sector_answer["confidence"]) < choice_min_confidence:
-        return {}, None, None
-    sector = str(sector_answer["choice"])
+        return theme_polarity, None, None
     sector_polarity = _polarity(
         answers["sector_polarity"], ("emphasize", "avoid"), choice_min_confidence
     )
-    return {}, sector, sector_polarity
+    return theme_polarity, str(sector_answer["choice"]), sector_polarity
 
 
 def _classify_text(
@@ -292,7 +285,7 @@ def _classify_text(
 
     nothing_matched = not signal_polarity and not theme_polarity and sector is None
     signals_unclassified = signals_relevant and not signal_polarity
-    themes_unclassified = themes_relevant and not theme_polarity and sector is None
+    themes_unclassified = themes_relevant and sector is None
     if nothing_matched or signals_unclassified or themes_unclassified:
         return text
 
