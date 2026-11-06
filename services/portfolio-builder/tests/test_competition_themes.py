@@ -22,6 +22,7 @@ STANDALONE_THEME = ("BK", "은행")
 # Starts with the group's prefix but has no separating underscore: a naive, unescaped
 # `LIKE '반도체_%'` would still match it.
 LOOKALIKE_THEME = ("SX", "반도체X")
+SUFFIX_TWIN_THEME = ("CG", "자동차_생산")
 
 
 def _seed_group_themes(engine):
@@ -42,6 +43,14 @@ def _seed_lookalike_theme(engine):
         conn.execute(
             sa.text("INSERT INTO themes (theme_code, name) VALUES (:code, :name)"),
             {"code": LOOKALIKE_THEME[0], "name": LOOKALIKE_THEME[1]},
+        )
+
+
+def _seed_theme(engine, code, name):
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text("INSERT INTO themes (theme_code, name) VALUES (:code, :name)"),
+            {"code": code, "name": name},
         )
 
 
@@ -112,6 +121,50 @@ def test_a_lookalike_name_resolves_only_to_itself(engine):
     resolved = resolve_theme_codes(engine, ["반도체X"])
 
     assert resolved == {"반도체X": ["SX"]}
+
+
+def test_a_bare_group_member_suffix_resolves_to_its_single_code(engine):
+    _seed_group_themes(engine)
+
+    resolved = resolve_theme_codes(engine, ["후공정장비"])
+
+    assert resolved == {"후공정장비": ["SH"]}
+
+
+def test_a_suffix_shared_by_two_groups_is_refused_rather_than_guessed(engine):
+    _seed_group_themes(engine)
+    _seed_theme(engine, *SUFFIX_TWIN_THEME)
+
+    with pytest.raises(UnresolvedTheme):
+        resolve_theme_codes(engine, ["생산"])
+
+
+def test_an_exact_name_wins_over_the_same_string_as_a_suffix(engine):
+    _seed_group_themes(engine)
+    _seed_theme(engine, "PR", "생산")
+
+    resolved = resolve_theme_codes(engine, ["생산"])
+
+    assert resolved == {"생산": ["PR"]}
+
+
+def test_a_group_name_wins_over_the_same_string_as_a_suffix(engine):
+    _seed_group_themes(engine)
+    _seed_theme(engine, "GB", "은행_반도체")
+
+    resolved = resolve_theme_codes(engine, ["반도체"])
+
+    assert resolved == {"반도체": ["SG", "SH", "SS"]}
+
+
+def test_a_suffix_match_escapes_the_underscore_and_the_wildcard(engine):
+    _seed_group_themes(engine)
+    _seed_theme(engine, "PC", "소재_100%생산")
+    _seed_theme(engine, "PD", "소재_1000생산")
+
+    resolved = resolve_theme_codes(engine, ["100%생산"])
+
+    assert resolved == {"100%생산": ["PC"]}
 
 
 def test_an_unresolvable_name_raises(engine):

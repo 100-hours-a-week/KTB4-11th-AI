@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import sqlalchemy as sa
 
 from portfolio_builder.competition.message import AgentSettings
-from portfolio_builder.database import like_group_prefix
+from portfolio_builder.database import like_group_prefix, like_group_suffix
 
 
 class UnresolvedTheme(Exception):
@@ -23,6 +23,16 @@ class ResolvedAgent:
     interested_theme_names: list[str]
     excluded_theme_names: list[str]
     additional_request: str
+
+
+def _codes_matching(conn: sa.Connection, pattern: str) -> list[str]:
+    rows = conn.execute(
+        sa.text(
+            "SELECT theme_code FROM themes WHERE name LIKE :pattern ESCAPE '\\' ORDER BY theme_code"
+        ),
+        {"pattern": pattern},
+    )
+    return list(rows.scalars())
 
 
 def resolve_theme_codes(engine: sa.Engine, names: Sequence[str]) -> dict[str, list[str]]:
@@ -44,20 +54,16 @@ def resolve_theme_codes(engine: sa.Engine, names: Sequence[str]) -> dict[str, li
         for name in unique_names:
             if name in resolved:
                 continue
-            pattern = like_group_prefix(name)
-            codes = (
-                conn.execute(
-                    sa.text(
-                        "SELECT theme_code FROM themes WHERE name LIKE :pattern ESCAPE '\\'"
-                        " ORDER BY theme_code"
-                    ),
-                    {"pattern": pattern},
-                )
-                .scalars()
-                .all()
-            )
+            codes = _codes_matching(conn, like_group_prefix(name))
             if codes:
-                resolved[name] = list(codes)
+                resolved[name] = codes
+
+        for name in unique_names:
+            if name in resolved:
+                continue
+            codes = _codes_matching(conn, like_group_suffix(name))
+            if len(codes) == 1:
+                resolved[name] = codes
 
     missing = [name for name in unique_names if name not in resolved]
     if missing:

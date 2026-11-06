@@ -215,3 +215,7 @@ def like_contains(text: str) -> str:
 
 def like_group_prefix(text: str) -> str:
     return f"{_escape_like(text)}\\_%"
+
+
+def like_group_suffix(text: str) -> str:
+    return f"%\\_{_escape_like(text)}"
