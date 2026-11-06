@@ -72,8 +72,13 @@ def _news_lines(news: RecentNews, window_days: int, excluded: frozenset[str]) ->
 
 
 def _settings_lines(participant: ParticipantSettings) -> list[str]:
-    interested = ", ".join(participant.interested_theme_codes) or "none"
-    excluded = ", ".join(participant.excluded_theme_codes) or "none"
+    interested = (
+        ", ".join(participant.interested_theme_names or participant.interested_theme_codes)
+        or "none"
+    )
+    excluded = (
+        ", ".join(participant.excluded_theme_names or participant.excluded_theme_codes) or "none"
+    )
     lines = [
         "# Your settings",
         f"Risk profile: {participant.risk_profile}",

@@ -4,7 +4,11 @@ from datetime import datetime
 import pytest
 from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT, SYSTEM_PROMPT
 from portfolio_builder.briefing import load_briefing, service
-from portfolio_builder.competition.repository import link_portfolio, store_settings
+from portfolio_builder.competition.repository import (
+    generation_key,
+    link_portfolio,
+    store_settings,
+)
 from portfolio_builder.portfolio import Exit, Holding, Submission, save_portfolio
 
 SAMSUNG, HYNIX = "00126380", "00164779"
@@ -174,6 +178,55 @@ def test_the_settings_section_carries_every_value_and_the_free_text_verbatim(eng
     assert "# Your settings" in briefing.text
     assert "성장형" in briefing.text
     assert "한 종목에 몰리지 않게 해줘" in briefing.text
+
+
+def _theme_lines(text):
+    return [
+        line
+        for line in text.splitlines()
+        if line.startswith(("Interested themes:", "Excluded themes:"))
+    ]
+
+
+def test_the_settings_section_names_the_themes_instead_of_their_codes(engine, _settings):
+    participant = _settings(
+        interested_theme_codes=("T1", "T2"),
+        excluded_theme_codes=("T4",),
+        interested_theme_names=("HBM", "AI반도체"),
+        excluded_theme_names=("은행",),
+    )
+
+    briefing = load_briefing(engine, NewsClientStub(), 7, participant=participant)
+
+    assert _theme_lines(briefing.text) == [
+        "Interested themes: HBM, AI반도체",
+        "Excluded themes: 은행",
+    ]
+
+
+def test_a_participant_without_stored_theme_names_falls_back_to_the_codes(engine, _settings):
+    participant = _settings(
+        interested_theme_codes=("T1",),
+        excluded_theme_codes=("T4",),
+        interested_theme_names=(),
+        excluded_theme_names=(),
+    )
+
+    briefing = load_briefing(engine, NewsClientStub(), 7, participant=participant)
+
+    assert _theme_lines(briefing.text) == [
+        "Interested themes: T1",
+        "Excluded themes: T4",
+    ]
+
+
+def test_the_theme_names_shown_do_not_change_the_generation_key(_settings):
+    codes = _settings(interested_theme_codes=("T1",), interested_theme_names=())
+    named = _settings(interested_theme_codes=("T1",), interested_theme_names=("HBM",))
+
+    assert generation_key(codes, None, "openrouter/m") == generation_key(
+        named, None, "openrouter/m"
+    )
 
 
 def test_a_classified_participants_briefing_carries_the_raw_text_not_the_structure(
