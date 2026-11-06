@@ -24,6 +24,8 @@ SETTINGS_DRIFT_FIELDS = (
     "risk_profile",
     "interested_theme_codes",
     "excluded_theme_codes",
+    "interested_theme_names",
+    "excluded_theme_names",
     "additional_request",
 )
 

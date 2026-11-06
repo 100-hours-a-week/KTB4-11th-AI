@@ -48,6 +48,22 @@ def test_a_later_message_with_a_different_agent_id_is_flagged_as_drift(engine, _
     assert "agent_id" in changed
 
 
+def test_received_theme_names_changing_under_identical_codes_is_flagged_as_drift(
+    engine, _request
+):
+    store_settings(engine, _request(interested_theme_names=["반도체"]))
+
+    _, changed = store_settings(
+        engine,
+        _request(
+            interested_theme_names=["반도체_생산", "반도체_후공정장비"],
+            excluded_theme_names=["은행"],
+        ),
+    )
+
+    assert set(changed) == {"interested_theme_names", "excluded_theme_names"}
+
+
 def test_later_message_keeps_the_stored_snapshot_and_reports_the_difference(engine, _request):
     store_settings(engine, _request())
 
