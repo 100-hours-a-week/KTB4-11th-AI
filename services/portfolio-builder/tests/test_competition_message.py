@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from portfolio_builder.competition.message import (
     MAX_ADDITIONAL_REQUEST_CHARS,
@@ -78,6 +80,16 @@ def test_additional_request_defaults_to_empty_and_is_kept_verbatim():
     text = "  반도체만 담아줘\n"
     agent = AgentSettings(**{**AGENT_BASE, "additional_request": text})
     assert agent.additional_request == text
+
+
+def test_an_explicit_null_additional_request_becomes_the_empty_string():
+    agent = AgentSettings(**{**AGENT_BASE, "additional_request": None})
+    assert agent.additional_request == ""
+
+    request = Request.model_validate_json(
+        json.dumps({**BASE, "agents": [{**AGENT_BASE, "additional_request": None}]})
+    )
+    assert request.agents[0].additional_request == ""
 
 
 def test_additional_request_over_the_limit_is_rejected():

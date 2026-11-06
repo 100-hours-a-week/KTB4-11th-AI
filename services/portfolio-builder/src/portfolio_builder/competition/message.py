@@ -1,8 +1,19 @@
 from typing import Annotated
 
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, BeforeValidator, Field, StrictInt
 
 MAX_ADDITIONAL_REQUEST_CHARS = 4000
+
+
+def _null_as_empty(value: object) -> object:
+    return "" if value is None else value
+
+
+AdditionalRequest = Annotated[
+    str,
+    BeforeValidator(_null_as_empty),
+    Field(max_length=MAX_ADDITIONAL_REQUEST_CHARS),
+]
 
 RISK_LEVEL_TO_PROFILE: dict[int, str] = {
     1: "안정형",
@@ -19,7 +30,7 @@ class AgentSettings(BaseModel):
     risk_level: Annotated[StrictInt, Field(ge=1, le=5)]
     preferred_themes: list[str] = Field(default_factory=list)
     excluded_themes: list[str] = Field(default_factory=list)
-    additional_request: str = Field(default="", max_length=MAX_ADDITIONAL_REQUEST_CHARS)
+    additional_request: AdditionalRequest = ""
 
     @property
     def risk_profile(self) -> str:
