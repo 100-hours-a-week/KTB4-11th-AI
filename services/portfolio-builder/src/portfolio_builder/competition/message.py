@@ -3,6 +3,7 @@ from typing import Annotated
 from pydantic import BaseModel, BeforeValidator, Field, StrictInt
 
 MAX_ADDITIONAL_REQUEST_CHARS = 4000
+MAX_REQUEST_ID_CHARS = 128
 MAX_AGENTS = 16
 
 
@@ -14,6 +15,12 @@ AdditionalRequest = Annotated[
     str,
     BeforeValidator(_null_as_empty),
     Field(max_length=MAX_ADDITIONAL_REQUEST_CHARS),
+]
+
+RequestId = Annotated[
+    str,
+    BeforeValidator(_null_as_empty),
+    Field(max_length=MAX_REQUEST_ID_CHARS),
 ]
 
 RISK_LEVEL_TO_PROFILE: dict[int, str] = {
@@ -39,6 +46,7 @@ class AgentSettings(BaseModel):
 
 
 class Request(BaseModel):
+    request_id: RequestId = ""
     competition_id: Annotated[StrictInt, Field(gt=0)]
     user_id: Annotated[StrictInt, Field(gt=0)]
     agents: Annotated[list[AgentSettings], Field(min_length=1, max_length=MAX_AGENTS)]

@@ -83,7 +83,7 @@ def test_competition_settings_default_to_unset(monkeypatch):
     settings = Settings()
 
     assert settings.competition_queue_url == ""
-    assert settings.competition_visibility_timeout == 900
+    assert settings.competition_visibility_timeout == 300
     assert settings.competition_stale_running_seconds == 3600
     assert settings.competition_max_attempts == 3
     assert settings.backend_base_uri == ""

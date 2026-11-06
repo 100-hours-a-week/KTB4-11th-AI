@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     explain_result_chars: int = Field(default=2000, gt=0)
     explain_max_tokens: int = Field(default=16000, gt=0)
     competition_queue_url: str = ""
-    competition_visibility_timeout: int = Field(default=900, gt=0)
+    competition_visibility_timeout: int = Field(default=300, gt=0)
     competition_stale_running_seconds: int = Field(default=3600, gt=0)
     competition_max_attempts: int = Field(default=3, gt=0)
     backend_base_uri: str = ""

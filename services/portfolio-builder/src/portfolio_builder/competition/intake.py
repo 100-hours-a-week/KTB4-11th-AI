@@ -56,8 +56,7 @@ def process_message(
     try:
         request = Request.model_validate_json(str(message["Body"]))
     except ValidationError as error:
-        log.error("invalid_message", error_type=type(error).__name__)
-        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+        log.error("invalid_message", error_type=type(error).__name__, error=str(error))
         return
 
     try:
@@ -66,7 +65,13 @@ def process_message(
             for agent in request.agents
         ]
     except UnresolvedTheme as error:
-        log.error("unresolved_theme", error_type=type(error).__name__, error=str(error))
+        log.error(
+            "unresolved_theme",
+            request_id=request.request_id,
+            competition_id=request.competition_id,
+            error_type=type(error).__name__,
+            error=str(error),
+        )
         return
 
     for resolved in resolved_agents:
@@ -76,8 +81,15 @@ def process_message(
         if differing_fields:
             log.warning(
                 "settings_mismatch",
+                request_id=request.request_id,
                 participant_id=participant.participant_id,
                 fields=differing_fields,
             )
 
+    log.info(
+        "intake",
+        request_id=request.request_id,
+        competition_id=request.competition_id,
+        participant_ids=[agent.participant_id for agent in request.agents],
+    )
     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)

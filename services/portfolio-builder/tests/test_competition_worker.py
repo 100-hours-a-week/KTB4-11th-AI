@@ -159,7 +159,44 @@ def _patch_news(monkeypatch):
     monkeypatch.setattr(generation, "NewsClient", lambda uri: NewsClientStub())
 
 
-def test_an_invalid_message_is_deleted_without_generating(engine, monkeypatch):
+def test_the_request_id_reaches_the_intake_log(engine, monkeypatch):
+    sqs, backend, log = _deps()
+    monkeypatch.setattr(generation, "run_agent", Mock())
+
+    _cycle(
+        _message({**_body(), "request_id": "req-7f3a"}),
+        sqs,
+        engine,
+        backend,
+        Mock(return_value=Mock()),
+        _settings(),
+        log,
+    )
+
+    intake_logs = [fields for event, _, fields in log.events if event == "intake"]
+    assert [fields["request_id"] for fields in intake_logs] == ["req-7f3a"]
+    assert intake_logs[0]["participant_ids"] == [1]
+
+
+def test_a_message_without_a_request_id_is_still_accepted(engine, monkeypatch):
+    sqs, backend, log = _deps()
+    monkeypatch.setattr(generation, "run_agent", Mock())
+
+    _cycle(
+        _message(_body()),
+        sqs,
+        engine,
+        backend,
+        Mock(return_value=Mock()),
+        _settings(),
+        log,
+    )
+
+    assert sqs.delete_message.called
+    assert _count(engine, "competition_participants") == 1
+
+
+def test_an_invalid_message_is_left_for_the_dead_letter_queue(engine, monkeypatch):
     sqs, backend, log = _deps()
     run_agent_stub = Mock()
     monkeypatch.setattr(generation, "run_agent", run_agent_stub)
@@ -174,8 +211,10 @@ def test_an_invalid_message_is_deleted_without_generating(engine, monkeypatch):
         log,
     )
 
-    assert sqs.delete_message.called
+    assert not sqs.delete_message.called
     assert not run_agent_stub.called
+    assert _count(engine, "competition_participants") == 0
+    assert any(event == "invalid_message" for event, _, _ in log.events)
 
 
 def test_an_unresolvable_theme_name_leaves_the_message_and_stores_nothing(engine, monkeypatch):
