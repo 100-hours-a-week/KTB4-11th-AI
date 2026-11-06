@@ -33,6 +33,8 @@ RUN uv pip install --no-deps \
 
 FROM python:3.14-slim-bookworm AS runtime
 
+LABEL com.ktb.app="ai"
+
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 
