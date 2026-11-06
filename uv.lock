@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14, <3.16"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -1592,6 +1592,7 @@ dependencies = [
     { name = "boto3" },
     { name = "disclosure-retrieval" },
     { name = "httpx" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "langchain" },
     { name = "langchain-core" },
@@ -1610,6 +1611,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "disclosure-retrieval", editable = "services/disclosure-retrieval" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "langchain", specifier = ">=1.4.2" },
     { name = "langchain-core", specifier = ">=1.6.5" },
@@ -1993,6 +1995,7 @@ source = { editable = "services/report-builder" }
 dependencies = [
     { name = "boto3" },
     { name = "httpx" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "langchain-core" },
     { name = "langchain-openrouter" },
@@ -2006,6 +2009,7 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "langchain-core", specifier = ">=1.6.5" },
     { name = "langchain-openrouter", specifier = ">=0.2.9" },

@@ -2,6 +2,7 @@ from functools import partial
 from typing import Any
 
 import sqlalchemy as sa
+from ktb_aws.sqs import Message, Queue
 from ktb_core.logging import StructuredLogger
 from pydantic import ValidationError
 
@@ -44,17 +45,14 @@ def _classify(
 
 
 def process_message(
-    message: dict[str, object],
-    sqs: Any,
+    message: Message,
+    queue: Queue,
     engine: sa.Engine,
     settings: Settings,
     log: StructuredLogger,
 ) -> None:
-    queue_url = str(message["_queue_url"])
-    receipt_handle = str(message["ReceiptHandle"])
-
     try:
-        request = Request.model_validate_json(str(message["Body"]))
+        request = Request.model_validate_json(message.body)
     except ValidationError as error:
         log.error("invalid_message", error_type=type(error).__name__, error=str(error))
         return
@@ -92,4 +90,4 @@ def process_message(
         competition_id=request.competition_id,
         participant_ids=[agent.participant_id for agent in request.agents],
     )
-    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+    queue.delete(message.receipt)

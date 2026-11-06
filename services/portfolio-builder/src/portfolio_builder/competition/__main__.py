@@ -4,7 +4,7 @@ import time
 import boto3
 import httpx
 import sqlalchemy as sa
-from botocore.config import Config
+from ktb_aws.sqs import POLL_CONFIG, SqsQueue
 from ktb_core.backend_auth import BackendAuth
 from ktb_core.logging import get_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
@@ -37,14 +37,10 @@ def main() -> None:
         raise SystemExit(f"missing required settings: {', '.join(missing)}")
 
     logger.info("worker_started")
-    sqs = boto3.client(
-        "sqs",
-        region_name=settings.aws_region,
-        config=Config(connect_timeout=10, read_timeout=25, retries={"max_attempts": 1}),
+    queue = SqsQueue(
+        boto3.client("sqs", region_name=settings.aws_region, config=POLL_CONFIG),
+        settings.competition_queue_url,
     )
-    queue_url = settings.competition_queue_url
-    if not queue_url.startswith("http"):
-        queue_url = sqs.get_queue_url(QueueName=queue_url)["QueueUrl"]
     engine = sa.create_engine(settings.postgres_dsn)
     model_factory = functools.partial(
         ChatOpenRouter, model=settings.llm_model, api_key=settings.llm_api_key
@@ -59,20 +55,13 @@ def main() -> None:
         try:
             while True:
                 try:
-                    response = sqs.receive_message(
-                        QueueUrl=queue_url,
-                        MaxNumberOfMessages=1,
-                        WaitTimeSeconds=20,
-                        VisibilityTimeout=settings.competition_visibility_timeout,
+                    messages = queue.receive(
+                        limit=1,
+                        wait=20,
+                        visibility=settings.competition_visibility_timeout,
                     )
-                    for message in response.get("Messages", []):
-                        process_message(
-                            {**message, "_queue_url": queue_url},
-                            sqs,
-                            engine,
-                            settings,
-                            logger,
-                        )
+                    for message in messages:
+                        process_message(message, queue, engine, settings, logger)
                     generate_missing_portfolios(engine, model_factory, settings, logger)
                     notify_finished_jobs(engine, backend, logger, settings)
                 except Exception as error:
