@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     thinking_level: Literal["none", "minimal", "low", "medium", "high", "xhigh"] = "medium"
     news_window_days: int = Field(default=7, gt=0)
     max_turns: int = Field(default=150, gt=0)
+    disclosure_enabled: bool = Field(default=False, validation_alias="DISCLOSURE_ENABLED")
     log_level: str = "INFO"
     explain_result_chars: int = Field(default=2000, gt=0)
     explain_max_tokens: int = Field(default=16000, gt=0)

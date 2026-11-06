@@ -4,8 +4,8 @@ Wants=network-online.target
 After=network-online.target docker.service
 Requires=docker.service
 # 작업 결과를 AI_CWAgent/ScheduledJobFailure(JobName=news-preprocessor)로 발행합니다.
-OnSuccess=ktb-scheduled-job-success@news-preprocessor.service
-OnFailure=ktb-scheduled-job-failure@news-preprocessor.service
+OnSuccess=ktb-scheduled-job-success@news-preprocessor.service ktb-disclosure-indexer.service
+OnFailure=ktb-scheduled-job-failure@news-preprocessor.service ktb-disclosure-indexer.service
 StartLimitIntervalSec=1h
 StartLimitBurst=3
 

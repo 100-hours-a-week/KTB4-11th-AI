@@ -101,7 +101,7 @@ def test_collection_migrations_extend_dev_as_one_unique_head():
     scripts = ScriptDirectory.from_config(Config(str(VERSIONS.parents[3] / "alembic.ini")))
     revisions = list(scripts.walk_revisions())
     assert len({revision.revision for revision in revisions}) == len(revisions)
-    assert scripts.get_heads() == ["0019"]
+    assert scripts.get_heads() == ["0020"]
     assert scripts.get_revision("0013").down_revision == "0012"
     assert scripts.get_revision("0012").path.endswith("0012_rename_theme_corporations.py")
 
@@ -147,7 +147,7 @@ def test_collection_upgrade_and_rollback_preserve_dev_theme_data(pg_dsn, pg_engi
                 ).all() == [("990009", True)]
                 assert conn.execute(
                     sa.text("SELECT version_num FROM alembic_version")
-                ).scalar_one() == ("0012" if revision == "0012" else "0019")
+                ).scalar_one() == ("0012" if revision == "0012" else "0020")
                 assert (
                     conn.execute(sa.text("SELECT to_regclass('disclosures')")).scalar() is None
                 ) == (revision == "0012")

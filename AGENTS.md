@@ -120,6 +120,8 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `packages/telemetry` (`ktb_telemetry`) | OpenTelemetry tracing setup and log trace ids; keeps OpenTelemetry dependencies outside core |
 | `services/market-syncer` | Populate PostgreSQL corporation, alias, index membership, and theme data from Kiwoom and OpenDART |
 | `services/news-preprocessor` | Fetch news and OpenDART disclosures, embed articles, and store them in PostgreSQL |
+| `services/disclosure-indexer` | Read collected disclosure documents from PostgreSQL, embed narrative sections, and store vectors in pgvector |
+| `services/disclosure-retrieval` | Direct Python disclosure search and database reads called by portfolio-builder |
 | `services/news-clusterer` | Recompute DBSCAN over embedded articles and persist cluster assignments |
 | `services/news-graph-builder` | Summarize clusters and build entities and relations in PostgreSQL |
 | `services/news-http` | Serve private, read-only news and graph HTTP queries |
@@ -130,8 +132,18 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
 
+The indexer and retrieval share `DISCLOSURE_EMBEDDING_*`;
+news keeps `KTB_EMBEDDING_*`.
+Documents and queries must use one checkpoint and one dimension, so the query prefix is
+part of the index signature and changing it forces a reindex. `disclosure_sections` and
+`disclosure_financial_facts` are readable with no embedding server configured, and a
+search reports each report's `index_state` rather than failing a whole stock when one
+index belongs to a retired embedding space. An empty result is not evidence that no risk
+exists; `latest_searched` says how many candidates were scored.
+
 Services communicate through datastores and explicit HTTP/queue contracts. Do not import
-another service's implementation. Keep module boundaries aligned with `tach.toml`.
+another service's implementation except the explicitly declared disclosure-retrieval
+library dependency used by portfolio-builder. Keep module boundaries aligned with `tach.toml`.
 Move code into shared packages only when actual callers need it; keep core free of
 third-party dependencies.
 
@@ -292,10 +304,44 @@ failures are logged without another same-day collection run. A delayed startup a
 06:00 runs only if that daily slot has not yet been attempted.
 The daily hour remains configurable through `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR`.
 
-Normal checks resume inclusively from the last successful date. Existing receipt and
-parser-version checks skip stored documents before downloading. No new receipts means
+Original and corrected disclosures keep their distinct receipt IDs and publication dates.
+Collection stores a receipt's parsed document, sections and financial facts once. Writers
+lock the disclosure row before checking for an existing document in a fresh statement;
+a repeated or concurrent save returns False without replacing stored data. A metadata row
+with no document may finish its first complete save. Existing legacy parser rows are not
+deleted by this collection change; no new parser versions are accumulated automatically.
+
+Normal checks resume inclusively from the last successful date. A stored document marks
+its receipt as collected independently of parser version or legacy status, so it is
+skipped before downloading. No new receipts means
 no document fetch, and no filing list means no classification/financial request. Set
 paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` for manual replay within
 365 days; it does not update automatic progress. Remove date overrides after replay.
-The collection-state table belongs to the unmerged 0013; collection still owns three
+The collection-state table belongs to 0013; collection still owns three
 migration revisions and no standalone collector, extra timer or pending-work queue.
+
+The existing news-preprocessor service starts the DB-only indexer after success or
+final failure. There is no separate collection or indexing timer.
+
+Portfolio-builder's disclosure tools live in `tools/disclosure`: `search.py` handles narrative
+search, `get.py` handles direct section and financial reads, and `tool.py` binds agent tools.
+Retrieval lives under `services/disclosure-retrieval`; builder passes its own
+SQLAlchemy engine to the tools. There is no retrieval HTTP server, router, client, port, or
+container. Financial and section tools query PostgreSQL directly. Narrative search calls Modal
+over HTTPS for query embedding and reranking, returning DB connections before those calls.
+Neither collection nor retrieval generates answers. Backend polling may include an
+optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
+receiving this field does not change trading behavior. Invalid optional profiles are ignored
+and logged without rejecting account snapshots.
+
+Disclosure indexing and portfolio disclosure tools require `DISCLOSURE_ENABLED=true`.
+The default false mode preserves portfolio generation without model configuration and
+lets the indexer exit before DB/model work. Enabled mode validates all model settings
+and retains the mandatory successful disclosure search before portfolio submission.
+Deployment environment and SSM ownership stay with the Cloud configuration.
+
+The disclosure indexer records attempts when claiming work; expired final-attempt leases
+become dead-letter work without another inference call. Its systemd unit does not restart
+automatically. Direct disclosure reads accept as_of and select revisions visible at that
+cutoff. Both CPU disclosure services share stdlib inference transport and vector validation
+in ktb_core.embedding.inference; core still has no GPU or third-party dependency.

@@ -2,6 +2,8 @@ source_roots = [
     "packages/aws/src",
     "packages/core/src",
     "packages/telemetry/src",
+    "services/disclosure-indexer/src",
+    "services/disclosure-retrieval/src",
     "services/market-syncer/src",
     "services/market-collector/src",
     "services/market-http/src",
@@ -24,6 +26,14 @@ path = "ktb_core"
 [[modules]]
 path = "ktb_telemetry"
 depends_on = []
+
+[[modules]]
+path = "disclosure_indexer"
+depends_on = ["ktb_core"]
+
+[[modules]]
+path = "disclosure_retrieval"
+depends_on = ["ktb_core"]
 
 [[modules]]
 path = "news_preprocessor"
@@ -83,7 +93,7 @@ from = ["news_graph_builder.graph"]
 
 [[modules]]
 path = "portfolio_builder"
-depends_on = ["ktb_core"]
+depends_on = ["disclosure_retrieval", "ktb_core"]
 
 [[modules]]
 path = "market_syncer"
