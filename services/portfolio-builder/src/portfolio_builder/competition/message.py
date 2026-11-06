@@ -3,6 +3,7 @@ from typing import Annotated
 from pydantic import BaseModel, BeforeValidator, Field, StrictInt
 
 MAX_ADDITIONAL_REQUEST_CHARS = 4000
+MAX_AGENTS = 16
 
 
 def _null_as_empty(value: object) -> object:
@@ -40,4 +41,4 @@ class AgentSettings(BaseModel):
 class Request(BaseModel):
     competition_id: Annotated[StrictInt, Field(gt=0)]
     user_id: Annotated[StrictInt, Field(gt=0)]
-    agents: Annotated[list[AgentSettings], Field(min_length=1)]
+    agents: Annotated[list[AgentSettings], Field(min_length=1, max_length=MAX_AGENTS)]

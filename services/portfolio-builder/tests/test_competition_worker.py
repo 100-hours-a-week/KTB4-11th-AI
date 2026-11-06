@@ -575,6 +575,57 @@ def test_an_always_failing_explanation_stops_being_retried_and_is_still_notified
     assert _notified_at(engine, 1) is not None
 
 
+def test_an_unexpected_exception_fails_the_job_instead_of_parking_it_as_running(
+    engine, monkeypatch
+):
+    sqs, backend, log = _deps()
+    settings = _settings()
+    monkeypatch.setattr(generation, "run_agent", Mock(side_effect=RuntimeError("news-http down")))
+    _patch_news(monkeypatch)
+
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+
+    job = _job(engine)
+    assert job["status"] == "failed"
+    assert "news-http down" in job["error"]
+    assert any(event == "generation_failed" for event, _, _ in log.events)
+
+
+def test_the_competition_run_logs_the_prompt_and_its_turns_and_usage(
+    engine, monkeypatch, _insert_portfolio
+):
+    sqs, backend, log = _deps()
+    settings = _settings()
+    portfolio_id = _insert_portfolio(engine)
+    monkeypatch.setattr(
+        generation,
+        "run_agent",
+        Mock(
+            return_value=RunResult(
+                outcome="saved",
+                portfolio_id=portfolio_id,
+                turns=7,
+                usage={"total_tokens": 123},
+                trace=[TraceEntry(turn=1, kind="model", text="생각")],
+            )
+        ),
+    )
+    monkeypatch.setattr(generation, "explain_and_save", Mock(return_value=1))
+    _patch_news(monkeypatch)
+
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+
+    prompt = next(fields for event, _, fields in log.events if event == "prompt")
+    assert prompt["system_prompt"] == COMPETITION_SYSTEM_PROMPT
+    assert "# Your settings" in prompt["briefing"]
+    generated = next(fields for event, _, fields in log.events if event == "generated")
+    assert generated["turns"] == 7
+    assert generated["usage"] == {"total_tokens": 123}
+    assert generated["participant_id"] == 1
+    ingestion = next(fields for event, _, fields in log.events if event == "ingestion")
+    assert ingestion["briefing_chars"] > 0
+
+
 def test_a_failed_notification_does_not_cause_a_second_agent_run(
     engine, monkeypatch, _insert_portfolio
 ):

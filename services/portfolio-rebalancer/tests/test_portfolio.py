@@ -59,7 +59,7 @@ def _link_competition_portfolio(conn, portfolio_id):
     participant_id = conn.execute(
         sa.text(
             "INSERT INTO competition_participants (competition_id, user_id, risk_profile)"
-            " VALUES (1, 1, 'balanced') RETURNING participant_id"
+            " VALUES (1, 1, '위험중립형') RETURNING participant_id"
         )
     ).scalar_one()
     conn.execute(

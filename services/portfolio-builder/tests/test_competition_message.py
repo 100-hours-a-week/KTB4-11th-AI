@@ -3,6 +3,7 @@ import json
 import pytest
 from portfolio_builder.competition.message import (
     MAX_ADDITIONAL_REQUEST_CHARS,
+    MAX_AGENTS,
     RISK_LEVEL_TO_PROFILE,
     AgentSettings,
     Request,
@@ -72,6 +73,21 @@ def test_invalid_agent_identifiers_are_rejected(changes):
 def test_an_empty_agents_list_is_rejected():
     with pytest.raises(ValidationError):
         Request(**{**BASE, "agents": []})
+
+
+def _agents(count):
+    return [{**AGENT_BASE, "participant_id": 200 + i} for i in range(count)]
+
+
+def test_a_batch_up_to_the_agent_cap_is_accepted():
+    request = Request(**{**BASE, "agents": _agents(MAX_AGENTS)})
+
+    assert len(request.agents) == MAX_AGENTS
+
+
+def test_a_batch_over_the_agent_cap_is_rejected():
+    with pytest.raises(ValidationError):
+        Request(**{**BASE, "agents": _agents(MAX_AGENTS + 1)})
 
 
 def test_additional_request_defaults_to_empty_and_is_kept_verbatim():

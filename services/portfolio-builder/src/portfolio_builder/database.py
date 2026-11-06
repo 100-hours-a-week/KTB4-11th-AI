@@ -139,6 +139,10 @@ competition_participants = sa.Table(
         nullable=False,
         server_default=sa.text("now()"),
     ),
+    sa.CheckConstraint(
+        "risk_profile IN ('성장형', '성장추구형', '위험중립형', '안정추구형', '안정형')",
+        name="competition_participants_risk_profile_check",
+    ),
     sa.Index("competition_participants_competition_id_idx", "competition_id"),
 )
 

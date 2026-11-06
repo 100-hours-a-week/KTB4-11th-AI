@@ -69,6 +69,18 @@ def test_acknowledged_constraints_defaults_to_null(engine):
     assert stored is None
 
 
+def test_competition_participants_rejects_a_risk_profile_production_cannot_produce(engine):
+    with pytest.raises(sa.exc.IntegrityError):
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "INSERT INTO competition_participants"
+                    " (participant_id, competition_id, user_id, risk_profile, additional_request)"
+                    " VALUES (1, 10, 100, 'balanced', '')"
+                )
+            )
+
+
 def test_competition_jobs_rejects_an_unknown_status(engine):
     with engine.begin() as conn:
         conn.execute(

@@ -84,11 +84,14 @@ def _generate(
             participant_id,
         ),
     ]
+    system_prompt = COMPETITION_SYSTEM_PROMPT + (
+        DISCLOSURE_PROMPT if settings.disclosure_enabled else ""
+    )
+    log.info("prompt", system_prompt=system_prompt, briefing=briefing_text)
     return run_agent(
         model=model,
         tools=tools,
-        system_prompt=COMPETITION_SYSTEM_PROMPT
-        + (DISCLOSURE_PROMPT if settings.disclosure_enabled else ""),
+        system_prompt=system_prompt,
         briefing=briefing_text,
         max_turns=settings.max_turns,
         log=log,
@@ -133,35 +136,67 @@ def _generate_for(
         link_portfolio(engine, participant.participant_id, claim.portfolio_id)
         return
 
-    excluded = excluded_company_ids(engine, participant.excluded_theme_codes)
-    log.info(
-        "excluded_themes",
-        excluded_theme_codes=participant.excluded_theme_codes,
-        excluded_company_count=len(excluded),
-    )
-    news_client = NewsClient(settings.news_http_base_uri)
-    briefing = load_briefing(engine, news_client, settings.news_window_days, participant, excluded)
+    try:
+        excluded = excluded_company_ids(engine, participant.excluded_theme_codes)
+        log.info(
+            "excluded_themes",
+            excluded_theme_codes=participant.excluded_theme_codes,
+            excluded_company_count=len(excluded),
+        )
+        news_client = NewsClient(settings.news_http_base_uri)
+        briefing = load_briefing(
+            engine, news_client, settings.news_window_days, participant, excluded
+        )
+        log.info(
+            "ingestion",
+            participant_id=participant.participant_id,
+            previous_portfolio_id=briefing.previous_portfolio_id,
+            previous_holdings=briefing.previous_holdings,
+            previous_exits=briefing.previous_exits,
+            cluster_ids=briefing.cluster_ids,
+            cluster_count=len(briefing.cluster_ids),
+            company_count=briefing.company_count,
+            theme_count=briefing.theme_count,
+            briefing_chars=len(briefing.text),
+        )
 
-    result = _generate(
-        engine,
-        settings,
-        log,
-        model_factory,
-        news_client,
-        briefing.previous_company_ids,
-        excluded,
-        briefing.text,
-        participant.participant_id,
-    )
+        result = _generate(
+            engine,
+            settings,
+            log,
+            model_factory,
+            news_client,
+            briefing.previous_company_ids,
+            excluded,
+            briefing.text,
+            participant.participant_id,
+        )
+        log.info(
+            "generated",
+            participant_id=participant.participant_id,
+            outcome=result.outcome,
+            portfolio_id=result.portfolio_id,
+            turns=result.turns,
+            usage=result.usage,
+        )
 
-    if result.portfolio_id is None:
-        error = result.error or f"agent ended with outcome {result.outcome}"
-        fail_job(engine, key, error)
+        if result.portfolio_id is None:
+            error = result.error or f"agent ended with outcome {result.outcome}"
+            fail_job(engine, key, error)
+            return
+
+        save_trace(engine, result.portfolio_id, result.trace)
+        link_portfolio(engine, participant.participant_id, result.portfolio_id)
+        finish_job(engine, key, result.portfolio_id)
+    except Exception as error:
+        log.exception(
+            "generation_failed",
+            participant_id=participant.participant_id,
+            error=str(error),
+        )
+        fail_job(engine, key, f"{type(error).__name__}: {error}")
         return
 
-    save_trace(engine, result.portfolio_id, result.trace)
-    link_portfolio(engine, participant.participant_id, result.portfolio_id)
-    finish_job(engine, key, result.portfolio_id)
     _explain(engine, model_factory, settings, log, result.portfolio_id, result.trace)
 
 

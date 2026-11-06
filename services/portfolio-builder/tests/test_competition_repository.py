@@ -184,8 +184,6 @@ def test_any_setting_difference_changes_the_key(changes, _settings):
 
 
 def test_additional_request_alone_no_longer_changes_the_key(_settings):
-    # Canonicalisation, not the raw text, carries identity now: two rows with the same
-    # canonical_form/canonical_version share a key even if their raw text differs.
     a = _settings(additional_request="반도체 위주")
     b = _settings(additional_request="반도체만")
     assert generation_key(a, None, MODEL) == generation_key(b, None, MODEL)

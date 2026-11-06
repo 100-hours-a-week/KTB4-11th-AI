@@ -42,6 +42,11 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
         ),
     )
+    op.create_check_constraint(
+        "competition_participants_risk_profile_check",
+        "competition_participants",
+        "risk_profile IN ('성장형', '성장추구형', '위험중립형', '안정추구형', '안정형')",
+    )
     op.create_index(
         "competition_participants_competition_id_idx",
         "competition_participants",
@@ -129,5 +134,10 @@ def downgrade() -> None:
     op.drop_table("competition_portfolios")
     op.drop_index(
         "competition_participants_competition_id_idx", table_name="competition_participants"
+    )
+    op.drop_constraint(
+        "competition_participants_risk_profile_check",
+        "competition_participants",
+        type_="check",
     )
     op.drop_table("competition_participants")
