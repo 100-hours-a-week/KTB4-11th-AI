@@ -18,10 +18,10 @@ class ResolvedAgent:
     agent_id: int
     participant_id: int
     risk_profile: str
-    interested_theme_codes: list[str]
-    excluded_theme_codes: list[str]
-    interested_theme_names: list[str]
-    excluded_theme_names: list[str]
+    interested_theme_codes: tuple[str, ...]
+    excluded_theme_codes: tuple[str, ...]
+    interested_theme_names: tuple[str, ...]
+    excluded_theme_names: tuple[str, ...]
     additional_request: str
 
 
@@ -98,9 +98,9 @@ def resolve_agent(
         agent_id=agent.agent_id,
         participant_id=agent.participant_id,
         risk_profile=agent.risk_profile,
-        interested_theme_codes=interested_codes,
-        excluded_theme_codes=excluded_codes,
-        interested_theme_names=interested_names,
-        excluded_theme_names=sorted(excluded_names),
+        interested_theme_codes=tuple(interested_codes),
+        excluded_theme_codes=tuple(excluded_codes),
+        interested_theme_names=tuple(interested_names),
+        excluded_theme_names=tuple(sorted(excluded_names)),
         additional_request=agent.additional_request,
     )

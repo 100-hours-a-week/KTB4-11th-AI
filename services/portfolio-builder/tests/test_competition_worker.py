@@ -505,10 +505,10 @@ def _theme_resolved():
         agent_id=9001,
         participant_id=1,
         risk_profile="성장형",
-        interested_theme_codes=[],
-        excluded_theme_codes=[],
-        interested_theme_names=[],
-        excluded_theme_names=[],
+        interested_theme_codes=(),
+        excluded_theme_codes=(),
+        interested_theme_names=(),
+        excluded_theme_names=(),
         additional_request="아무 테마나 담아줘",
     )
 

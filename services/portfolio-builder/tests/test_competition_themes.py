@@ -178,10 +178,22 @@ def test_resolve_agent_excludes_a_group_resolved_name_from_interested(engine):
 
     resolved = resolve_agent(engine, 10, 100, agent)
 
-    assert resolved.excluded_theme_codes == ["SG"]
-    assert resolved.interested_theme_codes == ["SH", "SS"]
-    assert resolved.interested_theme_names == ["반도체"]
-    assert resolved.excluded_theme_names == ["반도체_생산"]
+    assert resolved.excluded_theme_codes == ("SG",)
+    assert resolved.interested_theme_codes == ("SH", "SS")
+    assert resolved.interested_theme_names == ("반도체",)
+    assert resolved.excluded_theme_names == ("반도체_생산",)
+
+
+def test_resolve_agent_carries_the_theme_fields_as_tuples(engine):
+    _seed_group_themes(engine)
+    agent = _agent(preferred_themes=["반도체"], excluded_themes=["은행"])
+
+    resolved = resolve_agent(engine, 10, 100, agent)
+
+    assert resolved.interested_theme_codes == ("SG", "SH", "SS")
+    assert resolved.excluded_theme_codes == ("BK",)
+    assert resolved.interested_theme_names == ("반도체",)
+    assert resolved.excluded_theme_names == ("은행",)
 
 
 def test_resolve_agent_keeps_agent_and_participant_ids_distinct(engine):

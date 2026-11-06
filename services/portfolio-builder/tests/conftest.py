@@ -81,10 +81,10 @@ _RESOLVED_DEFAULTS = {
     "agent_id": 9001,
     "participant_id": 1,
     "risk_profile": "성장형",
-    "interested_theme_codes": ["T1"],
-    "excluded_theme_codes": [],
-    "interested_theme_names": ["HBM"],
-    "excluded_theme_names": [],
+    "interested_theme_codes": ("T1",),
+    "excluded_theme_codes": (),
+    "interested_theme_names": ("HBM",),
+    "excluded_theme_names": (),
     "additional_request": "원문",
 }
 

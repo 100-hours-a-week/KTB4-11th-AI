@@ -48,16 +48,14 @@ def test_a_later_message_with_a_different_agent_id_is_flagged_as_drift(engine, _
     assert "agent_id" in changed
 
 
-def test_received_theme_names_changing_under_identical_codes_is_flagged_as_drift(
-    engine, _request
-):
-    store_settings(engine, _request(interested_theme_names=["반도체"]))
+def test_received_theme_names_changing_under_identical_codes_is_flagged_as_drift(engine, _request):
+    store_settings(engine, _request(interested_theme_names=("반도체",)))
 
     _, changed = store_settings(
         engine,
         _request(
-            interested_theme_names=["반도체_생산", "반도체_후공정장비"],
-            excluded_theme_names=["은행"],
+            interested_theme_names=("반도체_생산", "반도체_후공정장비"),
+            excluded_theme_names=("은행",),
         ),
     )
 
@@ -210,15 +208,15 @@ def test_a_different_model_changes_the_key(_settings):
 
 
 def test_theme_code_order_does_not_change_the_key(engine, _request):
-    a, _ = store_settings(engine, _request(participant_id=1, interested_theme_codes=["T1", "T2"]))
-    b, _ = store_settings(engine, _request(participant_id=2, interested_theme_codes=["T2", "T1"]))
+    a, _ = store_settings(engine, _request(participant_id=1, interested_theme_codes=("T1", "T2")))
+    b, _ = store_settings(engine, _request(participant_id=2, interested_theme_codes=("T2", "T1")))
     assert generation_key(a, None, MODEL) == generation_key(b, None, MODEL)
 
 
 def test_a_theme_code_in_both_lists_ends_up_excluded_only(engine, _request):
     settings, _ = store_settings(
         engine,
-        _request(interested_theme_codes=["T1", "T2"], excluded_theme_codes=["T2"]),
+        _request(interested_theme_codes=("T1", "T2"), excluded_theme_codes=("T2",)),
     )
 
     assert settings.interested_theme_codes == ("T1",)
@@ -226,7 +224,7 @@ def test_a_theme_code_in_both_lists_ends_up_excluded_only(engine, _request):
 
 
 def test_duplicate_incoming_theme_codes_collapse_in_the_stored_snapshot(engine, _request):
-    settings, _ = store_settings(engine, _request(interested_theme_codes=["T1", "T1", "T2"]))
+    settings, _ = store_settings(engine, _request(interested_theme_codes=("T1", "T1", "T2")))
 
     assert settings.interested_theme_codes == ("T1", "T2")
 
