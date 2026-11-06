@@ -215,5 +215,8 @@ def mark_explanation_failed(engine: sa.Engine, portfolio_id: int) -> None:
         conn.execute(
             sa.update(portfolios)
             .where(portfolios.c.id == portfolio_id)
-            .values(status="explanation_failed")
+            .values(
+                status="explanation_failed",
+                explanation_attempts=portfolios.c.explanation_attempts + 1,
+            )
         )

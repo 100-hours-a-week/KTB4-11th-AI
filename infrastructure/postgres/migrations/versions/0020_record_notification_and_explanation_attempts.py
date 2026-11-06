@@ -1,4 +1,4 @@
-"""record each participant's notification of a generation outcome
+"""record each participant's notification, and count explanation attempts
 
 Revision ID: 0020
 Revises: 0019
@@ -31,7 +31,12 @@ def upgrade() -> None:
         ),
         sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     )
+    op.add_column(
+        "portfolios",
+        sa.Column("explanation_attempts", sa.Integer, nullable=False, server_default=sa.text("0")),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("portfolios", "explanation_attempts")
     op.drop_table("competition_notifications")

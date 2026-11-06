@@ -171,5 +171,7 @@ def generate_missing_portfolios(
     settings: Settings,
     log: StructuredLogger,
 ) -> None:
-    for participant in participants_without_ready_portfolio(engine):
+    for participant in participants_without_ready_portfolio(
+        engine, settings.competition_max_attempts
+    ):
         _generate_for(participant, engine, model_factory, settings, log)

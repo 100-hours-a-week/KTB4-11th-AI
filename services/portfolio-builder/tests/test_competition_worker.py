@@ -553,6 +553,28 @@ def test_an_explain_failure_keeps_the_job_succeeded_and_marks_the_portfolio(
     assert "rejected" in failed["error"]
 
 
+def test_an_always_failing_explanation_stops_being_retried_and_is_still_notified(
+    engine, monkeypatch, _insert_portfolio
+):
+    sqs, backend, log = _deps()
+    settings = _settings(competition_max_attempts=2)
+    portfolio_id = _insert_portfolio(engine)
+    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
+    explain_stub = Mock(side_effect=RuntimeError("rejected"))
+    monkeypatch.setattr(generation, "explain_and_save", explain_stub)
+    _patch_news(monkeypatch)
+    model_factory = Mock(return_value=Mock())
+    message = _message(_body())
+
+    for _ in range(4):
+        _cycle(message, sqs, engine, backend, model_factory, settings, log)
+
+    assert explain_stub.call_count == settings.competition_max_attempts
+    assert backend.completed.call_args.args[1] == portfolio_id
+    assert backend.completed.call_count == 1
+    assert _notified_at(engine, 1) is not None
+
+
 def test_a_failed_notification_does_not_cause_a_second_agent_run(
     engine, monkeypatch, _insert_portfolio
 ):

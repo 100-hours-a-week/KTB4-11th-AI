@@ -287,7 +287,9 @@ def latest_participant_portfolio(
     return row.id, row.status, row.has_trace
 
 
-def participants_without_ready_portfolio(engine: sa.Engine) -> list[ParticipantSettings]:
+def participants_without_ready_portfolio(
+    engine: sa.Engine, max_explanation_attempts: int
+) -> list[ParticipantSettings]:
     latest = (
         sa.select(
             competition_portfolios.c.participant_id,
@@ -306,7 +308,15 @@ def participants_without_ready_portfolio(engine: sa.Engine) -> list[ParticipantS
                         latest.c.participant_id == competition_participants.c.participant_id,
                     ).outerjoin(portfolios, portfolios.c.id == latest.c.portfolio_id)
                 )
-                .where(sa.or_(portfolios.c.status.is_(None), portfolios.c.status != "ready"))
+                .where(
+                    sa.or_(
+                        portfolios.c.status.is_(None),
+                        sa.and_(
+                            portfolios.c.status != "ready",
+                            portfolios.c.explanation_attempts < max_explanation_attempts,
+                        ),
+                    )
+                )
                 .order_by(competition_participants.c.participant_id)
             )
             .mappings()
