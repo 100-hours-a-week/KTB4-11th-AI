@@ -503,9 +503,77 @@ def test_a_failure_that_the_next_pass_retries_successfully_only_reports_completi
     assert _notified_at(engine, 1) is not None
 
 
+def test_four_sharers_on_a_failing_key_each_get_an_attempt_and_none_stays_silent(
+    engine, monkeypatch
+):
+    sqs, backend, log = _deps()
+    settings = _settings(competition_max_attempts=3)
+    run_agent_stub = Mock(
+        return_value=RunResult(outcome="error", portfolio_id=None, turns=1, usage={})
+    )
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    _patch_news(monkeypatch)
+    message = _message(
+        _body(*[_agent(agent_id=9000 + number, participant_id=number) for number in (1, 2, 3, 4)])
+    )
+
+    _cycle(message, sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+
+    assert run_agent_stub.call_count == 4
+    assert _count(engine, "competition_jobs") == 1
+    assert _count(engine, "competition_notifications") == 4
+    assert all(_notified_at(engine, number) is None for number in (1, 2, 3, 4))
+
+    for _ in range(2):
+        _cycle(message, sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+
+    assert [call.args[0].participant_id for call in backend.failed.call_args_list] == [1, 2, 3, 4]
+
+
+def test_a_participant_told_failed_is_told_completed_when_the_key_later_succeeds(
+    engine, monkeypatch, _insert_portfolio
+):
+    sqs, backend, log = _deps()
+    settings = _settings(competition_max_attempts=1)
+    portfolio_id = _insert_portfolio(engine)
+    run_agent_stub = Mock(
+        side_effect=[
+            RunResult(outcome="error", portfolio_id=None, turns=1, usage={}),
+            _saved(portfolio_id),
+        ]
+    )
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", _explains_and_marks_ready(engine))
+    _patch_news(monkeypatch)
+    model_factory = Mock(return_value=Mock())
+
+    _cycle(_message(_body()), sqs, engine, backend, model_factory, settings, log)
+
+    assert [call.args[0].participant_id for call in backend.failed.call_args_list] == [1]
+
+    _cycle(
+        _message(_body(_agent(agent_id=9002, participant_id=2))),
+        sqs,
+        engine,
+        backend,
+        model_factory,
+        settings,
+        log,
+    )
+    _cycle(_message(_body()), sqs, engine, backend, model_factory, settings, log)
+
+    assert run_agent_stub.call_count == 2
+    assert [name for name, args, _ in backend.method_calls if args[0].participant_id == 1] == [
+        "failed",
+        "completed",
+    ]
+    assert latest_participant_portfolio(engine, 1)[0] == portfolio_id
+    assert latest_participant_portfolio(engine, 2)[0] == portfolio_id
+
+
 def test_two_participants_sharing_an_exhausted_key_are_each_notified_once(engine, monkeypatch):
     sqs, backend, log = _deps()
-    settings = _settings()
+    settings = _settings(competition_max_attempts=2)
     monkeypatch.setattr(
         generation,
         "run_agent",

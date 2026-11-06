@@ -30,6 +30,7 @@ def upgrade() -> None:
             primary_key=True,
         ),
         sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("attempts", sa.Integer, nullable=False, server_default=sa.text("0")),
     )
     op.add_column(
         "portfolios",

@@ -179,7 +179,6 @@ def claim_job(
     max_attempts: int,
 ) -> Claim | None:
     with engine.begin() as conn:
-        claim = None
         inserted = conn.execute(
             pg_insert(competition_jobs)
             .values(
@@ -191,49 +190,71 @@ def claim_job(
             .on_conflict_do_nothing(index_elements=["generation_key"])
             .returning(competition_jobs.c.generation_key)
         ).first()
-        if inserted is not None:
-            claim = Claim(mine=True, portfolio_id=None)
-        else:
-            stale_before = sa.func.now() - timedelta(seconds=stale_after_seconds)
-            row = (
-                conn.execute(
-                    sa.select(
-                        competition_jobs,
-                        (competition_jobs.c.started_at < stale_before).label("is_stale"),
-                    )
-                    .where(competition_jobs.c.generation_key == key)
-                    .with_for_update()
-                )
-                .mappings()
-                .one()
-            )
-            if row["status"] == "succeeded":
-                if row["portfolio_id"] is not None:
-                    claim = Claim(mine=False, portfolio_id=row["portfolio_id"])
-            elif (
-                row["status"] == "failed" or (row["status"] == "running" and row["is_stale"])
-            ) and row["attempts"] < max_attempts:
-                conn.execute(
-                    sa.update(competition_jobs)
-                    .where(competition_jobs.c.generation_key == key)
-                    .values(
-                        status="running",
-                        attempts=competition_jobs.c.attempts + 1,
-                        started_at=sa.func.now(),
-                        finished_at=None,
-                        error=None,
-                        portfolio_id=None,
-                    )
-                )
-                claim = Claim(mine=True, portfolio_id=None)
 
-        if claim is not None:
-            conn.execute(
-                pg_insert(competition_notifications)
-                .values(participant_id=participant.participant_id, generation_key=key)
-                .on_conflict_do_nothing(index_elements=["participant_id", "generation_key"])
+        conn.execute(
+            pg_insert(competition_notifications)
+            .values(participant_id=participant.participant_id, generation_key=key)
+            .on_conflict_do_nothing(index_elements=["participant_id", "generation_key"])
+        )
+        spend_attempt = (
+            sa.update(competition_notifications)
+            .where(
+                competition_notifications.c.participant_id == participant.participant_id,
+                competition_notifications.c.generation_key == key,
             )
-        return claim
+            .values(attempts=competition_notifications.c.attempts + 1)
+        )
+
+        if inserted is not None:
+            conn.execute(spend_attempt)
+            return Claim(mine=True, portfolio_id=None)
+
+        stale_before = sa.func.now() - timedelta(seconds=stale_after_seconds)
+        row = (
+            conn.execute(
+                sa.select(
+                    competition_jobs,
+                    (competition_jobs.c.started_at < stale_before).label("is_stale"),
+                    competition_notifications.c.attempts.label("participant_attempts"),
+                )
+                .select_from(
+                    competition_jobs.join(
+                        competition_notifications,
+                        sa.and_(
+                            competition_notifications.c.generation_key
+                            == competition_jobs.c.generation_key,
+                            competition_notifications.c.participant_id
+                            == participant.participant_id,
+                        ),
+                    )
+                )
+                .where(competition_jobs.c.generation_key == key)
+                .with_for_update(of=competition_jobs)
+            )
+            .mappings()
+            .one()
+        )
+        if row["status"] == "succeeded":
+            if row["portfolio_id"] is None:
+                return None
+            return Claim(mine=False, portfolio_id=row["portfolio_id"])
+        reclaimable = row["status"] == "failed" or (row["status"] == "running" and row["is_stale"])
+        if not reclaimable or row["participant_attempts"] >= max_attempts:
+            return None
+        conn.execute(
+            sa.update(competition_jobs)
+            .where(competition_jobs.c.generation_key == key)
+            .values(
+                status="running",
+                attempts=competition_jobs.c.attempts + 1,
+                started_at=sa.func.now(),
+                finished_at=None,
+                error=None,
+                portfolio_id=None,
+            )
+        )
+        conn.execute(spend_attempt)
+        return Claim(mine=True, portfolio_id=None)
 
 
 def finish_job(engine: sa.Engine, key: str, portfolio_id: int) -> None:
@@ -242,6 +263,11 @@ def finish_job(engine: sa.Engine, key: str, portfolio_id: int) -> None:
             sa.update(competition_jobs)
             .where(competition_jobs.c.generation_key == key)
             .values(status="succeeded", portfolio_id=portfolio_id, finished_at=sa.func.now())
+        )
+        conn.execute(
+            sa.update(competition_notifications)
+            .where(competition_notifications.c.generation_key == key)
+            .values(notified_at=None)
         )
 
 
@@ -364,7 +390,7 @@ def unnotified_notifications(engine: sa.Engine, max_attempts: int) -> list[Notif
                         ),
                         sa.and_(
                             competition_jobs.c.status == "failed",
-                            competition_jobs.c.attempts >= max_attempts,
+                            competition_notifications.c.attempts >= max_attempts,
                         ),
                     ),
                 )

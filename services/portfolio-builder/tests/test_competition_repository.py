@@ -1,3 +1,5 @@
+import threading
+
 import pytest
 import sqlalchemy as sa
 from portfolio_builder.briefing.repository import (
@@ -22,6 +24,19 @@ MODEL = "openrouter/m"
 class _NullLog:
     def error(self, event, **fields):
         pass
+
+
+def _job_attempts(engine):
+    with engine.connect() as conn:
+        return conn.execute(sa.text("SELECT attempts FROM competition_jobs")).scalar_one()
+
+
+def _participant_attempts(engine):
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text("SELECT participant_id, attempts FROM competition_notifications")
+        )
+        return {row[0]: row[1] for row in rows}
 
 
 def test_first_message_stores_the_snapshot(engine, _request):
@@ -286,6 +301,87 @@ def test_a_failed_job_is_retried_until_the_attempt_limit(engine, _request):
     assert claim_job(engine, key, settings, None, 3600, 2).mine
     fail_job(engine, key, "boom")
     assert claim_job(engine, key, settings, None, 3600, 2) is None
+
+
+def test_every_sharer_gets_an_attempt_of_its_own_at_the_default_limit(engine, _request):
+    participants = [
+        store_settings(engine, _request(participant_id=number))[0] for number in (1, 2, 3, 4)
+    ]
+    key = generation_key(participants[0], None, MODEL)
+
+    claims = []
+    for participant in participants:
+        claims.append(claim_job(engine, key, participant, None, 3600, 3))
+        fail_job(engine, key, "boom")
+
+    assert all(claim is not None and claim.mine for claim in claims)
+    assert _participant_attempts(engine) == {1: 1, 2: 1, 3: 1, 4: 1}
+    assert _job_attempts(engine) == 4
+
+
+def test_one_participant_spending_its_budget_leaves_another_participants_intact(engine, _request):
+    first, _ = store_settings(engine, _request(participant_id=1))
+    second, _ = store_settings(engine, _request(participant_id=2))
+    key = generation_key(first, None, MODEL)
+
+    for _ in range(2):
+        assert claim_job(engine, key, first, None, 3600, 2).mine
+        fail_job(engine, key, "boom")
+
+    assert claim_job(engine, key, first, None, 3600, 2) is None
+    assert claim_job(engine, key, second, None, 3600, 2).mine
+    assert _participant_attempts(engine) == {1: 2, 2: 1}
+
+
+def test_a_refused_claim_still_leaves_the_participant_a_notification_row(engine, _request):
+    first, _ = store_settings(engine, _request(participant_id=1))
+    second, _ = store_settings(engine, _request(participant_id=2))
+    key = generation_key(first, None, MODEL)
+    claim_job(engine, key, first, None, 3600, 3)
+
+    assert claim_job(engine, key, second, None, 3600, 3) is None
+    assert _participant_attempts(engine) == {1: 1, 2: 0}
+
+
+def test_a_succeeded_key_is_handed_to_every_later_participant_without_reclaiming(
+    engine, _request, _insert_portfolio
+):
+    first, _ = store_settings(engine, _request(participant_id=1))
+    key = generation_key(first, None, MODEL)
+    claim_job(engine, key, first, None, 3600, 1)
+    portfolio_id = _insert_portfolio(engine)
+    finish_job(engine, key, portfolio_id)
+
+    claims = []
+    for number in (2, 3, 4):
+        later, _ = store_settings(engine, _request(participant_id=number))
+        claims.append(claim_job(engine, key, later, None, 3600, 1))
+
+    assert [(claim.mine, claim.portfolio_id) for claim in claims] == [(False, portfolio_id)] * 3
+    assert _job_attempts(engine) == 1
+
+
+def test_two_workers_claiming_the_same_key_at_once_produce_one_generation(engine, _request):
+    first, _ = store_settings(engine, _request(participant_id=1))
+    second, _ = store_settings(engine, _request(participant_id=2))
+    key = generation_key(first, None, MODEL)
+    barrier = threading.Barrier(2)
+    claims = {}
+
+    def claim(participant):
+        barrier.wait()
+        claims[participant.participant_id] = claim_job(engine, key, participant, None, 3600, 3)
+
+    threads = [threading.Thread(target=claim, args=(p,)) for p in (first, second)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    mine = [claim for claim in claims.values() if claim is not None and claim.mine]
+    assert len(mine) == 1
+    assert _job_attempts(engine) == 1
+    assert sorted(_participant_attempts(engine)) == [1, 2]
 
 
 def test_the_latest_participant_portfolio_ignores_status(engine, _request, _insert_portfolio):
