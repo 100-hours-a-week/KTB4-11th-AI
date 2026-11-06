@@ -1,0 +1,23 @@
+[Unit]
+Description=KTB report builder worker
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+# 작업 결과를 AI_CWAgent/ScheduledJobFailure(JobName=report-builder)로 발행합니다.
+OnFailure=ktb-scheduled-job-failure@report-builder.service
+StartLimitIntervalSec=1h
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=@@DEPLOY_USER@@
+WorkingDirectory=@@DEPLOY_DIR@@
+ExecStart=/usr/bin/flock -n -E 0 @@DEPLOY_DIR@@/.report-builder.lock /usr/bin/docker compose --env-file .env --env-file .image.env -f compose.prod.yaml run --rm --no-deps -T report-builder
+Restart=on-failure
+RestartMode=direct
+RestartSec=30s
+TimeoutStopSec=2m
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target
