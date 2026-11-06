@@ -19,8 +19,6 @@ GROUP_THEMES = [
     ("SS", "반도체_시스템반도체"),
 ]
 STANDALONE_THEME = ("BK", "은행")
-# Starts with the group's prefix but has no separating underscore: a naive, unescaped
-# `LIKE '반도체_%'` would still match it.
 LOOKALIKE_THEME = ("SX", "반도체X")
 SUFFIX_TWIN_THEME = ("CG", "자동차_생산")
 
