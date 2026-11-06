@@ -176,6 +176,55 @@ Once the limit is reached, `claim_job` returns nothing and the pass costs one qu
 regeneration is equally derivable — a participant whose latest portfolio predates today — so no
 stage needs the table.
 
+## The retry budget belongs to the participant, not the key
+
+`competition_jobs.attempts` against `competition_max_attempts` reads naturally as "how many times
+do we retry this generation", but because several participants share one key, it was spent by
+**sharers rather than by retries**. Four participants at the default limit of three left the
+fourth with no claim at all: P1 claims and fails, P2 reclaims and fails, P3 reclaims and fails,
+and P4 is refused. With no claim it was owed no outcome, so it had no portfolio and no
+notification — silent. The blast radius was `sharers − max_attempts`, on the first batch, and at
+a limit of one it was every participant but the first.
+
+Worse in combination with wrapping the generation in `fail_job`: one transient `news-http` failure
+walks the whole budget down inside a single pass, so a group of three or more sharers got **zero**
+retries across time.
+
+So the budget is counted per participant, on the row that already records what that participant is
+owed:
+
+```
+competition_notifications
+  participant_id  bigint       not null
+  generation_key  text         not null
+  attempts        int          not null default 0
+  notified_at     timestamptz  null
+  primary key (participant_id, generation_key)
+```
+
+The composite key matters: from stage 2 a participant takes part in a new key each round, so
+keying on the participant alone would collide.
+
+`competition_jobs.attempts` stays as the total, for observability and nothing else. The cost is
+that a permanently failing shared key now costs `sharers × max_attempts` runs rather than
+`max_attempts` — twelve instead of three at the defaults. That is a broken-system scenario and it
+is bounded; in the ordinary transient case the first retry succeeds and every other participant
+takes the shared portfolio at no extra cost. A participant that never produces a portfolio breaks
+the comparison the whole feature exists for, which is worse than a bounded number of runs when
+generation is already failing.
+
+**Insert the row after the row lock, never before.** The row's foreign key to `competition_jobs`
+takes `FOR KEY SHARE` on the job row, so inserting before `SELECT … FOR UPDATE` leaves every
+worker reclaiming the same key holding `KEY SHARE` and then trying to upgrade — a deadlock, which
+four workers racing on one failed job reproduce. The row is therefore written exactly where it was
+always meant to be: at the moment `claim_job` returns a `Claim`.
+
+A refused claim writes no row, and that is safe. A claim is refused in only three situations: the
+job is `running` and fresh, in which case the participant still has no portfolio, stays in the
+derived work query, and is handed the result on a later cycle; the participant's own budget is
+spent, which means its row already exists; or the job is `succeeded` with no portfolio, which is
+corrupt data.
+
 ## Notification becomes its own pass
 
 Intake-only handling stops a redelivered message from regenerating, but on its own it leaves a
@@ -197,3 +246,5 @@ what actually removes the original defect's cost, rather than merely making it u
   write, `ended_at` recorded by `report-builder`, plus `end_date` stored at intake.
 - *SQS becomes intake only*, in one detail: no pending-work table, and notification is a pass of
   its own.
+- The base design's per-key retry budget: attempts are counted per participant, because a shared
+  key otherwise spends the budget on sharers instead of on retries.
