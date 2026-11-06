@@ -6,9 +6,10 @@ import pytest
 import sqlalchemy as sa
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.competition import worker
+from portfolio_builder.competition import generation, intake, notification, repository
 from portfolio_builder.competition.repository import (
     claim_job,
+    fail_job,
     generation_key,
     latest_participant_portfolio,
     link_portfolio,
@@ -81,13 +82,57 @@ def _deps():
     return Mock(), Mock(), Recorder()
 
 
-REAL_CLASSIFY = worker._classify
+def _cycle(message, sqs, engine, backend, model_factory, settings, log):
+    intake.process_message(message, sqs, engine, settings, log)
+    generation.generate_missing_portfolios(engine, model_factory, settings, log)
+    notification.notify_finished_jobs(engine, backend, log)
+
+
+def _saved(portfolio_id, text="생각"):
+    return RunResult(
+        outcome="saved",
+        portfolio_id=portfolio_id,
+        turns=1,
+        usage={},
+        trace=[TraceEntry(turn=1, kind="model", text=text)],
+    )
+
+
+def _explains_and_marks_ready(engine):
+    def explain(_engine, _explainer, portfolio_id, _trace, _chars):
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text("UPDATE portfolios SET status = 'ready' WHERE id = :id"),
+                {"id": portfolio_id},
+            )
+        return 1
+
+    return Mock(side_effect=explain)
+
+
+def _job(engine):
+    with engine.connect() as conn:
+        return (
+            conn.execute(
+                sa.text("SELECT generation_key, status, error, notified_at FROM competition_jobs")
+            )
+            .mappings()
+            .one()
+        )
+
+
+def _count(engine, table):
+    with engine.connect() as conn:
+        return conn.execute(sa.text(f"SELECT count(*) FROM {table}")).scalar_one()
+
+
+REAL_CLASSIFY = intake._classify
 
 
 @pytest.fixture(autouse=True)
 def _stub_classification(monkeypatch):
     monkeypatch.setattr(
-        worker, "_classify", lambda engine, settings, log, resolved: (None, None, False)
+        intake, "_classify", lambda engine, settings, log, resolved: (None, None, False)
     )
 
 
@@ -100,35 +145,16 @@ class NewsClientStub:
 
 
 def _patch_news(monkeypatch):
-    monkeypatch.setattr(worker, "NewsClient", lambda uri: NewsClientStub())
+    monkeypatch.setattr(generation, "NewsClient", lambda uri: NewsClientStub())
 
 
-def test_an_invalid_message_is_deleted_without_generating(monkeypatch):
+def test_an_invalid_message_is_deleted_without_generating(engine, monkeypatch):
     sqs, backend, log = _deps()
     run_agent_stub = Mock()
-    monkeypatch.setattr(worker, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
 
-    worker.process_message(
+    _cycle(
         _message(_body(_agent(risk_level=0))),
-        sqs,
-        Mock(),
-        backend,
-        Mock(return_value=Mock()),
-        _settings(),
-        log,
-    )
-
-    assert sqs.delete_message.called
-    assert not run_agent_stub.called
-
-
-def test_an_unresolvable_theme_name_deletes_the_message_and_stores_nothing(engine, monkeypatch):
-    sqs, backend, log = _deps()
-    run_agent_stub = Mock()
-    monkeypatch.setattr(worker, "run_agent", run_agent_stub)
-
-    worker.process_message(
-        _message(_body(_agent(preferred_themes=["금융"]))),
         sqs,
         engine,
         backend,
@@ -139,31 +165,71 @@ def test_an_unresolvable_theme_name_deletes_the_message_and_stores_nothing(engin
 
     assert sqs.delete_message.called
     assert not run_agent_stub.called
-    with engine.connect() as conn:
-        count = conn.execute(sa.text("SELECT count(*) FROM competition_participants")).scalar_one()
-    assert count == 0
+
+
+def test_an_unresolvable_theme_name_leaves_the_message_and_stores_nothing(engine, monkeypatch):
+    sqs, backend, log = _deps()
+    run_agent_stub = Mock()
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+
+    _cycle(
+        _message(_body(_agent(preferred_themes=["금융"]))),
+        sqs,
+        engine,
+        backend,
+        Mock(return_value=Mock()),
+        _settings(),
+        log,
+    )
+
+    assert not sqs.delete_message.called
+    assert not run_agent_stub.called
+    assert _count(engine, "competition_participants") == 0
+    assert any(event == "unresolved_theme" for event, _, _ in log.events)
+
+
+def test_intake_never_computes_a_generation_key(engine, monkeypatch):
+    sqs, _, log = _deps()
+    monkeypatch.setattr(
+        repository, "generation_key", Mock(side_effect=AssertionError("key computed at intake"))
+    )
+    monkeypatch.setattr(
+        generation, "_generate", Mock(side_effect=AssertionError("generated at intake"))
+    )
+
+    intake.process_message(_message(_body()), sqs, engine, _settings(), log)
+
+    assert sqs.delete_message.called
+    assert _count(engine, "competition_participants") == 1
+    assert _count(engine, "competition_jobs") == 0
+
+
+def test_intake_of_the_same_body_twice_stores_one_participant_and_classifies_once(
+    engine, monkeypatch
+):
+    sqs, _, log = _deps()
+    classify_spy = Mock(return_value=({"relevant": False}, "v", True))
+    monkeypatch.setattr(intake, "_classify", classify_spy)
+    settings = _settings()
+
+    intake.process_message(_message(_body()), sqs, engine, settings, log)
+    intake.process_message(_message(_body()), sqs, engine, settings, log)
+
+    assert classify_spy.call_count == 1
+    assert _count(engine, "competition_participants") == 1
+    assert _count(engine, "competition_jobs") == 0
 
 
 def test_a_successful_generation_links_notifies_and_deletes(engine, monkeypatch, _insert_portfolio):
     sqs, backend, log = _deps()
     settings = _settings()
     portfolio_id = _insert_portfolio(engine)
-    run_agent_stub = Mock(
-        return_value=RunResult(
-            outcome="saved",
-            portfolio_id=portfolio_id,
-            turns=3,
-            usage={},
-            trace=[TraceEntry(turn=1, kind="model", text="생각")],
-        )
-    )
-    monkeypatch.setattr(worker, "run_agent", run_agent_stub)
-    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    run_agent_stub = Mock(return_value=_saved(portfolio_id))
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", Mock(return_value=1))
     _patch_news(monkeypatch)
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
-    )
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
 
     assert sqs.delete_message.called
     assert backend.completed.call_args.args[1] == portfolio_id
@@ -176,22 +242,14 @@ def test_a_second_participant_with_the_same_settings_shares_without_generating(
     sqs, backend, log = _deps()
     settings = _settings()
     portfolio_id = _insert_portfolio(engine)
-    run_agent_stub = Mock(
-        return_value=RunResult(
-            outcome="saved",
-            portfolio_id=portfolio_id,
-            turns=1,
-            usage={},
-            trace=[TraceEntry(turn=1, kind="model", text="생각")],
-        )
-    )
-    monkeypatch.setattr(worker, "run_agent", run_agent_stub)
-    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    run_agent_stub = Mock(return_value=_saved(portfolio_id))
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", _explains_and_marks_ready(engine))
     _patch_news(monkeypatch)
     model_factory = Mock(return_value=Mock())
 
-    worker.process_message(_message(_body()), sqs, engine, backend, model_factory, settings, log)
-    worker.process_message(
+    _cycle(_message(_body()), sqs, engine, backend, model_factory, settings, log)
+    _cycle(
         _message(_body(_agent(agent_id=9002, participant_id=2))),
         sqs,
         engine,
@@ -203,6 +261,8 @@ def test_a_second_participant_with_the_same_settings_shares_without_generating(
 
     assert run_agent_stub.call_count == 1
     assert latest_participant_portfolio(engine, 2)[0] == latest_participant_portfolio(engine, 1)[0]
+    notified = {call.args[0].participant_id for call in backend.completed.call_args_list}
+    assert notified == {1, 2}
 
 
 def test_a_batch_with_several_agents_creates_several_participants(
@@ -213,28 +273,13 @@ def test_a_batch_with_several_agents_creates_several_participants(
     first_portfolio_id = _insert_portfolio(engine)
     second_portfolio_id = _insert_portfolio(engine)
     run_agent_stub = Mock(
-        side_effect=[
-            RunResult(
-                outcome="saved",
-                portfolio_id=first_portfolio_id,
-                turns=1,
-                usage={},
-                trace=[TraceEntry(turn=1, kind="model", text="생각1")],
-            ),
-            RunResult(
-                outcome="saved",
-                portfolio_id=second_portfolio_id,
-                turns=1,
-                usage={},
-                trace=[TraceEntry(turn=1, kind="model", text="생각2")],
-            ),
-        ]
+        side_effect=[_saved(first_portfolio_id, "생각1"), _saved(second_portfolio_id, "생각2")]
     )
-    monkeypatch.setattr(worker, "run_agent", run_agent_stub)
-    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", Mock(return_value=1))
     _patch_news(monkeypatch)
 
-    worker.process_message(
+    _cycle(
         _message(
             _body(
                 _agent(agent_id=9001, participant_id=1, risk_level=5),
@@ -263,7 +308,7 @@ def test_a_batch_with_several_agents_creates_several_participants(
     assert agent_ids == [9001, 9002]
 
 
-def test_a_running_job_leaves_the_message_in_place(engine, monkeypatch, _request):
+def test_a_running_job_is_skipped_by_the_generation_pass(engine, monkeypatch, _request):
     sqs, backend, log = _deps()
     settings = _settings()
     participant, _ = store_settings(engine, _request())
@@ -277,13 +322,36 @@ def test_a_running_job_leaves_the_message_in_place(engine, monkeypatch, _request
         settings.competition_max_attempts,
     )
     run_agent_stub = Mock()
-    monkeypatch.setattr(worker, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+
+    assert sqs.delete_message.called
+    assert not run_agent_stub.called
+    assert not backend.completed.called
+
+
+def test_a_participant_at_the_attempt_limit_is_skipped_by_the_generation_pass(
+    engine, monkeypatch, _request
+):
+    _, _, log = _deps()
+    settings = _settings(competition_max_attempts=1)
+    participant, _ = store_settings(engine, _request())
+    key = generation_key(participant, None, settings.llm_model)
+    claim_job(
+        engine,
+        key,
+        participant,
+        None,
+        settings.competition_stale_running_seconds,
+        settings.competition_max_attempts,
     )
+    fail_job(engine, key, "에이전트 실패")
+    run_agent_stub = Mock()
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
 
-    assert not sqs.delete_message.called
+    generation.generate_missing_portfolios(engine, Mock(return_value=Mock()), settings, log)
+
     assert not run_agent_stub.called
 
 
@@ -297,13 +365,11 @@ def test_an_unexplained_portfolio_is_re_explained_instead_of_regenerated(
     portfolio_id = _insert_portfolio(engine, status="explanation_failed", trace=trace)
     link_portfolio(engine, 1, portfolio_id)
     run_agent_stub = Mock()
-    monkeypatch.setattr(worker, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
     explain_stub = Mock(return_value=1)
-    monkeypatch.setattr(worker, "explain_and_save", explain_stub)
+    monkeypatch.setattr(generation, "explain_and_save", explain_stub)
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
-    )
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
 
     assert not run_agent_stub.called
     assert explain_stub.called
@@ -317,23 +383,11 @@ def test_round_two_settings_drift_is_logged_and_the_snapshot_wins(
     settings = _settings()
     store_settings(engine, _request())
     portfolio_id = _insert_portfolio(engine)
-    monkeypatch.setattr(
-        worker,
-        "run_agent",
-        Mock(
-            return_value=RunResult(
-                outcome="saved",
-                portfolio_id=portfolio_id,
-                turns=1,
-                usage={},
-                trace=[TraceEntry(turn=1, kind="model", text="생각")],
-            )
-        ),
-    )
-    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
+    monkeypatch.setattr(generation, "explain_and_save", Mock(return_value=1))
     _patch_news(monkeypatch)
 
-    worker.process_message(
+    _cycle(
         _message(_body(_agent(risk_level=1, additional_request="다른 원문"))),
         sqs,
         engine,
@@ -351,18 +405,38 @@ def test_a_failed_generation_fails_the_job_notifies_and_deletes(engine, monkeypa
     sqs, backend, log = _deps()
     settings = _settings()
     monkeypatch.setattr(
-        worker,
+        generation,
         "run_agent",
         Mock(return_value=RunResult(outcome="error", portfolio_id=None, turns=5, usage={})),
     )
     _patch_news(monkeypatch)
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
-    )
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
 
     assert backend.failed.called
     assert sqs.delete_message.called
+
+
+def test_a_failed_job_notifies_the_backend_with_the_stored_error(engine, _request):
+    _, backend, log = _deps()
+    settings = _settings()
+    participant, _ = store_settings(engine, _request())
+    key = generation_key(participant, None, settings.llm_model)
+    claim_job(
+        engine,
+        key,
+        participant,
+        None,
+        settings.competition_stale_running_seconds,
+        settings.competition_max_attempts,
+    )
+    fail_job(engine, key, "에이전트 실패")
+
+    notification.notify_finished_jobs(engine, backend, log)
+
+    assert not backend.completed.called
+    assert backend.failed.call_args.args[1] == "에이전트 실패"
+    assert _job(engine)["notified_at"] is not None
 
 
 def test_an_explain_failure_keeps_the_job_succeeded_and_marks_the_portfolio(
@@ -371,30 +445,15 @@ def test_an_explain_failure_keeps_the_job_succeeded_and_marks_the_portfolio(
     sqs, backend, log = _deps()
     settings = _settings()
     portfolio_id = _insert_portfolio(engine)
-    monkeypatch.setattr(
-        worker,
-        "run_agent",
-        Mock(
-            return_value=RunResult(
-                outcome="saved",
-                portfolio_id=portfolio_id,
-                turns=1,
-                usage={},
-                trace=[TraceEntry(turn=1, kind="model", text="생각")],
-            )
-        ),
-    )
-    monkeypatch.setattr(worker, "explain_and_save", Mock(side_effect=RuntimeError("rejected")))
+    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
+    monkeypatch.setattr(generation, "explain_and_save", Mock(side_effect=RuntimeError("rejected")))
     _patch_news(monkeypatch)
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
-    )
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
 
     with engine.connect() as conn:
         status = conn.execute(sa.text("SELECT status FROM portfolios")).scalar_one()
-        job = conn.execute(sa.text("SELECT status FROM competition_jobs")).scalar_one()
-    assert (status, job) == ("explanation_failed", "succeeded")
+    assert (status, _job(engine)["status"]) == ("explanation_failed", "succeeded")
     assert backend.completed.called
     assert sqs.delete_message.called
     failed = next(fields for e, _, fields in log.events if e == "explain_failed")
@@ -402,34 +461,66 @@ def test_an_explain_failure_keeps_the_job_succeeded_and_marks_the_portfolio(
     assert "rejected" in failed["error"]
 
 
-def test_a_notification_failure_leaves_the_message_for_redelivery(
+def test_a_failed_notification_does_not_cause_a_second_agent_run(
     engine, monkeypatch, _insert_portfolio
 ):
     sqs, backend, log = _deps()
     backend.completed.side_effect = RuntimeError("backend is down")
     settings = _settings()
     portfolio_id = _insert_portfolio(engine)
-    monkeypatch.setattr(
-        worker,
-        "run_agent",
-        Mock(
-            return_value=RunResult(
-                outcome="saved",
-                portfolio_id=portfolio_id,
-                turns=1,
-                usage={},
-                trace=[TraceEntry(turn=1, kind="model", text="생각")],
-            )
-        ),
-    )
-    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    run_agent_stub = Mock(return_value=_saved(portfolio_id))
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", _explains_and_marks_ready(engine))
+    _patch_news(monkeypatch)
+    model_factory = Mock(return_value=Mock())
+
+    _cycle(_message(_body()), sqs, engine, backend, model_factory, settings, log)
+    _cycle(_message(_body()), sqs, engine, backend, model_factory, settings, log)
+
+    assert run_agent_stub.call_count == 1
+    assert _count(engine, "competition_jobs") == 1
+    assert _job(engine)["notified_at"] is None
+
+
+def test_a_failed_notification_is_retried_by_the_notification_pass_alone(
+    engine, monkeypatch, _insert_portfolio
+):
+    sqs, backend, log = _deps()
+    backend.completed.side_effect = RuntimeError("backend is down")
+    settings = _settings()
+    portfolio_id = _insert_portfolio(engine)
+    run_agent_stub = Mock(return_value=_saved(portfolio_id))
+    monkeypatch.setattr(generation, "run_agent", run_agent_stub)
+    monkeypatch.setattr(generation, "explain_and_save", _explains_and_marks_ready(engine))
     _patch_news(monkeypatch)
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
-    )
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+    assert _job(engine)["notified_at"] is None
 
-    assert not sqs.delete_message.called
+    backend.completed.side_effect = None
+    notification.notify_finished_jobs(engine, backend, log)
+
+    assert run_agent_stub.call_count == 1
+    assert backend.completed.call_args.args[1] == portfolio_id
+    assert _job(engine)["notified_at"] is not None
+
+
+def test_an_already_notified_job_is_not_notified_again(engine, monkeypatch, _insert_portfolio):
+    sqs, backend, log = _deps()
+    settings = _settings()
+    portfolio_id = _insert_portfolio(engine)
+    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
+    monkeypatch.setattr(generation, "explain_and_save", _explains_and_marks_ready(engine))
+    _patch_news(monkeypatch)
+
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
+    stamped = _job(engine)["notified_at"]
+    assert stamped is not None
+
+    notification.notify_finished_jobs(engine, backend, log)
+
+    assert backend.completed.call_count == 1
+    assert _job(engine)["notified_at"] == stamped
 
 
 def test_classification_runs_once_at_creation_and_never_again(
@@ -438,33 +529,20 @@ def test_classification_runs_once_at_creation_and_never_again(
     sqs, backend, log = _deps()
     settings = _settings()
     classify_spy = Mock(return_value=({"relevant": False}, "v", True))
-    monkeypatch.setattr(worker, "_classify", classify_spy)
+    monkeypatch.setattr(intake, "_classify", classify_spy)
     portfolio_id = _insert_portfolio(engine)
-    monkeypatch.setattr(
-        worker,
-        "run_agent",
-        Mock(
-            return_value=RunResult(
-                outcome="saved",
-                portfolio_id=portfolio_id,
-                turns=1,
-                usage={},
-                trace=[TraceEntry(turn=1, kind="model", text="생각")],
-            )
-        ),
-    )
-    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
+    monkeypatch.setattr(generation, "explain_and_save", _explains_and_marks_ready(engine))
     _patch_news(monkeypatch)
+    model_factory = Mock(return_value=Mock())
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
-    )
-    worker.process_message(
+    _cycle(_message(_body()), sqs, engine, backend, model_factory, settings, log)
+    _cycle(
         _message(_body(_agent(additional_request="다른 원문"))),
         sqs,
         engine,
         backend,
-        Mock(return_value=Mock()),
+        model_factory,
         settings,
         log,
     )
@@ -514,7 +592,7 @@ def _theme_resolved():
 
 
 def test_classify_falls_back_to_a_safe_confidence_floor_when_unset(engine, monkeypatch):
-    monkeypatch.setattr(worker.jev, "ask", _ask_for_sector(0.6))
+    monkeypatch.setattr(intake.jev, "ask", _ask_for_sector(0.6))
     settings = _settings()
     assert settings.jev_choice_min_confidence is None
 
@@ -525,7 +603,7 @@ def test_classify_falls_back_to_a_safe_confidence_floor_when_unset(engine, monke
 
 
 def test_classify_uses_an_explicit_confidence_floor_when_set(engine, monkeypatch):
-    monkeypatch.setattr(worker.jev, "ask", _ask_for_sector(0.6))
+    monkeypatch.setattr(intake.jev, "ask", _ask_for_sector(0.6))
     settings = _settings(jev_choice_min_confidence=0.9)
 
     form, _, classified = REAL_CLASSIFY(engine, settings, Recorder(), _theme_resolved())
@@ -535,35 +613,21 @@ def test_classify_uses_an_explicit_confidence_floor_when_set(engine, monkeypatch
 
 
 def test_a_classification_failure_does_not_block_generation(engine, monkeypatch, _insert_portfolio):
-    monkeypatch.setattr(worker, "_classify", REAL_CLASSIFY)
+    monkeypatch.setattr(intake, "_classify", REAL_CLASSIFY)
 
     def raising_ask(base_uri, model, api_key, state, questions, timeout=20, client=None):
         raise RuntimeError("jev is down")
 
-    monkeypatch.setattr(worker.jev, "ask", raising_ask)
+    monkeypatch.setattr(intake.jev, "ask", raising_ask)
 
     sqs, backend, log = _deps()
     settings = _settings()
     portfolio_id = _insert_portfolio(engine)
-    monkeypatch.setattr(
-        worker,
-        "run_agent",
-        Mock(
-            return_value=RunResult(
-                outcome="saved",
-                portfolio_id=portfolio_id,
-                turns=1,
-                usage={},
-                trace=[TraceEntry(turn=1, kind="model", text="생각")],
-            )
-        ),
-    )
-    monkeypatch.setattr(worker, "explain_and_save", Mock(return_value=1))
+    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
+    monkeypatch.setattr(generation, "explain_and_save", Mock(return_value=1))
     _patch_news(monkeypatch)
 
-    worker.process_message(
-        _message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log
-    )
+    _cycle(_message(_body()), sqs, engine, backend, Mock(return_value=Mock()), settings, log)
 
     with engine.connect() as conn:
         participant = (
@@ -577,7 +641,6 @@ def test_a_classification_failure_does_not_block_generation(engine, monkeypatch,
             .mappings()
             .one()
         )
-        job_status = conn.execute(sa.text("SELECT status FROM competition_jobs")).scalar_one()
         linked_portfolio_id = conn.execute(
             sa.text("SELECT portfolio_id FROM competition_portfolios WHERE participant_id = :pid"),
             {"pid": AGENT["participant_id"]},
@@ -586,7 +649,7 @@ def test_a_classification_failure_does_not_block_generation(engine, monkeypatch,
     assert participant["canonical_form"] == AGENT["additional_request"]
     assert participant["canonical_version"] is None
     assert not participant["classified"]
-    assert job_status == "succeeded"
+    assert _job(engine)["status"] == "succeeded"
     assert linked_portfolio_id == portfolio_id
     assert backend.completed.called
     assert sqs.delete_message.called

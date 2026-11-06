@@ -10,7 +10,9 @@ from ktb_core.logging import get_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
 
 from portfolio_builder.competition.backend import Backend
-from portfolio_builder.competition.worker import process_message
+from portfolio_builder.competition.generation import generate_missing_portfolios
+from portfolio_builder.competition.intake import process_message
+from portfolio_builder.competition.notification import notify_finished_jobs
 from portfolio_builder.settings import Settings
 
 logger = get_logger(__name__)
@@ -68,11 +70,11 @@ def main() -> None:
                             {**message, "_queue_url": queue_url},
                             sqs,
                             engine,
-                            backend,
-                            model_factory,
                             settings,
                             logger,
                         )
+                    generate_missing_portfolios(engine, model_factory, settings, logger)
+                    notify_finished_jobs(engine, backend, logger)
                 except Exception as error:
                     logger.error("sqs_poll_failed", error_type=type(error).__name__)
                     time.sleep(1)

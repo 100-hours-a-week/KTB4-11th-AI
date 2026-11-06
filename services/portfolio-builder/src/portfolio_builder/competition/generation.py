@@ -1,30 +1,24 @@
 from collections.abc import Callable
-from functools import partial
-from typing import Any
 
 import sqlalchemy as sa
 from ktb_core.logging import StructuredLogger
 from langchain_core.language_models import BaseChatModel
-from pydantic import ValidationError
 
 from portfolio_builder.agent.run import RunResult, run_agent
 from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.briefing import load_briefing
-from portfolio_builder.competition import jev
-from portfolio_builder.competition.backend import Backend
-from portfolio_builder.competition.canonical import classify_additional_request
-from portfolio_builder.competition.message import Request
 from portfolio_builder.competition.repository import (
+    ParticipantSettings,
     claim_job,
+    clear_notified,
     fail_job,
     finish_job,
     generation_key,
     latest_participant_portfolio,
     link_portfolio,
-    store_settings,
+    participants_without_ready_portfolio,
 )
-from portfolio_builder.competition.themes import ResolvedAgent, UnresolvedTheme, resolve_agent
 from portfolio_builder.database import portfolios
 from portfolio_builder.explain import Explanations, explain_and_save
 from portfolio_builder.market import HttpMarket
@@ -37,17 +31,6 @@ from portfolio_builder.tools.submit import submit_tool
 from portfolio_builder.tools.technicals import technicals_tool
 
 ModelFactory = Callable[..., BaseChatModel]
-
-JEV_CHOICE_MIN_CONFIDENCE_FALLBACK = 0.5
-
-
-def _notify(log: StructuredLogger, notify: Callable[[], None]) -> bool:
-    try:
-        notify()
-        return True
-    except Exception as error:
-        log.error("notify_failed", error_type=type(error).__name__)
-        return False
 
 
 def _explain(
@@ -108,52 +91,13 @@ def _generate(
     )
 
 
-def _classify(
+def _generate_for(
+    participant: ParticipantSettings,
     engine: sa.Engine,
-    settings: Settings,
-    log: StructuredLogger,
-    resolved: ResolvedAgent,
-) -> tuple[Any, str | None, bool]:
-    ask = partial(
-        jev.ask,
-        settings.jev_base_uri,
-        settings.jev_model,
-        settings.llm_api_key,
-        timeout=settings.jev_timeout,
-    )
-    choice_min_confidence = settings.jev_choice_min_confidence
-    if choice_min_confidence is None:
-        choice_min_confidence = JEV_CHOICE_MIN_CONFIDENCE_FALLBACK
-    return classify_additional_request(
-        engine,
-        ask,
-        settings.jev_model,
-        settings.jev_noul_threshold,
-        choice_min_confidence,
-        resolved.additional_request,
-        resolved.interested_theme_names,
-        log,
-    )
-
-
-def _process_agent(
-    resolved: ResolvedAgent,
-    engine: sa.Engine,
-    backend: Backend,
     model_factory: ModelFactory,
     settings: Settings,
     log: StructuredLogger,
-) -> bool:
-    participant, differing_fields = store_settings(
-        engine, resolved, partial(_classify, engine, settings, log)
-    )
-    if differing_fields:
-        log.warning(
-            "settings_mismatch",
-            participant_id=participant.participant_id,
-            fields=differing_fields,
-        )
-
+) -> None:
     previous = latest_participant_portfolio(engine, participant.participant_id)
     previous_portfolio_id = previous[0] if previous is not None else None
 
@@ -166,7 +110,7 @@ def _process_agent(
                 ).scalar_one()
             trace = [TraceEntry.model_validate(entry) for entry in trace_rows]
             _explain(engine, model_factory, settings, log, portfolio_id, trace)
-            return _notify(log, lambda: backend.completed(participant, portfolio_id))
+            return
 
     key = generation_key(participant, previous_portfolio_id, settings.llm_model)
     claim = claim_job(
@@ -178,11 +122,12 @@ def _process_agent(
         settings.competition_max_attempts,
     )
     if claim is None:
-        return False
+        return
 
     if not claim.mine:
         link_portfolio(engine, participant.participant_id, claim.portfolio_id)
-        return _notify(log, lambda: backend.completed(participant, claim.portfolio_id))
+        clear_notified(engine, key)
+        return
 
     excluded = excluded_company_ids(engine, participant.excluded_theme_codes)
     log.info(
@@ -208,48 +153,19 @@ def _process_agent(
     if result.portfolio_id is None:
         error = result.error or f"agent ended with outcome {result.outcome}"
         fail_job(engine, key, error)
-        return _notify(log, lambda: backend.failed(participant, error))
+        return
 
     save_trace(engine, result.portfolio_id, result.trace)
     link_portfolio(engine, participant.participant_id, result.portfolio_id)
     finish_job(engine, key, result.portfolio_id)
     _explain(engine, model_factory, settings, log, result.portfolio_id, result.trace)
-    return _notify(log, lambda: backend.completed(participant, result.portfolio_id))
 
 
-def process_message(
-    message: dict[str, object],
-    sqs: Any,
+def generate_missing_portfolios(
     engine: sa.Engine,
-    backend: Backend,
     model_factory: ModelFactory,
     settings: Settings,
     log: StructuredLogger,
 ) -> None:
-    queue_url = str(message["_queue_url"])
-    receipt_handle = str(message["ReceiptHandle"])
-
-    try:
-        request = Request.model_validate_json(str(message["Body"]))
-    except ValidationError as error:
-        log.error("invalid_message", error_type=type(error).__name__)
-        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
-        return
-
-    try:
-        resolved_agents = [
-            resolve_agent(engine, request.competition_id, request.user_id, agent)
-            for agent in request.agents
-        ]
-    except UnresolvedTheme as error:
-        log.error("unresolved_theme", error_type=type(error).__name__, error=str(error))
-        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
-        return
-
-    all_notified = True
-    for resolved in resolved_agents:
-        if not _process_agent(resolved, engine, backend, model_factory, settings, log):
-            all_notified = False
-
-    if all_notified:
-        sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
+    for participant in participants_without_ready_portfolio(engine):
+        _generate_for(participant, engine, model_factory, settings, log)
