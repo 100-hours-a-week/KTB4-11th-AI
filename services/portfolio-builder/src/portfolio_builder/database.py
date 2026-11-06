@@ -197,6 +197,7 @@ competition_jobs = sa.Table(
         server_default=sa.text("now()"),
     ),
     sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint(
         "status IN ('running', 'succeeded', 'failed')",
         name="competition_jobs_status_check",
