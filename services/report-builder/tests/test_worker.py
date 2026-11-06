@@ -43,7 +43,6 @@ def dependencies(monkeypatch):
         {"competition_id": "bad"},
         {"participant_id": None},
         {"user_id": "bad"},
-        {"portfolio_reason_ids": []},
         {"portfolio_reason_ids": ["bad-uuid"]},
     ],
 )
@@ -84,6 +83,31 @@ def test_posts_report_and_deletes_after_success(dependencies):
         "56",
         json={"news": [{"title": "N", "summary": "S"}], "thoughts": [{"title": "T", "text": "X"}]},
     )
+    sqs.delete_message.assert_called_once_with(
+        QueueUrl="https://sqs.example/queue", ReceiptHandle="receipt"
+    )
+
+
+def test_a_participant_that_never_traded_still_gets_a_report():
+    auth = Mock()
+    auth.request.return_value = Mock(status_code=200)
+    sqs = Mock()
+
+    worker.process_message(
+        {
+            "Body": json.dumps({**MESSAGE, "portfolio_reason_ids": []}),
+            "ReceiptHandle": "receipt",
+            "_queue_url": "https://sqs.example/queue",
+        },
+        sqs,
+        auth,
+        Mock(),
+        Mock(),
+    )
+
+    posted = auth.request.call_args.kwargs["json"]
+    assert posted["news"] == []
+    assert posted["thoughts"]
     sqs.delete_message.assert_called_once_with(
         QueueUrl="https://sqs.example/queue", ReceiptHandle="receipt"
     )

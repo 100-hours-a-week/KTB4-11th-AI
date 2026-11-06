@@ -3,7 +3,14 @@ from uuid import UUID
 import pytest
 import sqlalchemy as sa
 from pydantic import ValidationError
-from report_builder.report import EvidenceError, build_report, load_evidence
+from report_builder.report import (
+    NO_TRADE_TEXT,
+    NO_TRADE_TITLE,
+    Evidence,
+    EvidenceError,
+    build_report,
+    load_evidence,
+)
 
 FIRST = UUID("00000000-0000-0000-0000-000000000001")
 SECOND = UUID("00000000-0000-0000-0000-000000000002")
@@ -90,9 +97,22 @@ def test_missing_cited_summary_fails():
         load_evidence(Engine([reason(FIRST, "comment", [9])], []), [FIRST], PARTICIPANT_1)
 
 
-def test_empty_reason_selection_fails():
-    with pytest.raises(EvidenceError, match="at least one"):
-        load_evidence(Engine([], []), [], PARTICIPANT_1)
+def test_an_empty_reason_selection_loads_empty_evidence_without_querying():
+    evidence = load_evidence(Engine([], []), [], PARTICIPANT_1)
+
+    assert evidence.reasons == []
+    assert evidence.news == []
+
+
+def test_an_empty_evidence_set_reports_that_nothing_was_traded_without_calling_the_model():
+    class Unreachable:
+        def invoke(self, messages):
+            raise AssertionError("an empty evidence set must not call the model")
+
+    report = build_report(Evidence(reasons=[], news=[]), Unreachable())
+
+    assert [thought.title for thought in report.thoughts] == [NO_TRADE_TITLE]
+    assert report.thoughts[0].text == NO_TRADE_TEXT
 
 
 def _insert_portfolio(engine, commentary="c"):
@@ -215,8 +235,11 @@ def test_build_report_keeps_reason_commentary_pairs_and_supplied_news():
 
 @pytest.mark.parametrize("answer", [{"thoughts": []}, {"thoughts": [{"title": "", "text": "x"}]}])
 def test_malformed_or_empty_thoughts_fail(answer):
-    from report_builder.report import Evidence
-
-    evidence = Evidence(reasons=[], news=[])
+    evidence = Evidence.model_validate(
+        {
+            "reasons": [{"id": str(FIRST), "reason": "R1", "reasonings": [], "commentary": "C1"}],
+            "news": [],
+        }
+    )
     with pytest.raises((ValidationError, ValueError)):
         build_report(evidence, StubRunnable(answer))

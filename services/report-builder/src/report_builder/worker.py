@@ -16,7 +16,7 @@ class Request(BaseModel):
     competition_id: Annotated[StrictInt, Field(gt=0)]
     participant_id: Annotated[StrictInt, Field(gt=0)]
     user_id: Annotated[StrictInt, Field(gt=0)]
-    portfolio_reason_ids: list[UUID] = Field(min_length=1)
+    portfolio_reason_ids: list[UUID]
 
 
 def process_message(
