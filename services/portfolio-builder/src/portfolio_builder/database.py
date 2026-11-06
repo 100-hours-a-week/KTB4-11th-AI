@@ -162,7 +162,6 @@ competition_portfolios = sa.Table(
         nullable=False,
         server_default=sa.text("now()"),
     ),
-    sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     sa.Index("competition_portfolios_portfolio_id_idx", "portfolio_id"),
 )
 
@@ -198,12 +197,29 @@ competition_jobs = sa.Table(
         server_default=sa.text("now()"),
     ),
     sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
-    sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     sa.CheckConstraint(
         "status IN ('running', 'succeeded', 'failed')",
         name="competition_jobs_status_check",
     ),
     sa.Index("competition_jobs_participant_id_idx", "participant_id"),
+)
+
+competition_notifications = sa.Table(
+    "competition_notifications",
+    metadata,
+    sa.Column(
+        "participant_id",
+        sa.BigInteger,
+        sa.ForeignKey("competition_participants.participant_id"),
+        primary_key=True,
+    ),
+    sa.Column(
+        "generation_key",
+        sa.Text,
+        sa.ForeignKey("competition_jobs.generation_key"),
+        primary_key=True,
+    ),
+    sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
 )
 
 

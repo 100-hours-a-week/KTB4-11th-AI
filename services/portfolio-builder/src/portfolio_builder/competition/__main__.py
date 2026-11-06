@@ -74,7 +74,7 @@ def main() -> None:
                             logger,
                         )
                     generate_missing_portfolios(engine, model_factory, settings, logger)
-                    notify_finished_jobs(engine, backend, logger)
+                    notify_finished_jobs(engine, backend, logger, settings.competition_max_attempts)
                 except Exception as error:
                     logger.error("sqs_poll_failed", error_type=type(error).__name__)
                     time.sleep(1)

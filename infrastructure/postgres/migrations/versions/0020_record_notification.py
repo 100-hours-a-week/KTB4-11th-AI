@@ -1,4 +1,4 @@
-"""record notification on the participant link, and on the job for a failed generation
+"""record each participant's notification of a generation outcome
 
 Revision ID: 0020
 Revises: 0019
@@ -15,16 +15,23 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "competition_portfolios",
-        sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
-    )
-    op.add_column(
-        "competition_jobs",
+    op.create_table(
+        "competition_notifications",
+        sa.Column(
+            "participant_id",
+            sa.BigInteger,
+            sa.ForeignKey("competition_participants.participant_id"),
+            primary_key=True,
+        ),
+        sa.Column(
+            "generation_key",
+            sa.Text,
+            sa.ForeignKey("competition_jobs.generation_key"),
+            primary_key=True,
+        ),
         sa.Column("notified_at", sa.DateTime(timezone=True), nullable=True),
     )
 
 
 def downgrade() -> None:
-    op.drop_column("competition_jobs", "notified_at")
-    op.drop_column("competition_portfolios", "notified_at")
+    op.drop_table("competition_notifications")

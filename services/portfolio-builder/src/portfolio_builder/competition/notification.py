@@ -5,8 +5,10 @@ from portfolio_builder.competition.backend import Backend
 from portfolio_builder.competition.repository import mark_notified, unnotified_notifications
 
 
-def notify_finished_jobs(engine: sa.Engine, backend: Backend, log: StructuredLogger) -> None:
-    for notification in unnotified_notifications(engine):
+def notify_finished_jobs(
+    engine: sa.Engine, backend: Backend, log: StructuredLogger, max_attempts: int
+) -> None:
+    for notification in unnotified_notifications(engine, max_attempts):
         try:
             if notification.portfolio_id is not None:
                 backend.completed(notification.participant, notification.portfolio_id)

@@ -5,7 +5,8 @@ from portfolio_builder.competition.themes import ResolvedAgent
 from portfolio_builder.database import portfolios
 
 TABLES = (
-    "competition_jobs, competition_portfolios, competition_participants,"
+    "competition_notifications, competition_jobs, competition_portfolios,"
+    " competition_participants,"
     " portfolio_reasons, portfolio_exits, portfolio_holdings, portfolios, relations,"
     " cluster_entities, entities, cluster_summaries, article_clusters, clusters, articles,"
     " theme_corporations, themes, corporation_indices, corporation_aliases, corporations"
