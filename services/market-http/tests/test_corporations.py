@@ -27,7 +27,7 @@ def test_limits_query_uses_latest_valid_snapshot_and_binds_symbols(monkeypatch):
 
     monkeypatch.setattr(corporations.questdb, "connect", lambda conf: nullcontext(DB()))
 
-    assert corporations.current_day_price_limits("conf", ["005930"]) == {
+    assert corporations.latest_price_limits("conf", ["005930"]) == {
         "005930": {"upper_limit_price": 104000, "lower_limit_price": 56000}
     }
     assert "upper_limit_price IS NOT NULL AND lower_limit_price IS NOT NULL" in queries[0][0]
