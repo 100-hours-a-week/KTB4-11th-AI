@@ -21,7 +21,7 @@ dependencies = [
 
 [project.scripts]
 portfolio-builder = "portfolio_builder.__main__:main"
-portfolio-builder-worker = "portfolio_builder.competition.__main__:main"
+portfolio-builder-worker = "portfolio_builder.participants.__main__:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }

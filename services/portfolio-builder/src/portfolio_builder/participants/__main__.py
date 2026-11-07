@@ -5,7 +5,7 @@ import sqlalchemy as sa
 from ktb_core.logging import get_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
 
-from portfolio_builder.competition.generation import generate_missing_portfolios
+from portfolio_builder.participants.generation import generate_missing_portfolios
 from portfolio_builder.settings import Settings
 
 logger = get_logger(__name__)

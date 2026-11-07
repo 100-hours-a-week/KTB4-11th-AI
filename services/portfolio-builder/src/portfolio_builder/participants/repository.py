@@ -9,13 +9,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from portfolio_builder.briefing.dto import PreviousPortfolio
 from portfolio_builder.briefing.repository import load_previous_portfolio
-from portfolio_builder.competition.database import (
+from portfolio_builder.database import portfolios
+from portfolio_builder.participants.database import (
     competition_attempts,
     competition_jobs,
     competition_participants,
     competition_portfolios,
 )
-from portfolio_builder.database import portfolios
 
 
 @dataclass(frozen=True)

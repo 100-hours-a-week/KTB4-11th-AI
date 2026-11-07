@@ -8,9 +8,13 @@ from langchain_core.language_models import BaseChatModel
 from portfolio_builder.agent.run import RunResult, run_agent
 from portfolio_builder.agent.system_prompt import DISCLOSURE_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.competition.briefing import load_briefing
-from portfolio_builder.competition.portfolio import excluded_company_ids
-from portfolio_builder.competition.repository import (
+from portfolio_builder.database import portfolios
+from portfolio_builder.explain import Explanations, explain_and_save
+from portfolio_builder.market import HttpMarket
+from portfolio_builder.news_client import NewsClient
+from portfolio_builder.participants.briefing import load_briefing
+from portfolio_builder.participants.portfolio import excluded_company_ids
+from portfolio_builder.participants.repository import (
     ParticipantSettings,
     claim_job,
     fail_job,
@@ -20,12 +24,8 @@ from portfolio_builder.competition.repository import (
     link_portfolio,
     participants_without_ready_portfolio,
 )
-from portfolio_builder.competition.submit import submit_tool
-from portfolio_builder.competition.system_prompt import COMPETITION_SYSTEM_PROMPT
-from portfolio_builder.database import portfolios
-from portfolio_builder.explain import Explanations, explain_and_save
-from portfolio_builder.market import HttpMarket
-from portfolio_builder.news_client import NewsClient
+from portfolio_builder.participants.submit import submit_tool
+from portfolio_builder.participants.system_prompt import COMPETITION_SYSTEM_PROMPT
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
 from portfolio_builder.settings import Settings
 from portfolio_builder.tools.disclosure.tool import disclosure_tools

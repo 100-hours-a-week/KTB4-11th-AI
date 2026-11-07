@@ -1,8 +1,8 @@
 import pytest
 import sqlalchemy as sa
 from competition.themes import ResolvedAgent
-from portfolio_builder.competition.repository import ParticipantSettings
 from portfolio_builder.database import portfolios
+from portfolio_builder.participants.repository import ParticipantSettings
 
 TABLES = (
     "competition_attempts, competition_jobs, competition_portfolios,"

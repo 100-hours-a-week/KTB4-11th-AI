@@ -8,8 +8,8 @@ def test_common_submission_has_no_participant_constraints():
 
 
 def test_competition_submission_exposes_its_own_constraints():
-    from portfolio_builder.competition.portfolio import CompetitionSubmission
-    from portfolio_builder.competition.submit import CompetitionSubmitArgs
+    from portfolio_builder.participants.portfolio import CompetitionSubmission
+    from portfolio_builder.participants.submit import CompetitionSubmitArgs
 
     assert "constraints" in CompetitionSubmission.model_fields
     assert "constraints" in CompetitionSubmitArgs.model_fields

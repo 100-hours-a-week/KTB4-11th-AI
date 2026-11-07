@@ -120,7 +120,7 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
             },
         ),
         (
-            "portfolio_builder.competition.database",
+            "portfolio_builder.participants.database",
             {
                 "competition_participants",
                 "competition_jobs",

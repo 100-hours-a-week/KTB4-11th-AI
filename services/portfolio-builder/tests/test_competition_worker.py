@@ -13,15 +13,15 @@ from ktb_aws.sqs import Message
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.system_prompt import DISCLOSURE_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.competition import generation, repository
-from portfolio_builder.competition.repository import (
+from portfolio_builder.participants import generation, repository
+from portfolio_builder.participants.repository import (
     claim_job,
     fail_job,
     generation_key,
     latest_participant_portfolio,
     link_portfolio,
 )
-from portfolio_builder.competition.system_prompt import COMPETITION_SYSTEM_PROMPT
+from portfolio_builder.participants.system_prompt import COMPETITION_SYSTEM_PROMPT
 from portfolio_builder.settings import Settings
 
 AGENT = {

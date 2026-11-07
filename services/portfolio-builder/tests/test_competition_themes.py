@@ -3,10 +3,10 @@ import sqlalchemy as sa
 from competition.message import AgentSettings
 from competition.repository import store_settings
 from competition.themes import resolve_agent
-from portfolio_builder.competition.portfolio import excluded_company_ids
-from portfolio_builder.competition.repository import generation_key
-from portfolio_builder.competition.submit import submit_tool
 from portfolio_builder.errors import PortfolioRejected
+from portfolio_builder.participants.portfolio import excluded_company_ids
+from portfolio_builder.participants.repository import generation_key
+from portfolio_builder.participants.submit import submit_tool
 
 LGES = "01515323"
 

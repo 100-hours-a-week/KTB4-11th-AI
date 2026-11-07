@@ -3,8 +3,8 @@ import threading
 import pytest
 import sqlalchemy as sa
 from competition.repository import store_settings
-from portfolio_builder.competition.database import competition_jobs
-from portfolio_builder.competition.repository import (
+from portfolio_builder.participants.database import competition_jobs
+from portfolio_builder.participants.repository import (
     claim_job,
     fail_job,
     find_participant_portfolio,

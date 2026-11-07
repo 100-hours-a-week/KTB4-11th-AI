@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
-from portfolio_builder.competition import __main__ as entry
+from portfolio_builder.participants import __main__ as entry
 
 
 def test_worker_generates_from_database_without_queue_settings(monkeypatch):

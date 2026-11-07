@@ -5,12 +5,12 @@ import pytest
 from competition.repository import store_settings
 from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
 from portfolio_builder.briefing import load_briefing as render_briefing
-from portfolio_builder.competition.briefing import load_briefing as participant_briefing
-from portfolio_builder.competition.repository import (
+from portfolio_builder.participants.briefing import load_briefing as participant_briefing
+from portfolio_builder.participants.repository import (
     generation_key,
     link_portfolio,
 )
-from portfolio_builder.competition.system_prompt import COMPETITION_SYSTEM_PROMPT
+from portfolio_builder.participants.system_prompt import COMPETITION_SYSTEM_PROMPT
 from portfolio_builder.portfolio import Exit, Holding, Submission, save_portfolio
 from portfolio_builder.scheduled import repository as service
 

@@ -7,13 +7,13 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import Command
 from pydantic import Field
 
-from portfolio_builder.competition.portfolio import (
+from portfolio_builder.news_client import NewsClient
+from portfolio_builder.participants.portfolio import (
     CompetitionSubmission,
     Constraints,
     save_portfolio,
     validate_portfolio,
 )
-from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import Exit, Holding
 from portfolio_builder.tools.binding import bind
 from portfolio_builder.tools.submit import SubmitPortfolioArgs, commit_submission
