@@ -22,8 +22,7 @@ uv sync --all-packages --locked --group migrations
 uv run ruff check .
 uv run ruff format --check .
 uv run tach check
-uv run tach check-external -e services,packages/aws
-uv run deptry packages/aws/src --config packages/aws/pyproject.toml
+uv run tach check-external -e services
 uv run pytest
 uv run pytest services/news-clusterer
 ```

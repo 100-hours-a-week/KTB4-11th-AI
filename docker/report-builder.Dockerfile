@@ -14,7 +14,7 @@ COPY pyproject.toml ./
 COPY packages/aws packages/aws
 COPY packages/core packages/core
 COPY services/report-builder services/report-builder
-RUN uv pip install --no-deps "./packages/aws[sqs]" ./packages/core ./services/report-builder
+RUN uv pip install --no-deps ./packages/aws ./packages/core ./services/report-builder
 
 FROM python:3.14-slim-bookworm AS runtime
 

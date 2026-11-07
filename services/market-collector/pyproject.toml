@@ -5,7 +5,7 @@ description = "Kiwoom OHLCV and theme ingestion into QuestDB"
 requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
-    "ktb-aws[redis]",
+    "ktb-aws",
     "pydantic>=2.9",
     "pydantic-settings>=2.7",
     "kwcli",

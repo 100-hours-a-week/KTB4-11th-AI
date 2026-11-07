@@ -14,7 +14,7 @@ COPY pyproject.toml ./
 COPY packages packages
 COPY services services
 RUN uv pip install --no-deps \
-    "./packages/aws[redis,sqs]" \
+    ./packages/aws \
     ./packages/core \
     ./packages/telemetry \
     ./services/disclosure-indexer \

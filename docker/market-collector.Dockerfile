@@ -14,7 +14,7 @@ COPY pyproject.toml ./
 COPY packages/aws packages/aws
 COPY packages/core packages/core
 COPY services/market-collector services/market-collector
-RUN uv pip install --no-deps "./packages/aws[redis]" ./packages/core ./services/market-collector
+RUN uv pip install --no-deps ./packages/aws ./packages/core ./services/market-collector
 
 FROM python:3.14-slim-bookworm AS runtime
 

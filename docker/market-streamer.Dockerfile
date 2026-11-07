@@ -15,7 +15,7 @@ COPY packages/aws packages/aws
 COPY packages/core packages/core
 COPY packages/telemetry packages/telemetry
 COPY services/market-streamer services/market-streamer
-RUN uv pip install --no-deps "./packages/aws[redis]" ./packages/core ./packages/telemetry ./services/market-streamer
+RUN uv pip install --no-deps ./packages/aws ./packages/core ./packages/telemetry ./services/market-streamer
 
 FROM python:3.14-slim-bookworm AS runtime
 

@@ -164,8 +164,7 @@ jobs:
       - name: Check core has no external dependencies
         run: |
           uv run python -c 'import pathlib, tomllib; assert not tomllib.loads(pathlib.Path("packages/core/pyproject.toml").read_text())["project"]["dependencies"]'
-          uv run tach check-external -e services,packages/aws
-          uv run deptry packages/aws/src --config packages/aws/pyproject.toml
+          uv run tach check-external -e services
 
       - name: Check report-builder isolated import
         if: contains(fromJSON(needs.detect-changes.outputs.services), 'report-builder')
