@@ -2,6 +2,7 @@ import json
 from unittest.mock import Mock
 
 import pytest
+from ktb_aws.sqs import Message
 from report_builder import report, worker
 from report_builder.report import Evidence, Report, Thought
 
@@ -11,6 +12,10 @@ MESSAGE = {
     "user_id": 56,
     "portfolio_reason_ids": ["00000000-0000-0000-0000-000000000001"],
 }
+
+
+def _message(body):
+    return Message("mid", json.dumps(body), "receipt")
 
 
 @pytest.fixture
@@ -43,40 +48,31 @@ def dependencies(monkeypatch):
         {"competition_id": "bad"},
         {"participant_id": None},
         {"user_id": "bad"},
-        {"portfolio_reason_ids": []},
         {"portfolio_reason_ids": ["bad-uuid"]},
     ],
 )
 def test_invalid_message_is_not_deleted(changes, dependencies):
     auth, engine, structured = dependencies
-    sqs = Mock()
+    queue = Mock()
 
     worker.process_message(
-        {
-            "Body": json.dumps({**MESSAGE, **changes}),
-            "ReceiptHandle": "receipt",
-            "_queue_url": "https://sqs.example/queue",
-        },
-        sqs,
+        _message({**MESSAGE, **changes}),
+        queue,
         auth,
         engine,
         structured,
     )
 
-    sqs.delete_message.assert_not_called()
+    queue.delete.assert_not_called()
     auth.request.assert_not_called()
 
 
 def test_posts_report_and_deletes_after_success(dependencies):
     auth, engine, structured = dependencies
-    sqs = Mock()
-    message = {
-        "Body": json.dumps(MESSAGE),
-        "ReceiptHandle": "receipt",
-        "_queue_url": "https://sqs.example/queue",
-    }
+    queue = Mock()
+    message = _message(MESSAGE)
 
-    worker.process_message(message, sqs, auth, engine, structured)
+    worker.process_message(message, queue, auth, engine, structured)
 
     auth.request.assert_called_once_with(
         "POST",
@@ -84,15 +80,32 @@ def test_posts_report_and_deletes_after_success(dependencies):
         "56",
         json={"news": [{"title": "N", "summary": "S"}], "thoughts": [{"title": "T", "text": "X"}]},
     )
-    sqs.delete_message.assert_called_once_with(
-        QueueUrl="https://sqs.example/queue", ReceiptHandle="receipt"
+    queue.delete.assert_called_once_with("receipt")
+
+
+def test_a_participant_that_never_traded_still_gets_a_report():
+    auth = Mock()
+    auth.request.return_value = Mock(status_code=200)
+    queue = Mock()
+
+    worker.process_message(
+        _message({**MESSAGE, "portfolio_reason_ids": []}),
+        queue,
+        auth,
+        Mock(),
+        Mock(),
     )
+
+    posted = auth.request.call_args.kwargs["json"]
+    assert posted["news"] == []
+    assert posted["thoughts"]
+    queue.delete.assert_called_once_with("receipt")
 
 
 @pytest.mark.parametrize("failure", ["query", "llm", "callback"])
 def test_processing_failures_do_not_delete(failure, dependencies):
     auth, engine, structured = dependencies
-    sqs = Mock()
+    queue = Mock()
     if failure == "query":
         worker.load_evidence.side_effect = RuntimeError("query")
     elif failure == "llm":
@@ -101,33 +114,25 @@ def test_processing_failures_do_not_delete(failure, dependencies):
         auth.request.side_effect = RuntimeError("callback")
 
     worker.process_message(
-        {
-            "Body": json.dumps(MESSAGE),
-            "ReceiptHandle": "receipt",
-            "_queue_url": "https://sqs.example/queue",
-        },
-        sqs,
+        _message(MESSAGE),
+        queue,
         auth,
         engine,
         structured,
     )
 
-    sqs.delete_message.assert_not_called()
+    queue.delete.assert_not_called()
 
 
 def test_delete_failure_propagates(dependencies):
     auth, engine, structured = dependencies
-    sqs = Mock()
-    sqs.delete_message.side_effect = RuntimeError("delete")
+    queue = Mock()
+    queue.delete.side_effect = RuntimeError("delete")
 
     with pytest.raises(RuntimeError, match="delete"):
         worker.process_message(
-            {
-                "Body": json.dumps(MESSAGE),
-                "ReceiptHandle": "receipt",
-                "_queue_url": "https://sqs.example/queue",
-            },
-            sqs,
+            _message(MESSAGE),
+            queue,
             auth,
             engine,
             structured,

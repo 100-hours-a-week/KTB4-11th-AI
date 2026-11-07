@@ -3,17 +3,9 @@ import sqlalchemy as sa
 from portfolio_builder.briefing.dto import PreviousPortfolio
 
 
-def find_previous_portfolio(conn: sa.Connection) -> PreviousPortfolio | None:
-    portfolio = (
-        conn.execute(
-            sa.text(
-                "SELECT id, created_at, cash_weight, commentary FROM portfolios"
-                " ORDER BY created_at DESC, id DESC LIMIT 1"
-            )
-        )
-        .mappings()
-        .first()
-    )
+def load_previous_portfolio(
+    conn: sa.Connection, portfolio: sa.RowMapping | None
+) -> PreviousPortfolio | None:
     if portfolio is None:
         return None
     holdings = conn.execute(

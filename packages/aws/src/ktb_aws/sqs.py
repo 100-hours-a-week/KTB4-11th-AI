@@ -12,7 +12,7 @@ class Message:
 class Queue(Protocol):
     def send(self, body: str, *, group: str, dedup: str) -> str: ...
 
-    def receive(self, *, limit: int = 10, wait: int = 20) -> list[Message]: ...
+    def receive(self, *, visibility: int, limit: int = 1, wait: int = 20) -> list[Message]: ...
 
     def delete(self, receipt: str) -> None: ...
 
@@ -31,11 +31,12 @@ class SqsQueue:
         )
         return response["MessageId"]
 
-    def receive(self, *, limit: int = 10, wait: int = 20) -> list[Message]:
+    def receive(self, *, visibility: int, limit: int = 1, wait: int = 20) -> list[Message]:
         response = self._client.receive_message(
             QueueUrl=self._url,
             MaxNumberOfMessages=limit,
             WaitTimeSeconds=wait,
+            VisibilityTimeout=visibility,
         )
         return [
             Message(message["MessageId"], message["Body"], message["ReceiptHandle"])

@@ -14,6 +14,7 @@ source_roots = [
     "services/news-http/src",
     "services/portfolio-builder/src",
     "services/portfolio-rebalancer/src",
+    "services/report-builder/src",
 ]
 root_module = "forbid"
 
@@ -112,5 +113,21 @@ path = "market_streamer"
 depends_on = ["ktb_aws", "ktb_core", "ktb_telemetry"]
 
 [[modules]]
+path = "report_builder"
+depends_on = ["ktb_aws", "ktb_core"]
+
+[[modules]]
 path = "market_http"
 depends_on = ["ktb_aws", "ktb_core", "ktb_telemetry"]
+
+[[modules]]
+path = "portfolio_builder.competition"
+depends_on = ["portfolio_builder", "ktb_core", "ktb_aws", "disclosure_retrieval"]
+
+[[modules]]
+path = "portfolio_builder.scheduled"
+depends_on = ["portfolio_builder"]
+
+[[modules]]
+path = "portfolio_builder.__main__"
+depends_on = ["portfolio_builder", "portfolio_builder.scheduled", "portfolio_builder.competition", "ktb_core", "disclosure_retrieval"]

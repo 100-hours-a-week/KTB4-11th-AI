@@ -20,6 +20,7 @@ botocore==1.43.109 \
     --hash=sha256:cd00edff465264fb448e36acc9ee29a828f738fff3746270b3f685a19194a5a6
     # via
     #   boto3
+    #   ktb-aws
     #   s3transfer
 certifi==2026.10.19 \
     --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
@@ -334,6 +335,10 @@ pyyaml==6.0.3 \
     --hash=sha256:d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f \
     --hash=sha256:ebc55a14a21cb14062aa4162f906cd962b28e2e9ea38f9b4391244cd8de4ae0b
     # via langchain-core
+redis==8.1.0 \
+    --hash=sha256:6e1a19beef9225c83efd689c7e6b7da2d5215b1f42cd13b7fc3714d0a09c7b25 \
+    --hash=sha256:a4fe1aac3d3b3cc791d4b3d5931c5a956045dc951ee74d1c913ee3ac4d2ee9fb
+    # via ktb-aws
 requests==2.34.2 \
     --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0 \
     --hash=sha256:f288924cae4e29463698d6d60bc6a4da69c89185ad1e0bcc4104f584e960b9ed

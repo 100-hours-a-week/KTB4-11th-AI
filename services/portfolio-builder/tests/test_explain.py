@@ -1,20 +1,23 @@
 import json
+from unittest.mock import Mock
 
 import pytest
 import sqlalchemy as sa
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableLambda
 from portfolio_builder.agent.trace import TraceEntry
+from portfolio_builder.competition.repository import link_portfolio, store_settings
 from portfolio_builder.explain import (
     ExplanationRejected,
     Explanations,
     Target,
     explain,
+    explain_and_save,
     load_targets,
-    load_unexplained,
     save_explanations,
 )
 from portfolio_builder.portfolio import mark_explanation_failed
+from portfolio_builder.scheduled.repository import load_unexplained
 from pydantic import ValidationError
 
 SAMSUNG = "00126380"
@@ -34,6 +37,7 @@ VALID = {
     ]
 }
 TRACE = [TraceEntry(turn=1, kind="tool", name="search_news_cluster", args={}, result="x" * 50)]
+TRACE_ROW = [{"turn": 1, "kind": "model"}]
 
 
 def _validate(raw):
@@ -273,3 +277,76 @@ def test_a_portfolio_without_a_trace_is_not_retried(engine):
     _insert(engine, None)
 
     assert load_unexplained(engine) is None
+
+
+def test_load_unexplained_ignores_a_competition_portfolio(engine, _request, _insert_portfolio):
+    store_settings(engine, _request())
+    competition = _insert_portfolio(engine, status="explanation_failed", trace=TRACE_ROW)
+    link_portfolio(engine, 1, competition)
+
+    assert load_unexplained(engine) is None
+
+
+def test_load_unexplained_still_finds_a_common_portfolio(engine, _request, _insert_portfolio):
+    store_settings(engine, _request())
+    common = _insert_portfolio(engine, status="explanation_failed", trace=TRACE_ROW)
+    linked = _insert_portfolio(engine, status="explanation_failed", trace=TRACE_ROW)
+    link_portfolio(engine, 1, linked)
+
+    portfolio_id, _ = load_unexplained(engine)
+
+    assert portfolio_id == common
+
+
+def _portfolio_with_one_holding(engine):
+    with engine.begin() as conn:
+        portfolio_id = conn.execute(
+            sa.text(
+                "INSERT INTO portfolios (cash_weight, commentary, model)"
+                " VALUES (0.4, 'c', 'm') RETURNING id"
+            )
+        ).scalar_one()
+        conn.execute(
+            sa.text(
+                "INSERT INTO portfolio_holdings (portfolio_id, company_id, weight)"
+                " VALUES (:p, :c, 0.6)"
+            ),
+            {"p": portfolio_id, "c": SAMSUNG},
+        )
+    return portfolio_id
+
+
+def _stub_explainer_for(engine, portfolio_id):
+    targets = load_targets(engine, portfolio_id)
+    raw = {"stocks": [{"company_id": t.company_id, "buy": SIDE, "sell": SIDE} for t in targets]}
+    structured, _ = _scripted(_ok(raw))
+    return structured
+
+
+def test_explain_and_save_writes_a_reason_per_side_and_returns_the_stock_count(engine):
+    portfolio_id = _portfolio_with_one_holding(engine)
+    explainer = _stub_explainer_for(engine, portfolio_id)
+
+    stocks = explain_and_save(engine, explainer, portfolio_id, [], 2000)
+
+    with engine.connect() as conn:
+        sides = (
+            conn.execute(
+                sa.text(
+                    "SELECT side FROM portfolio_reasons WHERE portfolio_id = :id ORDER BY side"
+                ),
+                {"id": portfolio_id},
+            )
+            .scalars()
+            .all()
+        )
+    assert stocks == 1
+    assert sides == ["buy", "sell"]
+
+
+def test_explain_and_save_propagates_a_failure(engine):
+    portfolio_id = _portfolio_with_one_holding(engine)
+    failing = Mock(invoke=Mock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError):
+        explain_and_save(engine, failing, portfolio_id, [], 2000)

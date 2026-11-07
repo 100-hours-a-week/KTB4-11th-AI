@@ -44,10 +44,10 @@ def structured_generator(model: str, api_key: str, timeout: float) -> Runnable:
     ).with_structured_output(Thoughts)
 
 
-def load_evidence(engine: sa.Engine, reason_ids: list[UUID]) -> Evidence:
+def load_evidence(engine: sa.Engine, reason_ids: list[UUID], participant_id: int) -> Evidence:
     ids = list(dict.fromkeys(reason_ids))
     if not ids:
-        raise EvidenceError("at least one portfolio reason is required")
+        return Evidence(reasons=[], news=[])
     reason_query = sa.text(
         "SELECT r.id, r.reason, r.reasonings, p.commentary,"
         " COALESCE(h.cited_cluster_ids, e.cited_cluster_ids, '{}') AS cited_cluster_ids"
@@ -57,10 +57,22 @@ def load_evidence(engine: sa.Engine, reason_ids: list[UUID]) -> Evidence:
         " ON h.portfolio_id = r.portfolio_id AND h.company_id = r.company_id"
         " LEFT JOIN portfolio_exits e"
         " ON e.portfolio_id = r.portfolio_id AND e.company_id = r.company_id"
-        " WHERE r.id IN :reason_ids ORDER BY r.id"
+        " WHERE r.id IN :reason_ids"
+        " AND ("
+        "  NOT EXISTS (SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = p.id)"
+        "  OR EXISTS ("
+        "   SELECT 1 FROM competition_portfolios cp"
+        "   WHERE cp.portfolio_id = p.id AND cp.participant_id = :participant_id"
+        "  )"
+        " )"
+        " ORDER BY r.id"
     ).bindparams(sa.bindparam("reason_ids", expanding=True))
     with engine.connect() as conn:
-        rows = conn.execute(reason_query, {"reason_ids": ids}).mappings().all()
+        rows = (
+            conn.execute(reason_query, {"reason_ids": ids, "participant_id": participant_id})
+            .mappings()
+            .all()
+        )
         found = {row["id"] for row in rows}
         missing = set(ids) - found
         if missing:
@@ -104,6 +116,10 @@ def load_evidence(engine: sa.Engine, reason_ids: list[UUID]) -> Evidence:
     return Evidence(reasons=reasons, news=news)
 
 
+NO_TRADE_TITLE = "거래 없음"
+
+NO_TRADE_TEXT = "이 참가자는 매매를 하지 않아 설명할 투자 이유가 없습니다."
+
 REPORT_PROMPT = (
     "선택된 투자 이유와 그 이유가 속한 포트폴리오 코멘터리를 읽고,"
     " 근거에 기반한 한국어 thoughts를 작성하세요."
@@ -113,6 +129,11 @@ REPORT_PROMPT = (
 
 
 def build_report(evidence: Evidence, structured: Runnable) -> Report:
+    if not evidence.reasons:
+        return Report(
+            news=evidence.news,
+            thoughts=[Thought(title=NO_TRADE_TITLE, text=NO_TRADE_TEXT)],
+        )
     prompt_data = [
         {
             "reason": reason.reason,

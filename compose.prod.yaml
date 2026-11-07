@@ -441,6 +441,27 @@ services:
       PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
       PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
       PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+      PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED: ${PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED:-false}
+      PORTFOLIO_BUILDER_BACKEND_BASE_URI: ${PORTFOLIO_BUILDER_BACKEND_BASE_URI:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_SECRET: ${PORTFOLIO_BUILDER_BACKEND_JWT_SECRET:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER: ${PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      news-http:
+        condition: service_started
+
+  competition-portfolio-builder:
+    <<: *app
+    profiles: ["competition"]
+    command: ["competition-portfolio-builder"]
+    env_file: /etc/stockspoon/ai.env
+    mem_limit: 768m
+    restart: unless-stopped
+    environment:
+      <<: *postgres-environment
+      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:?PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI must be set}
+      PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI:-http://news-http:8000}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,7 +1,8 @@
-from typing import Annotated, Any
+from typing import Annotated
 from uuid import UUID
 
 import sqlalchemy as sa
+from ktb_aws.sqs import Message, Queue
 from ktb_core.backend_auth import BackendAuth
 from ktb_core.logging import get_logger
 from langchain_core.runnables import Runnable
@@ -16,22 +17,19 @@ class Request(BaseModel):
     competition_id: Annotated[StrictInt, Field(gt=0)]
     participant_id: Annotated[StrictInt, Field(gt=0)]
     user_id: Annotated[StrictInt, Field(gt=0)]
-    portfolio_reason_ids: list[UUID] = Field(min_length=1)
+    portfolio_reason_ids: list[UUID]
 
 
 def process_message(
-    message: dict[str, object],
-    sqs: Any,
+    message: Message,
+    queue: Queue,
     auth: BackendAuth,
     engine: sa.Engine,
     structured: Runnable,
 ) -> None:
     try:
-        body = message["Body"]
-        if not isinstance(body, str):
-            raise ValueError("message body must be a string")
-        request = Request.model_validate_json(body)
-        evidence = load_evidence(engine, request.portfolio_reason_ids)
+        request = Request.model_validate_json(message.body)
+        evidence = load_evidence(engine, request.portfolio_reason_ids, request.participant_id)
         report = build_report(evidence, structured)
         auth.request(
             "POST",
@@ -42,6 +40,4 @@ def process_message(
     except Exception as error:
         logger.error("report_request_failed", error_type=type(error).__name__)
         return
-    sqs.delete_message(
-        QueueUrl=str(message["_queue_url"]), ReceiptHandle=str(message["ReceiptHandle"])
-    )
+    queue.delete(message.receipt)

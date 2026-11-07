@@ -1,8 +1,13 @@
 import pytest
 import sqlalchemy as sa
+from portfolio_builder.competition.repository import ParticipantSettings
+from portfolio_builder.competition.themes import ResolvedAgent
+from portfolio_builder.database import portfolios
 
 TABLES = (
-    "portfolio_reasons, portfolio_exits, portfolio_holdings, portfolios, relations,"
+    "competition_attempts, competition_jobs, competition_portfolios,"
+    " competition_participants,"
+    " portfolio_reasons, portfolio_exits, portfolio_holdings, portfolios, relations,"
     " cluster_entities, entities, cluster_summaries, article_clusters, clusters, articles,"
     " theme_corporations, themes, corporation_indices, corporation_aliases, corporations"
 )
@@ -41,9 +46,9 @@ SEED = [
     " (1, 1, 1, 2, 'supplies', '삼성전자가 엔비디아에 HBM을 공급'),"
     " (2, 1, 4, 2, 'used_by', 'HBM은 엔비디아 GPU에 쓰인다'),"
     " (3, 2, 3, 4, 'produces', 'SK하이닉스가 HBM을 생산')",
-    "INSERT INTO themes (theme_code, name) VALUES ('T1', 'HBM')",
+    "INSERT INTO themes (theme_code, name) VALUES ('T1', 'HBM'), ('T2', 'AI반도체')",
     "INSERT INTO theme_corporations (theme_code, stock_code, is_major) VALUES"
-    " ('T1', '005930', true), ('T1', '000660', false)",
+    " ('T1', '005930', true), ('T1', '000660', false), ('T2', '005930', true)",
 ]
 
 
@@ -69,3 +74,64 @@ def news_client():
             return cluster_id != 404
 
     return Stub()
+
+
+_RESOLVED_DEFAULTS = {
+    "competition_id": 10,
+    "user_id": 100,
+    "agent_id": 9001,
+    "participant_id": 1,
+    "risk_profile": "성장형",
+    "interested_theme_codes": ("T1",),
+    "excluded_theme_codes": (),
+    "interested_theme_names": ("HBM",),
+    "excluded_theme_names": (),
+    "additional_request": "원문",
+}
+
+_SETTINGS_DEFAULTS = {
+    "participant_id": 1,
+    "competition_id": 10,
+    "user_id": 100,
+    "agent_id": 9001,
+    "risk_profile": "성장형",
+    "interested_theme_codes": ("T1",),
+    "excluded_theme_codes": (),
+    "interested_theme_names": ("HBM",),
+    "excluded_theme_names": (),
+    "additional_request": "원문",
+}
+
+_PORTFOLIO_DEFAULTS = {
+    "cash_weight": 0.1,
+    "commentary": "c",
+    "model": "m",
+}
+
+
+@pytest.fixture
+def _request():
+    def make(**changes) -> ResolvedAgent:
+        return ResolvedAgent(**{**_RESOLVED_DEFAULTS, **changes})
+
+    return make
+
+
+@pytest.fixture
+def _settings():
+    def make(**changes) -> ParticipantSettings:
+        return ParticipantSettings(**{**_SETTINGS_DEFAULTS, **changes})
+
+    return make
+
+
+@pytest.fixture
+def _insert_portfolio():
+    def make(engine: sa.Engine, **columns) -> int:
+        values = {**_PORTFOLIO_DEFAULTS, **columns}
+        with engine.begin() as conn:
+            return conn.execute(
+                sa.insert(portfolios).values(**values).returning(portfolios.c.id)
+            ).scalar_one()
+
+    return make

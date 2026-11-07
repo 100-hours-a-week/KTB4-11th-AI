@@ -100,16 +100,6 @@ class Explanations(BaseModel):
         return self
 
 
-def load_unexplained(engine: sa.Engine) -> tuple[int, list[TraceEntry]] | None:
-    with engine.connect() as conn:
-        row = conn.execute(
-            sa.text("SELECT id, status, trace FROM portfolios ORDER BY id DESC LIMIT 1")
-        ).first()
-    if row is None or row.status == "ready" or row.trace is None:
-        return None
-    return row.id, [TraceEntry.model_validate(entry) for entry in row.trace]
-
-
 def load_targets(engine: sa.Engine, portfolio_id: int) -> list[Target]:
     with engine.connect() as conn:
         rows = conn.execute(
@@ -186,6 +176,19 @@ def explain(
                 ),
             ]
     raise AssertionError("unreachable")
+
+
+def explain_and_save(
+    engine: sa.Engine,
+    explainer: Runnable,
+    portfolio_id: int,
+    trace: list[TraceEntry],
+    result_chars: int,
+) -> int:
+    targets = load_targets(engine, portfolio_id)
+    explanations = explain(explainer, targets, trace, result_chars)
+    save_explanations(engine, portfolio_id, explanations)
+    return len(explanations.stocks)
 
 
 def save_explanations(engine: sa.Engine, portfolio_id: int, explanations: Explanations) -> None:

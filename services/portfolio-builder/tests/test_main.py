@@ -6,7 +6,7 @@ from portfolio_builder import __main__ as entry
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.briefing import Briefing
-from portfolio_builder.explain import ExplanationRejected, Explanations
+from portfolio_builder.explain import ExplanationRejected
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
@@ -34,10 +34,10 @@ def env(monkeypatch):
     calls = {}
     monkeypatch.setattr(entry, "save_trace", lambda engine, pid, trace: calls.update(trace=pid))
     monkeypatch.setattr(entry, "load_unexplained", lambda engine: None)
-    monkeypatch.setattr(entry, "load_targets", lambda engine, pid: [])
-    monkeypatch.setattr(entry, "explain", lambda *args: Explanations(stocks=[]))
     monkeypatch.setattr(
-        entry, "save_explanations", lambda engine, pid, explanations: calls.update(saved=pid)
+        entry,
+        "explain_and_save",
+        lambda engine, explainer, pid, trace, chars: calls.update(saved=pid) or 0,
     )
     monkeypatch.setattr(
         entry, "mark_explanation_failed", lambda engine, pid: calls.update(failed=pid)
@@ -118,7 +118,7 @@ def test_a_rejected_explanation_marks_the_portfolio_failed_and_exits_one(env, mo
     def rejected(*args):
         raise ExplanationRejected("HYNIX: missing")
 
-    monkeypatch.setattr(entry, "explain", rejected)
+    monkeypatch.setattr(entry, "explain_and_save", rejected)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
@@ -141,7 +141,7 @@ def test_provider_error_during_explain_marks_the_portfolio_failed_and_exits_one(
     def provider_error(*args):
         raise RuntimeError("502 from provider")
 
-    monkeypatch.setattr(entry, "explain", provider_error)
+    monkeypatch.setattr(entry, "explain_and_save", provider_error)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
@@ -173,8 +173,8 @@ def test_an_unexplained_portfolio_is_explained_again_without_the_agent(env, monk
     seen = {}
     monkeypatch.setattr(
         entry,
-        "explain",
-        lambda model, targets, t, chars: seen.update(trace=t) or Explanations(stocks=[]),
+        "explain_and_save",
+        lambda engine, explainer, pid, t, chars: seen.update(trace=t) or env.update(saved=pid) or 0,
     )
 
     with pytest.raises(SystemExit) as exit_:
@@ -194,7 +194,7 @@ def test_a_failed_reexplanation_stays_failed_and_exits_one(env, monkeypatch, cap
     def rejected(*args):
         raise ExplanationRejected("HYNIX: missing")
 
-    monkeypatch.setattr(entry, "explain", rejected)
+    monkeypatch.setattr(entry, "explain_and_save", rejected)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
@@ -238,3 +238,58 @@ def test_enabled_disclosure_with_missing_endpoint_fails_before_agent(env, monkey
     )
     with pytest.raises(ValidationError):
         entry.main()
+
+
+@pytest.fixture
+def participant_mode(env, monkeypatch):
+    from unittest.mock import Mock
+
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED", "true")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_BASE_URI", "https://backend")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_JWT_SECRET", "s" * 32)
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER", "issuer")
+    scheduled = Mock(return_value=True)
+    monkeypatch.setattr(entry, "run_scheduled", scheduled, raising=False)
+    return scheduled
+
+
+def test_scheduled_participants_run_after_a_successful_common_run(participant_mode, monkeypatch):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 1, {}))
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    participant_mode.assert_called_once()
+
+
+def test_scheduled_participants_run_even_if_common_generation_fails(participant_mode, monkeypatch):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("max_turns", None, 1, {}))
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 1
+    participant_mode.assert_called_once()
+
+
+def test_scheduled_failure_makes_the_overall_run_fail(participant_mode, monkeypatch):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 1, {}))
+    participant_mode.return_value = False
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 1
+
+
+def test_scheduled_participants_run_after_a_common_exception(participant_mode, monkeypatch):
+    def failing_briefing(*args):
+        raise RuntimeError("common failed")
+
+    monkeypatch.setattr(entry, "load_briefing", failing_briefing)
+
+    with pytest.raises(RuntimeError, match="common failed"):
+        entry.main()
+
+    participant_mode.assert_called_once()

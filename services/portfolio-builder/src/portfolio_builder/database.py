@@ -30,6 +30,8 @@ portfolios = sa.Table(
         nullable=False,
         server_default=sa.text("'explanation_pending'"),
     ),
+    sa.Column("acknowledged_constraints", postgresql.JSONB, nullable=True),
+    sa.Column("explanation_attempts", sa.Integer, nullable=False, server_default=sa.text("0")),
     sa.Index("portfolios_created_at_idx", "created_at"),
 )
 
@@ -96,6 +98,9 @@ portfolio_reasons = sa.Table(
 )
 
 
+def _escape_like(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def like_contains(text: str) -> str:
-    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
+    return f"%{_escape_like(text)}%"
