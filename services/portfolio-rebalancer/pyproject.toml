@@ -5,7 +5,7 @@ description = "Turns model portfolios into buy and sell requests on the Backend"
 requires-python = ">=3.14,<3.16"
 dependencies = [
     "ktb-core",
-    "ktb-aws",
+    "ktb-aws[sqs]",
     "httpx>=0.28",
     "boto3>=1.43.98",
     "psycopg[binary]>=3.3.6",
