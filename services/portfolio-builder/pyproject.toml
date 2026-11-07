@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Cron-triggered model portfolio agent"
 requires-python = ">=3.14,<3.16"
 dependencies = [
-    "ktb-aws",
+    "ktb-aws[sqs]",
     "ktb-core",
     "disclosure-retrieval",
     "boto3>=1.35",

@@ -18,13 +18,9 @@ class Queue(Protocol):
 
 
 class SqsQueue:
-    def __init__(self, client: Any, url_or_name: str) -> None:
+    def __init__(self, client: Any, url: str) -> None:
         self._client = client
-        self._url = (
-            url_or_name
-            if url_or_name.startswith("http")
-            else client.get_queue_url(QueueName=url_or_name)["QueueUrl"]
-        )
+        self._url = url
 
     def send(self, body: str, *, group: str, dedup: str) -> str:
         response = self._client.send_message(
