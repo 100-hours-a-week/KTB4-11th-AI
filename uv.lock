@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.14, <3.16"
 resolution-markers = [
     "sys_platform == 'win32'",
@@ -677,16 +677,23 @@ wheels = [
 name = "ktb-aws"
 version = "0.1.0"
 source = { editable = "packages/aws" }
-dependencies = [
+
+[package.optional-dependencies]
+redis = [
     { name = "botocore" },
     { name = "redis" },
+]
+sqs = [
+    { name = "boto3" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "botocore", specifier = ">=1.40" },
-    { name = "redis", specifier = ">=6.4" },
+    { name = "boto3", marker = "extra == 'sqs'", specifier = ">=1.35" },
+    { name = "botocore", marker = "extra == 'redis'", specifier = ">=1.40" },
+    { name = "redis", marker = "extra == 'redis'", specifier = ">=6.4" },
 ]
+provides-extras = ["redis", "sqs"]
 
 [[package]]
 name = "ktb-core"
@@ -973,7 +980,7 @@ name = "market-collector"
 version = "0.1.0"
 source = { editable = "services/market-collector" }
 dependencies = [
-    { name = "ktb-aws" },
+    { name = "ktb-aws", extra = ["redis"] },
     { name = "ktb-core" },
     { name = "kwcli" },
     { name = "psycopg", extra = ["binary"] },
@@ -986,7 +993,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ktb-aws", editable = "packages/aws" },
+    { name = "ktb-aws", extras = ["redis"], editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "kwcli" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
@@ -1003,7 +1010,7 @@ version = "0.1.0"
 source = { editable = "services/market-http" }
 dependencies = [
     { name = "fastapi" },
-    { name = "ktb-aws" },
+    { name = "ktb-aws", extra = ["redis"] },
     { name = "ktb-core" },
     { name = "ktb-telemetry" },
     { name = "opentelemetry-api" },
@@ -1022,7 +1029,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.142" },
-    { name = "ktb-aws", editable = "packages/aws" },
+    { name = "ktb-aws", extras = ["redis"], editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "ktb-telemetry", editable = "packages/telemetry" },
     { name = "opentelemetry-api", specifier = ">=1.45" },
@@ -1043,7 +1050,7 @@ name = "market-streamer"
 version = "0.1.0"
 source = { editable = "services/market-streamer" }
 dependencies = [
-    { name = "ktb-aws" },
+    { name = "ktb-aws", extra = ["redis"] },
     { name = "ktb-core" },
     { name = "ktb-telemetry" },
     { name = "kwcli" },
@@ -1059,7 +1066,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ktb-aws", editable = "packages/aws" },
+    { name = "ktb-aws", extras = ["redis"], editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "ktb-telemetry", editable = "packages/telemetry" },
     { name = "kwcli" },
@@ -1626,7 +1633,7 @@ source = { editable = "services/portfolio-rebalancer" }
 dependencies = [
     { name = "boto3" },
     { name = "httpx" },
-    { name = "ktb-aws" },
+    { name = "ktb-aws", extra = ["sqs"] },
     { name = "ktb-core" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -1639,7 +1646,7 @@ dependencies = [
 requires-dist = [
     { name = "boto3", specifier = ">=1.43.98" },
     { name = "httpx", specifier = ">=0.28" },
-    { name = "ktb-aws", editable = "packages/aws" },
+    { name = "ktb-aws", extras = ["sqs"], editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic", specifier = ">=2.9" },
