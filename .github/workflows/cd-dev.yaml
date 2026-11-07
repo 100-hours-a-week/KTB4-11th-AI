@@ -100,6 +100,7 @@ jobs:
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/publish-scheduled-job-metric.sh"
           scp infrastructure/systemd/ktb-*.service.in \
             infrastructure/systemd/ktb-*.timer \
+            infrastructure/systemd/ktb-batch.slice \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" 'chmod 600 ~/ai/.image.env.next'
 
@@ -190,6 +191,13 @@ jobs:
           done
 
           cp "$schedule_stage"/ktb-*.timer "$schedule_render_dir/"
+
+          test "$(docker info --format '{{.CgroupDriver}} {{.CgroupVersion}}')" = "systemd 2"
+          cp "$schedule_stage/ktb-batch.slice" "$schedule_render_dir/"
+          sudo -n systemd-analyze verify "$schedule_render_dir/ktb-batch.slice"
+          sudo -n install -m 0644 "$schedule_render_dir/ktb-batch.slice" /etc/systemd/system/
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl enable --now ktb-batch.slice
 
           # 직전 성공 배포 파일은 새 배포 실패 시 복구할 수 있도록 보관합니다.
           if [[ -f compose.prod.yaml && -f .image.env ]]; then
