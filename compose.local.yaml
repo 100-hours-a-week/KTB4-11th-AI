@@ -328,6 +328,10 @@ services:
       PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
       PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
       PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+      PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED: ${PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED:-false}
+      PORTFOLIO_BUILDER_BACKEND_BASE_URI: ${PORTFOLIO_BUILDER_BACKEND_BASE_URI:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_SECRET: ${PORTFOLIO_BUILDER_BACKEND_JWT_SECRET:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER: ${PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -337,25 +341,12 @@ services:
         condition: service_started
     restart: "no"
 
-  competition:
-    profiles: ["competition"]
-    build:
-      context: .
-      dockerfile: docker/competition.Dockerfile
-    env_file: ai.env
-    environment:
-      COMPETITION_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: unless-stopped
-
-  portfolio-builder-worker:
+  competition-portfolio-builder:
     profiles: ["competition"]
     build:
       context: .
       dockerfile: docker/portfolio-builder.Dockerfile
-    command: portfolio-builder-worker
+    command: competition-portfolio-builder
     env_file: ai.env
     environment:
       PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}

@@ -7,6 +7,7 @@ from langchain_openrouter import ChatOpenRouter
 
 from portfolio_builder.agent.run import run_agent
 from portfolio_builder.agent.system_prompt import DISCLOSURE_PROMPT, SYSTEM_PROMPT
+from portfolio_builder.competition.scheduled import run_scheduled
 from portfolio_builder.explain import Explanations, explain_and_save
 from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
@@ -21,8 +22,7 @@ from portfolio_builder.tools.submit import submit_tool
 from portfolio_builder.tools.technicals import technicals_tool
 
 
-def main() -> None:
-    settings = Settings()
+def run_common(settings: Settings) -> None:
     setup_logging(settings.log_level, service_name="portfolio-builder")
     log = get_logger(__name__, run_id=str(uuid.uuid4()))
     with start_logging(
@@ -116,6 +116,31 @@ def main() -> None:
 
         end.update(outcome=outcome, portfolio_id=portfolio_id, error=error)
         raise SystemExit(0 if outcome in ("saved", "reexplained") else 1)
+
+
+def main() -> None:
+    settings = Settings()
+    exit_code = 0
+    common_error: Exception | None = None
+    try:
+        run_common(settings)
+    except SystemExit as stopped:
+        exit_code = stopped.code if isinstance(stopped.code, int) else int(stopped.code is not None)
+    except Exception as error:
+        common_error = error
+        exit_code = 1
+    if settings.competition_scheduled_enabled:
+        try:
+            if not run_scheduled(settings):
+                exit_code = 1
+        except Exception as error:
+            get_logger(__name__).exception(
+                "participant_run_failed", error_type=type(error).__name__
+            )
+            exit_code = 1
+    if common_error is not None:
+        raise common_error
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

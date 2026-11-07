@@ -2,7 +2,6 @@ source_roots = [
     "packages/aws/src",
     "packages/core/src",
     "packages/telemetry/src",
-    "services/competition/src",
     "services/disclosure-indexer/src",
     "services/disclosure-retrieval/src",
     "services/market-syncer/src",
@@ -98,10 +97,6 @@ path = "portfolio_builder"
 depends_on = ["disclosure_retrieval", "ktb_core"]
 
 [[modules]]
-path = "competition"
-depends_on = ["ktb_aws", "ktb_core"]
-
-[[modules]]
 path = "market_syncer"
 depends_on = ["ktb_core"]
 
@@ -126,8 +121,8 @@ path = "market_http"
 depends_on = ["ktb_aws", "ktb_core", "ktb_telemetry"]
 
 [[modules]]
-path = "portfolio_builder.participants"
-depends_on = ["portfolio_builder", "ktb_core", "disclosure_retrieval"]
+path = "portfolio_builder.competition"
+depends_on = ["portfolio_builder", "ktb_core", "ktb_aws", "disclosure_retrieval"]
 
 [[modules]]
 path = "portfolio_builder.scheduled"
@@ -135,4 +130,4 @@ depends_on = ["portfolio_builder"]
 
 [[modules]]
 path = "portfolio_builder.__main__"
-depends_on = ["portfolio_builder", "portfolio_builder.scheduled", "ktb_core", "disclosure_retrieval"]
+depends_on = ["portfolio_builder", "portfolio_builder.scheduled", "portfolio_builder.competition", "ktb_core", "disclosure_retrieval"]

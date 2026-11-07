@@ -3,9 +3,9 @@ from unittest.mock import Mock
 
 import pytest
 import sqlalchemy as sa
-from competition import intake
-from competition.settings import Settings
 from ktb_aws.sqs import Message
+from portfolio_builder.competition import intake
+from portfolio_builder.competition.settings import Settings
 
 AGENT = {
     "agent_id": 9001,

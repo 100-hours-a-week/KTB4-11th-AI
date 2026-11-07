@@ -6,12 +6,12 @@ from ktb_aws.sqs import Message, Queue
 from ktb_core.logging import StructuredLogger
 from pydantic import ValidationError
 
-from competition import jev
-from competition.canonical import classify_additional_request
-from competition.message import Request
-from competition.repository import store_settings
-from competition.settings import Settings
-from competition.themes import ResolvedAgent, UnknownTheme, resolve_agent
+from portfolio_builder.competition import jev
+from portfolio_builder.competition.canonical import classify_additional_request
+from portfolio_builder.competition.message import Request
+from portfolio_builder.competition.repository import store_settings
+from portfolio_builder.competition.settings import Settings
+from portfolio_builder.competition.themes import ResolvedAgent, UnknownTheme, resolve_agent
 
 
 def _classify(
@@ -20,6 +20,8 @@ def _classify(
     log: StructuredLogger,
     resolved: ResolvedAgent,
 ) -> tuple[Any, str | None, bool]:
+    if settings.jev_api_key is None:
+        raise ValueError("Jev credential is required during classification")
     ask = partial(
         jev.ask,
         settings.jev_base_uri,

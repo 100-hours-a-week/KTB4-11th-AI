@@ -1,6 +1,6 @@
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,4 +23,26 @@ class Settings(BaseSettings):
     explain_max_tokens: int = Field(default=16000, gt=0)
     competition_stale_running_seconds: int = Field(default=3600, gt=0)
     competition_max_attempts: int = Field(default=3, gt=0)
-    worker_poll_interval: float = Field(default=2, gt=0, allow_inf_nan=False)
+    competition_scheduled_enabled: bool = False
+    backend_base_uri: str = ""
+    backend_jwt_secret: SecretStr | None = Field(default=None, min_length=32)
+    backend_jwt_issuer: str = ""
+
+    @field_validator("backend_jwt_secret", mode="before")
+    @classmethod
+    def empty_backend_secret(cls, value):
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def scheduled_lookup_configuration(self) -> Self:
+        if self.competition_scheduled_enabled:
+            missing = [
+                name
+                for name in ("backend_base_uri", "backend_jwt_secret", "backend_jwt_issuer")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(
+                    "scheduled participants require backend settings: " + ", ".join(missing)
+                )
+        return self

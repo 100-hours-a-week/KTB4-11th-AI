@@ -2,7 +2,7 @@ import json
 
 import httpx
 import pytest
-from competition.jev import JevError, ask
+from portfolio_builder.competition.jev import JevError, ask
 from pydantic import SecretStr
 
 BASE_URI = "https://jev.example/api/v1"

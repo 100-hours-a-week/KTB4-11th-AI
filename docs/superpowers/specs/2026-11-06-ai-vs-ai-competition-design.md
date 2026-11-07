@@ -1,6 +1,6 @@
 # AI vs AI Competition Portfolios
 
-Runtime boundary updated 2026-11-07: `competition` is a standalone SQS intake service that stores frozen participant preferences. `portfolio-builder-worker` reads committed participants and performs initial generation and explanation retries. The services communicate only through PostgreSQL and do not import each other. Shared briefing and submission code no longer owns participant selection or participant constraints. See [the service separation design](2026-11-07-competition-intake-service-design.md). Subsequent 06:00 generation and participant-account trading remain pending the Backend account mapping contract.
+Runtime boundary updated 2026-11-07: `portfolio_builder.competition` owns the settings SQS worker, frozen preferences, and initial generation. There is no separate competition service. The existing builder entrypoint also runs opted-in 06:00 participant regeneration from active Backend account mappings. Common submission and briefing code stay independent of participant policies. See the [competition flow design](2026-11-07-competition-intake-service-design.md) and [participant cadence design](2026-11-07-participant-cadence-design.md).
 
 This is the current design, consolidated. It replaces four documents written while the feature
 was being built, and it is the only one to read:
@@ -454,7 +454,7 @@ can never become the row every account trades. This is the anti-goal that matter
 enforced in SQL rather than by convention.
 
 **The common pipeline** is unchanged. `load_unexplained` and `find_previous_portfolio` are scoped
-away from competition portfolios, so a competition generation cannot be picked up by the common
+away from portfolio_builder.competition portfolios, so a competition generation cannot be picked up by the common
 re-explain flow.
 
 **`report-builder`** scopes `load_evidence` to the requesting participant, so one participant's
@@ -555,18 +555,18 @@ so a different valid kind would land in the DLQ.
 
 | Variable | Default |
 |---|---|
-| `COMPETITION_QUEUE_URL` | required; a full URL avoids needing `sqs:GetQueueUrl` |
-| `COMPETITION_VISIBILITY_TIMEOUT` | `300` |
+| `PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL` | required; a full URL avoids needing `sqs:GetQueueUrl` |
+| `PORTFOLIO_BUILDER_COMPETITION_VISIBILITY_TIMEOUT` | `300` |
 | `PORTFOLIO_BUILDER_COMPETITION_STALE_RUNNING_SECONDS` | `3600` |
 | `PORTFOLIO_BUILDER_COMPETITION_MAX_ATTEMPTS` | `3` |
-| `COMPETITION_JEV_API_KEY` | required; intake credential, independent of the builder model |
-| `COMPETITION_JEV_BASE_URI` | `https://openrouter.ai/api/v1` |
-| `COMPETITION_JEV_MODEL` | `typesafe/jev-1.14` — pinned, never an alias |
-| `COMPETITION_JEV_TIMEOUT` | `20` |
-| `COMPETITION_JEV_NOUL_THRESHOLD` | `0.5` |
-| `COMPETITION_JEV_CHOICE_MIN_CONFIDENCE` | no default; the worker refuses to start without it |
+| `PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY` | optional; defaults to the builder LLM credential |
+| `PORTFOLIO_BUILDER_COMPETITION_JEV_BASE_URI` | `https://openrouter.ai/api/v1` |
+| `PORTFOLIO_BUILDER_COMPETITION_JEV_MODEL` | `typesafe/jev-1.14` — pinned, never an alias |
+| `PORTFOLIO_BUILDER_COMPETITION_JEV_TIMEOUT` | `20` |
+| `PORTFOLIO_BUILDER_COMPETITION_JEV_NOUL_THRESHOLD` | `0.5` |
+| `PORTFOLIO_BUILDER_COMPETITION_JEV_CHOICE_MIN_CONFIDENCE` | no default; the worker refuses to start without it |
 
-Queue and Jev configuration belongs to the competition service. Generation retry and polling settings belong to portfolio-builder.
+Queue and Jev configuration belongs to the competition worker settings within portfolio-builder. Generation settings remain in the builder settings.
 
 ## Testing
 

@@ -65,4 +65,4 @@ Add the service to the uv workspace, development and production Compose files, D
 
 ## Boundaries
 
-The Backend owns storing order reason IDs, creating the SQS message from competition orders, callback authorization, idempotent report storage, and the request queue's dead-letter policy. This repo owns UUID migration, rebalancer payload, and the report consumer. The shared Backend authentication code from PR #237 is treated as an available dependency.
+The Backend owns storing order reason IDs, creating the SQS message from portfolio_builder.competition orders, callback authorization, idempotent report storage, and the request queue's dead-letter policy. This repo owns UUID migration, rebalancer payload, and the report consumer. The shared Backend authentication code from PR #237 is treated as an available dependency.

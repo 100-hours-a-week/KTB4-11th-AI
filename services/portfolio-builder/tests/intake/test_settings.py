@@ -1,5 +1,5 @@
 import pytest
-from competition.settings import Settings
+from portfolio_builder.competition.settings import Settings
 from pydantic import SecretStr, ValidationError
 
 BASE = {
@@ -17,9 +17,9 @@ def test_intake_constructs_without_generation_configuration():
     assert isinstance(settings.jev_api_key, SecretStr)
 
 
-@pytest.mark.parametrize("name", list(BASE))
+@pytest.mark.parametrize("name", ["queue_url", "jev_choice_min_confidence"])
 def test_intake_requires_its_own_configuration(name, monkeypatch):
-    monkeypatch.delenv(f"COMPETITION_{name.upper()}", raising=False)
+    monkeypatch.delenv(f"PORTFOLIO_BUILDER_COMPETITION_{name.upper()}", raising=False)
     values = {key: value for key, value in BASE.items() if key != name}
 
     with pytest.raises(ValidationError):
@@ -55,7 +55,7 @@ def test_confidence_floor_accepts_probability_boundaries(value):
 
 def test_intake_uses_its_own_environment_prefix(monkeypatch):
     for name, value in BASE.items():
-        monkeypatch.setenv(f"COMPETITION_{name.upper()}", str(value))
-    monkeypatch.setenv("COMPETITION_VISIBILITY_TIMEOUT", "600")
+        monkeypatch.setenv(f"PORTFOLIO_BUILDER_COMPETITION_{name.upper()}", str(value))
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_VISIBILITY_TIMEOUT", "600")
 
     assert Settings().visibility_timeout == 600

@@ -148,9 +148,9 @@ flowchart LR
 - 실험 시에만 `true`로 설정하고, 일반 실행에서는 활성화하지 않음
 - 기존 가격 API는 `/prices`, `/prices/stream`임
 
-### `competition`: 대결 참가자 설정 접수
+### `competition-portfolio-builder`: 대결 설정 접수와 최초 생성
 
-`competition` 서비스가 SQS 설정 요청을 검증·정규화하여 PostgreSQL에 저장합니다. 별도 `portfolio-builder-worker`는 저장된 미생성 참가자를 읽어 최초 포트폴리오를 생성하고 설명 실패를 재시도합니다. 두 서비스는 서로의 코드를 import하지 않습니다. 로컬에서는 `docker compose -f compose.local.yaml --profile competition up competition portfolio-builder-worker`로 실행하며, 설정 이름은 `.env.example`을 따릅니다.
+`portfolio-builder/competition/`의 SQS 워커가 설정을 검증·정규화해 PostgreSQL에 저장하고 최초 포트폴리오를 생성합니다. 공통 제출 모델과 대결 전용 정책은 구분합니다. 이후 활성 참가자의 재생성은 기존 06:00 builder 경로에서 실행합니다. 백엔드의 명시적인 `participant_id` 계좌 매핑과 조회 인증을 배포한 뒤 정기 생성 옵션을 켭니다. 로컬 워커는 `docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder`로 실행합니다.
 
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 

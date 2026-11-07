@@ -5,8 +5,8 @@ import sqlalchemy as sa
 from pydantic import BaseModel, Field
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from portfolio_builder.competition.database import competition_portfolios
 from portfolio_builder.news_client import NewsClient
-from portfolio_builder.participants.database import competition_portfolios
 from portfolio_builder.portfolio import (
     Submission,
     insert_portfolio,

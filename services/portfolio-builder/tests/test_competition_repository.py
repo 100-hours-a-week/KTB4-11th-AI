@@ -2,9 +2,8 @@ import threading
 
 import pytest
 import sqlalchemy as sa
-from competition.repository import store_settings
-from portfolio_builder.participants.database import competition_jobs
-from portfolio_builder.participants.repository import (
+from portfolio_builder.competition.database import competition_jobs
+from portfolio_builder.competition.repository import (
     claim_job,
     fail_job,
     find_participant_portfolio,
@@ -12,6 +11,7 @@ from portfolio_builder.participants.repository import (
     generation_key,
     latest_participant_portfolio,
     link_portfolio,
+    store_settings,
 )
 from portfolio_builder.scheduled.repository import find_previous_portfolio
 

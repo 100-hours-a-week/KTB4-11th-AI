@@ -17,7 +17,6 @@ RUN uv pip install --no-deps \
     ./packages/aws \
     ./packages/core \
     ./packages/telemetry \
-    ./services/competition \
     ./services/disclosure-indexer \
     ./services/disclosure-retrieval \
     ./services/market-collector \

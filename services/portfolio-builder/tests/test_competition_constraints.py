@@ -1,5 +1,5 @@
-from portfolio_builder.participants.portfolio import CompetitionSubmission as Submission
-from portfolio_builder.participants.portfolio import Constraints, validate_constraints
+from portfolio_builder.competition.portfolio import CompetitionSubmission as Submission
+from portfolio_builder.competition.portfolio import Constraints, validate_constraints
 from portfolio_builder.portfolio import Holding, normalize_weights
 
 

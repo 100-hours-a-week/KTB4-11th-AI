@@ -160,7 +160,7 @@ def mark_explanation_failed(engine: sa.Engine, portfolio_id: int) -> None:
     with engine.begin() as conn:
         conn.execute(
             sa.update(portfolios)
-            .where(portfolios.c.id == portfolio_id)
+            .where(portfolios.c.id == portfolio_id, portfolios.c.status != "ready")
             .values(
                 status="explanation_failed",
                 explanation_attempts=portfolios.c.explanation_attempts + 1,

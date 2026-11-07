@@ -1,5 +1,5 @@
 import sqlalchemy as sa
-from competition.canonical import (
+from portfolio_builder.competition.canonical import (
     EMPTY_CANONICAL_FORM,
     MAX_CHOICE_OPTIONS,
     SIGNAL_NAMES,

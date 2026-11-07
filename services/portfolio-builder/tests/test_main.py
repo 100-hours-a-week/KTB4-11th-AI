@@ -238,3 +238,58 @@ def test_enabled_disclosure_with_missing_endpoint_fails_before_agent(env, monkey
     )
     with pytest.raises(ValidationError):
         entry.main()
+
+
+@pytest.fixture
+def participant_mode(env, monkeypatch):
+    from unittest.mock import Mock
+
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED", "true")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_BASE_URI", "https://backend")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_JWT_SECRET", "s" * 32)
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER", "issuer")
+    scheduled = Mock(return_value=True)
+    monkeypatch.setattr(entry, "run_scheduled", scheduled, raising=False)
+    return scheduled
+
+
+def test_scheduled_participants_run_after_a_successful_common_run(participant_mode, monkeypatch):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 1, {}))
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 0
+    participant_mode.assert_called_once()
+
+
+def test_scheduled_participants_run_even_if_common_generation_fails(participant_mode, monkeypatch):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("max_turns", None, 1, {}))
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 1
+    participant_mode.assert_called_once()
+
+
+def test_scheduled_failure_makes_the_overall_run_fail(participant_mode, monkeypatch):
+    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 1, {}))
+    participant_mode.return_value = False
+
+    with pytest.raises(SystemExit) as exit_:
+        entry.main()
+
+    assert exit_.value.code == 1
+
+
+def test_scheduled_participants_run_after_a_common_exception(participant_mode, monkeypatch):
+    def failing_briefing(*args):
+        raise RuntimeError("common failed")
+
+    monkeypatch.setattr(entry, "load_briefing", failing_briefing)
+
+    with pytest.raises(RuntimeError, match="common failed"):
+        entry.main()
+
+    participant_mode.assert_called_once()

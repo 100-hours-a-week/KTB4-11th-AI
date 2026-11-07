@@ -1,6 +1,6 @@
 import pytest
 import sqlalchemy as sa
-from competition.themes import ResolvedAgent
+from portfolio_builder.competition.themes import ResolvedAgent
 
 
 @pytest.fixture

@@ -1,7 +1,7 @@
 import pytest
 import sqlalchemy as sa
-from competition.message import AgentSettings
-from competition.themes import UnknownTheme, resolve_agent, theme_names
+from portfolio_builder.competition.message import AgentSettings
+from portfolio_builder.competition.themes import UnknownTheme, resolve_agent, theme_names
 
 THEMES = [
     ("SG", "반도체_생산"),

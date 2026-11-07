@@ -96,20 +96,19 @@ Run market-syncer before jobs that need corporation reference data. The morning 
 runs news-clusterer, news-graph-builder, then portfolio-builder; see
 `scripts/run-morning-pipeline.sh`. Production schedules live in `infrastructure/systemd/`.
 Report-builder is a long-running worker and its local Compose configuration loads `ai.env`.
-The `competition` profile starts two long-running workers, also configured through
-`ai.env`: `competition` validates, canonicalizes, and freezes settings from SQS;
-`portfolio-builder-worker` polls PostgreSQL and generates each participant's initial
-portfolio. Intake needs `COMPETITION_QUEUE_URL`, `COMPETITION_JEV_API_KEY`, and an
-explicit `COMPETITION_JEV_CHOICE_MIN_CONFIDENCE`. Generation needs the builder LLM
-credentials. Compose supplies separate database DSNs and the builder HTTP endpoints.
+The `competition` profile starts `competition-portfolio-builder` from the builder image.
+It consumes SQS settings, freezes them in PostgreSQL, then generates the initial portfolio.
+It also resumes committed pending settings after a worker restart. The queue and Jev settings
+use `PORTFOLIO_BUILDER_COMPETITION_*`; generation uses ordinary builder settings.
 
 ```bash
-docker compose -f compose.local.yaml --profile competition up competition portfolio-builder-worker
+docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder
 ```
 
-Give the settings queue a redrive policy for malformed requests and failed intake.
-Intake acknowledges only after settings commit. Generation retries use database jobs
-and per-participant budgets; they do not depend on SQS redelivery.
+Set the settings queue's redrive/DLQ policy for intake failures. Generation has its own
+participant retry budget. The common 06:00 builder entrypoint also regenerates active
+participants when `PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED=true`, after Backend
+provides explicit nullable account participant IDs and the lookup JWT configuration.
 
 ## Repository map
 
@@ -131,8 +130,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/market-collector` | Collect market bars and index quotes into QuestDB and publish popularity rankings to Valkey |
 | `services/market-streamer` | Stream Kiwoom prices, orderbooks, and daily ranking values to Valkey |
 | `services/market-http` | Serve public market snapshots, bars, indices, rankings, and SSE streams |
-| `services/competition` | Consume settings SQS, validate and canonicalize preferences, then freeze participant settings in PostgreSQL |
-| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent; `portfolio-builder-worker` polls PostgreSQL for initial participant generation |
+| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent; `competition-portfolio-builder` consumes settings and performs initial participant generation |
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
 
@@ -164,7 +162,7 @@ third-party dependencies.
 - Portfolio-builder stores the agent trace and moves portfolio status from
   `explanation_pending` to `ready` or `explanation_failed`. If the latest portfolio is
   not ready and has a trace, retry explanations before building another portfolio.
-- Rebalancing uses only the latest **common** portfolio, and only when it is `ready`;
+- Common rebalancing uses only the latest **common** portfolio, and only when it is `ready`;
   never fall back to an older ready portfolio. Carry stock explanations as `reason` and
   `thoughts`.
 - Competition portfolios share the `portfolios` table with the common model portfolio.

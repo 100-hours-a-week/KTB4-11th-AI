@@ -5,23 +5,22 @@ from unittest.mock import Mock
 
 import pytest
 import sqlalchemy as sa
-from competition import intake
-from competition.repository import store_settings
-from competition.settings import Settings as IntakeSettings
-from competition.themes import ResolvedAgent
 from ktb_aws.sqs import Message
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.system_prompt import DISCLOSURE_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.participants import generation, repository
-from portfolio_builder.participants.repository import (
+from portfolio_builder.competition import generation, intake, repository
+from portfolio_builder.competition.repository import (
     claim_job,
     fail_job,
     generation_key,
     latest_participant_portfolio,
     link_portfolio,
+    store_settings,
 )
-from portfolio_builder.participants.system_prompt import COMPETITION_SYSTEM_PROMPT
+from portfolio_builder.competition.settings import Settings as IntakeSettings
+from portfolio_builder.competition.system_prompt import COMPETITION_SYSTEM_PROMPT
+from portfolio_builder.competition.themes import ResolvedAgent
 from portfolio_builder.settings import Settings
 
 AGENT = {

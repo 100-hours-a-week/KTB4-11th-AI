@@ -102,3 +102,14 @@ def test_competition_variables_are_read_from_the_environment(monkeypatch):
     settings = Settings()
 
     assert settings.competition_max_attempts == 5
+
+
+def test_scheduled_participants_are_disabled_until_backend_contract_is_available(monkeypatch):
+    _populate(monkeypatch)
+    assert Settings().competition_scheduled_enabled is False
+
+
+def test_scheduled_participants_require_backend_lookup_configuration(monkeypatch):
+    _populate(monkeypatch, PORTFOLIO_BUILDER_COMPETITION_SCHEDULED_ENABLED="true")
+    with pytest.raises(ValidationError, match="backend"):
+        Settings()

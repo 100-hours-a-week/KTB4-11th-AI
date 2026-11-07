@@ -2,10 +2,10 @@ import logging
 
 import pytest
 import sqlalchemy as sa
-from competition.repository import store_settings
+from portfolio_builder.competition.portfolio import excluded_company_ids
+from portfolio_builder.competition.repository import store_settings
+from portfolio_builder.competition.submit import submit_tool as _submit_tool
 from portfolio_builder.errors import PortfolioRejected
-from portfolio_builder.participants.portfolio import excluded_company_ids
-from portfolio_builder.participants.submit import submit_tool as _submit_tool
 from portfolio_builder.scheduled.repository import find_previous_portfolio
 
 SAMSUNG = "00126380"

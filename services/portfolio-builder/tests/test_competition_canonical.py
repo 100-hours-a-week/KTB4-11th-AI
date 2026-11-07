@@ -1,9 +1,9 @@
-from competition.canonical import (
+from portfolio_builder.competition.canonical import (
     EMPTY_CANONICAL_FORM,
     SIGNAL_NAMES,
     classify_additional_request,
 )
-from portfolio_builder.participants.repository import ParticipantSettings, generation_key
+from portfolio_builder.competition.repository import ParticipantSettings, generation_key
 
 NOUL_THRESHOLD = 0.5
 CHOICE_MIN_CONFIDENCE = 0.6

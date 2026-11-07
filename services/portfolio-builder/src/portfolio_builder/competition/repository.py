@@ -1,21 +1,24 @@
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from portfolio_builder.briefing.dto import PreviousPortfolio
 from portfolio_builder.briefing.repository import load_previous_portfolio
-from portfolio_builder.database import portfolios
-from portfolio_builder.participants.database import (
+from portfolio_builder.competition.database import (
     competition_attempts,
     competition_jobs,
     competition_participants,
     competition_portfolios,
 )
+from portfolio_builder.competition.themes import ResolvedAgent
+from portfolio_builder.database import portfolios
 
 
 @dataclass(frozen=True)
@@ -287,3 +290,157 @@ def find_participant_portfolio(
         .first()
     )
     return load_previous_portfolio(conn, portfolio)
+
+
+def participants_due_for_generation(
+    engine: sa.Engine,
+    active: dict[int, int],
+    now: datetime,
+    max_explanation_attempts: int,
+) -> list[tuple[ParticipantSettings, int | None]]:
+    if not active:
+        return []
+    start = now.astimezone(ZoneInfo("Asia/Seoul")).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    latest = (
+        sa.select(
+            competition_portfolios.c.participant_id,
+            sa.func.max(competition_portfolios.c.portfolio_id).label("portfolio_id"),
+        )
+        .group_by(competition_portfolios.c.participant_id)
+        .subquery()
+    )
+    with engine.connect() as conn:
+        rows = (
+            conn.execute(
+                sa.select(competition_participants, latest.c.portfolio_id.label("previous_id"))
+                .select_from(
+                    competition_participants.outerjoin(
+                        latest, latest.c.participant_id == competition_participants.c.participant_id
+                    )
+                    .outerjoin(
+                        competition_portfolios,
+                        sa.and_(
+                            competition_portfolios.c.participant_id
+                            == competition_participants.c.participant_id,
+                            competition_portfolios.c.portfolio_id == latest.c.portfolio_id,
+                        ),
+                    )
+                    .outerjoin(portfolios, portfolios.c.id == latest.c.portfolio_id)
+                )
+                .where(
+                    competition_participants.c.participant_id.in_(active),
+                    sa.or_(
+                        latest.c.portfolio_id.is_(None),
+                        sa.and_(
+                            portfolios.c.status != "ready",
+                            portfolios.c.explanation_attempts < max_explanation_attempts,
+                        ),
+                        sa.and_(
+                            portfolios.c.status == "ready",
+                            competition_portfolios.c.created_at < start,
+                        ),
+                    ),
+                )
+                .order_by(competition_participants.c.participant_id)
+            )
+            .mappings()
+            .all()
+        )
+    return [
+        (_participant(row), row["previous_id"])
+        for row in rows
+        if active[row["participant_id"]] == row["user_id"]
+    ]
+
+
+SETTINGS_DRIFT_FIELDS = (
+    "participant_id",
+    "competition_id",
+    "user_id",
+    "agent_id",
+    "risk_profile",
+    "interested_theme_codes",
+    "excluded_theme_codes",
+    "interested_theme_names",
+    "excluded_theme_names",
+    "additional_request",
+)
+
+
+ClassifyFn = Callable[[ResolvedAgent], tuple[Any, str | None, bool]]
+
+
+def _unclassified(resolved: ResolvedAgent) -> tuple[Any, str | None, bool]:
+    return resolved.additional_request, None, False
+
+
+def store_settings(
+    engine: sa.Engine,
+    resolved: ResolvedAgent,
+    classify: ClassifyFn = _unclassified,
+) -> tuple[ParticipantSettings, list[str]]:
+    excluded_codes = sorted(set(resolved.excluded_theme_codes))
+    interested_codes = sorted(set(resolved.interested_theme_codes) - set(excluded_codes))
+
+    with engine.begin() as conn:
+        inserted = conn.execute(
+            pg_insert(competition_participants)
+            .values(
+                participant_id=resolved.participant_id,
+                competition_id=resolved.competition_id,
+                user_id=resolved.user_id,
+                agent_id=resolved.agent_id,
+                risk_profile=resolved.risk_profile,
+                interested_theme_codes=interested_codes,
+                excluded_theme_codes=excluded_codes,
+                interested_theme_names=resolved.interested_theme_names,
+                excluded_theme_names=resolved.excluded_theme_names,
+                additional_request=resolved.additional_request,
+            )
+            .on_conflict_do_nothing(index_elements=["participant_id"])
+            .returning(competition_participants.c.participant_id)
+        ).first()
+
+        if inserted is not None:
+            canonical_form, canonical_version, classified = classify(resolved)
+            conn.execute(
+                sa.update(competition_participants)
+                .where(competition_participants.c.participant_id == resolved.participant_id)
+                .values(
+                    canonical_form=canonical_form,
+                    canonical_version=canonical_version,
+                    classified=classified,
+                )
+            )
+
+        row = (
+            conn.execute(
+                sa.select(competition_participants).where(
+                    competition_participants.c.participant_id == resolved.participant_id
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+    stored = _participant(row)
+    from_request = ParticipantSettings(
+        participant_id=resolved.participant_id,
+        competition_id=resolved.competition_id,
+        user_id=resolved.user_id,
+        agent_id=resolved.agent_id,
+        risk_profile=resolved.risk_profile,
+        interested_theme_codes=tuple(interested_codes),
+        excluded_theme_codes=tuple(excluded_codes),
+        interested_theme_names=tuple(resolved.interested_theme_names),
+        excluded_theme_names=tuple(resolved.excluded_theme_names),
+        additional_request=resolved.additional_request,
+    )
+    differing = [
+        name
+        for name in SETTINGS_DRIFT_FIELDS
+        if getattr(stored, name) != getattr(from_request, name)
+    ]
+    return stored, differing

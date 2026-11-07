@@ -1,5 +1,5 @@
-from competition.canonical import classify_additional_request
-from competition.repository import store_settings
+from portfolio_builder.competition.canonical import classify_additional_request
+from portfolio_builder.competition.repository import store_settings
 
 MODEL = "openrouter/m"
 

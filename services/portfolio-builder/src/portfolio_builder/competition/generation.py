@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import UTC, datetime
 
 import sqlalchemy as sa
 from disclosure_retrieval.settings import Settings as DisclosureSettings
@@ -8,13 +9,9 @@ from langchain_core.language_models import BaseChatModel
 from portfolio_builder.agent.run import RunResult, run_agent
 from portfolio_builder.agent.system_prompt import DISCLOSURE_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.database import portfolios
-from portfolio_builder.explain import Explanations, explain_and_save
-from portfolio_builder.market import HttpMarket
-from portfolio_builder.news_client import NewsClient
-from portfolio_builder.participants.briefing import load_briefing
-from portfolio_builder.participants.portfolio import excluded_company_ids
-from portfolio_builder.participants.repository import (
+from portfolio_builder.competition.briefing import load_briefing
+from portfolio_builder.competition.portfolio import excluded_company_ids
+from portfolio_builder.competition.repository import (
     ParticipantSettings,
     claim_job,
     fail_job,
@@ -22,10 +19,15 @@ from portfolio_builder.participants.repository import (
     generation_key,
     latest_participant_portfolio,
     link_portfolio,
+    participants_due_for_generation,
     participants_without_ready_portfolio,
 )
-from portfolio_builder.participants.submit import submit_tool
-from portfolio_builder.participants.system_prompt import COMPETITION_SYSTEM_PROMPT
+from portfolio_builder.competition.submit import submit_tool
+from portfolio_builder.competition.system_prompt import COMPETITION_SYSTEM_PROMPT
+from portfolio_builder.database import portfolios
+from portfolio_builder.explain import Explanations, explain_and_save
+from portfolio_builder.market import HttpMarket
+from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed, save_trace
 from portfolio_builder.settings import Settings
 from portfolio_builder.tools.disclosure.tool import disclosure_tools
@@ -43,18 +45,40 @@ def _explain(
     log: StructuredLogger,
     portfolio_id: int,
     trace: list[TraceEntry],
-) -> None:
-    try:
-        explainer = model_factory(
-            max_tokens=settings.explain_max_tokens, reasoning={"effort": "none"}
-        ).with_structured_output(Explanations, include_raw=True)
-        stocks = explain_and_save(
-            engine, explainer, portfolio_id, trace, settings.explain_result_chars
-        )
-        log.info("explained", portfolio_id=portfolio_id, stocks=stocks)
-    except Exception as error:
-        log.exception("explain_failed", portfolio_id=portfolio_id, error=str(error))
-        mark_explanation_failed(engine, portfolio_id)
+) -> bool:
+    with engine.begin() as conn:
+        locked = conn.execute(
+            sa.text("SELECT pg_try_advisory_xact_lock(hashtextextended(:identity, 0))"),
+            {"identity": f"portfolio-builder:explain:{portfolio_id}"},
+        ).scalar_one()
+        if not locked:
+            log.info("explanation_already_running", portfolio_id=portfolio_id)
+            return True
+        row = conn.execute(
+            sa.select(portfolios.c.status, portfolios.c.explanation_attempts).where(
+                portfolios.c.id == portfolio_id
+            )
+        ).first()
+        if row is None:
+            return False
+        if row.status == "ready":
+            return True
+        if row.explanation_attempts >= settings.competition_max_attempts:
+            log.info("explanation_budget_exhausted", portfolio_id=portfolio_id)
+            return False
+        try:
+            explainer = model_factory(
+                max_tokens=settings.explain_max_tokens, reasoning={"effort": "none"}
+            ).with_structured_output(Explanations, include_raw=True)
+            stocks = explain_and_save(
+                engine, explainer, portfolio_id, trace, settings.explain_result_chars
+            )
+            log.info("explained", portfolio_id=portfolio_id, stocks=stocks)
+            return True
+        except Exception as error:
+            log.exception("explain_failed", portfolio_id=portfolio_id, error=str(error))
+            mark_explanation_failed(engine, portfolio_id)
+            return False
 
 
 def _generate(
@@ -107,9 +131,29 @@ def _generate_for(
     model_factory: ModelFactory,
     settings: Settings,
     log: StructuredLogger,
-) -> None:
+    *,
+    initial_only: bool = True,
+    expected_previous_id: int | None = None,
+    scheduled_at: datetime | None = None,
+) -> bool:
     previous = latest_participant_portfolio(engine, participant.participant_id)
     previous_portfolio_id = previous[0] if previous is not None else None
+    if not initial_only and previous_portfolio_id != expected_previous_id:
+        log.info("generation_selection_changed", participant_id=participant.participant_id)
+        return True
+    if not initial_only:
+        due = participants_due_for_generation(
+            engine,
+            {participant.participant_id: participant.user_id},
+            scheduled_at or datetime.now(UTC),
+            settings.competition_max_attempts,
+        )
+        if not due or due[0][1] != previous_portfolio_id:
+            log.info("generation_no_longer_due", participant_id=participant.participant_id)
+            return True
+    if initial_only and previous is not None and previous[1] == "ready":
+        log.info("initial_generation_already_ready", participant_id=participant.participant_id)
+        return True
 
     if previous is not None:
         portfolio_id, status, has_trace = previous
@@ -119,8 +163,7 @@ def _generate_for(
                     sa.select(portfolios.c.trace).where(portfolios.c.id == portfolio_id)
                 ).scalar_one()
             trace = [TraceEntry.model_validate(entry) for entry in trace_rows]
-            _explain(engine, model_factory, settings, log, portfolio_id, trace)
-            return
+            return _explain(engine, model_factory, settings, log, portfolio_id, trace)
 
     key = generation_key(participant, previous_portfolio_id, settings.llm_model)
     claim = claim_job(
@@ -133,9 +176,10 @@ def _generate_for(
     )
     if claim is None:
         log.info("generation_skipped", participant_id=participant.participant_id, key=key)
-        return
+        return True
 
     if not claim.mine:
+        assert claim.portfolio_id is not None
         link_portfolio(engine, participant.participant_id, claim.portfolio_id)
         log.info(
             "shared",
@@ -143,7 +187,7 @@ def _generate_for(
             portfolio_id=claim.portfolio_id,
             key=key,
         )
-        return
+        return True
 
     try:
         excluded = excluded_company_ids(engine, participant.excluded_theme_codes)
@@ -192,7 +236,7 @@ def _generate_for(
         if result.portfolio_id is None:
             error = result.error or f"agent ended with outcome {result.outcome}"
             fail_job(engine, key, error)
-            return
+            return False
 
         save_trace(engine, result.portfolio_id, result.trace)
         link_portfolio(engine, participant.participant_id, result.portfolio_id)
@@ -204,9 +248,9 @@ def _generate_for(
             error=str(error),
         )
         fail_job(engine, key, f"{type(error).__name__}: {error}")
-        return
+        return False
 
-    _explain(engine, model_factory, settings, log, result.portfolio_id, result.trace)
+    return _explain(engine, model_factory, settings, log, result.portfolio_id, result.trace)
 
 
 def generate_missing_portfolios(
@@ -219,3 +263,29 @@ def generate_missing_portfolios(
         engine, settings.competition_max_attempts
     ):
         _generate_for(participant, engine, model_factory, settings, log)
+
+
+def generate_scheduled_portfolios(
+    engine: sa.Engine,
+    model_factory: ModelFactory,
+    settings: Settings,
+    log: StructuredLogger,
+    active: dict[int, int],
+    now: datetime,
+) -> bool:
+    succeeded = True
+    for participant, previous_id in participants_due_for_generation(
+        engine, active, now, settings.competition_max_attempts
+    ):
+        result = _generate_for(
+            participant,
+            engine,
+            model_factory,
+            settings,
+            log,
+            initial_only=False,
+            expected_previous_id=previous_id,
+            scheduled_at=now,
+        )
+        succeeded = result and succeeded
+    return succeeded
