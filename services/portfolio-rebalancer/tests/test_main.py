@@ -533,3 +533,152 @@ def test_a_partial_cancel_publish_failure_does_not_place_replacements(env, monke
         requested["correlation_id"],
         requested["result"],
     ) == ("cancel-message-77", "cancel-77", "run", "published")
+
+
+def test_disabled_competition_never_cancels_or_places_for_participants(env, monkeypatch):
+    raw = {**account(11, pending=[77]), "participant_id": 9}
+    orders = _use(monkeypatch, users=users(raw))[0]
+    assert _main() == 0
+    assert orders.cancelled == []
+    assert orders.placed == []
+
+
+def test_enabled_competition_requires_explicit_identity_before_cancelling(env, monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_COMPETITION_ENABLED", "true")
+    orders = _use(monkeypatch, users=users(account(11, pending=[77])))[0]
+    assert _main() == 0
+    assert orders.cancelled == []
+    assert orders.placed == []
+
+
+@pytest.mark.parametrize("common", [None, Unready(id=8, status="explanation_failed")])
+def test_participant_runs_when_common_unavailable_and_resolves_before_cancel(
+    env, monkeypatch, common
+):
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_COMPETITION_ENABLED", "true")
+    monkeypatch.setattr(entry, "load_portfolio", lambda engine: common)
+    orders = _use(
+        monkeypatch,
+        users=users(
+            {**account(11, pending=[77]), "participant_id": 9},
+            {**account(12, pending=[78]), "participant_id": None},
+            {**account(13, pending=[79]), "participant_id": 10},
+            {**account(14, pending=[80], active=False), "participant_id": 11},
+        ),
+    )[0]
+    selected = []
+
+    def load(engine, user_id=None, participant_id=None):
+        if participant_id is None:
+            return common
+        assert orders.cancelled == []
+        selected.append((user_id, participant_id))
+        return PORTFOLIO if participant_id == 9 else Unready(id=7, status="explanation_pending")
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    assert _main() == 0
+    assert selected == [(1, 9), (1, 10)]
+    assert orders.cancelled == [(1, 11, 77)]
+    assert orders.placed == [(1, 11, "005930", 4)]
+
+
+def test_mixed_accounts_use_distinct_portfolios_and_aggregate_quotes(env, monkeypatch, capsys):
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_COMPETITION_ENABLED", "true")
+    personal = PORTFOLIO.model_copy(
+        update={
+            "id": 9,
+            "targets": [Target(stock_code="373220", weight=0.5, exiting=False, buy=WHY, sell=WHY)],
+            "names": {"373220": "LG에너지솔루션"},
+        }
+    )
+    reads = []
+
+    def load(engine, user_id=None, participant_id=None):
+        reads.append((user_id, participant_id))
+        return PORTFOLIO if participant_id is None else personal
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    selected = users(
+        {**account(11, pending=[77]), "participant_id": None},
+        {**account(12, pending=[78]), "participant_id": 9},
+        {**account(13, stocks=[("000660", 1)]), "participant_id": 10},
+    )
+    orders = _use(monkeypatch, users=selected)[0]
+    monkeypatch.setattr(
+        entry, "latest_prices", lambda conf, codes: {code: 100_000.0 for code in codes}
+    )
+
+    def closes(conf, codes, now):
+        env["codes"] = codes
+        return {code: [100_000.0] * 20 for code in codes}
+
+    monkeypatch.setattr(entry, "daily_closes", closes)
+    assert _main() == 0
+    assert reads == [(None, None), (1, 9), (1, 10)]
+    assert env["codes"] == {"005930", "373220", "000660"}
+    assert [(a, code) for _, a, code, _ in orders.placed] == [
+        (11, "005930"),
+        (12, "373220"),
+        (13, "373220"),
+    ]
+    assert orders.calls_of("users") == [("users",)]
+    events = _events(capsys.readouterr().out)
+    sent = [event for event in events if event["message"] == "order_sent"]
+    assert {(e["account_id"], e["participant_id"], e["portfolio_id"]) for e in sent} == {
+        (11, None, 5),
+        (12, 9, 9),
+        (13, 10, 9),
+    }
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("cross_user", [False, True])
+@pytest.mark.parametrize("identities", [(None, None), (9, 9), (9, 10), (None, 9)])
+def test_duplicate_account_entries_all_skip_before_publication(
+    env, monkeypatch, capsys, enabled, cross_user, identities
+):
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_COMPETITION_ENABLED", str(enabled))
+    first = {**account(11, pending=[77]), "participant_id": identities[0]}
+    second = {**account(11, pending=[77]), "participant_id": identities[1]}
+    if cross_user:
+        snapshots = [
+            User.model_validate({"user_id": 1, "accounts": [first]}),
+            User.model_validate({"user_id": 2, "accounts": [second]}),
+        ]
+    else:
+        snapshots = users(first, second)
+    snapshots.append(
+        User.model_validate({"user_id": 3, "accounts": [{**account(12), "participant_id": None}]})
+    )
+    orders = _use(monkeypatch, users=snapshots)[0]
+    monkeypatch.setattr(entry, "load_portfolio", lambda *args: PORTFOLIO)
+    assert _main() == 0
+    assert orders.cancelled == []
+    assert orders.placed == [(3, 12, "005930", 4)]
+    skipped = [e for e in _events(capsys.readouterr().out) if e["message"] == "account_skipped"]
+    assert [(e["account_id"], e["reason"]) for e in skipped] == [
+        (11, "duplicate_account_id"),
+        (11, "duplicate_account_id"),
+    ]
+
+
+@pytest.mark.parametrize("cross_user", [False, True])
+def test_participant_assigned_to_multiple_active_accounts_skips_every_mapping(
+    env, monkeypatch, cross_user
+):
+    monkeypatch.setenv("PORTFOLIO_REBALANCER_COMPETITION_ENABLED", "true")
+    first = {**account(11, pending=[77]), "participant_id": 9}
+    second = {**account(12, pending=[78]), "participant_id": 9}
+    snapshots = (
+        [
+            User.model_validate({"user_id": 1, "accounts": [first]}),
+            User.model_validate({"user_id": 2, "accounts": [second]}),
+        ]
+        if cross_user
+        else users(first, second)
+    )
+    orders = _use(monkeypatch, users=snapshots)[0]
+    monkeypatch.setattr(entry, "load_portfolio", lambda *args: PORTFOLIO)
+    assert _main() == 0
+    assert orders.cancelled == []
+    assert orders.placed == []

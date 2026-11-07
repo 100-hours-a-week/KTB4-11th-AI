@@ -18,7 +18,7 @@ from portfolio_rebalancer.backend import Backend, order_request_body
 from portfolio_rebalancer.holidays import COVERED_THROUGH, KST, hours_left, in_session
 from portfolio_rebalancer.market import daily_closes, latest_prices
 from portfolio_rebalancer.orders import Orders, PublishError
-from portfolio_rebalancer.portfolio import Unready, load_portfolio
+from portfolio_rebalancer.portfolio import Portfolio, Unready, load_portfolio
 from portfolio_rebalancer.rebalance import quote, rebalance
 from portfolio_rebalancer.settings import Settings
 from portfolio_rebalancer.snapshot import Account
@@ -36,11 +36,18 @@ TOTALS = (
 
 
 def _cancel_all(
-    orders: Orders, log: StructuredLogger, user_id: int, account: Account, counts: Counter[str]
+    orders: Orders,
+    log: StructuredLogger,
+    user_id: int,
+    account: Account,
+    counts: Counter[str],
+    portfolio_id: int,
 ) -> bool:
     for pending in account.pending_orders:
         fields = {
             "user_id": user_id,
+            "portfolio_id": portfolio_id,
+            "participant_id": account.participant_id,
             "account_id": account.account_id,
             "stock_code": pending.stock_code,
             "side": pending.order_side,
@@ -101,10 +108,10 @@ def main() -> None:
             portfolio = load_portfolio(engine)
         finally:
             engine.dispose()
-        if portfolio is None:
+        if portfolio is None and not settings.competition_enabled:
             end.update(outcome="no_portfolio")
             raise SystemExit(0)
-        if isinstance(portfolio, Unready):
+        if isinstance(portfolio, Unready) and not settings.competition_enabled:
             end.update(outcome=portfolio.status, portfolio_id=portfolio.id)
             raise SystemExit(1 if portfolio.status == "explanation_failed" else 0)
 
@@ -133,21 +140,77 @@ def main() -> None:
                 end.update(
                     outcome="users_fetch_failed",
                     error=detail,
-                    portfolio_id=portfolio.id,
+                    portfolio_id=portfolio.id if portfolio is not None else None,
                     **{key: counts[key] for key in TOTALS},
                 )
                 raise SystemExit(1) from error
-            for user in users:
-                for account in user.accounts:
-                    if account.is_active:
-                        if _cancel_all(orders, log, user.user_id, account, counts):
-                            cancel_requested_by_account[account.account_id].update(
-                                pending.order_id for pending in account.pending_orders
+            account_counts = Counter(a.account_id for u in users for a in u.accounts)
+            participant_counts = Counter(
+                a.participant_id
+                for u in users
+                for a in u.accounts
+                if a.is_active and a.participant_id is not None
+            )
+            selected: list[tuple[int, Account, Portfolio]] = []
+            cached: dict[tuple[int, int], Portfolio | Unready | None] = {}
+            engine = sa.create_engine(settings.postgres_dsn)
+            try:
+                for user in users:
+                    for account in user.accounts:
+                        fields = {
+                            "user_id": user.user_id,
+                            "account_id": account.account_id,
+                            "participant_id": account.participant_id,
+                        }
+                        reason = None
+                        chosen = portfolio
+                        if account_counts[account.account_id] > 1:
+                            reason = "duplicate_account_id"
+                        elif not account.is_active:
+                            reason = "inactive"
+                        elif (
+                            account.participant_id is not None
+                            and participant_counts[account.participant_id] > 1
+                        ):
+                            reason = "duplicate_participant_id"
+                        elif settings.competition_enabled and (
+                            "participant_id" not in account.model_fields_set
+                        ):
+                            reason = "participant_id_missing"
+                        elif account.participant_id is not None:
+                            if not settings.competition_enabled:
+                                reason = "competition_disabled"
+                            else:
+                                key = (user.user_id, account.participant_id)
+                                if key not in cached:
+                                    cached[key] = load_portfolio(engine, *key)
+                                chosen = cached[key]
+                        if reason is None and not isinstance(chosen, Portfolio):
+                            reason = (
+                                chosen.status if isinstance(chosen, Unready) else "no_portfolio"
                             )
-                        else:
-                            failed_cancels.add(account.account_id)
-            codes = {t.stock_code for t in portfolio.targets} | {
-                s.stock_code for u in users for a in u.accounts for s in a.stocks
+                        if reason is not None:
+                            log.info(
+                                "account_skipped",
+                                **fields,
+                                reason=reason,
+                                portfolio_id=chosen.id if chosen is not None else None,
+                            )
+                            continue
+                        assert isinstance(chosen, Portfolio)
+                        selected.append((user.user_id, account, chosen))
+                        log.info("portfolio_selected", **fields, portfolio_id=chosen.id)
+            finally:
+                engine.dispose()
+            for user_id, account, chosen in selected:
+                if _cancel_all(orders, log, user_id, account, counts, chosen.id):
+                    cancel_requested_by_account[account.account_id].update(
+                        pending.order_id for pending in account.pending_orders
+                    )
+                else:
+                    failed_cancels.add(account.account_id)
+            codes = {t.stock_code for _, _, p in selected for t in p.targets} | {
+                s.stock_code for _, a, _ in selected for s in a.stocks
             }
             closes = daily_closes(settings.questdb_conf, codes, now)
             prices = latest_prices(settings.questdb_conf, codes)
@@ -156,75 +219,77 @@ def main() -> None:
             if missing := sorted(codes - prices.keys()):
                 log.warning("no_price", stock_codes=missing, missing="latest_price")
             quotes = {c: quote(closes[c], prices[c]) for c in closes.keys() & prices.keys()}
-            named = {t.stock_code for t in portfolio.targets}
-            for user in users:
-                for account in user.accounts:
-                    if not account.is_active or account.account_id in failed_cancels:
-                        continue
-                    replaced = sorted(cancel_requested_by_account[account.account_id])
-                    if stranded := sorted(
-                        {s.stock_code for s in account.stocks if s.quantity > 0}
-                        - named
-                        - portfolio.leftovers.keys()
-                    ):
-                        log.warning(
-                            "leftover_without_reason",
-                            user_id=user.user_id,
-                            account_id=account.account_id,
-                            stock_codes=stranded,
+            for user_id, account, portfolio in selected:
+                named = {t.stock_code for t in portfolio.targets}
+                if account.account_id in failed_cancels:
+                    continue
+                replaced = sorted(cancel_requested_by_account[account.account_id])
+                if stranded := sorted(
+                    {s.stock_code for s in account.stocks if s.quantity > 0}
+                    - named
+                    - portfolio.leftovers.keys()
+                ):
+                    log.warning(
+                        "leftover_without_reason",
+                        user_id=user_id,
+                        portfolio_id=portfolio.id,
+                        participant_id=account.participant_id,
+                        account_id=account.account_id,
+                        stock_codes=stranded,
+                    )
+                for order in rebalance(
+                    portfolio,
+                    account,
+                    quotes,
+                    settings.band,
+                    settings.buy_buffer,
+                    runs_left,
+                    week_runs,
+                ):
+                    request_body = order_request_body(order)
+                    fields = {
+                        "user_id": user_id,
+                        "portfolio_id": portfolio.id,
+                        "participant_id": account.participant_id,
+                        "account_id": account.account_id,
+                        "stock_code": order.stock_code,
+                        "stock_name": order.stock_name,
+                        "request_body": request_body,
+                        "side": order.side,
+                        "quantity": order.quantity,
+                        "reason": order.explanation.reason,
+                        **order.pricing.model_dump(),
+                    }
+                    try:
+                        published = orders.place(
+                            user_id, account.account_id, request_body, replaced
                         )
-                    for order in rebalance(
-                        portfolio,
-                        account,
-                        quotes,
-                        settings.band,
-                        settings.buy_buffer,
-                        runs_left,
-                        week_runs,
-                    ):
-                        request_body = order_request_body(order)
-                        fields = {
-                            "user_id": user.user_id,
-                            "account_id": account.account_id,
-                            "stock_code": order.stock_code,
-                            "stock_name": order.stock_name,
-                            "request_body": request_body,
-                            "side": order.side,
-                            "quantity": order.quantity,
-                            "reason": order.explanation.reason,
-                            **order.pricing.model_dump(),
-                        }
-                        try:
-                            published = orders.place(
-                                user.user_id, account.account_id, request_body, replaced
-                            )
-                        except PublishError as error:
-                            counts["failed"] += 1
-                            log.error(
-                                "order_failed",
-                                **fields,
-                                **error.fields,
-                                result="failed",
-                                error=str(error),
-                                queue_role="orders",
-                                direction="publish",
-                            )
-                            continue
-                        counts["sent"] += 1
-                        counts[order.pricing.order_type] += 1
-                        if order.pricing.trigger in ("upper", "lower"):
-                            counts[f"{order.pricing.trigger}_triggered"] += 1
-                        log.info(
-                            "order_sent",
+                    except PublishError as error:
+                        counts["failed"] += 1
+                        log.error(
+                            "order_failed",
                             **fields,
-                            **published,
-                            result="published",
+                            **error.fields,
+                            result="failed",
+                            error=str(error),
                             queue_role="orders",
                             direction="publish",
                         )
-
+                        continue
+                    counts["sent"] += 1
+                    counts[order.pricing.order_type] += 1
+                    if order.pricing.trigger in ("upper", "lower"):
+                        counts[f"{order.pricing.trigger}_triggered"] += 1
+                    log.info(
+                        "order_sent",
+                        **fields,
+                        **published,
+                        result="published",
+                        queue_role="orders",
+                        direction="publish",
+                    )
             end.update(
-                portfolio_id=portfolio.id,
+                portfolio_id=portfolio.id if portfolio is not None else None,
                 **{key: counts[key] for key in TOTALS},
             )
             raise SystemExit(1 if counts["failed"] or counts["cancel_failed"] else 0)

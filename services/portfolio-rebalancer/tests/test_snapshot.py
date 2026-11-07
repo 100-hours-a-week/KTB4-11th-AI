@@ -78,3 +78,21 @@ def test_polling_ignores_invalid_unused_profile_without_rejecting_accounts(risk_
     assert len(snapshot.users) == 2
     assert snapshot.users[0].investment_profile is None
     assert snapshot.users[0].accounts == snapshot.users[1].accounts
+
+
+@pytest.mark.parametrize("participant_id", [None, 1, 999])
+def test_accounts_retain_explicit_participant_identity(participant_id):
+    raw = {**EXAMPLE["users"][0]["accounts"][0], "participant_id": participant_id}
+    snapshot = Snapshot.model_validate({"users": [{"user_id": 1, "accounts": [raw]}]})
+    account = snapshot.users[0].accounts[0]
+    assert account.participant_id == participant_id
+    assert "participant_id" in account.model_fields_set
+
+
+@pytest.mark.parametrize("participant_id", [0, -1, True, 1.5, "3"])
+def test_invalid_participant_identity_rejects_snapshot(participant_id):
+    from pydantic import ValidationError
+
+    raw = {**EXAMPLE["users"][0]["accounts"][0], "participant_id": participant_id}
+    with pytest.raises(ValidationError):
+        Snapshot.model_validate({"users": [{"user_id": 1, "accounts": [raw]}]})

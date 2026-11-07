@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Annotated, Literal
 
 from ktb_core.logging import get_logger
 from pydantic import BaseModel, Field, ValidationError, field_validator
@@ -23,6 +23,7 @@ class PendingOrder(BaseModel):
 
 
 class Account(BaseModel):
+    participant_id: Annotated[int, Field(gt=0, strict=True)] | None = None
     account_id: int
     is_active: bool
     cash_balance: int
