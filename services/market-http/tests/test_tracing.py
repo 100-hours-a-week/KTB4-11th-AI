@@ -40,7 +40,7 @@ def _stubs(monkeypatch):
     monkeypatch.setattr(prices_module, "questdb_prices", lambda conf, codes: [])
     monkeypatch.setattr(
         prices_module,
-        "current_day_price_limits",
+        "latest_price_limits",
         lambda conf, codes: {
             code: {"upper_limit_price": 107200, "lower_limit_price": 57700} for code in codes
         },
