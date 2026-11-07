@@ -190,3 +190,30 @@ def test_participant_leftovers_use_own_link_history_including_shared_portfolios(
     assert loaded.id == own
     assert set(loaded.leftovers) == {"373220"}
     assert loaded.leftovers["373220"].reason == "shared"
+
+
+def test_participant_history_survives_common_history_exclusion_from_builder_pr(
+    competition, monkeypatch
+):
+    from portfolio_rebalancer import portfolio as policy
+
+    monkeypatch.setattr(
+        policy,
+        "LEFTOVERS",
+        policy.LEFTOVERS.replace(
+            "ORDER BY",
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = r.portfolio_id"
+            ")\nORDER BY",
+        ),
+    )
+    with competition.begin() as conn:
+        _participant(conn, 10, 1)
+        historical = _portfolio(conn, [], [LGES], [(LGES, "sell", "own historical exit")])
+        _link(conn, 10, historical)
+        latest = _portfolio(conn, [], [], [])
+        _link(conn, 10, latest)
+    loaded = load_portfolio(competition, 1, 10)
+    assert loaded.id == latest
+    assert set(loaded.leftovers) == {"373220"}
+    assert loaded.leftovers["373220"].reason == "own historical exit"

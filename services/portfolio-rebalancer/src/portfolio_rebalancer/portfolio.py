@@ -66,25 +66,31 @@ ORDER BY c.stock_code, r.portfolio_id DESC
 """
 
 
+PARTICIPANT_LEFTOVERS = """
+SELECT DISTINCT ON (c.stock_code) c.stock_code, c.name, r.id, r.reason, r.reasonings
+FROM portfolio_reasons r
+JOIN portfolio_exits e ON e.portfolio_id = r.portfolio_id AND e.company_id = r.company_id
+JOIN corporations c ON c.corp_code = r.company_id
+JOIN competition_portfolios cp ON cp.portfolio_id = r.portfolio_id
+JOIN competition_participants p ON p.participant_id = cp.participant_id
+WHERE r.side = 'sell' AND r.portfolio_id <= :id
+  AND p.participant_id = :participant_id AND p.user_id = :user_id
+ORDER BY c.stock_code, r.portfolio_id DESC
+"""
+
+
 def load_portfolio(
     engine: sa.Engine, user_id: int | None = None, participant_id: int | None = None
 ) -> Portfolio | Unready | None:
     with engine.connect() as conn:
         has_links = conn.scalar(sa.text("SELECT to_regclass('competition_portfolios')")) is not None
         params = {"user_id": user_id, "participant_id": participant_id}
-        scope = ""
+        leftovers_sql = LEFTOVERS
         latest_sql = LATEST
         if participant_id is not None:
             if not has_links:
                 return None
-            scope = """
-AND EXISTS (
-    SELECT 1 FROM competition_portfolios cp
-    JOIN competition_participants p ON p.participant_id = cp.participant_id
-    WHERE cp.portfolio_id = r.portfolio_id
-      AND p.participant_id = :participant_id AND p.user_id = :user_id
-)
-"""
+            leftovers_sql = PARTICIPANT_LEFTOVERS
             latest_sql = """
 SELECT f.id, f.status FROM portfolios f
 JOIN competition_portfolios cp ON cp.portfolio_id = f.id
@@ -98,9 +104,11 @@ SELECT id, status FROM portfolios f
 WHERE NOT EXISTS (SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = f.id)
 ORDER BY id DESC LIMIT 1
 """
-            scope = """
-AND NOT EXISTS (SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = r.portfolio_id)
-"""
+            leftovers_sql = LEFTOVERS.replace(
+                "ORDER BY",
+                "AND NOT EXISTS (SELECT 1 FROM competition_portfolios cp"
+                " WHERE cp.portfolio_id = r.portfolio_id)\nORDER BY",
+            )
         latest = conn.execute(sa.text(latest_sql), params).first()
         if latest is None:
             return None
@@ -115,7 +123,6 @@ AND NOT EXISTS (SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = 
             for row in conn.execute(sa.text(REASONS), {"id": portfolio_id})
         }
         target_rows = conn.execute(sa.text(TARGETS), {"id": portfolio_id}).all()
-        leftovers_sql = LEFTOVERS.replace("ORDER BY", scope + "ORDER BY")
         leftover_rows = conn.execute(sa.text(leftovers_sql), {**params, "id": portfolio_id}).all()
     targets = [
         Target(
