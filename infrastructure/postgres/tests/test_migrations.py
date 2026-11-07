@@ -117,6 +117,11 @@ def test_downgrade_removes_articles_and_upgrade_restores_it(pg_dsn, pg_engine, m
                 "portfolio_holdings",
                 "portfolio_exits",
                 "portfolio_reasons",
+            },
+        ),
+        (
+            "portfolio_builder.competition.database",
+            {
                 "competition_participants",
                 "competition_jobs",
                 "competition_portfolios",

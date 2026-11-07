@@ -21,13 +21,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     explain_result_chars: int = Field(default=2000, gt=0)
     explain_max_tokens: int = Field(default=16000, gt=0)
-    competition_queue_url: str = ""
-    competition_visibility_timeout: int = Field(default=300, gt=0)
     competition_stale_running_seconds: int = Field(default=3600, gt=0)
     competition_max_attempts: int = Field(default=3, gt=0)
-    aws_region: str = "ap-northeast-2"
-    jev_base_uri: str = "https://openrouter.ai/api/v1"
-    jev_model: str = "typesafe/jev-1.14"
-    jev_timeout: int = Field(default=20, gt=0)
-    jev_noul_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
-    jev_choice_min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    worker_poll_interval: float = Field(default=2, gt=0, allow_inf_nan=False)

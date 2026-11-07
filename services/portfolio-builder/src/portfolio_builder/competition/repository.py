@@ -1,5 +1,5 @@
 import hashlib
-from collections.abc import Callable
+import json
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -7,28 +7,15 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from portfolio_builder.competition.canonical import canonical_form_part
-from portfolio_builder.competition.themes import ResolvedAgent
-from portfolio_builder.database import (
+from portfolio_builder.briefing.dto import PreviousPortfolio
+from portfolio_builder.briefing.repository import load_previous_portfolio
+from portfolio_builder.competition.database import (
     competition_attempts,
     competition_jobs,
     competition_participants,
     competition_portfolios,
-    portfolios,
 )
-
-SETTINGS_DRIFT_FIELDS = (
-    "participant_id",
-    "competition_id",
-    "user_id",
-    "agent_id",
-    "risk_profile",
-    "interested_theme_codes",
-    "excluded_theme_codes",
-    "interested_theme_names",
-    "excluded_theme_names",
-    "additional_request",
-)
+from portfolio_builder.database import portfolios
 
 
 @dataclass(frozen=True)
@@ -46,13 +33,6 @@ class ParticipantSettings:
     canonical_form: Any = None
     canonical_version: str | None = None
     classified: bool = False
-
-
-ClassifyFn = Callable[[ResolvedAgent], tuple[Any, str | None, bool]]
-
-
-def _unclassified(resolved: ResolvedAgent) -> tuple[Any, str | None, bool]:
-    return resolved.additional_request, None, False
 
 
 def _participant(row: sa.RowMapping) -> ParticipantSettings:
@@ -73,76 +53,6 @@ def _participant(row: sa.RowMapping) -> ParticipantSettings:
     )
 
 
-def store_settings(
-    engine: sa.Engine,
-    resolved: ResolvedAgent,
-    classify: ClassifyFn = _unclassified,
-) -> tuple[ParticipantSettings, list[str]]:
-    excluded_codes = sorted(set(resolved.excluded_theme_codes))
-    interested_codes = sorted(set(resolved.interested_theme_codes) - set(excluded_codes))
-
-    with engine.begin() as conn:
-        inserted = conn.execute(
-            pg_insert(competition_participants)
-            .values(
-                participant_id=resolved.participant_id,
-                competition_id=resolved.competition_id,
-                user_id=resolved.user_id,
-                agent_id=resolved.agent_id,
-                risk_profile=resolved.risk_profile,
-                interested_theme_codes=interested_codes,
-                excluded_theme_codes=excluded_codes,
-                interested_theme_names=resolved.interested_theme_names,
-                excluded_theme_names=resolved.excluded_theme_names,
-                additional_request=resolved.additional_request,
-            )
-            .on_conflict_do_nothing(index_elements=["participant_id"])
-            .returning(competition_participants.c.participant_id)
-        ).first()
-
-        if inserted is not None:
-            canonical_form, canonical_version, classified = classify(resolved)
-            conn.execute(
-                sa.update(competition_participants)
-                .where(competition_participants.c.participant_id == resolved.participant_id)
-                .values(
-                    canonical_form=canonical_form,
-                    canonical_version=canonical_version,
-                    classified=classified,
-                )
-            )
-
-        row = (
-            conn.execute(
-                sa.select(competition_participants).where(
-                    competition_participants.c.participant_id == resolved.participant_id
-                )
-            )
-            .mappings()
-            .one()
-        )
-
-    stored = _participant(row)
-    from_request = ParticipantSettings(
-        participant_id=resolved.participant_id,
-        competition_id=resolved.competition_id,
-        user_id=resolved.user_id,
-        agent_id=resolved.agent_id,
-        risk_profile=resolved.risk_profile,
-        interested_theme_codes=tuple(interested_codes),
-        excluded_theme_codes=tuple(excluded_codes),
-        interested_theme_names=tuple(resolved.interested_theme_names),
-        excluded_theme_names=tuple(resolved.excluded_theme_names),
-        additional_request=resolved.additional_request,
-    )
-    differing = [
-        name
-        for name in SETTINGS_DRIFT_FIELDS
-        if getattr(stored, name) != getattr(from_request, name)
-    ]
-    return stored, differing
-
-
 @dataclass(frozen=True)
 class Claim:
     mine: bool
@@ -154,6 +64,11 @@ def generation_key(
     previous_portfolio_id: int | None,
     llm_model: str,
 ) -> str:
+    canonical = participant.canonical_form
+    if canonical is None:
+        canonical = ""
+    elif not isinstance(canonical, str):
+        canonical = json.dumps(canonical, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     parts = [
         "v1",
         participant.risk_profile,
@@ -161,7 +76,7 @@ def generation_key(
         *participant.interested_theme_codes,
         str(len(participant.excluded_theme_codes)),
         *participant.excluded_theme_codes,
-        canonical_form_part(participant.canonical_form),
+        canonical,
         participant.canonical_version or "",
         str(previous_portfolio_id or 0),
         llm_model,
@@ -353,3 +268,22 @@ def participants_without_ready_portfolio(
             .all()
         )
     return [_participant(row) for row in rows]
+
+
+def find_participant_portfolio(
+    conn: sa.Connection, participant_id: int
+) -> PreviousPortfolio | None:
+    portfolio = (
+        conn.execute(
+            sa.text(
+                "SELECT p.id, p.created_at, p.cash_weight, p.commentary FROM portfolios p"
+                " JOIN competition_portfolios cp ON cp.portfolio_id = p.id"
+                " WHERE cp.participant_id = :participant_id"
+                " ORDER BY p.id DESC LIMIT 1"
+            ),
+            {"participant_id": participant_id},
+        )
+        .mappings()
+        .first()
+    )
+    return load_previous_portfolio(conn, portfolio)

@@ -3,10 +3,11 @@ from unittest.mock import Mock
 
 import pytest
 import sqlalchemy as sa
+from competition.repository import store_settings
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableLambda
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.competition.repository import link_portfolio, store_settings
+from portfolio_builder.competition.repository import link_portfolio
 from portfolio_builder.explain import (
     ExplanationRejected,
     Explanations,
@@ -14,10 +15,10 @@ from portfolio_builder.explain import (
     explain,
     explain_and_save,
     load_targets,
-    load_unexplained,
     save_explanations,
 )
 from portfolio_builder.portfolio import mark_explanation_failed
+from portfolio_builder.scheduled.repository import load_unexplained
 from pydantic import ValidationError
 
 SAMSUNG = "00126380"

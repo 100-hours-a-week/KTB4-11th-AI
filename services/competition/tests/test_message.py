@@ -1,7 +1,7 @@
 import json
 
 import pytest
-from portfolio_builder.competition.message import (
+from competition.message import (
     MAX_ADDITIONAL_REQUEST_CHARS,
     MAX_AGENTS,
     RISK_LEVEL_TO_PROFILE,

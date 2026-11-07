@@ -1,7 +1,7 @@
 import pytest
 import sqlalchemy as sa
+from competition.themes import ResolvedAgent
 from portfolio_builder.competition.repository import ParticipantSettings
-from portfolio_builder.competition.themes import ResolvedAgent
 from portfolio_builder.database import portfolios
 
 TABLES = (

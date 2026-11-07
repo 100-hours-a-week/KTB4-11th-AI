@@ -337,12 +337,25 @@ services:
         condition: service_started
     restart: "no"
 
-  competition-portfolio-builder:
+  competition:
+    profiles: ["competition"]
+    build:
+      context: .
+      dockerfile: docker/competition.Dockerfile
+    env_file: ai.env
+    environment:
+      COMPETITION_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  portfolio-builder-worker:
     profiles: ["competition"]
     build:
       context: .
       dockerfile: docker/portfolio-builder.Dockerfile
-    command: competition-portfolio-builder
+    command: portfolio-builder-worker
     env_file: ai.env
     environment:
       PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}

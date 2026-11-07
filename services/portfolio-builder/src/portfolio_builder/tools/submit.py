@@ -1,4 +1,6 @@
 import threading
+from collections.abc import Callable
+from functools import partial
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -11,7 +13,6 @@ from pydantic import BaseModel, Field
 from portfolio_builder.errors import PortfolioRejected, ToolError
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import (
-    Constraints,
     Exit,
     Holding,
     Submission,
@@ -29,57 +30,26 @@ class SubmitPortfolioArgs(BaseModel):
     commentary: str = Field(
         description="overall assessment of the portfolio and this run's decisions"
     )
-    constraints: Constraints = Field(
-        default_factory=Constraints,
-        description=(
-            "Numeric limits you actually read in the user's request, such as a maximum number"
-            " of holdings, a maximum weight for any single holding, or a minimum cash weight."
-            " Leave a field unset if the user did not state that limit; never invent one."
-        ),
-    )
     tool_call_id: Annotated[str, InjectedToolCallId]
 
 
-def submit_portfolio(
-    holdings: list[Holding],
-    exits: list[Exit],
-    cash_weight: float,
-    commentary: str,
-    constraints: Constraints,
+def commit_submission[S: Submission](
+    submission: S,
     tool_call_id: str,
     *,
-    engine: sa.Engine,
-    previous: frozenset[str],
-    model: str,
-    news_client: NewsClient,
+    validate: Callable[[S], list[str]],
+    save: Callable[[S], int],
     log: StructuredLogger,
     lock: threading.Lock,
     saved: list[int],
-    excluded: frozenset[str] = frozenset(),
-    participant_id: int | None = None,
 ) -> Command:
-    submission = Submission(
-        holdings=holdings,
-        exits=exits,
-        cash_weight=cash_weight,
-        commentary=commentary,
-        constraints=constraints,
-    )
     with lock:
         if saved:
             raise ToolError(f"portfolio already saved as {saved[0]}; the run is over")
-        errors = validate_portfolio(submission, previous, excluded)
+        errors = validate(submission)
         if not errors:
             try:
-                saved.append(
-                    save_portfolio(
-                        engine,
-                        normalize_weights(submission),
-                        model,
-                        news_client,
-                        participant_id,
-                    )
-                )
+                saved.append(save(normalize_weights(submission)))
             except PortfolioRejected as rejected:
                 errors = rejected.errors
         if errors:
@@ -96,17 +66,40 @@ def submit_portfolio(
     )
 
 
+def submit_portfolio(
+    holdings: list[Holding],
+    exits: list[Exit],
+    cash_weight: float,
+    commentary: str,
+    tool_call_id: str,
+    *,
+    engine: sa.Engine,
+    previous: frozenset[str],
+    model: str,
+    news_client: NewsClient,
+    log: StructuredLogger,
+    lock: threading.Lock,
+    saved: list[int],
+) -> Command:
+    return commit_submission(
+        Submission(holdings=holdings, exits=exits, cash_weight=cash_weight, commentary=commentary),
+        tool_call_id,
+        validate=partial(validate_portfolio, previous=previous),
+        save=partial(save_portfolio, engine, model=model, news_client=news_client),
+        log=log,
+        lock=lock,
+        saved=saved,
+    )
+
+
 def submit_tool(
     engine: sa.Engine,
     previous: frozenset[str],
     model: str,
     news_client: NewsClient,
     log: StructuredLogger,
-    excluded: frozenset[str] = frozenset(),
-    participant_id: int | None = None,
 ) -> BaseTool:
     return StructuredTool.from_function(
-        # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.
         bind(
             submit_portfolio,
             engine=engine,
@@ -116,8 +109,6 @@ def submit_tool(
             log=log,
             lock=threading.Lock(),
             saved=[],
-            excluded=excluded,
-            participant_id=participant_id,
         ),
         name="submit_portfolio",
         description=(

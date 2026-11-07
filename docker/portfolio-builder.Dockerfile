@@ -11,11 +11,10 @@ COPY docker/requirements/portfolio-builder.txt ./requirements.txt
 RUN uv pip install --require-hashes --requirement requirements.txt
 
 COPY pyproject.toml ./
-COPY packages/aws packages/aws
 COPY packages/core packages/core
 COPY services/disclosure-retrieval services/disclosure-retrieval
 COPY services/portfolio-builder services/portfolio-builder
-RUN uv pip install --no-deps ./packages/aws ./packages/core \
+RUN uv pip install --no-deps ./packages/core \
     ./services/disclosure-retrieval ./services/portfolio-builder
 
 FROM python:3.14-slim-bookworm AS runtime

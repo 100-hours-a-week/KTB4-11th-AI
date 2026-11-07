@@ -82,58 +82,8 @@ def test_competition_settings_default_to_unset(monkeypatch):
 
     settings = Settings()
 
-    assert settings.competition_queue_url == ""
-    assert settings.competition_visibility_timeout == 300
     assert settings.competition_stale_running_seconds == 3600
     assert settings.competition_max_attempts == 3
-
-
-def test_aws_region_defaults_to_ap_northeast_2(monkeypatch):
-    _populate(monkeypatch)
-
-    assert Settings().aws_region == "ap-northeast-2"
-
-
-def test_jev_settings_default(monkeypatch):
-    _populate(monkeypatch)
-
-    settings = Settings()
-
-    assert settings.jev_base_uri == "https://openrouter.ai/api/v1"
-    assert settings.jev_model == "typesafe/jev-1.14"
-    assert settings.jev_timeout == 20
-    assert settings.jev_noul_threshold == 0.5
-    assert settings.jev_choice_min_confidence is None
-
-
-def test_jev_settings_are_read_from_the_environment(monkeypatch):
-    _populate(
-        monkeypatch,
-        PORTFOLIO_BUILDER_JEV_BASE_URI="https://jev.example/v1",
-        PORTFOLIO_BUILDER_JEV_MODEL="typesafe/jev-9.9",
-        PORTFOLIO_BUILDER_JEV_TIMEOUT="5",
-        PORTFOLIO_BUILDER_JEV_NOUL_THRESHOLD="0.7",
-        PORTFOLIO_BUILDER_JEV_CHOICE_MIN_CONFIDENCE="0.8",
-    )
-
-    settings = Settings()
-
-    assert settings.jev_base_uri == "https://jev.example/v1"
-    assert settings.jev_model == "typesafe/jev-9.9"
-    assert settings.jev_timeout == 5
-    assert settings.jev_noul_threshold == 0.7
-    assert settings.jev_choice_min_confidence == 0.8
-
-
-@pytest.mark.parametrize(
-    "value",
-    ["-1", "1.5"],
-)
-def test_jev_noul_threshold_must_be_a_probability(monkeypatch, value):
-    _populate(monkeypatch, PORTFOLIO_BUILDER_JEV_NOUL_THRESHOLD=value)
-
-    with pytest.raises(ValidationError):
-        Settings()
 
 
 def test_the_existing_cron_settings_still_load_without_any_competition_variable(monkeypatch):
@@ -151,5 +101,4 @@ def test_competition_variables_are_read_from_the_environment(monkeypatch):
 
     settings = Settings()
 
-    assert settings.competition_queue_url == "q"
     assert settings.competition_max_attempts == 5

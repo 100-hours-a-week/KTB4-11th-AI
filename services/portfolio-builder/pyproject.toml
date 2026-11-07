@@ -4,10 +4,8 @@ version = "0.1.0"
 description = "Cron-triggered model portfolio agent"
 requires-python = ">=3.14,<3.16"
 dependencies = [
-    "ktb-aws",
     "ktb-core",
     "disclosure-retrieval",
-    "boto3>=1.35",
     "httpx>=0.28",
     "langchain>=1.4.2",
     "langchain-openrouter>=0.2.9",
@@ -23,10 +21,9 @@ dependencies = [
 
 [project.scripts]
 portfolio-builder = "portfolio_builder.__main__:main"
-competition-portfolio-builder = "portfolio_builder.competition.__main__:main"
+portfolio-builder-worker = "portfolio_builder.competition.__main__:main"
 
 [tool.uv.sources]
-ktb-aws = { workspace = true }
 ktb-core = { workspace = true }
 disclosure-retrieval = { workspace = true }
 

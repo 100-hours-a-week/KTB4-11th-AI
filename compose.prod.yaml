@@ -448,10 +448,23 @@ services:
       news-http:
         condition: service_started
 
-  competition-portfolio-builder:
+  competition:
     <<: *app
     profiles: ["competition"]
-    command: ["competition-portfolio-builder"]
+    command: ["competition"]
+    env_file: /etc/stockspoon/ai.env
+    mem_limit: 256m
+    restart: unless-stopped
+    environment:
+      COMPETITION_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  portfolio-builder-worker:
+    <<: *app
+    profiles: ["competition"]
+    command: ["portfolio-builder-worker"]
     env_file: /etc/stockspoon/ai.env
     mem_limit: 768m
     restart: unless-stopped

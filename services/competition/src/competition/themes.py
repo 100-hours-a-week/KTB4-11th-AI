@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import sqlalchemy as sa
 
-from portfolio_builder.competition.message import AgentSettings
+from competition.message import AgentSettings
 
 
 class UnknownTheme(Exception):

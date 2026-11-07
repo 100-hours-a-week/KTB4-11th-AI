@@ -96,17 +96,20 @@ Run market-syncer before jobs that need corporation reference data. The morning 
 runs news-clusterer, news-graph-builder, then portfolio-builder; see
 `scripts/run-morning-pipeline.sh`. Production schedules live in `infrastructure/systemd/`.
 Report-builder is a long-running worker and its local Compose configuration loads `ai.env`.
-So is `competition-portfolio-builder`, which is profile-gated and also loads `ai.env` —
-and because that file must supply its LLM credentials as well as its queue and Backend
-settings, a missing `PORTFOLIO_BUILDER_LLM_API_KEY` or `PORTFOLIO_BUILDER_LLM_MODEL`
-crash-loops it rather than failing once:
+The `competition` profile starts two long-running workers, also configured through
+`ai.env`: `competition` validates, canonicalizes, and freezes settings from SQS;
+`portfolio-builder-worker` polls PostgreSQL and generates each participant's initial
+portfolio. Intake needs `COMPETITION_QUEUE_URL`, `COMPETITION_JEV_API_KEY`, and an
+explicit `COMPETITION_JEV_CHOICE_MIN_CONFIDENCE`. Generation needs the builder LLM
+credentials. Compose supplies separate database DSNs and the builder HTTP endpoints.
 
 ```bash
-docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder
+docker compose -f compose.local.yaml --profile competition up competition portfolio-builder-worker
 ```
 
-Its queue needs a redrive policy with a dead-letter queue: the worker deliberately stops
-deleting a message once its job has exhausted `COMPETITION_MAX_ATTEMPTS`.
+Give the settings queue a redrive policy for malformed requests and failed intake.
+Intake acknowledges only after settings commit. Generation retries use database jobs
+and per-participant budgets; they do not depend on SQS redelivery.
 
 ## Repository map
 
@@ -128,7 +131,8 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/market-collector` | Collect market bars and index quotes into QuestDB and publish popularity rankings to Valkey |
 | `services/market-streamer` | Stream Kiwoom prices, orderbooks, and daily ranking values to Valkey |
 | `services/market-http` | Serve public market snapshots, bars, indices, rankings, and SSE streams |
-| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent; a second console script, `competition-portfolio-builder`, is a long-running SQS worker that builds one portfolio per competition participant |
+| `services/competition` | Consume settings SQS, validate and canonicalize preferences, then freeze participant settings in PostgreSQL |
+| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent; `portfolio-builder-worker` polls PostgreSQL for initial participant generation |
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
 
@@ -173,6 +177,10 @@ third-party dependencies.
   excludes them, which is the only thing that makes this true — competition portfolios do
   reach `ready`, so removing that condition would trade one participant's holdings in
   every user's account. Per-participant trading is separate, later work.
+- Competition intake imports no builder code and owns only preference validation,
+  canonicalization, and persistence. Portfolio-builder owns all generation jobs,
+  retry budgets, explanations, and portfolio links. Its initial worker skips ready
+  participants and resumes failed explanations on the existing portfolio.
 - A participant's settings are frozen at its first request, as a snapshot in
   `competition_participants`: later requests for the same participant carry settings that
   are logged and ignored. Participants whose settings and previous portfolio match share

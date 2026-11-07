@@ -2,14 +2,26 @@ from contextlib import nullcontext
 from datetime import datetime
 
 import pytest
-from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT, SYSTEM_PROMPT
-from portfolio_builder.briefing import load_briefing, service
+from competition.repository import store_settings
+from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
+from portfolio_builder.briefing import load_briefing as render_briefing
+from portfolio_builder.competition.briefing import load_briefing as participant_briefing
 from portfolio_builder.competition.repository import (
     generation_key,
     link_portfolio,
-    store_settings,
 )
+from portfolio_builder.competition.system_prompt import COMPETITION_SYSTEM_PROMPT
 from portfolio_builder.portfolio import Exit, Holding, Submission, save_portfolio
+from portfolio_builder.scheduled import repository as service
+
+
+def load_briefing(engine, client, days, participant=None, excluded=frozenset()):
+    if participant is not None:
+        return participant_briefing(engine, client, days, participant, excluded)
+    with engine.connect() as conn:
+        previous = service.find_previous_portfolio(conn)
+    return render_briefing(client, days, previous, excluded)
+
 
 SAMSUNG, HYNIX = "00126380", "00164779"
 

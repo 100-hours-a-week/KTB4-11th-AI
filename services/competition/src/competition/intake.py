@@ -6,14 +6,12 @@ from ktb_aws.sqs import Message, Queue
 from ktb_core.logging import StructuredLogger
 from pydantic import ValidationError
 
-from portfolio_builder.competition import jev
-from portfolio_builder.competition.canonical import classify_additional_request
-from portfolio_builder.competition.message import Request
-from portfolio_builder.competition.repository import store_settings
-from portfolio_builder.competition.themes import ResolvedAgent, UnknownTheme, resolve_agent
-from portfolio_builder.settings import Settings
-
-JEV_CHOICE_MIN_CONFIDENCE_FALLBACK = 0.5
+from competition import jev
+from competition.canonical import classify_additional_request
+from competition.message import Request
+from competition.repository import store_settings
+from competition.settings import Settings
+from competition.themes import ResolvedAgent, UnknownTheme, resolve_agent
 
 
 def _classify(
@@ -26,18 +24,15 @@ def _classify(
         jev.ask,
         settings.jev_base_uri,
         settings.jev_model,
-        settings.llm_api_key,
+        settings.jev_api_key,
         timeout=settings.jev_timeout,
     )
-    choice_min_confidence = settings.jev_choice_min_confidence
-    if choice_min_confidence is None:
-        choice_min_confidence = JEV_CHOICE_MIN_CONFIDENCE_FALLBACK
     return classify_additional_request(
         engine,
         ask,
         settings.jev_model,
         settings.jev_noul_threshold,
-        choice_min_confidence,
+        settings.jev_choice_min_confidence,
         resolved.additional_request,
         resolved.interested_theme_names,
         log,

@@ -1,23 +1,27 @@
 import json
 import logging
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 import sqlalchemy as sa
+from competition import intake
+from competition.repository import store_settings
+from competition.settings import Settings as IntakeSettings
+from competition.themes import ResolvedAgent
 from ktb_aws.sqs import Message
 from portfolio_builder.agent.run import RunResult
-from portfolio_builder.agent.system_prompt import COMPETITION_SYSTEM_PROMPT, DISCLOSURE_PROMPT
+from portfolio_builder.agent.system_prompt import DISCLOSURE_PROMPT
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.competition import generation, intake, repository
+from portfolio_builder.competition import generation, repository
 from portfolio_builder.competition.repository import (
     claim_job,
     fail_job,
     generation_key,
     latest_participant_portfolio,
     link_portfolio,
-    store_settings,
 )
-from portfolio_builder.competition.themes import ResolvedAgent
+from portfolio_builder.competition.system_prompt import COMPETITION_SYSTEM_PROMPT
 from portfolio_builder.settings import Settings
 
 AGENT = {
@@ -62,14 +66,20 @@ class Recorder:
 
 
 def _settings(**overrides):
-    return Settings(
+    builder = Settings(
         postgres_dsn="postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
         market_http_base_uri="http://market-http:8000",
         news_http_base_uri="http://news-http:8000",
         llm_api_key="k",
         llm_model="openai/gpt-5.5",
-        **overrides,
     )
+    intake_settings = IntakeSettings(
+        postgres_dsn=builder.postgres_dsn,
+        queue_url="https://sqs.example/settings",
+        jev_api_key="k",
+        jev_choice_min_confidence=0.5,
+    )
+    return SimpleNamespace(**{**builder.model_dump(), **intake_settings.model_dump(), **overrides})
 
 
 def _message(body, receipt="receipt"):
@@ -687,10 +697,10 @@ def _theme_resolved():
     )
 
 
-def test_classify_falls_back_to_a_safe_confidence_floor_when_unset(engine, monkeypatch):
+def test_classify_uses_the_configured_confidence_floor(engine, monkeypatch):
     monkeypatch.setattr(intake.jev, "ask", _ask_for_sector(0.6))
     settings = _settings()
-    assert settings.jev_choice_min_confidence is None
+    assert settings.jev_choice_min_confidence == 0.5
 
     form, _, classified = REAL_CLASSIFY(engine, settings, Recorder(), _theme_resolved())
 

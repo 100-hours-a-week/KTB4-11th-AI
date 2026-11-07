@@ -1,14 +1,12 @@
 import math
-from collections.abc import Sequence
 from typing import Annotated
 
 import sqlalchemy as sa
 from pydantic import BaseModel, Field
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.database import (
-    competition_portfolios,
     portfolio_exits,
     portfolio_holdings,
     portfolios,
@@ -36,36 +34,14 @@ class Exit(BaseModel):
     cited_cluster_ids: CitedClusters
 
 
-class Constraints(BaseModel):
-    max_holdings: int | None = None
-    max_weight_per_holding: float | None = None
-    min_cash_weight: float | None = None
-
-
 class Submission(BaseModel):
     holdings: list[Holding]
     exits: list[Exit]
     cash_weight: float
     commentary: str
-    constraints: Constraints = Constraints()
 
 
-def excluded_company_ids(engine: sa.Engine, excluded_theme_codes: Sequence[str]) -> frozenset[str]:
-    if not excluded_theme_codes:
-        return frozenset()
-    query = sa.text(
-        "SELECT corporations.corp_code FROM theme_corporations"
-        " JOIN corporations ON corporations.stock_code = theme_corporations.stock_code"
-        " WHERE theme_corporations.theme_code IN :theme_codes"
-    ).bindparams(sa.bindparam("theme_codes", expanding=True))
-    with engine.connect() as conn:
-        rows = conn.execute(query, {"theme_codes": list(excluded_theme_codes)})
-        return frozenset(row[0] for row in rows)
-
-
-def validate_portfolio(
-    submission: Submission, previous: frozenset[str], excluded: frozenset[str] = frozenset()
-) -> list[str]:
+def validate_portfolio(submission: Submission, previous: frozenset[str]) -> list[str]:
     errors: list[str] = []
     held: set[str] = set()
     for holding in submission.holdings:
@@ -76,8 +52,6 @@ def validate_portfolio(
             errors.append(f"holdings: {company} is entering the portfolio and needs a reason")
         if company in held:
             errors.append(f"holdings: {company} appears more than once")
-        if company in excluded:
-            errors.append(f"holdings: {company} is in an excluded theme")
         held.add(company)
 
     exited: set[str] = set()
@@ -107,39 +81,10 @@ def validate_portfolio(
         errors.append("weights and cash_weight sum to 0 or less; at least one must be positive")
     if not submission.commentary.strip():
         errors.append("commentary must not be empty")
-    if math.isfinite(total) and total > 0:
-        errors.extend(validate_constraints(normalize_weights(submission)))
     return errors
 
 
-FLOAT_TOLERANCE = 1e-9
-
-
-def validate_constraints(submission: Submission) -> list[str]:
-    errors: list[str] = []
-    constraints = submission.constraints
-    holdings = submission.holdings
-    if constraints.max_holdings is not None and len(holdings) > constraints.max_holdings:
-        errors.append(
-            f"constraints: {len(holdings)} holdings exceeds max_holdings {constraints.max_holdings}"
-        )
-    if constraints.max_weight_per_holding is not None:
-        for holding in holdings:
-            if holding.weight > constraints.max_weight_per_holding + FLOAT_TOLERANCE:
-                errors.append(
-                    f"constraints: {holding.company_id} weight {holding.weight} exceeds"
-                    f" max_weight_per_holding {constraints.max_weight_per_holding}"
-                )
-    min_cash_weight = constraints.min_cash_weight
-    if min_cash_weight is not None and submission.cash_weight < min_cash_weight - FLOAT_TOLERANCE:
-        errors.append(
-            f"constraints: cash_weight {submission.cash_weight} is below"
-            f" min_cash_weight {constraints.min_cash_weight}"
-        )
-    return errors
-
-
-def normalize_weights(submission: Submission) -> Submission:
+def normalize_weights[S: Submission](submission: S) -> S:
     total = sum(h.weight for h in submission.holdings) + submission.cash_weight
     return submission.model_copy(
         update={
@@ -151,54 +96,55 @@ def normalize_weights(submission: Submission) -> Submission:
     )
 
 
-def save_portfolio(
-    engine: sa.Engine,
-    submission: Submission,
-    model: str,
-    news_client: NewsClient,
-    participant_id: int | None = None,
-) -> int:
+def validate_citations(submission: Submission, news_client: NewsClient) -> None:
     cited = sorted(
         {c for item in [*submission.holdings, *submission.exits] for c in item.cited_cluster_ids}
     )
     missing = [c for c in cited if not news_client.has_cluster(c)]
     if missing:
         raise PortfolioRejected([f"cited_cluster_ids not found: {', '.join(map(str, missing))}"])
-    constraints = submission.constraints.model_dump()
-    acknowledged_constraints = None if all(v is None for v in constraints.values()) else constraints
+
+
+def insert_portfolio(
+    conn: sa.Connection,
+    submission: Submission,
+    model: str,
+    acknowledged_constraints: dict | None = None,
+) -> int:
     try:
-        with engine.begin() as conn:
-            portfolio_id = conn.execute(
-                sa.insert(portfolios)
-                .values(
-                    cash_weight=submission.cash_weight,
-                    commentary=submission.commentary,
-                    model=model,
-                    acknowledged_constraints=acknowledged_constraints,
-                )
-                .returning(portfolios.c.id)
-            ).scalar_one()
-            if submission.holdings:
-                conn.execute(
-                    sa.insert(portfolio_holdings),
-                    [{"portfolio_id": portfolio_id, **h.model_dump()} for h in submission.holdings],
-                )
-            if submission.exits:
-                conn.execute(
-                    sa.insert(portfolio_exits),
-                    [{"portfolio_id": portfolio_id, **e.model_dump()} for e in submission.exits],
-                )
-            if participant_id is not None:
-                conn.execute(
-                    pg_insert(competition_portfolios)
-                    .values(participant_id=participant_id, portfolio_id=portfolio_id)
-                    .on_conflict_do_nothing(index_elements=["participant_id", "portfolio_id"])
-                )
-            return portfolio_id
-    except sa.exc.IntegrityError as error:
+        portfolio_id = conn.execute(
+            sa.insert(portfolios)
+            .values(
+                cash_weight=submission.cash_weight,
+                commentary=submission.commentary,
+                model=model,
+                acknowledged_constraints=acknowledged_constraints,
+            )
+            .returning(portfolios.c.id)
+        ).scalar_one()
+        if submission.holdings:
+            conn.execute(
+                sa.insert(portfolio_holdings),
+                [{"portfolio_id": portfolio_id, **h.model_dump()} for h in submission.holdings],
+            )
+        if submission.exits:
+            conn.execute(
+                sa.insert(portfolio_exits),
+                [{"portfolio_id": portfolio_id, **e.model_dump()} for e in submission.exits],
+            )
+        return portfolio_id
+    except IntegrityError as error:
         diag = getattr(error.orig, "diag", None)
         detail = getattr(diag, "message_detail", None) or str(error.orig)
         raise PortfolioRejected([detail]) from error
+
+
+def save_portfolio(
+    engine: sa.Engine, submission: Submission, model: str, news_client: NewsClient
+) -> int:
+    validate_citations(submission, news_client)
+    with engine.begin() as conn:
+        return insert_portfolio(conn, submission, model)
 
 
 def save_trace(engine: sa.Engine, portfolio_id: int, trace: list[TraceEntry]) -> None:

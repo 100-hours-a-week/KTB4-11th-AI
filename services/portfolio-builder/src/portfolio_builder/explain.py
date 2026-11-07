@@ -100,22 +100,6 @@ class Explanations(BaseModel):
         return self
 
 
-def load_unexplained(engine: sa.Engine) -> tuple[int, list[TraceEntry]] | None:
-    with engine.connect() as conn:
-        row = conn.execute(
-            sa.text(
-                "SELECT id, status, trace FROM portfolios"
-                " WHERE NOT EXISTS ("
-                "  SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = portfolios.id"
-                " )"
-                " ORDER BY id DESC LIMIT 1"
-            )
-        ).first()
-    if row is None or row.status == "ready" or row.trace is None:
-        return None
-    return row.id, [TraceEntry.model_validate(entry) for entry in row.trace]
-
-
 def load_targets(engine: sa.Engine, portfolio_id: int) -> list[Target]:
     with engine.connect() as conn:
         rows = conn.execute(
