@@ -6,7 +6,7 @@ from ktb_core.logging import get_logger
 
 from market_collector.kiwoom.official import Page
 from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
-from market_collector.store import CandleRow, Store
+from market_collector.store import BarBatch, CandleRow
 
 __all__ = ["ChartSource", "reconcile_candles", "to_candle_rows"]
 
@@ -42,7 +42,7 @@ def to_candle_rows(bars: Sequence[Bar], symbol: str, src: str = "rest") -> list[
 
 def reconcile_candles(
     client: ChartSource,
-    store: Store,
+    batch: BarBatch,
     symbol: str,
     timeframe: str,
     base_dt: str,
@@ -88,6 +88,6 @@ def reconcile_candles(
     if latest is None:
         bars = bars[-LIMITS[timeframe] :]
     rows = to_candle_rows(bars, symbol)
-    written = store.write_candles(timeframe, rows)
+    written = batch.write_candles(timeframe, rows)
     log.info("candles_reconciled", count=written, timeframe=timeframe, symbol=symbol)
     return written

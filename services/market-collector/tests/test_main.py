@@ -6,6 +6,7 @@ import pytest
 from ktb_core.krx import KST
 from market_collector import __main__ as cli
 from market_collector.settings import Settings
+from market_collector.store import CandleRow
 
 QDB = "ws::addr=localhost:9000;"
 POSTGRES_DSN = "postgresql+psycopg://ktb:FAKE-PASSWORD@localhost:5432/news"
@@ -357,3 +358,78 @@ def test_run_shares_one_session_cache_between_passes(monkeypatch):
     _run(monkeypatch, day, archive)
     assert len(caches) == 3
     assert all(cache is caches[0] for cache in caches)
+
+
+class BatchStore:
+    def __init__(self):
+        self.commits = []
+
+    def latest_bar_timestamps(self, target_symbols):
+        return {}
+
+    def write_bars(self, bars):
+        self.commits.append([(timeframe, row.symbol) for timeframe, row in bars])
+        return len(bars)
+
+
+def _buffer_one_bar(client, batch, symbol, timeframe, base_dt, latest):
+    row = CandleRow(NOW, symbol, "regular", 1.0, 1.0, 1.0, 1.0, 1, "rest")
+    return batch.write_candles(timeframe, [row])
+
+
+def test_archive_pass_commits_bars_every_twenty_symbols(monkeypatch):
+    settings = _settings(monkeypatch)
+    store = BatchStore()
+    symbols = [f"{index:06d}" for index in range(45)]
+    monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
+    monkeypatch.setattr(cli, "Store", lambda db: store)
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
+    monkeypatch.setattr(cli, "reconcile_candles", _buffer_one_bar)
+
+    class Client:
+        def index_quote(self, name):
+            return {}
+
+    written = cli.collect_market_data(settings, symbols, Client(), _valkey(), NOW, daily=True)
+
+    assert written == 90
+    assert [len(commit) for commit in store.commits] == [40, 40, 10]
+    assert {symbol for _, symbol in store.commits[0]} == set(symbols[:20])
+
+
+def test_archive_pass_commits_buffered_bars_before_propagating_failure(monkeypatch):
+    settings = _settings(monkeypatch)
+    store = BatchStore()
+
+    def reconcile(client, batch, symbol, timeframe, base_dt, latest):
+        if symbol == "000003":
+            raise RuntimeError("boom")
+        return _buffer_one_bar(client, batch, symbol, timeframe, base_dt, latest)
+
+    monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
+    monkeypatch.setattr(cli, "Store", lambda db: store)
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
+    monkeypatch.setattr(cli, "reconcile_candles", reconcile)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        cli.collect_market_data(
+            settings, [f"{index:06d}" for index in range(5)], object(), _valkey(), NOW, False
+        )
+
+    assert store.commits == [[("1m", "000000"), ("1m", "000001"), ("1m", "000002")]]
+
+
+def test_archive_pass_commits_early_when_backfill_fills_the_batch(monkeypatch):
+    settings = _settings(monkeypatch)
+    store = BatchStore()
+    monkeypatch.setattr(cli, "BATCH_ROWS", 2)
+    monkeypatch.setattr(cli.questdb, "connect", lambda conf: nullcontext(DB()))
+    monkeypatch.setattr(cli, "Store", lambda db: store)
+    monkeypatch.setattr(cli, "popular_codes", lambda *args: [])
+    monkeypatch.setattr(cli, "reconcile_candles", _buffer_one_bar)
+
+    cli.collect_market_data(
+        settings, [f"{index:06d}" for index in range(5)], object(), _valkey(), NOW, False
+    )
+
+    assert [len(commit) for commit in store.commits] == [2, 2, 1]
