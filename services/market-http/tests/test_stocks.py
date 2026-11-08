@@ -196,3 +196,29 @@ def test_search_without_match_returns_empty_list(client):
 @pytest.mark.parametrize("q", ["", "   "])
 def test_blank_search_returns_422(client, q):
     assert client.get("/stocks", params={"q": q}).status_code == 422
+
+
+def test_search_size_limits_to_top_ranked_results(client):
+    response = client.get("/stocks", params={"q": "전자", "size": 2})
+
+    assert response.status_code == 200
+    assert [stock["code"] for stock in response.json()] == ["000003", "005930"]
+
+
+@pytest.mark.parametrize("size", [1, 4, 200])
+def test_search_size_returns_prefix_of_full_results(client, size):
+    full = _search(client, "전자")
+    response = client.get("/stocks", params={"q": "전자", "size": size})
+
+    assert [stock["code"] for stock in response.json()] == full[:size]
+
+
+def test_search_size_without_match_returns_empty_list(client):
+    response = client.get("/stocks", params={"q": "없는종목", "size": 10})
+
+    assert (response.status_code, response.json()) == (200, [])
+
+
+@pytest.mark.parametrize("size", ["0", "201", "-1", "1.5", "ten"])
+def test_invalid_search_size_returns_422(client, size):
+    assert client.get("/stocks", params={"q": "삼성", "size": size}).status_code == 422

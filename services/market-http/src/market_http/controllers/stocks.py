@@ -13,10 +13,12 @@ router = APIRouter()
 
 @router.get("/stocks", responses={503: {"description": "Stock data store unavailable"}})
 async def search(
-    engine: PostgresEngine, q: Annotated[str, Query(pattern=r"\S", max_length=100)]
+    engine: PostgresEngine,
+    q: Annotated[str, Query(pattern=r"\S", max_length=100)],
+    size: Annotated[int | None, Query(ge=1, le=200)] = None,
 ) -> list[StockMatch]:
     try:
-        return await asyncio.to_thread(search_stocks, engine, q.strip())
+        return await asyncio.to_thread(search_stocks, engine, q.strip(), size)
     except sa.exc.SQLAlchemyError as error:
         raise HTTPException(503, "stock data unavailable") from error
 
