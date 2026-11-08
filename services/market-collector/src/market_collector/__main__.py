@@ -46,7 +46,7 @@ def collect_market_data(
                     written += reconcile_candles(
                         client, batch, symbol, timeframe, base_dt, latest.get((symbol, timeframe))
                     )
-                if index % 20 == 0 or len(batch) >= BATCH_ROWS:
+                if len(batch) >= BATCH_ROWS:
                     batch.flush()
                 if index % 20 == 0:
                     for name in ("KOSPI", "KOSPI200"):

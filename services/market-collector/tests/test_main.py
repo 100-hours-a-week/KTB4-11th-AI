@@ -377,7 +377,7 @@ def _buffer_one_bar(client, batch, symbol, timeframe, base_dt, latest):
     return batch.write_candles(timeframe, [row])
 
 
-def test_archive_pass_commits_bars_every_twenty_symbols(monkeypatch):
+def test_archive_pass_commits_bars_once_per_pass(monkeypatch):
     settings = _settings(monkeypatch)
     store = BatchStore()
     symbols = [f"{index:06d}" for index in range(45)]
@@ -393,8 +393,7 @@ def test_archive_pass_commits_bars_every_twenty_symbols(monkeypatch):
     written = cli.collect_market_data(settings, symbols, Client(), _valkey(), NOW, daily=True)
 
     assert written == 90
-    assert [len(commit) for commit in store.commits] == [40, 40, 10]
-    assert {symbol for _, symbol in store.commits[0]} == set(symbols[:20])
+    assert [len(commit) for commit in store.commits] == [90]
 
 
 def test_archive_pass_commits_buffered_bars_before_propagating_failure(monkeypatch):
