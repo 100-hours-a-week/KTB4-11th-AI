@@ -123,7 +123,7 @@ def test_missing_engine_returns_503():
     with TestClient(create_app(FakeValkey(), "unused")) as client:
         response = client.get("/stocks/005930")
 
-    assert (response.status_code, response.json()) == (503, {"detail": "stock data unavailable"})
+    assert (response.status_code, response.json()) == (503, {"detail": "data store unavailable"})
 
 
 def test_openapi_documents_stock_detail_and_drops_stock_themes(client):
