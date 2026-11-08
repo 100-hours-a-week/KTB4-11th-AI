@@ -51,8 +51,11 @@ def search_stocks(engine: sa.Engine, query: str, size: int | None = None) -> lis
     query = query.casefold()
     pattern = hangul_pattern(query)
     ranked = []
-    for code, name, english_name in list_kospi200_names(engine):
+    for code, name, english_name, sector_name in list_kospi200_names(engine):
         rank = _rank(name, english_name, query, pattern)
         if rank is not None:
-            ranked.append((rank, code, name))
-    return [StockMatch(code=code, name=name) for _, code, name in sorted(ranked)[:size]]
+            ranked.append((rank, code, name, sector_name))
+    return [
+        StockMatch(code=code, name=name, sector=sector_name)
+        for _, code, name, sector_name in sorted(ranked)[:size]
+    ]
