@@ -67,11 +67,12 @@ def test_invalid_message_is_not_deleted(changes, dependencies):
     auth.request.assert_not_called()
 
 
-def test_posts_report_and_deletes_after_success(dependencies):
+@pytest.mark.parametrize("participant_id", [34, 78])
+def test_posts_report_and_deletes_after_success(participant_id, dependencies):
     auth, engine, structured = dependencies
     sqs = Mock()
     message = {
-        "Body": json.dumps(MESSAGE),
+        "Body": json.dumps({**MESSAGE, "participant_id": participant_id}),
         "ReceiptHandle": "receipt",
         "_queue_url": "https://sqs.example/queue",
     }
@@ -82,7 +83,11 @@ def test_posts_report_and_deletes_after_success(dependencies):
         "POST",
         "/api/v1/competitions/12/report",
         "56",
-        json={"news": [{"title": "N", "summary": "S"}], "thoughts": [{"title": "T", "text": "X"}]},
+        json={
+            "participant_id": participant_id,
+            "news": [{"title": "N", "summary": "S"}],
+            "thoughts": [{"title": "T", "text": "X"}],
+        },
     )
     sqs.delete_message.assert_called_once_with(
         QueueUrl="https://sqs.example/queue", ReceiptHandle="receipt"

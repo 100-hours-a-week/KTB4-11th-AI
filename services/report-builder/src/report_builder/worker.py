@@ -37,7 +37,7 @@ def process_message(
             "POST",
             f"/api/v1/competitions/{request.competition_id}/report",
             str(request.user_id),
-            json=report.model_dump(mode="json"),
+            json={"participant_id": request.participant_id, **report.model_dump(mode="json")},
         )
     except Exception as error:
         logger.error("report_request_failed", error_type=type(error).__name__)
