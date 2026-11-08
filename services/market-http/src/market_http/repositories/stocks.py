@@ -3,7 +3,7 @@ from datetime import datetime
 import sqlalchemy as sa
 from pydantic import BaseModel, ConfigDict
 
-from market_http.openapi_examples import STOCK_DETAIL_EXAMPLE
+from market_http.openapi_examples import STOCK_DETAIL_EXAMPLE, STOCK_MATCH_EXAMPLE
 from market_http.repositories.themes import StockTheme
 
 
@@ -18,6 +18,25 @@ class StockDetail(BaseModel):
     themes: list[StockTheme]
 
     model_config = ConfigDict(json_schema_extra={"examples": [STOCK_DETAIL_EXAMPLE]})
+
+
+class StockMatch(BaseModel):
+    code: str
+    name: str
+
+    model_config = ConfigDict(json_schema_extra={"examples": [STOCK_MATCH_EXAMPLE]})
+
+
+def list_kospi200_names(engine: sa.Engine) -> list[tuple[str, str, str | None]]:
+    with engine.connect() as conn:
+        rows = conn.execute(
+            sa.text(
+                "SELECT c.stock_code, c.name, c.eng_name FROM corporations c"
+                " JOIN corporation_indices ci ON ci.stock_code = c.stock_code"
+                " WHERE ci.index_name = 'KOSPI200'"
+            )
+        )
+        return [tuple(row) for row in rows]
 
 
 def find_stock(engine: sa.Engine, stock_code: str) -> StockDetail | None:
