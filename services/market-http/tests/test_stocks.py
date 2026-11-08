@@ -131,11 +131,13 @@ def test_openapi_documents_stock_detail_and_drops_stock_themes(client):
 
     assert set(paths["/stocks/{code}"]["get"]["responses"]) >= {"200", "404", "422", "503"}
     assert "/stocks/{code}/themes" not in paths
+    assert "/stocks" in paths
+    assert "/stocks/search" not in paths
     assert client.get("/stocks/005930/themes").status_code == 404
 
 
 def _search(client, q):
-    response = client.get("/stocks/search", params={"q": q})
+    response = client.get("/stocks", params={"q": q})
     assert response.status_code == 200
     return [stock["code"] for stock in response.json()]
 
@@ -164,7 +166,7 @@ def test_search_finds_samsung_electronics(client, q):
 
 
 def test_search_returns_code_and_name_only(client):
-    response = client.get("/stocks/search", params={"q": "samsung"})
+    response = client.get("/stocks", params={"q": "samsung"})
 
     assert response.json() == [{"code": "005930", "name": "삼성전자"}]
 
@@ -193,4 +195,4 @@ def test_search_without_match_returns_empty_list(client):
 
 @pytest.mark.parametrize("q", ["", "   "])
 def test_blank_search_returns_422(client, q):
-    assert client.get("/stocks/search", params={"q": q}).status_code == 422
+    assert client.get("/stocks", params={"q": q}).status_code == 422

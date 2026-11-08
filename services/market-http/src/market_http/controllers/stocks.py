@@ -11,7 +11,7 @@ from market_http.services.stocks import search_stocks
 router = APIRouter()
 
 
-@router.get("/stocks/search", responses={503: {"description": "Stock data store unavailable"}})
+@router.get("/stocks", responses={503: {"description": "Stock data store unavailable"}})
 async def search(
     engine: PostgresEngine, q: Annotated[str, Query(pattern=r"\S", max_length=100)]
 ) -> list[StockMatch]:
