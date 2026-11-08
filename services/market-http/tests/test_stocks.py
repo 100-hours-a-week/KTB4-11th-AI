@@ -44,14 +44,16 @@ def engine():
                 " ('005935', '00126380', '삼성전자우', NULL, 'KOSPI', '', ''),"
                 " ('000001', '00000001', '삼성', NULL, 'KOSPI', '', ''),"
                 " ('000002', '00000002', '삼성비편입', NULL, 'KOSPI', '', ''),"
-                " ('000003', '00000003', 'A.B전자', NULL, 'KOSPI', '', '')"
+                " ('000003', '00000003', 'A.B전자', NULL, 'KOSPI', '', ''),"
+                " ('000004', '00000004', '코드000004', NULL, 'KOSPI', '', '')"
             )
         )
         conn.execute(
             sa.text(
                 "INSERT INTO corporation_indices VALUES ('005930', 'KOSPI200'),"
                 " ('066570', 'KOSPI200'), ('051910', 'KOSPI200'), ('005935', 'KOSPI200'),"
-                " ('000001', 'KOSPI200'), ('000003', 'KOSPI200'), ('000002', 'KOSDAQ150')"
+                " ('000001', 'KOSPI200'), ('000003', 'KOSPI200'), ('000004', 'KOSPI200'),"
+                " ('000002', 'KOSDAQ150')"
             )
         )
         conn.execute(
@@ -133,6 +135,8 @@ def test_openapi_documents_stock_detail_and_drops_stock_themes(client):
     assert "/stocks/{code}/themes" not in paths
     assert "/stocks" in paths
     assert "/stocks/search" not in paths
+    q = paths["/stocks"]["get"]["parameters"][0]
+    assert "stock code" in q["description"]
     assert client.get("/stocks/005930/themes").status_code == 404
 
 
@@ -184,9 +188,30 @@ def test_search_ranks_exact_prefix_contains_partial_then_english(client):
     assert _search(client, "LG") == ["066570", "051910"]
 
 
+def test_search_matches_stock_code_exact_prefix_then_substring(client):
+    assert _search(client, "005930") == ["005930"]
+    assert _search(client, "005") == ["005930", "005935"]
+    assert _search(client, "5930") == ["005930"]
+    assert _search(client, "05") == ["051910", "005930", "005935"]
+    response = client.get("/stocks", params={"q": "05", "size": 2})
+    assert [stock["code"] for stock in response.json()] == ["051910", "005930"]
+
+
+def test_search_by_code_preserves_leading_zeros(client):
+    response = client.get("/stocks", params={"q": "005930"})
+
+    assert response.json() == [{"code": "005930", "name": "삼성전자", "sector": "전기전자"}]
+
+
+def test_search_returns_stock_matching_code_and_name_once(client):
+    assert _search(client, "000004") == ["000004"]
+    assert _search(client, "0000") == ["000001", "000003", "000004"]
+
+
 def test_search_excludes_non_kospi200_stocks(client):
     assert "000002" not in _search(client, "삼성비")
     assert "222222" not in _search(client, "무테마")
+    assert _search(client, "000002") == []
 
 
 def test_search_treats_regex_characters_literally(client):

@@ -52,7 +52,8 @@ def search_stocks(engine: sa.Engine, query: str, size: int | None = None) -> lis
     pattern = hangul_pattern(query)
     ranked = []
     for code, name, english_name, sector_name in list_kospi200_names(engine):
-        rank = _rank(name, english_name, query, pattern)
+        ranks = (_literal_rank(code.casefold(), query), _rank(name, english_name, query, pattern))
+        rank = min((rank for rank in ranks if rank is not None), default=None)
         if rank is not None:
             ranked.append((rank, code, name, sector_name))
     return [
