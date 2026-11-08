@@ -165,10 +165,16 @@ def test_search_finds_samsung_electronics(client, q):
     assert "005930" in _search(client, q)
 
 
-def test_search_returns_code_and_name_only(client):
+def test_search_returns_code_name_and_sector(client):
     response = client.get("/stocks", params={"q": "samsung"})
 
-    assert response.json() == [{"code": "005930", "name": "삼성전자"}]
+    assert response.json() == [{"code": "005930", "name": "삼성전자", "sector": "전기전자"}]
+
+
+def test_search_keeps_empty_sector(client):
+    response = client.get("/stocks", params={"q": "LG전자"})
+
+    assert response.json() == [{"code": "066570", "name": "LG전자", "sector": ""}]
 
 
 def test_search_ranks_exact_prefix_contains_partial_then_english(client):
