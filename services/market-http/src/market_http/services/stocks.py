@@ -47,7 +47,7 @@ def _rank(name: str, english_name: str | None, query: str, pattern: re.Pattern[s
     return None if rank is None else rank + 4
 
 
-def search_stocks(engine: sa.Engine, query: str) -> list[StockMatch]:
+def search_stocks(engine: sa.Engine, query: str, size: int | None = None) -> list[StockMatch]:
     query = query.casefold()
     pattern = hangul_pattern(query)
     ranked = []
@@ -55,4 +55,4 @@ def search_stocks(engine: sa.Engine, query: str) -> list[StockMatch]:
         rank = _rank(name, english_name, query, pattern)
         if rank is not None:
             ranked.append((rank, code, name))
-    return [StockMatch(code=code, name=name) for _, code, name in sorted(ranked)]
+    return [StockMatch(code=code, name=name) for _, code, name in sorted(ranked)[:size]]
