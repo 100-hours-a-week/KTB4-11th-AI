@@ -2,12 +2,23 @@ import asyncio
 from typing import Annotated
 
 import sqlalchemy as sa
-from fastapi import APIRouter, HTTPException, Path, Request
+from fastapi import APIRouter, HTTPException, Path, Query
 
-from market_http.controllers.dependencies import CODE
-from market_http.repositories.stocks import StockDetail, find_stock
+from market_http.controllers.dependencies import CODE, PostgresEngine
+from market_http.repositories.stocks import StockDetail, StockMatch, find_stock
+from market_http.services.stocks import search_stocks
 
 router = APIRouter()
+
+
+@router.get("/stocks/search", responses={503: {"description": "Stock data store unavailable"}})
+async def search(
+    engine: PostgresEngine, q: Annotated[str, Query(pattern=r"\S", max_length=100)]
+) -> list[StockMatch]:
+    try:
+        return await asyncio.to_thread(search_stocks, engine, q.strip())
+    except sa.exc.SQLAlchemyError as error:
+        raise HTTPException(503, "stock data unavailable") from error
 
 
 @router.get(
@@ -17,10 +28,9 @@ router = APIRouter()
         503: {"description": "Stock data store unavailable"},
     },
 )
-async def get_stock(request: Request, code: Annotated[str, Path(pattern=CODE)]) -> StockDetail:
-    engine: sa.Engine | None = request.app.state.postgres_engine
-    if engine is None:
-        raise HTTPException(503, "stock data unavailable")
+async def get_stock(
+    engine: PostgresEngine, code: Annotated[str, Path(pattern=CODE)]
+) -> StockDetail:
     try:
         stock = await asyncio.to_thread(find_stock, engine, code)
     except sa.exc.SQLAlchemyError as error:
