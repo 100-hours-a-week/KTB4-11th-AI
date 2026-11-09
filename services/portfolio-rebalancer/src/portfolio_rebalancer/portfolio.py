@@ -36,7 +36,13 @@ class Unready(BaseModel):
     status: str
 
 
-LATEST = "SELECT id, status FROM portfolios ORDER BY id DESC LIMIT 1"
+LATEST = (
+    "SELECT id, status FROM portfolios"
+    " WHERE NOT EXISTS ("
+    "  SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = portfolios.id"
+    " )"
+    " ORDER BY id DESC LIMIT 1"
+)
 
 CASH_WEIGHT = "SELECT cash_weight FROM portfolios WHERE id = :id"
 
@@ -62,6 +68,9 @@ FROM portfolio_reasons r
 JOIN portfolio_exits e ON e.portfolio_id = r.portfolio_id AND e.company_id = r.company_id
 JOIN corporations c ON c.corp_code = r.company_id
 WHERE r.side = 'sell' AND r.portfolio_id <= :id
+AND NOT EXISTS (
+  SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = r.portfolio_id
+)
 ORDER BY c.stock_code, r.portfolio_id DESC
 """
 

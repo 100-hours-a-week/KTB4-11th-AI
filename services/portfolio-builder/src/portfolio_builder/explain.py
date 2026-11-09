@@ -103,7 +103,13 @@ class Explanations(BaseModel):
 def load_unexplained(engine: sa.Engine) -> tuple[int, list[TraceEntry]] | None:
     with engine.connect() as conn:
         row = conn.execute(
-            sa.text("SELECT id, status, trace FROM portfolios ORDER BY id DESC LIMIT 1")
+            sa.text(
+                "SELECT id, status, trace FROM portfolios"
+                " WHERE NOT EXISTS ("
+                "  SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = portfolios.id"
+                " )"
+                " ORDER BY id DESC LIMIT 1"
+            )
         ).first()
     if row is None or row.status == "ready" or row.trace is None:
         return None
@@ -115,7 +121,17 @@ def load_targets(engine: sa.Engine, portfolio_id: int) -> list[Target]:
         rows = conn.execute(
             sa.text(
                 "WITH previous AS ("
-                "  SELECT max(id) AS id FROM portfolios WHERE id < :id"
+                "  SELECT CASE WHEN EXISTS ("
+                "   SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = :id"
+                "  ) THEN ("
+                "   SELECT j.previous_portfolio_id FROM competition_jobs j"
+                "   WHERE j.portfolio_id = :id"
+                "  ) ELSE ("
+                "   SELECT max(p.id) FROM portfolios p WHERE p.id < :id"
+                "   AND NOT EXISTS ("
+                "    SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = p.id"
+                "   )"
+                "  ) END AS id"
                 ")"
                 " SELECT h.company_id, c.name, false AS exiting, h.weight,"
                 "  (SELECT p.weight FROM portfolio_holdings p, previous"
