@@ -32,7 +32,7 @@ The Backend sends one JSON message to the SQS request queue:
 }
 ```
 
-The callback uses `ktb_core.backend_auth.BackendAuth.request()` from [PR #237](https://github.com/100-hours-a-week/KTB4-11th-AI/pull/237) for the existing AI JWT and CSRF protocol. It passes `str(user_id)` as the JWT subject. The JWT has actor `AI`. `participant_id` remains in the SQS message for request validation; one AI handles each competition, so it is not part of the callback URL. Authentication code consolidation is outside this spec.
+The callback uses `ktb_core.backend_auth.BackendAuth.request()` from [PR #237](https://github.com/100-hours-a-week/KTB4-11th-AI/pull/237) for the existing AI JWT and CSRF protocol. It passes `str(user_id)` as the JWT subject. The JWT has actor `AI`. `participant_id` scopes evidence ownership, is included in the callback JSON, and remains outside the competition-only callback URL. Authentication code consolidation is outside this spec.
 
 ## Reason IDs and orders
 
@@ -42,7 +42,7 @@ Add `portfolio_reasons.id UUID` for external references. Keep `(portfolio_id, co
 
 ## Report flow
 
-`report-builder` is a new, long-running uv workspace service. It long polls SQS for one message at a time, validates `competition_id`, `participant_id`, `user_id`, and the nonempty reason list, then queries `portfolio_reasons` by those IDs. Every requested ID must resolve; otherwise it sends no report. The query joins each selected reason to its portfolio commentary and the matching holding or exit row. It fetches only `cluster_summaries` referenced by that row's `cited_cluster_ids`. Missing cited summaries fail the attempt rather than silently changing the evidence. Duplicate reason IDs and duplicate cited clusters contribute once.
+`report-builder` is a new, long-running uv workspace service. It long polls SQS for one message at a time, validates `competition_id`, `participant_id`, `user_id`, and the nonempty reason list, then queries `portfolio_reasons` by those IDs. Every requested ID must resolve; otherwise it logs the failure, sends no callback, and leaves the message for retry. The query joins each selected reason to its portfolio commentary and the matching holding or exit row. It fetches only `cluster_summaries` referenced by that row's `cited_cluster_ids`. Missing cited summaries fail the attempt rather than silently changing the evidence. Duplicate reason IDs and duplicate cited clusters contribute once.
 
 The OpenRouter call receives the selected reasons, their ordered `reasonings`, and their associated portfolio commentary. It generates `thoughts` in Korean, grounded only in this supplied evidence. `news` comes from the cited cluster summary titles and summaries, deduplicated by cluster ID; the model does not invent or rewrite news. The generated response is validated as a nonempty list of `{title, text}` objects before the callback. The prompt must preserve the association between each reason and its own portfolio commentary when a request spans portfolios. No unrelated reasons, portfolio trace, or uncited news enter the prompt.
 
@@ -65,4 +65,4 @@ Add the service to the uv workspace, development and production Compose files, D
 
 ## Boundaries
 
-The Backend owns storing order reason IDs, creating the SQS message from competition orders, callback authorization, idempotent report storage, and the request queue's dead-letter policy. This repo owns UUID migration, rebalancer payload, and the report consumer. The shared Backend authentication code from PR #237 is treated as an available dependency.
+The Backend owns storing order reason IDs, creating the SQS message from the participant's orders, callback authorization, idempotent report storage, and the request queue's dead-letter policy. This repo owns UUID migration, rebalancer payload, and the report consumer. The shared Backend authentication code from PR #237 is treated as an available dependency.

@@ -1,7 +1,10 @@
 import pytest
 import sqlalchemy as sa
 
-TABLES = "portfolio_reasons, portfolio_exits, portfolio_holdings, portfolios, corporations"
+TABLES = (
+    "portfolio_reasons, portfolio_exits, portfolio_holdings,"
+    " competition_portfolios, portfolios, competition_participants, corporations"
+)
 
 
 def _truncate(engine):

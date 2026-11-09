@@ -3,10 +3,11 @@ import json
 import pytest
 import talib
 from portfolio_builder import __main__ as entry
+from portfolio_builder import builder
 from portfolio_builder.agent.run import RunResult
 from portfolio_builder.agent.trace import TraceEntry
 from portfolio_builder.briefing import Briefing
-from portfolio_builder.explain import ExplanationRejected, Explanations
+from portfolio_builder.explain import ExplanationRejected
 
 REQUIRED = {
     "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://ktb:ktb@localhost:5432/ktb",
@@ -35,7 +36,7 @@ def env(monkeypatch):
     monkeypatch.setattr(entry, "save_trace", lambda engine, pid, trace: calls.update(trace=pid))
     monkeypatch.setattr(entry, "load_unexplained", lambda engine: None)
     monkeypatch.setattr(entry, "load_targets", lambda engine, pid: [])
-    monkeypatch.setattr(entry, "explain", lambda *args: Explanations(stocks=[]))
+    monkeypatch.setattr(entry, "explain", lambda *args: entry.Explanations(stocks=[]))
     monkeypatch.setattr(
         entry, "save_explanations", lambda engine, pid, explanations: calls.update(saved=pid)
     )
@@ -56,7 +57,7 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
         captured.update(kwargs)
         return RunResult("saved", 7, 3, {"input": 10})
 
-    monkeypatch.setattr(entry, "run_agent", fake_run_agent)
+    monkeypatch.setattr(builder, "run_agent", fake_run_agent)
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
@@ -66,6 +67,10 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
     events = _events(out)
     messages = [e["message"] for e in events]
     assert messages == ["run_start", "ingestion", "prompt", "explained", "run_end"]
+    assert events[0]["logger"] == "portfolio_builder.__main__"
+    assert events[0]["provider"] == "openrouter"
+    assert events[-1]["turns"] == 3
+    assert events[-1]["usage"] == {"input": 10}
     assert events[-1]["outcome"] == "saved"
     assert events[-1]["portfolio_id"] == 7
     assert len({e["run_id"] for e in events}) == 1
@@ -88,7 +93,9 @@ def test_a_saved_portfolio_exits_zero(env, monkeypatch, capsys):
 
 
 def test_max_turns_exits_one(env, monkeypatch, capsys):
-    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("max_turns", None, 150, {}))
+    monkeypatch.setattr(
+        builder, "run_agent", lambda **kwargs: RunResult("max_turns", None, 150, {})
+    )
 
     with pytest.raises(SystemExit) as exit_:
         entry.main()
@@ -98,6 +105,11 @@ def test_max_turns_exits_one(env, monkeypatch, capsys):
 
 
 def test_a_failure_before_the_agent_raises_after_run_end(env, monkeypatch, capsys):
+    from unittest.mock import Mock
+
+    engine = Mock()
+    monkeypatch.setattr(entry.sa, "create_engine", lambda dsn: engine)
+
     def broken(engine, days):
         raise RuntimeError("postgres unreachable")
 
@@ -110,10 +122,11 @@ def test_a_failure_before_the_agent_raises_after_run_end(env, monkeypatch, capsy
     assert last["message"] == "run_end"
     assert last["outcome"] == "error"
     assert "postgres unreachable" in last["error"]
+    engine.dispose.assert_called_once()
 
 
 def test_a_rejected_explanation_marks_the_portfolio_failed_and_exits_one(env, monkeypatch, capsys):
-    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 3, {}))
+    monkeypatch.setattr(builder, "run_agent", lambda **kwargs: RunResult("saved", 7, 3, {}))
 
     def rejected(*args):
         raise ExplanationRejected("HYNIX: missing")
@@ -136,7 +149,7 @@ def test_a_rejected_explanation_marks_the_portfolio_failed_and_exits_one(env, mo
 def test_provider_error_during_explain_marks_the_portfolio_failed_and_exits_one(
     env, monkeypatch, capsys
 ):
-    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("saved", 7, 3, {}))
+    monkeypatch.setattr(builder, "run_agent", lambda **kwargs: RunResult("saved", 7, 3, {}))
 
     def provider_error(*args):
         raise RuntimeError("502 from provider")
@@ -157,7 +170,9 @@ def test_provider_error_during_explain_marks_the_portfolio_failed_and_exits_one(
 
 
 def test_no_explanation_without_a_saved_portfolio(env, monkeypatch, capsys):
-    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: RunResult("max_turns", None, 150, {}))
+    monkeypatch.setattr(
+        builder, "run_agent", lambda **kwargs: RunResult("max_turns", None, 150, {})
+    )
 
     with pytest.raises(SystemExit):
         entry.main()
@@ -169,12 +184,12 @@ def test_an_unexplained_portfolio_is_explained_again_without_the_agent(env, monk
     trace = [TraceEntry(turn=1, kind="model", text="삼성 사요")]
     monkeypatch.setattr(entry, "load_unexplained", lambda engine: (5, trace))
     monkeypatch.setattr(entry, "load_briefing", lambda engine, client, days: pytest.fail("briefed"))
-    monkeypatch.setattr(entry, "run_agent", lambda **kwargs: pytest.fail("agent ran"))
+    monkeypatch.setattr(builder, "run_agent", lambda **kwargs: pytest.fail("agent ran"))
     seen = {}
     monkeypatch.setattr(
         entry,
         "explain",
-        lambda model, targets, t, chars: seen.update(trace=t) or Explanations(stocks=[]),
+        lambda explainer, targets, t, chars: seen.update(trace=t) or entry.Explanations(stocks=[]),
     )
 
     with pytest.raises(SystemExit) as exit_:
@@ -209,7 +224,7 @@ def test_default_deployment_without_disclosure_config_keeps_portfolio_generation
     monkeypatch.delenv("DISCLOSURE_EMBEDDING_BASE_URI")
     monkeypatch.delenv("DISCLOSURE_EMBEDDING_MODEL")
     monkeypatch.setattr(
-        entry, "DisclosureSettings", lambda: pytest.fail("disabled model settings loaded")
+        builder, "DisclosureSettings", lambda: pytest.fail("disabled model settings loaded")
     )
     captured = {}
 
@@ -217,7 +232,7 @@ def test_default_deployment_without_disclosure_config_keeps_portfolio_generation
         captured.update(kwargs)
         return RunResult("saved", 7, 3, {})
 
-    monkeypatch.setattr(entry, "run_agent", run)
+    monkeypatch.setattr(builder, "run_agent", run)
     with pytest.raises(SystemExit) as result:
         entry.main()
     assert result.value.code == 0
@@ -234,7 +249,83 @@ def test_enabled_disclosure_with_missing_endpoint_fails_before_agent(env, monkey
     monkeypatch.delenv("DISCLOSURE_EMBEDDING_BASE_URI")
     monkeypatch.delenv("DISCLOSURE_EMBEDDING_MODEL")
     monkeypatch.setattr(
-        entry, "run_agent", lambda **kwargs: pytest.fail("agent ran without model config")
+        builder, "run_agent", lambda **kwargs: pytest.fail("agent ran without model config")
     )
     with pytest.raises(ValidationError):
         entry.main()
+
+
+@pytest.fixture
+def participant_mode(env, monkeypatch):
+    from unittest.mock import Mock
+
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_ENABLED", "true")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_BASE_URI", "https://backend")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_JWT_SECRET", "s" * 32)
+    monkeypatch.setenv("PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER", "issuer")
+    run = Mock(return_value=True)
+    monkeypatch.setattr(entry, "run_participants", run, raising=False)
+    return run
+
+
+def test_competition_mode_runs_only_participant_portfolios(participant_mode, monkeypatch):
+    def unexpected(**kwargs):
+        pytest.fail("competition mode also generated a common portfolio")
+
+    monkeypatch.setattr(builder, "run_agent", unexpected)
+    with pytest.raises(SystemExit) as stopped:
+        entry.main()
+    assert stopped.value.code == 0
+    participant_mode.assert_called_once()
+
+
+def test_failed_participant_mode_exits_nonzero(participant_mode):
+    participant_mode.return_value = False
+    with pytest.raises(SystemExit) as stopped:
+        entry.main()
+    assert stopped.value.code == 1
+
+
+def test_common_mode_does_not_query_backend_accounts(env, monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_ENABLED", "false")
+    monkeypatch.setattr(entry, "run_participants", lambda *args: pytest.fail("queried backend"))
+    monkeypatch.setattr(builder, "run_agent", lambda **kwargs: RunResult("saved", 7, 1, {}))
+    with pytest.raises(SystemExit) as stopped:
+        entry.main()
+    assert stopped.value.code == 0
+
+
+@pytest.mark.parametrize("participant_id", [None, 11])
+def test_shared_generation_selects_only_the_submit_schema_and_prompt(
+    env, monkeypatch, participant_id
+):
+    from unittest.mock import Mock
+
+    from portfolio_builder.agent.system_prompt import SYSTEM_PROMPT
+    from portfolio_builder.competition.prompt import COMPETITION_SYSTEM_PROMPT
+
+    monkeypatch.setenv("DISCLOSURE_ENABLED", "false")
+    captured = {}
+    result = RunResult("max_turns", None, 1, {})
+    monkeypatch.setattr(builder, "run_agent", lambda **kwargs: captured.update(kwargs) or result)
+    settings = builder.Settings()
+    assert (
+        builder._generate(
+            Mock(),
+            settings,
+            Mock(),
+            Mock(),
+            Mock(),
+            frozenset(),
+            frozenset(),
+            "brief",
+            participant_id,
+            Mock() if participant_id is not None else None,
+        )
+        is result
+    )
+    submit = next(tool for tool in captured["tools"] if tool.name == "submit_portfolio")
+    assert ("constraints" in submit.args) is (participant_id is not None)
+    assert captured["system_prompt"] == (
+        SYSTEM_PROMPT if participant_id is None else COMPETITION_SYSTEM_PROMPT
+    )

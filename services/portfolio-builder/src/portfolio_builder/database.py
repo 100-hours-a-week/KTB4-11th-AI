@@ -30,6 +30,8 @@ portfolios = sa.Table(
         nullable=False,
         server_default=sa.text("'explanation_pending'"),
     ),
+    sa.Column("acknowledged_constraints", postgresql.JSONB, nullable=True),
+    sa.Column("explanation_attempts", sa.Integer, nullable=False, server_default=sa.text("0")),
     sa.Index("portfolios_created_at_idx", "created_at"),
 )
 
