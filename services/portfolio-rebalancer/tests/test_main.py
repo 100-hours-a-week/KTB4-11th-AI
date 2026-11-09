@@ -5,7 +5,9 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
+import sqlalchemy as sa
 from portfolio_rebalancer import __main__ as entry
+from portfolio_rebalancer import portfolio as policy
 from portfolio_rebalancer.holidays import KST
 from portfolio_rebalancer.orders import PublishError
 from portfolio_rebalancer.portfolio import Explanation, Portfolio, Target, Unready
@@ -33,6 +35,7 @@ PORTFOLIO = Portfolio(
 def account(account_id, stocks=(), pending=(), active=True, cash=1_000_000):
     return {
         "account_id": account_id,
+        "participant_id": None,
         "is_active": active,
         "cash_balance": cash,
         "stocks": [{"stock_code": c, "quantity": q, "total_cost": 0} for c, q in stocks],
@@ -305,30 +308,40 @@ def test_a_calendar_ending_within_a_month_is_warned(env, monkeypatch, capsys):
     assert (warn["covered_through"], warn["days_left"]) == ("2026-10-24", 10)
 
 
-def test_no_explained_portfolio_exits_zero_without_calling_the_backend(env, monkeypatch, capsys):
+def test_missing_common_portfolio_fetches_users_and_skips_common_accounts(env, monkeypatch, capsys):
     monkeypatch.setattr(entry, "load_portfolio", lambda engine: None)
-    backends = _use(monkeypatch)
+    orders = _use(monkeypatch)[0]
 
     assert _main() == 0
-    assert backends[0].calls == []
-    assert _events(capsys.readouterr().out)[-1]["outcome"] == "no_portfolio"
+    assert orders.calls == [("users",)]
+    events = _events(capsys.readouterr().out)
+    skipped = [e for e in events if e["message"] == "account_skipped"]
+    assert [(e["account_id"], e["reason"]) for e in skipped] == [
+        (11, "no_portfolio"),
+        (12, "no_portfolio"),
+    ]
+    assert events[-1]["portfolio_id"] is None
 
 
 @pytest.mark.parametrize(
-    ("status", "code", "level"),
-    [("explanation_pending", 0, "INFO"), ("explanation_failed", 1, "ERROR")],
+    ("status", "code"),
+    [("explanation_pending", 0), ("explanation_failed", 2)],
 )
-def test_an_unready_latest_portfolio_sends_nothing(env, monkeypatch, capsys, status, code, level):
+def test_unready_common_portfolio_skips_accounts_after_user_lookup(
+    env, monkeypatch, capsys, status, code
+):
     monkeypatch.setattr(entry, "load_portfolio", lambda engine: Unready(id=8, status=status))
-    backends = _use(monkeypatch)
+    orders = _use(monkeypatch)[0]
 
-    with pytest.raises(SystemExit) as exit_:
-        entry.main()
-
-    assert exit_.value.code == code
-    assert backends[0].calls == []
-    last = _events(capsys.readouterr().out)[-1]
-    assert (last["outcome"], last["portfolio_id"], last["level"]) == (status, 8, level)
+    assert _main() == code
+    assert orders.calls == [("users",)]
+    events = _events(capsys.readouterr().out)
+    skipped = [e for e in events if e["message"] == "account_skipped"]
+    assert [(e["account_id"], e["reason"], e["portfolio_id"]) for e in skipped] == [
+        (11, status, 8),
+        (12, status, 8),
+    ]
+    assert events[-1]["explanation_failed"] == (2 if code == 2 else 0)
 
 
 def test_the_secret_never_reaches_the_log(env, monkeypatch, capsys):
@@ -533,3 +546,514 @@ def test_a_partial_cancel_publish_failure_does_not_place_replacements(env, monke
         requested["correlation_id"],
         requested["result"],
     ) == ("cancel-message-77", "cancel-77", "run", "published")
+
+
+def test_accounts_require_explicit_identity_before_cancelling(env, monkeypatch, capsys):
+    raw = account(11, pending=[77])
+    del raw["participant_id"]
+    orders = _use(monkeypatch, users=users(raw))[0]
+    assert _main() == 2
+    assert orders.cancelled == []
+    assert orders.placed == []
+    skipped = [e for e in _events(capsys.readouterr().out) if e["message"] == "account_skipped"]
+    assert [(e["account_id"], e["reason"]) for e in skipped] == [(11, "participant_id_missing")]
+
+
+@pytest.mark.parametrize(
+    "common",
+    [None, Unready(id=8, status="explanation_pending"), Unready(id=8, status="explanation_failed")],
+)
+def test_participant_runs_when_common_unavailable_and_resolves_before_cancel(
+    env, monkeypatch, capsys, common
+):
+    monkeypatch.setattr(entry, "load_portfolio", lambda engine: common)
+    orders = _use(
+        monkeypatch,
+        users=users(
+            {**account(11, pending=[77]), "participant_id": 9},
+            {**account(12, pending=[78]), "participant_id": None},
+            {**account(13, pending=[79]), "participant_id": 10},
+            {**account(14, pending=[80], active=False), "participant_id": 11},
+        ),
+    )[0]
+    selected = []
+
+    def load(engine, user_id=None, participant_id=None):
+        if participant_id is None:
+            return common
+        assert orders.cancelled == []
+        selected.append(participant_id)
+        return PORTFOLIO if participant_id == 9 else Unready(id=7, status="explanation_pending")
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    failed = isinstance(common, Unready) and common.status == "explanation_failed"
+    assert _main() == (2 if failed else 0)
+    assert selected == [9, 10]
+    assert orders.cancelled == [(1, 11, 77)]
+    assert orders.placed == [(1, 11, "005930", 4)]
+
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["explanation_failed"] == int(failed)
+    skipped = [e for e in events if e["message"] == "account_skipped"]
+    assert {(e["account_id"], e["reason"]) for e in skipped} == {
+        (12, common.status if isinstance(common, Unready) else "no_portfolio"),
+        (13, "explanation_pending"),
+        (14, "inactive"),
+    }
+
+
+def test_one_snapshot_selects_common_and_participant_targets_and_aggregates_quotes(
+    env, monkeypatch, capsys
+):
+    personal = PORTFOLIO.model_copy(
+        update={
+            "id": 9,
+            "targets": [Target(stock_code="373220", weight=0.5, exiting=False, buy=WHY, sell=WHY)],
+            "names": {"373220": "LG에너지솔루션"},
+        }
+    )
+    reads = []
+
+    def load(engine, user_id=None, participant_id=None):
+        reads.append(participant_id)
+        return PORTFOLIO if participant_id is None else personal
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    selected = users(
+        {**account(11, pending=[77]), "participant_id": None},
+        {**account(12, pending=[78]), "participant_id": 9},
+        {**account(13, stocks=[("000660", 1)]), "participant_id": 10},
+    )
+    orders = _use(monkeypatch, users=selected)[0]
+    monkeypatch.setattr(
+        entry, "latest_prices", lambda conf, codes: {code: 100_000.0 for code in codes}
+    )
+
+    def closes(conf, codes, now):
+        env["codes"] = codes
+        return {code: [100_000.0] * 20 for code in codes}
+
+    monkeypatch.setattr(entry, "daily_closes", closes)
+    assert _main() == 0
+    assert reads == [None, 9, 10]
+    assert env["codes"] == {"005930", "373220", "000660"}
+    assert [(a, code) for _, a, code, _ in orders.placed] == (
+        [(11, "005930"), (12, "373220"), (13, "373220")]
+    )
+    assert orders.cancelled == [(1, 11, 77), (1, 12, 78)]
+    assert orders.calls_of("users") == [("users",)]
+    events = _events(capsys.readouterr().out)
+    sent = [event for event in events if event["message"] == "order_sent"]
+    assert {(e["account_id"], e["participant_id"], e["portfolio_id"]) for e in sent} == (
+        {(11, None, 5), (12, 9, 9), (13, 10, 9)}
+    )
+    assert events[-1]["portfolio_id"] == 5
+
+
+@pytest.mark.parametrize("cross_user", [False, True])
+@pytest.mark.parametrize("identities", [(None, None), (9, 9), (9, 10), (None, 9)])
+def test_duplicate_account_entries_all_skip_before_publication(
+    env, monkeypatch, capsys, cross_user, identities
+):
+    first = {**account(11, pending=[77]), "participant_id": identities[0]}
+    second = {**account(11, pending=[77]), "participant_id": identities[1]}
+    if cross_user:
+        snapshots = [
+            User.model_validate({"user_id": 1, "accounts": [first]}),
+            User.model_validate({"user_id": 2, "accounts": [second]}),
+        ]
+    else:
+        snapshots = users(first, second)
+    snapshots.append(
+        User.model_validate({"user_id": 3, "accounts": [{**account(12), "participant_id": 11}]})
+    )
+    orders = _use(monkeypatch, users=snapshots)[0]
+    monkeypatch.setattr(entry, "load_portfolio", lambda *args: PORTFOLIO)
+    monkeypatch.setattr(policy, "load_portfolio", lambda *args: PORTFOLIO)
+    assert _main() == 2
+    assert orders.cancelled == []
+    assert orders.placed == [(3, 12, "005930", 4)]
+    skipped = [e for e in _events(capsys.readouterr().out) if e["message"] == "account_skipped"]
+    assert [(e["account_id"], e["reason"]) for e in skipped] == [
+        (11, "duplicate_account_id"),
+        (11, "duplicate_account_id"),
+    ]
+
+
+@pytest.mark.parametrize("cross_user", [False, True])
+def test_participant_assigned_to_multiple_active_accounts_skips_every_mapping(
+    env, monkeypatch, cross_user
+):
+    first = {**account(11, pending=[77]), "participant_id": 9}
+    second = {**account(12, pending=[78]), "participant_id": 9}
+    snapshots = (
+        [
+            User.model_validate({"user_id": 1, "accounts": [first]}),
+            User.model_validate({"user_id": 2, "accounts": [second]}),
+        ]
+        if cross_user
+        else users(first, second)
+    )
+    orders = _use(monkeypatch, users=snapshots)[0]
+    monkeypatch.setattr(entry, "load_portfolio", lambda *args: PORTFOLIO)
+    monkeypatch.setattr(policy, "load_portfolio", lambda *args: PORTFOLIO)
+    assert _main() == 2
+    assert orders.cancelled == []
+    assert orders.placed == []
+
+
+@pytest.mark.parametrize("personal", [None, Unready(id=9, status="explanation_pending")])
+def test_unavailable_participant_never_falls_back_to_ready_common(
+    env, monkeypatch, capsys, personal
+):
+    reads = []
+
+    def load(engine, user_id=None, participant_id=None):
+        reads.append(participant_id)
+        return PORTFOLIO if participant_id is None else personal
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    orders = _use(
+        monkeypatch,
+        users=users(account(11, pending=[77]), {**account(12, pending=[78]), "participant_id": 9}),
+    )[0]
+    assert _main() == 0
+    assert reads == [None, 9]
+    assert orders.cancelled == [(1, 11, 77)]
+    assert orders.placed == [(1, 11, "005930", 4)]
+    skipped = [e for e in _events(capsys.readouterr().out) if e["message"] == "account_skipped"]
+    assert [(e["account_id"], e["reason"]) for e in skipped] == [
+        (12, personal.status if isinstance(personal, Unready) else "no_portfolio")
+    ]
+
+
+@pytest.mark.parametrize("healthy", [False, True])
+def test_failed_participant_explanation_fails_summary_and_preserves_healthy_accounts(
+    env, monkeypatch, capsys, healthy
+):
+    snapshots = [{**account(11, pending=[77]), "participant_id": 9}]
+    if healthy:
+        snapshots.append(account(12, pending=[78]))
+    orders = _use(monkeypatch, users=users(*snapshots))[0]
+
+    def load(engine, user_id=None, participant_id=None):
+        assert orders.cancelled == []
+        return Unready(id=9, status="explanation_failed") if participant_id == 9 else PORTFOLIO
+
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    assert _main() == 2
+    assert orders.cancelled == ([(1, 12, 78)] if healthy else [])
+    assert orders.placed == ([(1, 12, "005930", 4)] if healthy else [])
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["explanation_failed"] == 1
+    skipped = [e for e in events if e["message"] == "account_skipped"]
+    assert [(e["account_id"], e["reason"]) for e in skipped] == [(11, "explanation_failed")]
+
+
+@pytest.mark.parametrize("failure", ["cancel", "order"])
+def test_publication_failure_takes_precedence_over_failed_participant_explanation(
+    env, monkeypatch, capsys, failure
+):
+    orders = _use(
+        monkeypatch,
+        users=users(
+            {**account(11, pending=[77]), "participant_id": 9},
+            {**account(12, pending=[78]), "participant_id": 10},
+            {**account(13, pending=[79]), "participant_id": 11},
+        ),
+        **({"fail_cancel": 78} if failure == "cancel" else {"fail_account": 12}),
+    )[0]
+
+    def load(engine, user_id=None, participant_id=None):
+        return Unready(id=9, status="explanation_failed") if participant_id == 9 else PORTFOLIO
+
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    assert _main() == 1
+    assert orders.cancelled == (
+        [(1, 13, 79)] if failure == "cancel" else [(1, 12, 78), (1, 13, 79)]
+    )
+    assert orders.placed == [(1, 13, "005930", 4)]
+    end = _events(capsys.readouterr().out)[-1]
+    assert end["explanation_failed"] == 1
+    assert (end["cancel_failed"], end["failed"]) == ((1, 0) if failure == "cancel" else (0, 1))
+
+
+def test_participant_orders_and_cancellations_keep_snapshot_user_identity(env, monkeypatch, capsys):
+    personal = PORTFOLIO.model_copy(
+        update={
+            "id": 19,
+            "targets": [Target(stock_code="373220", weight=0.5, exiting=False, buy=WHY, sell=WHY)],
+            "names": {"373220": "LG에너지솔루션"},
+        }
+    )
+
+    def load(engine, user_id=None, participant_id=None):
+        if participant_id is not None:
+            assert (user_id, participant_id) in {(701, 9), (802, 10)}
+        return {None: None, 9: PORTFOLIO, 10: personal}[participant_id]
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    snapshots = [
+        User.model_validate(
+            {
+                "user_id": user_id,
+                "accounts": [
+                    {**account(account_id, pending=[order_id]), "participant_id": participant_id}
+                ],
+            }
+        )
+        for user_id, account_id, participant_id, order_id in [(701, 31, 9, 77), (802, 42, 10, 78)]
+    ]
+    orders = _use(monkeypatch, users=snapshots)[0]
+    monkeypatch.setattr(
+        entry, "latest_prices", lambda conf, codes: {code: 100_000.0 for code in codes}
+    )
+    monkeypatch.setattr(
+        entry, "daily_closes", lambda conf, codes, now: {code: [100_000.0] * 20 for code in codes}
+    )
+    assert _main() == 0
+    assert orders.cancelled == [(701, 31, 77), (802, 42, 78)]
+    assert orders.placed == [(701, 31, "005930", 4), (802, 42, "373220", 4)]
+    events = _events(capsys.readouterr().out)
+    for message in ("portfolio_selected", "order_cancel_requested", "order_sent"):
+        assert {
+            (e["user_id"], e["account_id"], e["participant_id"])
+            for e in events
+            if e["message"] == message
+        } == {(701, 31, 9), (802, 42, 10)}
+
+
+@pytest.mark.parametrize("healthy", [False, True])
+def test_missing_identity_fails_summary_after_healthy_accounts_finish(
+    env, monkeypatch, capsys, healthy
+):
+    invalid = account(11, pending=[77])
+    del invalid["participant_id"]
+    snapshots = [invalid, account(12, pending=[78])] if healthy else [invalid]
+    orders = _use(monkeypatch, users=users(*snapshots))[0]
+    assert _main() == 2
+    assert orders.cancelled == ([(1, 12, 78)] if healthy else [])
+    assert orders.placed == ([(1, 12, "005930", 4)] if healthy else [])
+    assert _events(capsys.readouterr().out)[-1]["identity_failed"] == 1
+
+
+@pytest.mark.parametrize("scope", ["common", "participant"])
+@pytest.mark.parametrize(
+    "error_type",
+    [KeyError, ValueError, TypeError, sa.exc.NoResultFound, sa.exc.MultipleResultsFound],
+)
+def test_invalid_portfolio_data_is_isolated_before_any_cancel(
+    env, monkeypatch, capsys, scope, error_type
+):
+    orders = _use(
+        monkeypatch,
+        users=users(account(11, pending=[77]), {**account(12, pending=[78]), "participant_id": 9}),
+    )[0]
+    reads = []
+
+    def load(engine, user_id=None, participant_id=None):
+        assert orders.cancelled == []
+        reads.append((user_id, participant_id))
+        if (scope == "common") == (participant_id is None):
+            raise error_type("unsafe stored content")
+        return PORTFOLIO
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    assert _main() == 2
+    healthy_account = 12 if scope == "common" else 11
+    assert orders.cancelled == [(1, healthy_account, 78 if scope == "common" else 77)]
+    assert orders.placed == [(1, healthy_account, "005930", 4)]
+    assert reads == [(None, None), (1, 9)]
+    assert orders.calls_of("users") == [("users",)]
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["portfolio_failed"] == 1
+    failure = next(
+        e
+        for e in events
+        if e["message"]
+        == ("common_portfolio_failed" if scope == "common" else "portfolio_load_failed")
+    )
+    assert failure["error_type"] == error_type.__name__
+    assert failure["level"] == "ERROR"
+    assert "unsafe stored content" not in json.dumps(events)
+    if scope == "participant":
+        assert (failure["user_id"], failure["account_id"], failure["participant_id"]) == (1, 12, 9)
+
+
+@pytest.mark.parametrize("scope", ["common", "participant"])
+def test_database_connection_failure_aborts_before_any_publication(env, monkeypatch, scope):
+    orders = _use(
+        monkeypatch,
+        users=users(account(11, pending=[77]), {**account(12, pending=[78]), "participant_id": 9}),
+    )[0]
+
+    def load(engine, user_id=None, participant_id=None):
+        if (scope == "common") == (participant_id is None):
+            raise sa.exc.OperationalError("query", {}, RuntimeError("offline"))
+        return PORTFOLIO
+
+    monkeypatch.setattr(entry, "load_portfolio", load)
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    with pytest.raises(sa.exc.OperationalError):
+        entry.main()
+    assert orders.cancelled == []
+    assert orders.placed == []
+
+
+@pytest.mark.parametrize("data_failure", ["portfolio", "identity"])
+@pytest.mark.parametrize("send_failure", ["cancel", "order"])
+def test_publication_failure_takes_precedence_over_data_failure(
+    env, monkeypatch, capsys, data_failure, send_failure
+):
+    invalid = {**account(11, pending=[77]), "participant_id": 9}
+    if data_failure == "identity":
+        del invalid["participant_id"]
+    orders = _use(
+        monkeypatch,
+        users=users(invalid, account(12, pending=[78]), account(13, pending=[79])),
+        **({"fail_cancel": 78} if send_failure == "cancel" else {"fail_account": 12}),
+    )[0]
+
+    def load(engine, user_id=None, participant_id=None):
+        if participant_id == 9:
+            raise ValueError("invalid stored portfolio")
+        return PORTFOLIO
+
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    assert _main() == 1
+    assert orders.placed == [(1, 13, "005930", 4)]
+    end = _events(capsys.readouterr().out)[-1]
+    assert end["portfolio_failed" if data_failure == "portfolio" else "identity_failed"] == 1
+    assert (end["cancel_failed"], end["failed"]) == ((1, 0) if send_failure == "cancel" else (0, 1))
+
+
+@pytest.mark.parametrize("broken_scope", ["common", "participant"])
+@pytest.mark.parametrize("missing_side", ["buy", "sell"])
+def test_incomplete_ready_portfolio_preserves_healthy_accounts(
+    engine, env, monkeypatch, capsys, broken_scope, missing_side
+):
+    with engine.connect() as conn:
+        if conn.scalar(sa.text("SELECT to_regclass('competition_portfolios')")) is None:
+            pytest.skip("requires competition schema from #484")
+    with engine.begin() as conn:
+        conn.execute(sa.text("TRUNCATE competition_participants CASCADE"))
+        conn.execute(
+            sa.text(
+                "INSERT INTO competition_participants"
+                " (participant_id, competition_id, user_id, risk_profile)"
+                " VALUES (9, 1, 1, '안정형')"
+            )
+        )
+        for scope in ("common", "participant"):
+            portfolio_id = conn.execute(
+                sa.text(
+                    "INSERT INTO portfolios (cash_weight, commentary, model, status)"
+                    " VALUES (0.5, 'c', 'm', 'ready') RETURNING id"
+                )
+            ).scalar_one()
+            conn.execute(
+                sa.text(
+                    "INSERT INTO portfolio_holdings (portfolio_id, company_id, weight)"
+                    " VALUES (:p, '00126380', 0.5)"
+                ),
+                {"p": portfolio_id},
+            )
+            for side in ("buy", "sell"):
+                if scope == broken_scope and side == missing_side:
+                    continue
+                conn.execute(
+                    sa.text(
+                        "INSERT INTO portfolio_reasons"
+                        " (portfolio_id, company_id, side, reason, reasonings)"
+                        " VALUES (:p, '00126380', :side, 'reason', '[]')"
+                    ),
+                    {"p": portfolio_id, "side": side},
+                )
+            if scope == "participant":
+                conn.execute(
+                    sa.text("INSERT INTO competition_portfolios VALUES (9, :p, now())"),
+                    {"p": portfolio_id},
+                )
+    real_load = policy.load_portfolio
+    monkeypatch.setattr(entry, "load_portfolio", real_load)
+    monkeypatch.setattr(entry.sa, "create_engine", lambda *args: engine)
+    orders = _use(
+        monkeypatch,
+        users=users(account(11, pending=[77]), {**account(12, pending=[78]), "participant_id": 9}),
+    )[0]
+    assert _main() == 2
+    healthy = 12 if broken_scope == "common" else 11
+    assert orders.cancelled == [(1, healthy, 78 if healthy == 12 else 77)]
+    assert orders.placed == [(1, healthy, "005930", 4)]
+    assert orders.calls_of("users") == [("users",)]
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["portfolio_failed"] == 1
+    failure = next(
+        e
+        for e in events
+        if e["message"]
+        == ("common_portfolio_failed" if broken_scope == "common" else "portfolio_load_failed")
+    )
+    assert failure["error_type"] == "KeyError"
+
+
+@pytest.mark.parametrize("participant_id", [0, -1, True, 1.5, "9", [], {}])
+@pytest.mark.parametrize("healthy", [False, True])
+def test_invalid_participant_account_is_isolated_and_fails_summary(
+    env, monkeypatch, capsys, participant_id, healthy
+):
+    snapshots = [{**account(11, pending=[77]), "participant_id": participant_id}]
+    if healthy:
+        snapshots.append(account(12, pending=[78]))
+    orders = _use(monkeypatch, users=users(*snapshots))[0]
+
+    assert _main() == 2
+    assert orders.cancelled == ([(1, 12, 78)] if healthy else [])
+    assert orders.placed == ([(1, 12, "005930", 4)] if healthy else [])
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["identity_failed"] == 1
+    skipped = [event for event in events if event["message"] == "account_skipped"]
+    assert [(event["account_id"], event["reason"]) for event in skipped] == [
+        (11, "participant_id_invalid")
+    ]
+
+
+def test_invalid_identity_keeps_duplicate_account_exclusion(env, monkeypatch, capsys):
+    orders = _use(
+        monkeypatch,
+        users=users(
+            {**account(11, pending=[77]), "participant_id": "invalid"},
+            account(11, pending=[78]),
+            account(12, pending=[79]),
+        ),
+    )[0]
+    assert _main() == 2
+    assert orders.cancelled == [(1, 12, 79)]
+    assert orders.placed == [(1, 12, "005930", 4)]
+    assert _events(capsys.readouterr().out)[-1]["identity_failed"] == 2
+
+
+@pytest.mark.parametrize("healthy", [False, True])
+def test_missing_participant_schema_is_a_nonretryable_account_failure(
+    env, monkeypatch, capsys, healthy
+):
+    def load(engine, user_id=None, participant_id=None):
+        raise policy.MissingParticipantSchema("participant schema unavailable")
+
+    monkeypatch.setattr(policy, "load_portfolio", load)
+    snapshots = [{**account(11, pending=[77]), "participant_id": 9}]
+    if healthy:
+        snapshots.append(account(12, pending=[78]))
+    orders = _use(monkeypatch, users=users(*snapshots))[0]
+    assert _main() == 2
+    assert orders.cancelled == ([(1, 12, 78)] if healthy else [])
+    assert orders.placed == ([(1, 12, "005930", 4)] if healthy else [])
+    events = _events(capsys.readouterr().out)
+    assert events[-1]["portfolio_failed"] == 1
+    failure = next(event for event in events if event["message"] == "portfolio_load_failed")
+    assert failure["error_type"] == "MissingParticipantSchema"

@@ -2,15 +2,15 @@
 
 Replaces `2026-09-29-portfolio-rebalancer-design.md` and its implementation, which are deleted.
 That design laddered limit orders over three trading days and mirrored accounts into its own
-tables. This one sends market orders, keeps no state of its own, and attaches to every order the
+tables. This service publishes order requests, keeps no state of its own, and attaches to every order the
 explanation the Backend shows the user.
 
 Two members change:
 
 1. **portfolio-builder** keeps the agent's reasoning trace and, with one more LLM call per
    portfolio, turns it into a buy and a sell explanation per stock.
-2. **portfolio-rebalancer** reads the latest portfolio once it is explained, polls the Backend for accounts,
-   and sends one market order per stock that needs to move.
+2. **portfolio-rebalancer** fetches the Backend account snapshot, selects the latest explained
+   common or participant portfolio per account, and publishes cancellation and order requests to Order FIFO.
 
 portfolio-builder is built first: the rebalancer has nothing to send until explanations exist.
 
@@ -159,20 +159,31 @@ record and keep feeding the next run's briefing. The system prompt does not chan
 ## portfolio-rebalancer
 
 A one-shot `main()` with no inbound surface. Compose or cron runs it hourly during market hours.
-It keeps no tables: a pending order stops a duplicate, and a filled market order shows up as a
+It keeps no tables: a pending order stops a duplicate, and a filled order shows up as a
 holding on the next run.
 
 ### One run
 
-1. **Portfolio.** Load the latest portfolio. None: log and exit 0. `explanation_pending`: send
-   nothing and exit 0. `explanation_failed`: send nothing and exit 1, so the job's failure alert
-   fires. Never fall back to an older `ready` portfolio. `ready`: load its holdings, exits,
-   reasons, and stock codes from `corporations`.
-2. **Snapshot.** `GET {BACKEND_URL}/api/v1/users/ai-server` with the service token.
-3. **Prices.** The last regular-session daily close from QuestDB `bars_1d` for every stock in the
-   portfolio or held by any account, in one query.
-4. **Decide** each account with `rebalance()`.
-5. **Send** each order.
+One invocation automatically handles common and participant accounts; there is no competition
+mode flag. Respect the KRX session unless test mode is configured. Fetch one authenticated
+Backend snapshot, validate identities and select every account's portfolio before publishing
+any cancellation. Missing/unready common portfolios skip only common accounts; healthy
+participants continue. Collect quotes for all selected targets and held stocks, run the existing
+allocation calculation, then publish cancellation and replacement requests per account.
+
+Only a latest `ready` portfolio may trade. Missing, pending or foreign portfolios skip the
+account without cancelling orders or falling back to common/older history. An
+`explanation_failed` portfolio skips the account, increments the explanation-failure count,
+and makes the run exit 2 after healthy accounts finish. Cancellation or placement publication
+failures take precedence and exit 1. Invalid stored portfolio data increments `portfolio_failed`;
+a common read failure skips common accounts while participant selection continues, and a
+participant read failure skips only that account. Log the exception type without stored content.
+Missing or malformed participant identity on active accounts increments `identity_failed`.
+Inactive accounts are skipped as `inactive` before participant ID validation, so their missing
+or malformed participant IDs do not increase this counter. Duplicate account ID checks still
+precede inactivity filtering; duplicate participant checks apply to active mappings.
+These data failures exit 2 after healthy accounts finish. Database connection failures propagate
+before any cancellation; HTTP snapshot failures exit before any publication.
 
 ### Snapshot
 
@@ -196,6 +207,7 @@ class PendingOrder(BaseModel):
 
 class Account(BaseModel):
     account_id: int
+    participant_id: int | None
     is_active: bool
     cash_balance: int
     stocks: list[Stock]
@@ -208,6 +220,34 @@ class User(BaseModel):
 
 Fields not listed (`account_name`) are ignored. A 503 (`MARKET_DATA_UNAVAILABLE`) or any other
 error ends the run with exit code 1; the next run retries.
+
+### Participant selection and ownership
+
+Every account must carry an explicit `participant_id`: null selects common history and a strict
+positive integer selects that participant. Missing identity is skipped before cancellation or
+placement. For active accounts, invalid participant IDs mark only that account for exclusion
+and `identity_failed`;
+they are never treated as common accounts. Other invalid account financial fields still reject the
+snapshot before publication. Never infer a participant from an account ID,
+user ID, agent ID or investment profile. Match the settings user_id to the snapshot user_id
+when selecting participant portfolios and exit history; a mismatched owner is excluded. Order and cancellation requests retain the current snapshot's `user_id`.
+
+Exclude every duplicate account ID across the full snapshot, including identical duplicates and
+conflicts between common and participant accounts. If a participant maps to multiple active
+accounts, exclude every affected mapping. Unrelated valid accounts continue. Load each valid
+participant once, selecting only its latest link in `competition_portfolios`. Historical exit
+reasons use the same participant history, including shared portfolios. Common latest/history
+queries exclude all competition-linked portfolios. A database without competition tables uses
+independent legacy common SQL. Participant accounts require both competition_participants and
+competition_portfolios; absent tables raise MissingParticipantSchema, increment portfolio_failed,
+and make the run exit 2 after healthy accounts finish. This change adds no migration.
+
+Backend explicit nullable participant identity is a deployment prerequisite; participant trading
+also requires the competition schema and generation results. Migration `0017` requires the
+settings user_id; agent_id stays optional and unused. Selection,
+cancellation and placement logs include actual user, account, participant and chosen portfolio
+IDs. The run summary keeps the common portfolio ID nullable and never inherits the last
+participant's ID. No new identity fields enter the existing order payload.
 
 ### Decision
 
@@ -262,35 +302,25 @@ Each `Order` carries the side's `reason` and `reasonings`.
 
 ### Sending
 
-```python
-class OrderRequest(BaseModel):
-    stock_code: str
-    stock_name: str
-    order_side: Literal["buy", "sell"]
-    order_type: Literal["market"] = "market"
-    quantity: int
-    reason: str
-    thoughts: list[Reasoning]
-```
+Use the existing SQS Order FIFO contract from
+[the messaging design](2026-10-08-sqs-messaging-design.md). Publish cancellation requests first;
+a successful send means cancellation was requested, not completed. A failed/partial cancellation
+send prevents every replacement for that account. After all cancellation sends succeed, calculate
+and publish replacements immediately in the same account FIFO group using the original snapshot,
+without waiting for a refreshed snapshot. The Backend consumer must finish each cancellation
+before the next command in that group. Do not budget unconfirmed sell proceeds for buys.
 
-`POST {BACKEND_URL}/api/v1/accounts/{account_id}/orders`, one order per request. `stock_name` is `corporations.name`, loaded with the portfolio.
+Preserve the existing pricing rules and cancellation/order payloads; leftover sell reasons come
+from the same selected participant history. Preserve snapshot
+`user_id` for cancellation and placement. Account ID is the FIFO group and event ID is the
+deduplication ID. Log MessageId, eventId, correlationId and publication result. Snapshot HTTP
+continues to use the existing Backend JWT authentication. AWS uses its default credential chain.
 
-**Auth.** Every request carries an HS256 JWT, signed with PyJWT over
-`PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET`, in the `access_token` cookie. Claims: `iss` = the
-Backend's issuer, `type=access`, `actor=AI`, a five-minute `exp`, and
-
-- `sub=ai-server` for the snapshot GET;
-- `sub=<user_id>` for an order, which `OrderController` reads as the account owner.
-
-**CSRF.** Before the first order of a run, `GET /api/v1/auth/csrf` returns
-`{token, header_name}` and sets the `XSRF-TOKEN` cookie. Every POST sends
-`Cookie: access_token=…; XSRF-TOKEN=<cookie>` and `X-XSRF-TOKEN: <token>`. The cookie header is
-built by hand: the Backend marks the cookie `Secure` in production, and an HTTP client's cookie jar
-would not send it back over plain `http://` inside the cluster. A 403 `INVALID_CSRF_TOKEN` fetches
-a new token and retries that order once.
-
-A failed order is logged and the run continues; the run exits 1 if any order failed. The next run
-retries it, because nothing was recorded.
+Actual publication failures exit 1 and retain the existing automatic retry policy. Explanation,
+portfolio-data and identity-only failures exit 2: the systemd unit sets `RestartPreventExitStatus=2`, leaving exit 2 failed and
+eligible for `OnFailure` without restarting the whole run. Deploy the updated image together
+with the rendered/installed `ktb-portfolio-rebalancer.service`, then run `systemctl daemon-reload`.
+An image-only rollout leaves the old restart policy active.
 
 ### Settings
 
@@ -301,6 +331,8 @@ retries it, because nothing was recorded.
 | `PORTFOLIO_REBALANCER_BACKEND_URL` | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_SECRET` | required |
 | `PORTFOLIO_REBALANCER_BACKEND_JWT_ISSUER` | required |
+| `PORTFOLIO_REBALANCER_ORDER_QUEUE_URL` | required |
+| `PORTFOLIO_REBALANCER_TEST_MODE` | `false` |
 | `PORTFOLIO_REBALANCER_BAND` | `0.05` |
 | `PORTFOLIO_REBALANCER_BUY_BUFFER` | `0.02` |
 | `PORTFOLIO_REBALANCER_LOG_LEVEL` | `INFO` |
@@ -328,9 +360,11 @@ orders from the service token with the account in the path.
   equally, and the band uses the shared-out budget; the leftover is spent share by share, past the
   budget once the short holding is too dear; a held holding that cannot be bought is kept and its
   value locked out of the capital. The snapshot model parses the Backend doc's example JSON.
-  The client sends the cookies, the CSRF header and the right `sub`, and retries once on
-  `INVALID_CSRF_TOKEN`, against `httpx.MockTransport`. The repository loads the latest explained
-  portfolio against `ktb_test`.
+  Verify one authenticated snapshot, cancellation-before-placement FIFO publication, failure
+  isolation, and unchanged payloads. Against `ktb_test`, verify explicit nullable identity,
+  duplicate exclusion, common/participant SQL isolation, shared exit history, latest-unready
+  behavior, quote aggregation, snapshot user identity and exit 2 versus send-failure exit 1.
+  Participant SQL tests also run against a separately migrated database with competition tables.
 
 ## Docs
 
@@ -341,7 +375,4 @@ declared.
 
 ## Out of Scope
 
-- A trading-day calendar: the schedule only runs during market hours.
 - Fees, taxes and slippage.
-- Limit orders. Orders are market orders on both sides, assuming the Backend accepts market
-  sells.
