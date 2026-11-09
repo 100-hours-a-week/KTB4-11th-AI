@@ -133,10 +133,39 @@ jobs:
 
           schedule_stage="$PWD/.schedule.next"
           schedule_render_dir=""
+          report_builder_recovery_needed=false
+
+          cleanup_report_builder_containers() {
+            local report_builder_ids_text
+            local remaining_report_builder_ids
+            local -a report_builder_ids=()
+
+            report_builder_ids_text="$(docker compose --env-file .env --env-file .image.env \
+              -f compose.prod.yaml ps -a -q report-builder)" || return $?
+            if [[ -z "$report_builder_ids_text" ]]; then
+              return 0
+            fi
+
+            mapfile -t report_builder_ids <<< "$report_builder_ids_text"
+            docker stop --time 30 "${report_builder_ids[@]}" || true
+            docker rm "${report_builder_ids[@]}" || true
+            remaining_report_builder_ids="$(docker compose --env-file .env --env-file .image.env \
+              -f compose.prod.yaml ps -a -q report-builder)" || return $?
+            [[ -z "$remaining_report_builder_ids" ]]
+          }
+
+          restore_report_builder() {
+            sudo -n systemctl stop ktb-report-builder.service || return $?
+            cleanup_report_builder_containers || return $?
+            sudo -n systemctl reset-failed ktb-report-builder.service || return $?
+            sudo -n systemctl start ktb-report-builder.service || return $?
+            systemctl is-active --quiet ktb-report-builder.service
+          }
 
           rollback() {
             local status=$?
             local rollback_status
+            local report_builder_rollback_status
             trap - ERR
             set +e
 
@@ -161,6 +190,15 @@ jobs:
               fi
             else
               echo "::error::No previous successful deployment is available for rollback"
+            fi
+
+            if [[ "$report_builder_recovery_needed" == "true" ]]; then
+              if restore_report_builder; then
+                echo "::notice::report-builder rollback completed"
+              else
+                report_builder_rollback_status=$?
+                echo "::error::report-builder rollback failed with status $report_builder_rollback_status"
+              fi
             fi
 
             rm -f compose.prod.yaml.next .image.env.next .env.next
@@ -272,16 +310,6 @@ jobs:
               -f compose.prod.yaml rm -f market-collector
           fi
 
-          # report-builder가 systemd 밖에서 직접 떠 있으면 중복 워커가 되므로 먼저 정리합니다.
-          legacy_report_builder_id="$(docker compose --env-file .env --env-file .image.env \
-            -f compose.prod.yaml ps -q report-builder)"
-          if [[ -n "$legacy_report_builder_id" ]]; then
-            docker compose --env-file .env --env-file .image.env \
-              -f compose.prod.yaml stop report-builder
-            docker compose --env-file .env --env-file .image.env \
-              -f compose.prod.yaml rm -f report-builder
-          fi
-
           # 모든 운영 배치 timer를 활성화하고 재부팅 후에도 유지합니다.
           sudo -n systemctl enable --now \
             ktb-market-collector.timer \
@@ -301,7 +329,11 @@ jobs:
           # report-builder는 상시 실행 서비스라 timer가 아니라 직접 활성화하고,
           # 이미 떠 있던 경우에도 재시작해 새 이미지로 갱신합니다.
           sudo -n systemctl enable ktb-report-builder.service
-          sudo -n systemctl restart ktb-report-builder.service
+          report_builder_recovery_needed=true
+          sudo -n systemctl stop ktb-report-builder.service
+          cleanup_report_builder_containers
+          sudo -n systemctl reset-failed ktb-report-builder.service
+          sudo -n systemctl start ktb-report-builder.service
           systemctl is-enabled --quiet ktb-report-builder.service
           systemctl is-active --quiet ktb-report-builder.service
 
