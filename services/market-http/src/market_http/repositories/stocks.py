@@ -23,15 +23,16 @@ class StockDetail(BaseModel):
 class StockMatch(BaseModel):
     code: str
     name: str
+    sector: str
 
     model_config = ConfigDict(json_schema_extra={"examples": [STOCK_MATCH_EXAMPLE]})
 
 
-def list_kospi200_names(engine: sa.Engine) -> list[tuple[str, str, str | None]]:
+def list_kospi200_names(engine: sa.Engine) -> list[tuple[str, str, str | None, str]]:
     with engine.connect() as conn:
         rows = conn.execute(
             sa.text(
-                "SELECT c.stock_code, c.name, c.eng_name FROM corporations c"
+                "SELECT c.stock_code, c.name, c.eng_name, c.sector_name FROM corporations c"
                 " JOIN corporation_indices ci ON ci.stock_code = c.stock_code"
                 " WHERE ci.index_name = 'KOSPI200'"
             )

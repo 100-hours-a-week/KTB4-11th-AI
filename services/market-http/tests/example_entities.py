@@ -82,7 +82,7 @@ STOCK_DETAIL = StockDetail(
         StockTheme(code="550", name="반도체_생산", is_major=True),
     ],
 )
-STOCK_MATCH = StockMatch(code="005930", name="삼성전자")
+STOCK_MATCH = StockMatch(code="005930", name="삼성전자", sector="전기전자")
 HEALTH = HealthResponse(status="ok")
 
 ENTITIES = {

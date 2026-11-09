@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from market_collector.store import CandleRow, Store, _without_nones
+from market_collector.store import BarBatch, CandleRow, Store, _without_nones
 
 TS = datetime(2026, 9, 22, 6, 19, tzinfo=UTC)
 
@@ -151,7 +151,7 @@ def test_physical_timeframes_write_ohlcv_to_bars(timeframe):
     db = FakeDatabase()
     candle = _candle()
 
-    assert Store(db).write_candles(timeframe, [candle]) == 1
+    assert Store(db).write_bars([(timeframe, candle)]) == 1
 
     table, symbols, columns, at = db.output.rows[0]
     assert table == "bars"
@@ -173,7 +173,7 @@ def test_derived_timeframes_are_rejected_before_opening_a_sender(timeframe):
     db = FakeDatabase()
 
     with pytest.raises(KeyError, match=timeframe):
-        Store(db).write_candles(timeframe, [_candle()])
+        Store(db).write_bars([(timeframe, _candle())])
 
     assert db.sender_calls == 0
 
@@ -270,3 +270,58 @@ def test_without_nones_keeps_falsy_but_non_none_values():
         "d": 1,
         "e": "",
     }
+
+
+def test_bar_batch_writes_symbols_and_timeframes_in_one_time_ordered_commit():
+    db = FakeDatabase()
+    batch = BarBatch(Store(db))
+    later = TS.replace(minute=20)
+    day = TS.replace(hour=0, minute=0)
+
+    assert batch.write_candles("1m", [_candle(symbol="005930", ts=TS), _candle(ts=later)]) == 2
+    assert batch.write_candles("1m", [_candle(symbol="000660", ts=TS)]) == 1
+    assert batch.write_candles("1d", [_candle(symbol="000660", ts=day)]) == 1
+    assert db.sender_calls == 0
+
+    batch.flush()
+
+    assert db.sender_calls == 1
+    assert db.output.flushes == 1
+    assert [(row[1]["symbol"], row[2]["timeframe"], row[3]) for row in db.output.rows] == [
+        ("000660", "1d", day),
+        ("005930", "1m", TS),
+        ("000660", "1m", TS),
+        ("005930", "1m", later),
+    ]
+    assert len(batch) == 0
+
+
+def test_bar_batch_rejects_unknown_timeframe_and_skips_empty_flush():
+    db = FakeDatabase()
+    batch = BarBatch(Store(db))
+
+    with pytest.raises(KeyError, match="15m"):
+        batch.write_candles("15m", [_candle()])
+    batch.flush()
+
+    assert db.sender_calls == 0
+
+
+def test_bar_batch_drops_rows_after_a_failed_flush():
+    class FailingStore:
+        def __init__(self):
+            self.calls = 0
+
+        def write_bars(self, bars):
+            self.calls += 1
+            raise RuntimeError("QuestDB write failed")
+
+    store = FailingStore()
+    batch = BarBatch(store)
+    batch.write_candles("1m", [_candle()])
+
+    with pytest.raises(RuntimeError, match="QuestDB write failed"):
+        batch.flush()
+    batch.flush()
+
+    assert store.calls == 1

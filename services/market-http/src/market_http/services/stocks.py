@@ -47,12 +47,16 @@ def _rank(name: str, english_name: str | None, query: str, pattern: re.Pattern[s
     return None if rank is None else rank + 4
 
 
-def search_stocks(engine: sa.Engine, query: str) -> list[StockMatch]:
+def search_stocks(engine: sa.Engine, query: str, size: int | None = None) -> list[StockMatch]:
     query = query.casefold()
     pattern = hangul_pattern(query)
     ranked = []
-    for code, name, english_name in list_kospi200_names(engine):
-        rank = _rank(name, english_name, query, pattern)
+    for code, name, english_name, sector_name in list_kospi200_names(engine):
+        ranks = (_literal_rank(code.casefold(), query), _rank(name, english_name, query, pattern))
+        rank = min((rank for rank in ranks if rank is not None), default=None)
         if rank is not None:
-            ranked.append((rank, code, name))
-    return [StockMatch(code=code, name=name) for _, code, name in sorted(ranked)]
+            ranked.append((rank, code, name, sector_name))
+    return [
+        StockMatch(code=code, name=name, sector=sector_name)
+        for _, code, name, sector_name in sorted(ranked)[:size]
+    ]
