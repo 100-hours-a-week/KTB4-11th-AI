@@ -5,7 +5,13 @@ from typing import Protocol
 from ktb_core.logging import get_logger
 
 from market_collector.kiwoom.official import Page
-from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
+from market_collector.kiwoom.parse import (
+    DailyBar,
+    KiwoomParseError,
+    MinuteBar,
+    parse_daily_bar,
+    parse_minute_bar,
+)
 from market_collector.store import BarBatch, CandleRow
 
 __all__ = ["ChartSource", "reconcile_candles", "to_candle_rows"]
@@ -65,7 +71,16 @@ def reconcile_candles(
             if timeframe == "1d"
             else client.minute_page(symbol, 1, next_key)
         )
-        page_bars = [parse(row) for row in page.rows]
+        try:
+            page_bars = [parse(row) for row in page.rows]
+        except KiwoomParseError as error:
+            error.context.update(
+                api_id="ka10081" if timeframe == "1d" else "ka10080",
+                symbol=symbol,
+                timeframe=timeframe,
+                next_key=next_key,
+            )
+            raise
         bars_by_ts.update({bar.ts: bar for bar in page_bars})
 
         if not page.has_more or (latest is None and len(bars_by_ts) >= LIMITS[timeframe]):

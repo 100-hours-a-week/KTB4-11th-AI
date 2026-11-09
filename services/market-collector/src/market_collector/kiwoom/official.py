@@ -5,6 +5,8 @@ from kiwoom import KiwoomAuth, KiwoomClient
 from kiwoom.core.secrets import StaticSecretProvider
 from kiwoom.core.token_store import MemoryTokenStore
 
+from market_collector.kiwoom.parse import parse_field
+
 
 class Page(NamedTuple):
     rows: list[dict[str, str]]
@@ -113,18 +115,16 @@ class ChartClient:
 
     def index_quote(self, name: str) -> dict[str, float]:
         market, code = {"KOSPI": ("0", "001"), "KOSPI200": ("2", "201")}[name]
+        request = {"mrkt_tp": market, "inds_cd": code}
         self._avoid_rate_limit()
-        body = self._client.fetch_page(
-            api_id="ka20001",
-            path="/api/dostk/sect",
-            body={"mrkt_tp": market, "inds_cd": code},
-        ).body
+        body = self._client.fetch_page(api_id="ka20001", path="/api/dostk/sect", body=request).body
         if body.get("return_code") not in (None, 0, "0"):
             raise RuntimeError(body.get("return_msg") or "index request failed")
+        context = {"api_id": "ka20001", "request": request}
         return {
-            "value": abs(float(body["cur_prc"])),
-            "change": float(body["pred_pre"]),
-            "rate": float(body["flu_rt"]),
+            "value": abs(parse_field(body, "cur_prc", float, **context)),
+            "change": parse_field(body, "pred_pre", float, **context),
+            "rate": parse_field(body, "flu_rt", float, **context),
         }
 
     def _avoid_rate_limit(self) -> None:

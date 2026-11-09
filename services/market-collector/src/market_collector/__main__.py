@@ -10,6 +10,7 @@ from redis import Redis
 
 from market_collector.corporations import collect_corporations
 from market_collector.kiwoom.official import ChartClient, build_client
+from market_collector.kiwoom.parse import failure_fields
 from market_collector.popularity import SessionCache, popular_codes
 from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
@@ -58,8 +59,8 @@ def collect_market_data(
                                     {"name": name, **quote, "ts": datetime.now(KST).isoformat()}
                                 ),
                             )
-                        except Exception:
-                            log.exception("index_update_failed", name=name)
+                        except Exception as error:
+                            log.exception("index_update_failed", **failure_fields(error), name=name)
         finally:
             batch.flush()
 
@@ -130,8 +131,10 @@ def run(
                     daily=at == pending[-1],
                     session_cache=session_cache,
                 )
-            except Exception:
-                log.exception("archive_pass_failed", scheduled=at.isoformat())
+            except Exception as error:
+                log.exception(
+                    "archive_pass_failed", **failure_fields(error), scheduled=at.isoformat()
+                )
                 close_failed = at == pending[-1]
             elapsed = (clock() - started).total_seconds()
             if elapsed > PASS_BUDGET:
