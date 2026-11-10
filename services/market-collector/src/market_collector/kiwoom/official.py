@@ -121,9 +121,11 @@ class ChartClient:
         if body.get("return_code") not in (None, 0, "0"):
             raise RuntimeError(body.get("return_msg") or "index request failed")
         context = {"api_id": "ka20001", "request": request}
+        raw_change = body.get("pred_pre")
+        change = 0.0 if raw_change == "" else parse_field(body, "pred_pre", float, **context)
         return {
             "value": abs(parse_field(body, "cur_prc", float, **context)),
-            "change": parse_field(body, "pred_pre", float, **context),
+            "change": change,
             "rate": parse_field(body, "flu_rt", float, **context),
         }
 
