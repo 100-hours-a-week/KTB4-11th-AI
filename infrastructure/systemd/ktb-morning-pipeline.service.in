@@ -1,8 +1,8 @@
 [Unit]
 Description=KTB pre-market portfolio pipeline
 Wants=network-online.target
-After=network-online.target docker.service
-Requires=docker.service
+After=network-online.target docker.service ktb-batch.slice
+Requires=docker.service ktb-batch.slice
 # 작업 결과를 AI_CWAgent/ScheduledJobFailure(JobName=morning-pipeline)로 발행합니다.
 OnSuccess=ktb-scheduled-job-success@morning-pipeline.service
 OnFailure=ktb-scheduled-job-failure@morning-pipeline.service
