@@ -347,8 +347,9 @@ services:
       context: .
       dockerfile: docker/portfolio-builder.Dockerfile
     command: competition-portfolio-builder
-    env_file: ai.env
+    env_file: .env
     environment:
+      DISCLOSURE_RETRIEVAL_TIMEOUT: ${DISCLOSURE_RETRIEVAL_TIMEOUT:-150}
       PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: http://market-http:8000
       PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: http://news-http:8000

@@ -110,6 +110,8 @@ jobs:
           scp compose.prod.yaml "$DEPLOY_USER@$DEPLOY_HOST:~/ai/compose.prod.yaml.next"
           scp "$image_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.image.env.next"
           scp "$base_env" "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/base.env"
+          scp scripts/competition-worker.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/competition-worker.sh"
           scp scripts/ssm_env.py \
             "$DEPLOY_USER@$DEPLOY_HOST:~/ai/.schedule.next/ssm_env.py"
           scp scripts/run-morning-pipeline.sh \
@@ -134,6 +136,7 @@ jobs:
 
           schedule_stage="$PWD/.schedule.next"
           schedule_render_dir=""
+          source "$schedule_stage/competition-worker.sh"
           report_builder_recovery_needed=false
 
           cleanup_report_builder_containers() {
@@ -166,6 +169,7 @@ jobs:
           rollback() {
             local status=$?
             local rollback_status
+            local competition_worker_rollback_status
             local report_builder_rollback_status
             trap - ERR
             set +e
@@ -181,7 +185,7 @@ jobs:
               fi
 
               docker compose --env-file .env --env-file .image.env \
-                -f compose.prod.yaml up -d --wait postgres questdb
+                -f compose.prod.yaml up -d --wait postgres questdb news-http
               rollback_status=$?
 
               if [[ "$rollback_status" -eq 0 ]]; then
@@ -200,6 +204,13 @@ jobs:
                 report_builder_rollback_status=$?
                 echo "::error::report-builder rollback failed with status $report_builder_rollback_status"
               fi
+            fi
+
+            if restore_competition_worker; then
+              echo "::notice::competition-portfolio-builder rollback completed"
+            else
+              competition_worker_rollback_status=$?
+              echo "::error::competition-portfolio-builder rollback failed with status $competition_worker_rollback_status"
             fi
 
             rm -f compose.prod.yaml.next .image.env.next .env.next
@@ -265,6 +276,9 @@ jobs:
             fi
           fi
 
+          bash -n "$schedule_stage/competition-worker.sh"
+          snapshot_competition_worker
+
           deployment_started=true
           mv compose.prod.yaml.next compose.prod.yaml
           mv .env.next .env
@@ -276,7 +290,7 @@ jobs:
           compose config --quiet
           compose pull
           # market-http는 V2 ECS(cd-ecs-v2.yaml)에서 실행하고, market-streamer는 운영에서 실행하지 않습니다.
-          compose up -d --wait postgres questdb
+          compose up -d --wait postgres questdb news-http
           compose run --rm -T postgres-migrate </dev/null
           compose run --rm -T questdb-migrate </dev/null
 
@@ -344,6 +358,8 @@ jobs:
           sudo -n systemctl start ktb-report-builder.service
           systemctl is-enabled --quiet ktb-report-builder.service
           systemctl is-active --quiet ktb-report-builder.service
+
+          deploy_competition_worker
 
           test -x "$deploy_dir/scripts/run-morning-pipeline.sh"
           test -x "$deploy_dir/scripts/publish-scheduled-job-metric.sh"

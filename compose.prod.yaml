@@ -451,10 +451,11 @@ services:
     <<: *app
     profiles: ["competition"]
     command: ["competition-portfolio-builder"]
-    env_file: /etc/stockspoon/ai.env
+    env_file: .env
     mem_limit: 768m
     restart: unless-stopped
     environment:
+      DISCLOSURE_RETRIEVAL_TIMEOUT: ${DISCLOSURE_RETRIEVAL_TIMEOUT:-150}
       <<: *postgres-environment
       PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:?PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI must be set}
       PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI:-http://news-http:8000}

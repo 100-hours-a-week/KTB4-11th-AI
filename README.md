@@ -152,6 +152,8 @@ flowchart LR
 
 `portfolio-builder/competition/`의 SQS 워커가 설정을 검증·정규화해 PostgreSQL에 저장하고 최초 포트폴리오를 생성합니다. 공통 제출 모델과 대결 전용 정책은 구분합니다. 이후 활성 참가자의 재생성은 기존 06:00 builder 경로에서 실행합니다. 백엔드의 명시적인 `participant_id` 계좌 매핑과 조회 인증을 배포한 뒤 정기 생성 옵션을 켭니다. 로컬 워커는 `docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder`로 실행합니다.
 
+환경변수와 CD 배포·복구 절차는 [경쟁 워커 배포 문서](docs/competition-worker-deployment.md)를 참고합니다.
+
 ### `portfolio-builder`: 수집하고 추출한 정보를 바탕으로 투자 포트폴리오 생성하기
 
 - PostgreSQL의 이전 포트폴리오와 news-http의 최근 뉴스, 관련 기업과 테마를 묶어 에이전트의 시작 자료를 생성함
