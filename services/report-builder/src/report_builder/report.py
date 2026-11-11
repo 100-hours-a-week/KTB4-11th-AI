@@ -44,10 +44,10 @@ def structured_generator(model: str, api_key: str, timeout: float) -> Runnable:
     ).with_structured_output(Thoughts)
 
 
-def load_evidence(engine: sa.Engine, reason_ids: list[UUID]) -> Evidence:
+def load_evidence(engine: sa.Engine, reason_ids: list[UUID], participant_id: int) -> Evidence:
     ids = list(dict.fromkeys(reason_ids))
     if not ids:
-        raise EvidenceError("at least one portfolio reason is required")
+        raise EvidenceError("no investment evidence supplied")
     reason_query = sa.text(
         "SELECT r.id, r.reason, r.reasonings, p.commentary,"
         " COALESCE(h.cited_cluster_ids, e.cited_cluster_ids, '{}') AS cited_cluster_ids"
@@ -57,10 +57,22 @@ def load_evidence(engine: sa.Engine, reason_ids: list[UUID]) -> Evidence:
         " ON h.portfolio_id = r.portfolio_id AND h.company_id = r.company_id"
         " LEFT JOIN portfolio_exits e"
         " ON e.portfolio_id = r.portfolio_id AND e.company_id = r.company_id"
-        " WHERE r.id IN :reason_ids ORDER BY r.id"
+        " WHERE r.id IN :reason_ids"
+        " AND ("
+        "  NOT EXISTS (SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = p.id)"
+        "  OR EXISTS ("
+        "   SELECT 1 FROM competition_portfolios cp"
+        "   WHERE cp.portfolio_id = p.id AND cp.participant_id = :participant_id"
+        "  )"
+        " )"
+        " ORDER BY r.id"
     ).bindparams(sa.bindparam("reason_ids", expanding=True))
     with engine.connect() as conn:
-        rows = conn.execute(reason_query, {"reason_ids": ids}).mappings().all()
+        rows = (
+            conn.execute(reason_query, {"reason_ids": ids, "participant_id": participant_id})
+            .mappings()
+            .all()
+        )
         found = {row["id"] for row in rows}
         missing = set(ids) - found
         if missing:
@@ -113,6 +125,8 @@ REPORT_PROMPT = (
 
 
 def build_report(evidence: Evidence, structured: Runnable) -> Report:
+    if not evidence.reasons:
+        raise EvidenceError("no investment evidence supplied")
     prompt_data = [
         {
             "reason": reason.reason,

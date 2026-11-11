@@ -18,6 +18,7 @@ def test_defaults(monkeypatch):
 
     settings = Settings()
 
+    assert "competition_enabled" not in Settings.model_fields
     assert settings.band == 0.05
     assert settings.buy_buffer == 0.02
     assert settings.log_level == "INFO"

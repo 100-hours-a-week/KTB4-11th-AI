@@ -12,6 +12,10 @@ x-app: &app
       awslogs-create-group: "false"
       tag: "{{.Name}}-{{.ID}}"
 
+x-batch: &batch
+  <<: *app
+  cgroup_parent: ktb-batch.slice
+
 x-postgres-environment: &postgres-environment
   NEWS_PREPROCESSOR_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:?POSTGRES_USER must be set}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB must be set}
   NEWS_CLUSTERER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
@@ -148,10 +152,9 @@ services:
         condition: service_healthy
 
   disclosure-indexer:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["disclosure-indexer"]
-    mem_limit: 2g
     environment:
       <<: [*postgres-environment, *disclosure-model-environment]
       DISCLOSURE_INDEXER_LOG_LEVEL: ${DISCLOSURE_INDEXER_LOG_LEVEL:-INFO}
@@ -177,10 +180,9 @@ services:
     restart: "no"
 
   portfolio-rebalancer:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["portfolio-rebalancer"]
-    mem_limit: 384m
     stop_grace_period: 2m
     environment:
       <<: *postgres-environment
@@ -213,10 +215,9 @@ services:
         condition: service_healthy
 
   news-preprocessor:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["news-preprocessor"]
-    mem_limit: 1200m
     environment:
       <<: *postgres-environment
       NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT: ${NEWS_PREPROCESSOR_EMBED_BATCH_LIMIT:-100}
@@ -244,10 +245,9 @@ services:
         condition: service_healthy
 
   news-clusterer:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["news-clusterer"]
-    mem_limit: 2g
     environment:
       <<: *postgres-environment
       NEWS_CLUSTERER_EPS: ${NEWS_CLUSTERER_EPS:-0.36}
@@ -259,12 +259,11 @@ services:
         condition: service_healthy
 
   market-syncer:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["market-syncer"]
     # OpenDartReader writes docs_cache/ into the working directory; /app is not writable by app.
     working_dir: /tmp
-    mem_limit: 512m
     environment:
       <<: *postgres-environment
       MARKET_SYNCER_KIWOOM_APP_KEY: ${MARKET_SYNCER_KIWOOM_APP_KEY:-}
@@ -278,10 +277,9 @@ services:
         condition: service_healthy
 
   news-graph-builder:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["news-graph-builder"]
-    mem_limit: 1200m
     environment:
       <<: *postgres-environment
       NEWS_GRAPH_BUILDER_LLM_BASE_URI: ${NEWS_GRAPH_BUILDER_LLM_BASE_URI:-}
@@ -297,10 +295,9 @@ services:
         condition: service_healthy
 
   market-collector:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["market-collector"]
-    mem_limit: 768m
     stop_grace_period: 2m
     environment:
       <<: *postgres-environment
@@ -412,10 +409,9 @@ services:
       start_period: 10s
 
   portfolio-builder:
-    <<: *app
+    <<: *batch
     profiles: ["jobs"]
     command: ["portfolio-builder"]
-    mem_limit: 768m
     environment:
       <<: [*postgres-environment, *disclosure-model-environment]
       # 개발: http://market-http:8000 (같은 Compose), 운영: V2 ECS market-http (ALB /market)
@@ -441,6 +437,27 @@ services:
       PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
       PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
       PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+      PORTFOLIO_BUILDER_COMPETITION_ENABLED: ${PORTFOLIO_BUILDER_COMPETITION_ENABLED:-false}
+      PORTFOLIO_BUILDER_BACKEND_BASE_URI: ${PORTFOLIO_BUILDER_BACKEND_BASE_URI:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_SECRET: ${PORTFOLIO_BUILDER_BACKEND_JWT_SECRET:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER: ${PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      news-http:
+        condition: service_started
+
+  competition-portfolio-builder:
+    <<: *app
+    profiles: ["competition"]
+    command: ["competition-portfolio-builder"]
+    env_file: /etc/stockspoon/ai.env
+    mem_limit: 768m
+    restart: unless-stopped
+    environment:
+      <<: *postgres-environment
+      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI:?PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI must be set}
+      PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: ${PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI:-http://news-http:8000}
     depends_on:
       postgres:
         condition: service_healthy

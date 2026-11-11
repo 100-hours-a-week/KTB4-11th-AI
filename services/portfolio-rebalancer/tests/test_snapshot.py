@@ -78,3 +78,32 @@ def test_polling_ignores_invalid_unused_profile_without_rejecting_accounts(risk_
     assert len(snapshot.users) == 2
     assert snapshot.users[0].investment_profile is None
     assert snapshot.users[0].accounts == snapshot.users[1].accounts
+
+
+@pytest.mark.parametrize("participant_id", [None, 1, 999])
+def test_accounts_retain_explicit_participant_identity(participant_id):
+    raw = {**EXAMPLE["users"][0]["accounts"][0], "participant_id": participant_id}
+    snapshot = Snapshot.model_validate({"users": [{"user_id": 1, "accounts": [raw]}]})
+    account = snapshot.users[0].accounts[0]
+    assert account.participant_id == participant_id
+    assert "participant_id" in account.model_fields_set
+
+
+@pytest.mark.parametrize("participant_id", [0, -1, True, 1.5, "3", [], {}])
+def test_invalid_participant_identity_is_marked_without_rejecting_other_accounts(participant_id):
+    base = EXAMPLE["users"][0]["accounts"][0]
+    raw = {**base, "participant_id": participant_id}
+    valid = {**base, "account_id": 12, "participant_id": None}
+    snapshot = Snapshot.model_validate({"users": [{"user_id": 1, "accounts": [raw, valid]}]})
+    invalid, common = snapshot.users[0].accounts
+    assert invalid._participant_id_invalid
+    assert not common._participant_id_invalid
+    assert common.participant_id is None
+
+
+def test_other_invalid_account_fields_still_reject_the_snapshot():
+    from pydantic import ValidationError
+
+    raw = {**EXAMPLE["users"][0]["accounts"][0], "participant_id": 0, "cash_balance": "invalid"}
+    with pytest.raises(ValidationError):
+        Snapshot.model_validate({"users": [{"user_id": 1, "accounts": [raw]}]})

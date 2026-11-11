@@ -1,0 +1,12 @@
+[Unit]
+Description=Shared memory budget for KTB scheduled batch containers
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=50%
+MemoryMax=60%
+MemorySwapMax=0
+
+[Install]
+WantedBy=slices.target

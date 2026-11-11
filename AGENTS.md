@@ -96,6 +96,20 @@ Run market-syncer before jobs that need corporation reference data. The morning 
 runs news-clusterer, news-graph-builder, then portfolio-builder; see
 `scripts/run-morning-pipeline.sh`. Production schedules live in `infrastructure/systemd/`.
 Report-builder is a long-running worker and its local Compose configuration loads `ai.env`.
+The `competition` profile starts `competition-portfolio-builder` from the builder image.
+It consumes SQS settings, freezes them in PostgreSQL, then generates the initial portfolio.
+It also resumes committed pending settings after a worker restart. The queue and Jev settings
+use `PORTFOLIO_BUILDER_COMPETITION_*`; generation uses ordinary builder settings.
+
+```bash
+docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder
+```
+
+Set the settings queue's redrive/DLQ policy for intake failures. Generation has its own
+participant retry budget. The one-shot builder defaults to common generation.
+`PORTFOLIO_BUILDER_COMPETITION_ENABLED=true` selects participant generation instead,
+after Backend provides explicit nullable account participant IDs and lookup JWT configuration.
+Schedule separate invocations of the same image/command when both modes are required.
 
 ## Repository map
 
@@ -117,7 +131,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/market-collector` | Collect market bars and index quotes into QuestDB and publish popularity rankings to Valkey |
 | `services/market-streamer` | Stream Kiwoom prices, orderbooks, and daily ranking values to Valkey |
 | `services/market-http` | Serve public market snapshots, bars, indices, rankings, and SSE streams |
-| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent |
+| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent; `competition-portfolio-builder` consumes settings and performs initial participant generation |
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
 
@@ -149,8 +163,30 @@ third-party dependencies.
 - Portfolio-builder stores the agent trace and moves portfolio status from
   `explanation_pending` to `ready` or `explanation_failed`. If the latest portfolio is
   not ready and has a trace, retry explanations before building another portfolio.
-- Rebalancing uses only the latest portfolio, and only when it is `ready`; never fall
-  back to an older ready portfolio. Carry stock explanations as `reason` and `thoughts`.
+- Common rebalancing uses only the latest **common** portfolio, and only when it is `ready`;
+  never fall back to an older ready portfolio. Carry stock explanations as `reason` and
+  `thoughts`.
+- Competition portfolios share the `portfolios` table with the common model portfolio.
+  Ownership is a row in `competition_portfolios`; a portfolio with no such row is the
+  common one, and `find_previous_portfolio`, `load_unexplained`, the rebalancer's latest
+  and leftover queries, and report-builder's evidence lookup all depend on that predicate.
+  The link is written in the same transaction as the portfolio, so no reader can ever
+  observe a competition portfolio that still looks common.
+- **Competition portfolios are generated and stored but not traded.** The rebalancer
+  excludes them, which is the only thing that makes this true — competition portfolios do
+  reach `ready`, so removing that condition would trade one participant's holdings in
+  every user's account. Per-participant trading is separate, later work.
+- `portfolio_builder.backend` owns Backend HTTP/SQS input, preference validation,
+  canonicalization and persistence. Jev prompts live in `competition/prompt.py`.
+  `portfolio_builder.builder` shares agent and explanation execution for common and
+  participant contexts, including initial SQS generation and daily participant runs.
+  Preserve job claims, retry budgets, explanation locks and atomic ownership links.
+  Report-builder uses one explanation pipeline without a common/participant mode flag.
+- A participant's settings are frozen at its first request, as a snapshot in
+  `competition_participants`: later requests for the same participant carry settings that
+  are logged and ignored. Participants whose settings and previous portfolio match share
+  one generated portfolio, tracked in `competition_jobs` and keyed by `generation_key`,
+  whose uniqueness is also what stops the same request generating twice.
 
 ### Market data
 
