@@ -75,7 +75,7 @@ services:
         tag: "{{.Name}}-{{.ID}}"
 
   questdb:
-    image: questdb/questdb:10.0.1
+    image: questdb/questdb:10.2.0
     environment:
       QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
       QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
