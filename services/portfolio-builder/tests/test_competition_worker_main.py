@@ -22,6 +22,8 @@ def run_worker(monkeypatch, received, failure=None):
         aws_region="ap-northeast-2",
         jev_api_key=SecretStr("jev-key"),
     )
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", "jev-key")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_LLM_API_KEY", "key")
     engine = Mock()
     queue = Mock()
     queue.receive.side_effect = [received, KeyboardInterrupt]

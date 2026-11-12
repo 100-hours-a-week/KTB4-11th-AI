@@ -198,9 +198,9 @@ def test_query_params_are_left_alone_by_default(capsys):
 @pytest.mark.parametrize(
     "secret", ["synthetic-key", "synthetic\nkey", "synthetic'key", "synthetic가key", "}"]
 )
-def test_bound_secrets_are_masked_in_fields_and_exception_representations(capsys, secret):
-    setup_logging("INFO", service_name="svc")
-    log = get_logger("svc").bind(sensitive_values=(secret,)).bind(run_id="run-1")
+def test_configured_secrets_are_masked_in_fields_and_exception_representations(capsys, secret):
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,))
+    log = get_logger("svc").bind(run_id="run-1")
     log.warning("request_failed", credential=secret, nested={"values": [secret]})
 
     try:
@@ -217,10 +217,10 @@ def test_bound_secrets_are_masked_in_fields_and_exception_representations(capsys
     assert "Traceback" in failure["exception"]
 
 
-def test_binding_more_secrets_retains_previous_redactions(capsys):
-    setup_logging("INFO", service_name="svc")
-    log = get_logger("svc").bind(sensitive_values=("first-credential",))
-    log = log.bind(sensitive_values=("second-credential",))
-    log.error("failed", values=["first-credential", "second-credential"])
+def test_configured_secrets_are_masked_in_library_logs(capsys):
+    setup_logging(
+        "INFO", service_name="svc", sensitive_values=("first-credential", "second-credential")
+    )
+    logging.getLogger("httpcore").warning("%s %s", "first-credential", "second-credential")
 
-    assert _run_events(capsys)[0]["values"] == ["***", "***"]
+    assert _run_events(capsys)[0]["message"] == "*** ***"

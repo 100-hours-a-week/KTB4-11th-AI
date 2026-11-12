@@ -22,6 +22,10 @@ def main() -> None:
     setup_logging(
         os.environ.get("PORTFOLIO_BUILDER_LOG_LEVEL", "INFO"),
         service_name="competition-portfolio-builder",
+        sensitive_values=(
+            os.environ.get("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", ""),
+            os.environ.get("PORTFOLIO_BUILDER_LLM_API_KEY", ""),
+        ),
     )
     try:
         settings = Settings()
@@ -32,12 +36,6 @@ def main() -> None:
             fields=[".".join(map(str, item["loc"])) for item in error.errors()],
         )
         raise SystemExit(1) from None
-    log = logger.bind(
-        sensitive_values=(
-            intake.jev_api_key.get_secret_value(),
-            settings.llm_api_key.get_secret_value(),
-        )
-    )
     queue = SqsQueue(
         boto3.client(
             "sqs",
@@ -54,10 +52,10 @@ def main() -> None:
         while True:
             try:
                 for message in queue.receive(visibility=intake.visibility_timeout):
-                    process_message(message, queue, engine, intake, log)
-                generate_missing_portfolios(engine, model_factory, settings, log)
+                    process_message(message, queue, engine, intake, logger)
+                generate_missing_portfolios(engine, model_factory, settings, logger)
             except Exception as error:
-                log.exception("competition_cycle_failed", error_type=type(error).__name__)
+                logger.exception("competition_cycle_failed", error_type=type(error).__name__)
                 time.sleep(1)
     finally:
         engine.dispose()
