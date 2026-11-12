@@ -6,7 +6,7 @@ MODEL = "openrouter/m"
 
 
 class _NullLog:
-    def error(self, event, **fields):
+    def exception(self, event, **fields):
         pass
 
 

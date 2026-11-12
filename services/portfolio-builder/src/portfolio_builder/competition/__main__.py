@@ -3,6 +3,7 @@ import os
 import time
 
 import boto3
+import httpx
 import sqlalchemy as sa
 from botocore.config import Config
 from ktb_aws.sqs import SqsQueue
@@ -12,7 +13,6 @@ from pydantic import ValidationError
 
 from portfolio_builder.backend import process_message
 from portfolio_builder.builder import generate_missing_portfolios
-from portfolio_builder.competition.canonical import JevAccessError
 from portfolio_builder.settings import CompetitionSettings as IntakeSettings
 from portfolio_builder.settings import Settings
 
@@ -51,9 +51,13 @@ def main() -> None:
                 for message in queue.receive(visibility=intake.visibility_timeout):
                     process_message(message, queue, engine, intake, logger)
                 generate_missing_portfolios(engine, model_factory, settings, logger)
-            except JevAccessError:
-                raise
             except Exception as error:
+                if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in {
+                    401,
+                    402,
+                    403,
+                }:
+                    raise
                 logger.exception("competition_cycle_failed", error_type=type(error).__name__)
                 time.sleep(1)
     finally:

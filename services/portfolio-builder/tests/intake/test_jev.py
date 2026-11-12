@@ -2,6 +2,7 @@ import json
 
 import httpx
 import pytest
+from ktb_core.logging import JsonFormatter, get_logger
 from portfolio_builder.competition.canonical import JevError, ask, classify_additional_request
 from pydantic import SecretStr
 
@@ -130,30 +131,42 @@ def test_raises_on_an_http_error_status(server):
 
 
 @pytest.mark.parametrize("status", [401, 402, 403])
-def test_access_failures_stop_classification_without_using_raw_text(server, status):
+def test_access_failures_stop_classification_and_log_the_http_exception(server, status, caplog):
     _, responses, client = server
     responses.append((status, {"error": "provider response must not be logged"}))
-    events = []
-
-    class Log:
-        def error(self, event, **fields):
-            events.append((event, fields))
+    key = SecretStr("jev-key")
 
     def request(state, questions):
-        return ask(BASE_URI, MODEL, SecretStr("jev-key"), state, questions, client=client)
+        return ask(BASE_URI, MODEL, key, state, questions, client=client)
 
-    with pytest.raises(JevError):
-        classify_additional_request(None, request, MODEL, 0.5, 0.6, "원문", (), Log())
-
-    assert events == [
-        (
-            "jev_access_failed",
-            {
-                "status_code": status,
-                "reason": "insufficient_credit" if status == 402 else "authentication_failed",
-            },
+    with pytest.raises(httpx.HTTPStatusError):
+        classify_additional_request(
+            None, request, MODEL, 0.5, 0.6, "원문", (), get_logger(__name__)
         )
-    ]
+
+    record = next(r for r in caplog.records if r.message == "canonicalisation_failed")
+    output = JsonFormatter("competition-portfolio-builder").format(record)
+    logged = json.loads(output)
+    assert logged["error_type"] == "HTTPStatusError"
+    assert "Traceback" in logged["exception"]
+    assert str(status) in logged["exception"]
+    assert "jev-key" not in output
+    assert "provider response must not be logged" not in output
+
+
+def test_transient_classification_failure_logs_the_exception_and_keeps_raw_text(caplog):
+    def request(state, questions):
+        raise RuntimeError("Jev temporarily unavailable")
+
+    result = classify_additional_request(
+        None, request, MODEL, 0.5, 0.6, "원문", (), get_logger(__name__)
+    )
+
+    assert result == ("원문", None, False)
+    record = next(r for r in caplog.records if r.message == "canonicalisation_failed")
+    logged = json.loads(JsonFormatter("competition-portfolio-builder").format(record))
+    assert logged["error_type"] == "RuntimeError"
+    assert "RuntimeError: Jev temporarily unavailable" in logged["exception"]
 
 
 def test_raises_when_the_response_has_no_answers_object(server):

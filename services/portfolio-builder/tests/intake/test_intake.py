@@ -170,7 +170,7 @@ def test_jev_access_failure_rolls_back_settings_without_acknowledging(
         monkeypatch.setattr(canonical, "ask", partial(canonical.ask, client=client))
         queue, log = Mock(), Mock()
 
-        with pytest.raises(canonical.JevAccessError):
+        with pytest.raises(httpx.HTTPStatusError):
             intake.process_message(_message(), queue, engine, settings, log)
 
     queue.delete.assert_not_called()

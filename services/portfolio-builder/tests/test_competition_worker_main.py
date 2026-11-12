@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from ktb_aws.sqs import Message
 from pydantic import SecretStr
@@ -59,11 +60,13 @@ def test_committed_pending_settings_recover_even_if_the_queue_is_empty(monkeypat
 
 
 def test_jev_credit_failure_stops_the_worker_before_generation(monkeypatch):
-    from portfolio_builder.competition.canonical import JevAccessError
+    response = httpx.Response(
+        402, request=httpx.Request("POST", "https://jev.example/v1/systemone")
+    )
+    with pytest.raises(httpx.HTTPStatusError) as failure:
+        response.raise_for_status()
 
-    assert run_worker(monkeypatch, [Message("id", "{}", "receipt")], JevAccessError(402)) == [
-        "intake"
-    ]
+    assert run_worker(monkeypatch, [Message("id", "{}", "receipt")], failure.value) == ["intake"]
 
 
 def test_missing_jev_key_prevents_polling_even_when_a_builder_key_exists(monkeypatch, capsys):

@@ -18,7 +18,7 @@ class _NullLog:
     def __init__(self):
         self.errors = []
 
-    def error(self, event, **fields):
+    def exception(self, event, **fields):
         self.errors.append((event, fields))
 
 
