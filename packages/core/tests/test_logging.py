@@ -264,7 +264,7 @@ def test_url_paths_are_preserved_without_redaction_option(capsys):
     ("secret", "scheme"),
     [("http", "https"), ("https", "https"), ("://", "https"), ("HTTP", "HTTPS"), ("s://", "https")],
 )
-def test_url_redaction_precedes_overlapping_credential_redaction(capsys, secret, scheme):
+def test_url_scheme_overlap_does_not_leave_path_credentials(capsys, secret, scheme):
     url = f"{scheme}://jev.example/path-only-credential/api/v1"
     setup_logging("INFO", service_name="svc", sensitive_values=(secret,), redact_urls=True)
     get_logger("svc").error("failed", url=url, nested={url: [url]})
@@ -276,7 +276,7 @@ def test_url_redaction_precedes_overlapping_credential_redaction(capsys, secret,
     assert record["nested"] == {"<redacted-url>": ["<redacted-url>"]}
 
 
-def test_query_redaction_precedes_overlapping_credential_redaction(capsys):
+def test_query_name_overlap_does_not_leave_query_credentials(capsys):
     setup_logging(
         "INFO",
         service_name="svc",
@@ -305,3 +305,46 @@ def test_unencodable_sensitive_value_does_not_disable_logging(capsys):
     assert record["credential"] == "***"
     assert record["representation"] == "'***'"
     assert record["encoded"] == "b'***'"
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "private-prefixhttps://jev.example/credential",
+        "private-prefixHTTP://jev.example/credential",
+        "private-prefixcrtfc_key=private-suffix",
+    ],
+)
+def test_structural_redaction_does_not_leave_registered_credential_fragments(capsys, secret):
+    setup_logging(
+        "INFO",
+        service_name="svc",
+        sensitive_values=(secret,),
+        sensitive_query_params={"crtfc_key"},
+        redact_urls=True,
+    )
+    get_logger("svc").error("failed", credential=f"before {secret} after", nested={secret: secret})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert "private-prefix" not in output
+    assert "private-suffix" not in output
+    assert record["credential"].startswith("before ")
+    assert record["credential"].endswith(" after")
+
+
+@pytest.mark.parametrize(
+    ("secrets", "value", "expected"),
+    [
+        (("abc", "bcd"), "before abcd after", "before *** after"),
+        (("ababa",), "before abababa after", "before *** after"),
+        (("abc", "xyz"), "before abc xyz after", "before *** *** after"),
+    ],
+)
+def test_overlapping_and_repeated_credentials_are_masked_from_the_original_text(
+    capsys, secrets, value, expected
+):
+    setup_logging("INFO", service_name="svc", sensitive_values=secrets)
+    get_logger("svc").error("failed", value=value)
+
+    assert _run_events(capsys)[0]["value"] == expected

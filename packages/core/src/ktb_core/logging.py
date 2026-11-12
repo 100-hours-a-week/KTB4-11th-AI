@@ -132,12 +132,41 @@ class JsonFormatter(logging.Formatter):
 
         def redact(value: Any) -> Any:
             if isinstance(value, str):
+                spans: list[tuple[int, int, bool]] = []
                 if self.urls:
-                    value = self.urls.sub("<redacted-url>", value)
+                    spans.extend((m.start(), m.end(), True) for m in self.urls.finditer(value))
                 if self.sensitive:
-                    value = self.sensitive.sub(r"\1=***", value)
+                    spans.extend(
+                        (m.end(1) + 1, m.end(), False) for m in self.sensitive.finditer(value)
+                    )
                 for secret in self.secrets:
-                    value = value.replace(secret, "***")
+                    start = value.find(secret)
+                    while start != -1:
+                        spans.append((start, start + len(secret), False))
+                        start = value.find(secret, start + 1)
+                if not spans:
+                    return value
+
+                merged: list[tuple[int, int, bool]] = []
+                for start, end, is_url in sorted(spans):
+                    if merged and start < merged[-1][1]:
+                        previous_start, previous_end, previous_url = merged[-1]
+                        merged[-1] = (
+                            previous_start,
+                            max(previous_end, end),
+                            previous_url or is_url,
+                        )
+                    else:
+                        merged.append((start, end, is_url))
+
+                parts: list[str] = []
+                position = 0
+                for start, end, is_url in merged:
+                    parts.append(value[position:start])
+                    parts.append("<redacted-url>" if is_url else "***")
+                    position = end
+                parts.append(value[position:])
+                return "".join(parts)
             elif isinstance(value, dict):
                 return {redact(key): redact(item) for key, item in value.items()}
             elif isinstance(value, list | tuple):
