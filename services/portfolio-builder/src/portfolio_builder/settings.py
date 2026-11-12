@@ -67,8 +67,9 @@ class CompetitionSettings(BaseSettings):
     @field_validator("jev_api_key")
     @classmethod
     def validate_jev_api_key(cls, value: SecretStr) -> SecretStr:
-        if not value.get_secret_value().strip():
-            raise ValueError("Jev API key is required")
+        key = value.get_secret_value()
+        if not key or any(ord(character) < 33 or ord(character) > 126 for character in key):
+            raise ValueError("Jev API key must contain only visible ASCII characters")
         return value
 
     @field_validator("queue_url")

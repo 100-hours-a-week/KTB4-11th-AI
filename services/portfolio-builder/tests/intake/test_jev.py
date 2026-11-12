@@ -1,4 +1,7 @@
 import json
+from socketserver import BaseRequestHandler, TCPServer
+from threading import Thread
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -22,6 +25,22 @@ def server():
 
     client = httpx.Client(transport=httpx.MockTransport(handler))
     return requests, responses, client
+
+
+@pytest.fixture
+def local_endpoint():
+    class Handler(BaseRequestHandler):
+        def handle(self):
+            self.request.recv(65536)
+
+    with TCPServer(("127.0.0.1", 0), Handler) as server:
+        thread = Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
+        thread.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_address[1]}/v1"
+        finally:
+            server.shutdown()
+            thread.join()
 
 
 def test_posts_model_state_and_questions_to_systemone(server):
@@ -166,6 +185,30 @@ def test_classification_failure_logs_the_exception_and_propagates(caplog):
     logged = json.loads(JsonFormatter("competition-portfolio-builder").format(record))
     assert logged["error_type"] == "RuntimeError"
     assert "RuntimeError: Jev temporarily unavailable" in logged["exception"]
+
+
+@pytest.mark.parametrize("character", ["\n", "\r", "\x00", "가"])
+def test_invalid_authorization_does_not_expose_the_key_in_exception_logs(
+    local_endpoint, caplog, character
+):
+    marker = uuid4().hex
+    key = SecretStr(f"synthetic-{marker}{character}credential")
+
+    with httpx.Client(trust_env=False, timeout=1) as client:
+
+        def request(state, questions):
+            return ask(local_endpoint, MODEL, key, state, questions, client=client)
+
+        with pytest.raises(Exception) as failure:
+            classify_additional_request(
+                None, request, MODEL, 0.5, 0.6, "원문", (), get_logger(__name__)
+            )
+
+    record = next(r for r in caplog.records if r.message == "canonicalisation_failed")
+    output = JsonFormatter("competition-portfolio-builder").format(record)
+    assert marker not in output
+    assert isinstance(failure.value, JevError)
+    assert "Traceback" in json.loads(output)["exception"]
 
 
 def test_raises_when_the_response_has_no_answers_object(server):

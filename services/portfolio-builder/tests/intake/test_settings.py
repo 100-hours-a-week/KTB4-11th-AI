@@ -83,3 +83,13 @@ def test_intake_does_not_use_the_builder_llm_key(monkeypatch):
 
     with pytest.raises(ValidationError, match="jev_api_key"):
         Settings(**{k: v for k, v in BASE.items() if k != "jev_api_key"})
+
+
+@pytest.mark.parametrize("character", [chr(i) for i in range(33)] + [chr(127), "가"])
+def test_jev_key_rejects_characters_unsuitable_for_authorization(character):
+    key = f"synthetic{character}credential"
+
+    with pytest.raises(ValidationError) as failure:
+        Settings(**{**BASE, "jev_api_key": key})
+
+    assert "synthetic" not in str(failure.value)

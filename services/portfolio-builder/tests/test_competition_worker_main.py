@@ -70,7 +70,20 @@ def test_jev_credit_failure_skips_generation_and_keeps_polling(monkeypatch):
     assert run_worker(monkeypatch, [Message("id", "{}", "receipt")], failure.value) == ["intake"]
 
 
-def test_missing_jev_key_prevents_polling_even_when_a_builder_key_exists(monkeypatch, capsys):
+@pytest.mark.parametrize(
+    "jev_key",
+    [
+        None,
+        "synthetic\ncredential",
+        "synthetic\rcredential",
+        "synthetic\tcredential",
+        "synthetic credential",
+        "synthetic가credential",
+    ],
+)
+def test_invalid_jev_key_prevents_polling_even_when_a_builder_key_exists(
+    monkeypatch, capsys, jev_key
+):
     import json
 
     from portfolio_builder.competition import __main__ as entry
@@ -83,7 +96,10 @@ def test_missing_jev_key_prevents_polling_even_when_a_builder_key_exists(monkeyp
     monkeypatch.setenv("PORTFOLIO_BUILDER_LLM_API_KEY", "builder-key")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL", "https://sqs.example/settings")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_CHOICE_MIN_CONFIDENCE", "0.5")
-    monkeypatch.delenv("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", raising=False)
+    if jev_key is None:
+        monkeypatch.delenv("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", jev_key)
 
     def unexpected_client(*args, **kwargs):
         pytest.fail("a missing Jev key must stop the worker before polling")
@@ -99,3 +115,4 @@ def test_missing_jev_key_prevents_polling_even_when_a_builder_key_exists(monkeyp
     assert record["message"] == "competition_configuration_invalid"
     assert record["fields"] == ["jev_api_key"]
     assert "builder-key" not in output
+    assert "synthetic" not in output

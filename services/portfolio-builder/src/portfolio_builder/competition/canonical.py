@@ -46,12 +46,15 @@ def ask(
     if not questions:
         raise JevError("no questions to ask")
 
-    response = (client or httpx).post(
-        f"{base_uri.rstrip('/')}/systemone",
-        json={"model": model, "state": state, "questions": questions},
-        headers={"Authorization": f"Bearer {api_key.get_secret_value()}"},
-        timeout=timeout,
-    )
+    try:
+        response = (client or httpx).post(
+            f"{base_uri.rstrip('/')}/systemone",
+            json={"model": model, "state": state, "questions": questions},
+            headers={"Authorization": f"Bearer {api_key.get_secret_value()}"},
+            timeout=timeout,
+        )
+    except (httpx.LocalProtocolError, UnicodeEncodeError):
+        raise JevError("Jev request headers are invalid") from None
     body = response.raise_for_status().json()
     answers = body.get("answers")
     if not isinstance(answers, dict):
