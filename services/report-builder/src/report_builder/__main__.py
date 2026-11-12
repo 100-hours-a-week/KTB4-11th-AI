@@ -23,7 +23,7 @@ def main() -> None:
         region_name=settings.aws_region,
         config=Config(connect_timeout=10, read_timeout=25, retries={"max_attempts": 1}),
     )
-    queue_url = settings.sqs_queue_url
+    queue_url = settings.queue_url
     if not queue_url.startswith("http"):
         queue_url = sqs.get_queue_url(QueueName=queue_url)["QueueUrl"]
     engine = sa.create_engine(settings.postgres_dsn)
