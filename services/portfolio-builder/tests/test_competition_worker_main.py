@@ -31,6 +31,7 @@ def run_worker(monkeypatch, received, failure=None):
     monkeypatch.setattr(entry.sa, "create_engine", lambda _: engine)
     monkeypatch.setattr(entry.boto3, "client", lambda *args, **kwargs: Mock())
     monkeypatch.setattr(entry, "SqsQueue", lambda *args: queue)
+    monkeypatch.setattr(entry.time, "sleep", lambda _: None)
 
     def process(*args):
         events.append("intake")
@@ -42,7 +43,7 @@ def run_worker(monkeypatch, received, failure=None):
         entry, "generate_missing_portfolios", lambda *args: events.append("generate")
     )
 
-    with pytest.raises(type(failure) if failure else KeyboardInterrupt):
+    with pytest.raises(KeyboardInterrupt):
         entry.main()
 
     engine.dispose.assert_called_once()
@@ -59,7 +60,7 @@ def test_committed_pending_settings_recover_even_if_the_queue_is_empty(monkeypat
     assert run_worker(monkeypatch, []) == ["generate"]
 
 
-def test_jev_credit_failure_stops_the_worker_before_generation(monkeypatch):
+def test_jev_credit_failure_skips_generation_and_keeps_polling(monkeypatch):
     response = httpx.Response(
         402, request=httpx.Request("POST", "https://jev.example/v1/systemone")
     )

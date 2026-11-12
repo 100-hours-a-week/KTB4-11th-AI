@@ -871,46 +871,22 @@ def test_classify_uses_an_explicit_confidence_floor_when_set(engine, monkeypatch
     assert form == "아무 테마나 담아줘"
 
 
-def test_a_classification_failure_does_not_block_generation(engine, monkeypatch, _insert_portfolio):
+def test_a_classification_failure_blocks_generation_and_acknowledgement(engine, monkeypatch):
     monkeypatch.setattr(intake, "_classify", REAL_CLASSIFY)
 
     def raising_ask(base_uri, model, api_key, state, questions, timeout=20, client=None):
         raise RuntimeError("jev is down")
 
     monkeypatch.setattr(intake.canonical, "ask", raising_ask)
-
     queue, log = _deps()
-    settings = _settings()
-    portfolio_id = _insert_portfolio(engine)
-    monkeypatch.setattr(generation, "run_agent", Mock(return_value=_saved(portfolio_id)))
-    monkeypatch.setattr(generation, "save_explanations", Mock(return_value=1))
-    _patch_news(monkeypatch)
 
-    _cycle(_message(_body()), queue, engine, Mock(return_value=Mock()), settings, log)
+    with pytest.raises(RuntimeError, match="jev is down"):
+        _cycle(_message(_body()), queue, engine, Mock(), _settings(), log)
 
-    with engine.connect() as conn:
-        participant = (
-            conn.execute(
-                sa.text(
-                    "SELECT canonical_form, canonical_version, classified"
-                    " FROM competition_participants WHERE participant_id = :pid"
-                ),
-                {"pid": AGENT["participant_id"]},
-            )
-            .mappings()
-            .one()
-        )
-        linked_portfolio_id = conn.execute(
-            sa.text("SELECT portfolio_id FROM competition_portfolios WHERE participant_id = :pid"),
-            {"pid": AGENT["participant_id"]},
-        ).scalar_one()
-
-    assert participant["canonical_form"] == AGENT["additional_request"]
-    assert participant["canonical_version"] is None
-    assert not participant["classified"]
-    assert _job(engine)["status"] == "succeeded"
-    assert linked_portfolio_id == portfolio_id
-    assert queue.delete.called
+    assert _count(engine, "competition_participants") == 0
+    assert _count(engine, "competition_jobs") == 0
+    assert _count(engine, "competition_portfolios") == 0
+    queue.delete.assert_not_called()
 
 
 def test_an_enabled_disclosure_deployment_gives_the_competition_agent_the_disclosure_tools(

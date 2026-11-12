@@ -268,13 +268,7 @@ def classify_additional_request(
         return form.to_json(), version, True
     except Exception as error:
         log.exception("canonicalisation_failed", error_type=type(error).__name__)
-        if isinstance(error, httpx.HTTPStatusError) and error.response.status_code in {
-            401,
-            402,
-            403,
-        }:
-            raise
-        return additional_request, None, False
+        raise
 
 
 def canonical_form_part(canonical_form: Any) -> str:

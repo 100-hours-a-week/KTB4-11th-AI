@@ -130,7 +130,7 @@ def test_raises_on_an_http_error_status(server):
         )
 
 
-@pytest.mark.parametrize("status", [401, 402, 403])
+@pytest.mark.parametrize("status", [401, 402, 403, 429, 500])
 def test_access_failures_stop_classification_and_log_the_http_exception(server, status, caplog):
     _, responses, client = server
     responses.append((status, {"error": "provider response must not be logged"}))
@@ -154,15 +154,14 @@ def test_access_failures_stop_classification_and_log_the_http_exception(server, 
     assert "provider response must not be logged" not in output
 
 
-def test_transient_classification_failure_logs_the_exception_and_keeps_raw_text(caplog):
+def test_classification_failure_logs_the_exception_and_propagates(caplog):
     def request(state, questions):
         raise RuntimeError("Jev temporarily unavailable")
 
-    result = classify_additional_request(
-        None, request, MODEL, 0.5, 0.6, "원문", (), get_logger(__name__)
-    )
-
-    assert result == ("원문", None, False)
+    with pytest.raises(RuntimeError, match="Jev temporarily unavailable"):
+        classify_additional_request(
+            None, request, MODEL, 0.5, 0.6, "원문", (), get_logger(__name__)
+        )
     record = next(r for r in caplog.records if r.message == "canonicalisation_failed")
     logged = json.loads(JsonFormatter("competition-portfolio-builder").format(record))
     assert logged["error_type"] == "RuntimeError"

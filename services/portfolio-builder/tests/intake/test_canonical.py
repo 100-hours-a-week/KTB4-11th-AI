@@ -1,8 +1,10 @@
+import pytest
 import sqlalchemy as sa
 from portfolio_builder.competition.canonical import (
     EMPTY_CANONICAL_FORM,
     MAX_CHOICE_OPTIONS,
     SIGNAL_NAMES,
+    CanonicalisationError,
     canonical_form_part,
     classify_additional_request,
 )
@@ -361,23 +363,17 @@ def test_more_than_255_themes_fails_classification_cleanly_instead_of_truncating
     )
     log = _NullLog()
 
-    form, version, classified = _classify(engine, ask, text="아무 테마나", interested=(), log=log)
-
-    assert form == "아무 테마나"
-    assert version is None
-    assert not classified
+    with pytest.raises(CanonicalisationError):
+        _classify(engine, ask, text="아무 테마나", interested=(), log=log)
     assert log.errors
 
 
-def test_a_classification_failure_stores_the_raw_text(engine):
+def test_a_classification_failure_propagates(engine):
     def raising_ask(state, questions):
         raise RuntimeError("jev is down")
 
-    form, version, classified = _classify(engine, raising_ask, text="원문")
-
-    assert form == "원문"
-    assert version is None
-    assert not classified
+    with pytest.raises(RuntimeError, match="jev is down"):
+        _classify(engine, raising_ask, text="원문")
 
 
 def test_at_most_three_calls_are_ever_made(engine):

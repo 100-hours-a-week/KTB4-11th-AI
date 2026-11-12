@@ -158,7 +158,7 @@ def test_failed_persistence_does_not_acknowledge(engine, settings, monkeypatch):
     queue.delete.assert_not_called()
 
 
-@pytest.mark.parametrize("status", [401, 402, 403])
+@pytest.mark.parametrize("status", [401, 402, 403, 429, 500])
 def test_jev_access_failure_rolls_back_settings_without_acknowledging(
     engine, settings, monkeypatch, status
 ):
