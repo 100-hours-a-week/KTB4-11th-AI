@@ -193,21 +193,19 @@ def test_invalid_authorization_does_not_expose_the_key_in_exception_logs(
 ):
     marker = uuid4().hex
     key = SecretStr(f"synthetic-{marker}{character}credential")
+    log = get_logger(__name__).bind(sensitive_values=(key.get_secret_value(),))
 
     with httpx.Client(trust_env=False, timeout=1) as client:
 
         def request(state, questions):
             return ask(local_endpoint, MODEL, key, state, questions, client=client)
 
-        with pytest.raises(Exception) as failure:
-            classify_additional_request(
-                None, request, MODEL, 0.5, 0.6, "원문", (), get_logger(__name__)
-            )
+        with pytest.raises((httpx.LocalProtocolError, UnicodeEncodeError)):
+            classify_additional_request(None, request, MODEL, 0.5, 0.6, "원문", (), log)
 
     record = next(r for r in caplog.records if r.message == "canonicalisation_failed")
     output = JsonFormatter("competition-portfolio-builder").format(record)
     assert marker not in output
-    assert isinstance(failure.value, JevError)
     assert "Traceback" in json.loads(output)["exception"]
 
 

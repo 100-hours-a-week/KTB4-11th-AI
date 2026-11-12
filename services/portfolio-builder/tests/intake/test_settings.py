@@ -6,6 +6,10 @@ BASE = {
     "postgres_dsn": "postgresql+psycopg://ktb:test@localhost/ktb_test",
     "queue_url": "https://sqs.example/settings.fifo",
     "jev_api_key": "secret",
+    "jev_base_uri": "https://api.typesafe.ai/v1",
+    "jev_model": "jev-1.14.0",
+    "jev_timeout": 20,
+    "jev_noul_threshold": 0.5,
     "jev_choice_min_confidence": 0.6,
 }
 
@@ -17,7 +21,7 @@ def test_intake_constructs_without_generation_configuration():
     assert isinstance(settings.jev_api_key, SecretStr)
 
 
-@pytest.mark.parametrize("name", ["queue_url", "jev_api_key", "jev_choice_min_confidence"])
+@pytest.mark.parametrize("name", [name for name in BASE if name != "postgres_dsn"])
 def test_intake_requires_its_own_configuration(name, monkeypatch):
     monkeypatch.delenv(f"PORTFOLIO_BUILDER_COMPETITION_{name.upper()}", raising=False)
     values = {key: value for key, value in BASE.items() if key != name}
@@ -34,6 +38,8 @@ def test_intake_requires_its_own_configuration(name, monkeypatch):
         ("jev_api_key", ""),
         ("jev_api_key", "   "),
         ("jev_api_key", None),
+        ("jev_base_uri", ""),
+        ("jev_model", ""),
         ("visibility_timeout", 0),
         ("visibility_timeout", 43201),
         ("jev_timeout", 0),
@@ -69,7 +75,13 @@ def test_jev_and_region_environment_overrides_are_applied(monkeypatch):
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_MODEL", "custom-jev")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_NOUL_THRESHOLD", "0.7")
 
-    settings = Settings(**BASE)
+    settings = Settings(
+        **{
+            k: v
+            for k, v in BASE.items()
+            if k not in {"jev_base_uri", "jev_model", "jev_noul_threshold"}
+        }
+    )
 
     assert settings.aws_region == "us-east-1"
     assert settings.jev_base_uri == "https://jev.example/v1"

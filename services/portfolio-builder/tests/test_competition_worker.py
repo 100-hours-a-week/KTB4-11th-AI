@@ -85,6 +85,10 @@ def _settings(**overrides):
         postgres_dsn=builder.postgres_dsn,
         queue_url="https://sqs.example/settings",
         jev_api_key="k",
+        jev_base_uri="https://api.typesafe.ai/v1",
+        jev_model="jev-1.14.0",
+        jev_timeout=20,
+        jev_noul_threshold=0.5,
         jev_choice_min_confidence=0.5,
     )
     return SimpleNamespace(**{**builder.model_dump(), **intake_settings.model_dump(), **overrides})

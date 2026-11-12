@@ -58,10 +58,10 @@ class CompetitionSettings(BaseSettings):
     visibility_timeout: int = Field(default=300, gt=0, le=43200)
     aws_region: str = "ap-northeast-2"
     jev_api_key: SecretStr = Field(min_length=1)
-    jev_base_uri: str = "https://api.typesafe.ai/v1"
-    jev_model: str = "jev-1.14.0"
-    jev_timeout: int = Field(default=20, gt=0)
-    jev_noul_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    jev_base_uri: str = Field(min_length=1)
+    jev_model: str = Field(min_length=1)
+    jev_timeout: int = Field(gt=0)
+    jev_noul_threshold: float = Field(ge=0.0, le=1.0)
     jev_choice_min_confidence: float = Field(ge=0.0, le=1.0)
 
     @field_validator("jev_api_key")

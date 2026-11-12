@@ -193,3 +193,34 @@ def test_query_params_are_left_alone_by_default(capsys):
     logging.getLogger("svc").info("crtfc_key=abc")
 
     assert json.loads(capsys.readouterr().out)["message"] == "crtfc_key=abc"
+
+
+@pytest.mark.parametrize(
+    "secret", ["synthetic-key", "synthetic\nkey", "synthetic'key", "synthetic가key", "}"]
+)
+def test_bound_secrets_are_masked_in_fields_and_exception_representations(capsys, secret):
+    setup_logging("INFO", service_name="svc")
+    log = get_logger("svc").bind(sensitive_values=(secret,)).bind(run_id="run-1")
+    log.warning("request_failed", credential=secret, nested={"values": [secret]})
+
+    try:
+        raise ValueError(f"Illegal header value {('Bearer ' + secret).encode()!r}")
+    except ValueError:
+        log.exception("request_failed")
+
+    field, failure = _run_events(capsys)
+    assert field["credential"] == "***"
+    assert field["nested"] == {"values": ["***"]}
+    assert field["run_id"] == failure["run_id"] == "run-1"
+    assert "sensitive_values" not in field
+    assert "Bearer ***" in failure["exception"]
+    assert "Traceback" in failure["exception"]
+
+
+def test_binding_more_secrets_retains_previous_redactions(capsys):
+    setup_logging("INFO", service_name="svc")
+    log = get_logger("svc").bind(sensitive_values=("first-credential",))
+    log = log.bind(sensitive_values=("second-credential",))
+    log.error("failed", values=["first-credential", "second-credential"])
+
+    assert _run_events(capsys)[0]["values"] == ["***", "***"]

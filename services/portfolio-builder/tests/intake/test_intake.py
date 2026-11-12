@@ -40,6 +40,10 @@ def settings():
         postgres_dsn="postgresql+psycopg://ktb:test@localhost/ktb_test",
         queue_url="https://sqs.example/settings.fifo",
         jev_api_key="secret",
+        jev_base_uri="https://api.typesafe.ai/v1",
+        jev_model="jev-1.14.0",
+        jev_timeout=20,
+        jev_noul_threshold=0.5,
         jev_choice_min_confidence=0.6,
     )
 

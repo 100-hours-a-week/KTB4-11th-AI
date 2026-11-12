@@ -70,6 +70,21 @@ def test_jev_credit_failure_skips_generation_and_keeps_polling(monkeypatch):
     assert run_worker(monkeypatch, [Message("id", "{}", "receipt")], failure.value) == ["intake"]
 
 
+def test_worker_masks_credentials_in_protocol_error_logs(monkeypatch, capsys):
+    import json
+
+    failure = httpx.LocalProtocolError("Illegal header value b'Bearer jev-key'")
+
+    assert run_worker(monkeypatch, [Message("id", "{}", "receipt")], failure) == ["intake"]
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert record["message"] == "competition_cycle_failed"
+    assert record["error_type"] == "LocalProtocolError"
+    assert "Bearer ***" in record["exception"]
+    assert "jev-key" not in output
+
+
 @pytest.mark.parametrize(
     "jev_key",
     [
@@ -96,6 +111,10 @@ def test_invalid_jev_key_prevents_polling_even_when_a_builder_key_exists(
     monkeypatch.setenv("PORTFOLIO_BUILDER_LLM_API_KEY", "builder-key")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL", "https://sqs.example/settings")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_CHOICE_MIN_CONFIDENCE", "0.5")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_BASE_URI", "https://api.typesafe.ai/v1")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_MODEL", "jev-1.14.0")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_TIMEOUT", "20")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_NOUL_THRESHOLD", "0.5")
     if jev_key is None:
         monkeypatch.delenv("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", raising=False)
     else:

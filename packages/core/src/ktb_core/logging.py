@@ -14,15 +14,27 @@ BoundLogger = Callable[..., None]
 
 
 class StructuredLogger:
-    def __init__(self, logger: logging.Logger, **bound: Any) -> None:
+    def __init__(
+        self, logger: logging.Logger, *, sensitive_values: Collection[str] = (), **bound: Any
+    ) -> None:
         self.logger = logger
         self.bound = bound
+        self.sensitive_values = tuple(sensitive_values)
 
-    def bind(self, **fields: Any) -> "StructuredLogger":
-        return StructuredLogger(self.logger, **self.bound, **fields)
+    def bind(self, *, sensitive_values: Collection[str] = (), **fields: Any) -> "StructuredLogger":
+        return StructuredLogger(
+            self.logger,
+            sensitive_values=(*self.sensitive_values, *sensitive_values),
+            **{**self.bound, **fields},
+        )
 
     def _log(self, level: int, event: str, *, exc_info: bool = False, **fields: Any) -> None:
-        self.logger.log(level, event, extra={"fields": {**self.bound, **fields}}, exc_info=exc_info)
+        self.logger.log(
+            level,
+            event,
+            extra={"fields": {**self.bound, **fields}, "sensitive_values": self.sensitive_values},
+            exc_info=exc_info,
+        )
 
     def debug(self, event: str, **fields: Any) -> None:
         self._log(logging.DEBUG, event, **fields)
@@ -107,7 +119,32 @@ class JsonFormatter(logging.Formatter):
             payload.update(fields)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
-        line = json.dumps(payload, ensure_ascii=False, default=str)
+        secrets = sorted(
+            {
+                variant
+                for value in getattr(record, "sensitive_values", ())
+                if value
+                for variant in (value, repr(value)[1:-1], repr(value.encode())[2:-1])
+            },
+            key=len,
+            reverse=True,
+        )
+
+        def redact(value: Any) -> Any:
+            if isinstance(value, str):
+                for secret in secrets:
+                    value = value.replace(secret, "***")
+            elif isinstance(value, dict):
+                return {key: redact(item) for key, item in value.items()}
+            elif isinstance(value, list | tuple):
+                return [redact(item) for item in value]
+            return value
+
+        line = json.dumps(
+            redact(payload) if secrets else payload,
+            ensure_ascii=False,
+            default=lambda value: redact(str(value)),
+        )
         return self.sensitive.sub(r"\1=***", line) if self.sensitive else line
 
 
