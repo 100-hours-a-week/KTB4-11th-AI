@@ -1,0 +1,68 @@
+# Evaluation harness. Combine with one information and one decision override:
+#   scripts/run-evaluation.sh evaluations/experiments/weekly-single-shot-2026h2.json raw equal-weight
+# Start the shared dataset first (evaluations/compose/dataset.yaml).
+# See evaluations/harness/README.md.
+name: ktb4-evaluation
+
+x-health: &health
+  interval: 5s
+  timeout: 3s
+  retries: 12
+  start_period: 10s
+
+services:
+  market-http-prices:
+    image: ktb4-evaluation/market-http:local
+    build:
+      context: .
+      dockerfile: docker/market-http.Dockerfile
+    command: ["market-http-evaluation"]
+    environment:
+      MARKET_HTTP_QUESTDB_CONF: ${EVALUATION_QUESTDB_CONF:-ws::addr=questdb:9000;connect_timeout=5000;}
+      MARKET_HTTP_EVALUATION_ACCESS: harness
+      MARKET_HTTP_LOG_LEVEL: ${EVALUATION_LOG_LEVEL:-INFO}
+      OTEL_SDK_DISABLED: "true"
+    networks: [dataset, harness]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      <<: *health
+
+  runner:
+    image: ktb4-evaluation/harness:local
+    build:
+      context: .
+      dockerfile: docker/harness.Dockerfile
+      target: harness
+    user: "${EVALUATION_UID:-10001}:${EVALUATION_GID:-10001}"
+    environment:
+      HARNESS_SPEC_FILE: /experiment/spec.json
+      HARNESS_RESULTS_DIR: /results
+      HARNESS_RUN_ID: ${EVALUATION_RUN_ID:?EVALUATION_RUN_ID must be set}
+      HARNESS_PRICES_URL: http://market-http-prices:8000
+      HARNESS_CLOCK_FILE: /clock/as_of
+      HARNESS_DECISION_TIMEOUT_SECONDS: ${EVALUATION_DECISION_TIMEOUT_SECONDS:-900}
+      HARNESS_CODE_COMMIT: ${EVALUATION_CODE_COMMIT:-}
+      HARNESS_IMAGE_DIGEST: ${EVALUATION_IMAGE_DIGEST:-}
+      HARNESS_LOG_LEVEL: ${EVALUATION_LOG_LEVEL:-INFO}
+    volumes:
+      - clock:/clock
+      - ${EVALUATION_SPEC:?EVALUATION_SPEC must be set}:/experiment/spec.json:ro
+      - ${EVALUATION_RESULTS_DIR:-./evaluations/results}:/results
+    networks: [harness]
+    depends_on:
+      market-http-prices:
+        condition: service_healthy
+
+volumes:
+  clock:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=${EVALUATION_UID:-10001},gid=${EVALUATION_GID:-10001},mode=0755,size=1m"
+
+networks:
+  dataset:
+    name: ktb4-evaluation-dataset
+    external: true
+  harness:
+    internal: true

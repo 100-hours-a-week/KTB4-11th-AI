@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     backend_base_uri: str = ""
     backend_jwt_secret: SecretStr | None = Field(default=None, min_length=32)
     backend_jwt_issuer: str = ""
+    submitter: Literal["database", "evaluation"] = "database"
+    evaluation_output_dir: str | None = None
 
     @field_validator("backend_jwt_secret", mode="before")
     @classmethod
@@ -46,6 +48,14 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "competition mode requires backend settings: " + ", ".join(missing)
                 )
+        return self
+
+    @model_validator(mode="after")
+    def evaluation_submitter_configuration(self) -> Self:
+        if (self.submitter == "evaluation") != (self.evaluation_output_dir is not None):
+            raise ValueError("evaluation_output_dir is set exactly when submitter is evaluation")
+        if self.submitter == "evaluation" and self.competition_enabled:
+            raise ValueError("competition mode writes participant portfolios to the database")
         return self
 
 

@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 news-http = "news_http.__main__:main"
+news-http-evaluation = "news_http.evaluation:main"
 
 [tool.uv.sources]
 ktb-core = { workspace = true }

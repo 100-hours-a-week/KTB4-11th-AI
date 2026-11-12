@@ -38,6 +38,7 @@ from portfolio_builder.market import HttpMarket
 from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import mark_explanation_failed
 from portfolio_builder.settings import Settings
+from portfolio_builder.submitters import create_submitter
 from portfolio_builder.tools.disclosure.tool import disclosure_tools
 from portfolio_builder.tools.graph.tools import graph_tools
 from portfolio_builder.tools.news.tools import news_tools
@@ -111,9 +112,10 @@ def _generate(
     model = model_factory(reasoning={"effort": settings.thinking_level})
     disclosure_settings = DisclosureSettings() if settings.disclosure_enabled else None
     if participant_id is None:
-        submission = common_submit_tool(
-            engine, previous_company_ids, f"openrouter/{settings.llm_model}", news_client, log
+        submitter = create_submitter(
+            settings, engine, news_client, f"openrouter/{settings.llm_model}"
         )
+        submission = common_submit_tool(submitter, previous_company_ids, log)
     else:
         if claim is None:
             raise ClaimLost("participant generation requires a claim")

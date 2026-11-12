@@ -22,7 +22,12 @@ class Bar(BaseModel):
 
 
 def find_bars(
-    conf: str, code: str, timeframe: Timeframe, limit: int, before: datetime | None
+    conf: str,
+    code: str,
+    timeframe: Timeframe,
+    limit: int,
+    before: datetime | None,
+    until: datetime | None = None,
 ) -> list[Bar]:
     sql = (
         f"SELECT timestamp, open, high, low, close, volume FROM {VIEWS[timeframe]}"
@@ -34,6 +39,9 @@ def find_bars(
     if before is not None:
         binds.append(questdb_time(before))
         sql += f" AND timestamp < cast(${len(binds)} AS TIMESTAMP)"
+    if until is not None:
+        binds.append(questdb_time(until))
+        sql += f" AND timestamp <= cast(${len(binds)} AS TIMESTAMP)"
     binds.append(limit)
     sql += f" ORDER BY timestamp DESC LIMIT ${len(binds)}"
     with questdb.connect(conf) as db:

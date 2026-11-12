@@ -31,16 +31,20 @@ def _cursor(cursor: str | None = None) -> datetime | None:
     return timestamp
 
 
-@router.get("/bars/{code}")
-def list_bars(
-    code: Annotated[str, Path(pattern=CODE)],
-    timeframe: Timeframe,
-    conf: QuestDBConf,
-    before: Annotated[datetime | None, Depends(_cursor)],
-    limit: Annotated[int, Query(ge=1, le=1000)] = 300,
-) -> Page:
-    rows = find_bars(conf, code, timeframe, limit + 1, before)
+Cursor = Annotated[datetime | None, Depends(_cursor)]
+Limit = Annotated[int, Query(ge=1, le=1000)]
+Code = Annotated[str, Path(pattern=CODE)]
+
+
+def page(rows: list[Bar], limit: int) -> Page:
     if len(rows) <= limit:
         return Page(items=rows, next_cursor=None)
     cursor = urlsafe_b64encode(rows[limit - 1].timestamp.isoformat().encode()).decode()
     return Page(items=rows[:limit], next_cursor=cursor)
+
+
+@router.get("/bars/{code}")
+def list_bars(
+    code: Code, timeframe: Timeframe, conf: QuestDBConf, before: Cursor, limit: Limit = 300
+) -> Page:
+    return page(find_bars(conf, code, timeframe, limit + 1, before), limit)

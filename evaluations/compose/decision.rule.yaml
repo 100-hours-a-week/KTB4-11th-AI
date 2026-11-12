@@ -1,0 +1,5 @@
+# In-process decision systems: equal-weight, buy-and-hold, jev-stub.
+services:
+  runner:
+    environment:
+      HARNESS_DECISION_SYSTEM: ${EVALUATION_DECISION:?EVALUATION_DECISION must be set}

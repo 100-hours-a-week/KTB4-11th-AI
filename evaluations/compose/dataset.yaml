@@ -1,0 +1,55 @@
+# Shared source data for every evaluation run; decision containers never join this network.
+#   docker network create --internal ktb4-evaluation-dataset
+#   docker compose -f evaluations/compose/dataset.yaml up -d
+# Restore the dataset snapshot into the two volumes before the first run and record its name
+# as dataset_version in the experiment spec. Admin ports bind to 127.0.0.1 for loading only.
+name: ktb4-evaluation-dataset
+
+services:
+  questdb:
+    image: questdb/questdb:10.2.0
+    environment:
+      QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
+      QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
+      QDB_QUERY_TIMEOUT: 30s
+    volumes:
+      - questdb-snapshot:/var/lib/questdb
+    networks: [dataset, admin]
+    ports:
+      - "127.0.0.1:${EVALUATION_QUESTDB_ADMIN_PORT:-19000}:9000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9003/status || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg18-trixie
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set}
+    volumes:
+      - postgres-snapshot:/var/lib/postgresql
+    networks: [dataset, admin]
+    ports:
+      - "127.0.0.1:${EVALUATION_POSTGRES_ADMIN_PORT:-15432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  questdb-snapshot:
+    name: ${EVALUATION_QUESTDB_VOLUME:-ktb4-evaluation-questdb}
+  postgres-snapshot:
+    name: ${EVALUATION_POSTGRES_VOLUME:-ktb4-evaluation-postgres}
+
+networks:
+  dataset:
+    name: ktb4-evaluation-dataset
+    external: true
+  admin: {}
