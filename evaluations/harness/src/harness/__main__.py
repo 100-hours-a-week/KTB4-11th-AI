@@ -27,6 +27,7 @@ from harness.information import (
     NoInformation,
 )
 from harness.market_http import MarketHttpPriceSource
+from harness.production import RecordedPortfolios
 from harness.recorder import RunDirectory, dumps
 from harness.replay import recompute, replay_run
 from harness.runner import run_experiment
@@ -77,6 +78,9 @@ def decision_system(
                 settings.decision_timeout_seconds,
                 client,
             )
+        case "production-portfolios":
+            assert settings.production_portfolios_file
+            return RecordedPortfolios(Path(settings.production_portfolios_file))
 
 
 @contextmanager

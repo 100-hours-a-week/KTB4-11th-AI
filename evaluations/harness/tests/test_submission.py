@@ -1,9 +1,11 @@
+import json
 from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 from harness.contracts import DecisionContext, DecisionFailed, PortfolioProposal, PortfolioState
-from harness.production import proposal_from_production
+from harness.information import NoInformation
+from harness.production import RecordedPortfolios, proposal_from_production
 from harness.submission import SubmissionDesk, create_submission_app
 from ktb_core.krx import KST
 
@@ -125,3 +127,27 @@ def test_production_submissions_map_to_stock_codes():
     with pytest.raises(DecisionFailed) as failed:
         proposal_from_production(submission, {})
     assert failed.value.kind == "invalid_submission"
+
+
+def test_recorded_portfolios_replay_production_decisions(tmp_path):
+    portfolios = [
+        {
+            "id": 3,
+            "created_at": "2026-10-02T07:05:40+00:00",
+            "model": "openrouter/m",
+            "cash_weight": 0.2,
+            "holdings": [{"company_id": "00126380", "stock_code": "005930", "weight": 0.8}],
+        }
+    ]
+    path = tmp_path / "portfolios.json"
+    path.write_text(json.dumps(portfolios))
+    system = RecordedPortfolios(path)
+    state = PortfolioState(1.0, {}, {})
+    audit: dict[str, object] = {}
+    decided = datetime(2026, 10, 2, 16, 5, 40, tzinfo=KST)
+    proposal = system.decide(DecisionContext(decided, state, ("005930",)), NoInformation(), audit)
+    assert proposal == PortfolioProposal({"005930": 0.8}, 0.2)
+    assert audit == {"portfolio_id": 3, "model": "openrouter/m"}
+    with pytest.raises(DecisionFailed) as failed:
+        system.decide(DecisionContext(decided.replace(hour=17), state, ()), NoInformation(), {})
+    assert failed.value.kind == "no_submission"

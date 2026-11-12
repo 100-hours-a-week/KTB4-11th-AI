@@ -20,9 +20,10 @@ class RunnerSettings(BaseSettings):
     news_url: str | None = None
     features_url: str | None = None
     disclosures_url: str | None = None
-    decision_system: Literal["equal-weight", "buy-and-hold", "jev-stub", "docker-agent"] = (
-        "equal-weight"
-    )
+    decision_system: Literal[
+        "equal-weight", "buy-and-hold", "jev-stub", "docker-agent", "production-portfolios"
+    ] = "equal-weight"
+    production_portfolios_file: str | None = None
     agent_worker_url: str | None = None
     submission_host: str = "0.0.0.0"
     submission_port: int = Field(default=8100, gt=0, lt=65536)
@@ -39,6 +40,13 @@ class RunnerSettings(BaseSettings):
             self.agent_worker_url and self.submission_url
         ):
             raise ValueError("docker-agent needs agent_worker_url and submission_url")
+        if (self.decision_system == "production-portfolios") != (
+            self.production_portfolios_file is not None
+        ):
+            raise ValueError(
+                "production_portfolios_file is set exactly when the decision system is"
+                " production-portfolios"
+            )
         return self
 
 
