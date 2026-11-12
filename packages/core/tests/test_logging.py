@@ -193,3 +193,191 @@ def test_query_params_are_left_alone_by_default(capsys):
     logging.getLogger("svc").info("crtfc_key=abc")
 
     assert json.loads(capsys.readouterr().out)["message"] == "crtfc_key=abc"
+
+
+@pytest.mark.parametrize(
+    "secret", ["synthetic-key", "synthetic\nkey", "synthetic'key", "synthetic가key", "}"]
+)
+def test_configured_secrets_are_masked_in_fields_and_exception_representations(capsys, secret):
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,))
+    log = get_logger("svc").bind(run_id="run-1")
+    log.warning("request_failed", credential=secret, nested={"values": [secret]})
+
+    try:
+        raise ValueError(f"Illegal header value {('Bearer ' + secret).encode()!r}")
+    except ValueError:
+        log.exception("request_failed")
+
+    field, failure = _run_events(capsys)
+    assert field["credential"] == "***"
+    assert field["nested"] == {"values": ["***"]}
+    assert field["run_id"] == failure["run_id"] == "run-1"
+    assert "sensitive_values" not in field
+    assert "Bearer ***" in failure["exception"]
+    assert "Traceback" in failure["exception"]
+
+
+def test_configured_secrets_are_masked_in_library_logs(capsys):
+    setup_logging(
+        "INFO", service_name="svc", sensitive_values=("first-credential", "second-credential")
+    )
+    logging.getLogger("httpcore").warning("%s %s", "first-credential", "second-credential")
+
+    assert _run_events(capsys)[0]["message"] == "*** ***"
+
+
+def test_configured_secrets_are_masked_in_dictionary_keys(capsys):
+    secret = "synthetic-field-credential"
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,))
+    get_logger("svc").error("failed", **{secret: "value", "nested": {secret: [{secret: secret}]}})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert secret not in output
+    assert record["***"] == "value"
+    assert record["nested"] == {"***": [{"***": "***"}]}
+
+
+def test_url_redaction_masks_library_messages_and_structured_urls(capsys):
+    url = "https://jev.example/path-only-credential/api/v1"
+    setup_logging("INFO", service_name="svc", redact_urls=True)
+    logging.getLogger("httpx").info('HTTP Request: POST %s "HTTP/1.1 401"', url)
+    get_logger("svc").error("failed", url=url, nested={url: [url]})
+
+    output = capsys.readouterr().out
+    request, field = [json.loads(line) for line in output.splitlines()]
+    assert "path-only-credential" not in output
+    assert "401" in request["message"]
+    assert field["url"] == "<redacted-url>"
+    assert field["nested"] == {"<redacted-url>": ["<redacted-url>"]}
+
+
+def test_url_paths_are_preserved_without_redaction_option(capsys):
+    url = "https://jev.example/api/v1"
+    setup_logging("INFO", service_name="svc")
+    get_logger("svc").info("request", url=url)
+
+    assert _run_events(capsys)[0]["url"] == url
+
+
+@pytest.mark.parametrize(
+    ("secret", "scheme"),
+    [("http", "https"), ("https", "https"), ("://", "https"), ("HTTP", "HTTPS"), ("s://", "https")],
+)
+def test_url_scheme_overlap_does_not_leave_path_credentials(capsys, secret, scheme):
+    url = f"{scheme}://jev.example/path-only-credential/api/v1"
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,), redact_urls=True)
+    get_logger("svc").error("failed", url=url, nested={url: [url]})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert "path-only-credential" not in output
+    assert record["url"] == "<redacted-url>"
+    assert record["nested"] == {"<redacted-url>": ["<redacted-url>"]}
+
+
+def test_query_name_overlap_does_not_leave_query_credentials(capsys):
+    setup_logging(
+        "INFO",
+        service_name="svc",
+        sensitive_values=("crtfc",),
+        sensitive_query_params={"crtfc_key"},
+    )
+    get_logger("svc").error("failed", url="https://jev.example/api?crtfc_key=query-only-credential")
+
+    output = capsys.readouterr().out
+    assert "query-only-credential" not in output
+    assert "crtfc" not in output
+    assert json.loads(output)["url"].endswith("***_key=***")
+
+
+def test_unencodable_sensitive_value_does_not_disable_logging(capsys):
+    secret = "synthetic\ud800credential"
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,))
+    get_logger("svc").error(
+        "failed",
+        credential=secret,
+        representation=repr(secret),
+        encoded=secret.encode(errors="backslashreplace"),
+    )
+
+    record = _run_events(capsys)[0]
+    assert record["credential"] == "***"
+    assert record["representation"] == "'***'"
+    assert record["encoded"] == "b'***'"
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "private-prefixhttps://jev.example/credential",
+        "private-prefixHTTP://jev.example/credential",
+        "private-prefixcrtfc_key=private-suffix",
+    ],
+)
+def test_structural_redaction_does_not_leave_registered_credential_fragments(capsys, secret):
+    setup_logging(
+        "INFO",
+        service_name="svc",
+        sensitive_values=(secret,),
+        sensitive_query_params={"crtfc_key"},
+        redact_urls=True,
+    )
+    get_logger("svc").error("failed", credential=f"before {secret} after", nested={secret: secret})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert "private-prefix" not in output
+    assert "private-suffix" not in output
+    assert record["credential"].startswith("before ")
+    assert record["credential"].endswith(" after")
+
+
+@pytest.mark.parametrize(
+    ("secrets", "value", "expected"),
+    [
+        (("abc", "bcd"), "before abcd after", "before *** after"),
+        (("ababa",), "before abababa after", "before *** after"),
+        (("abc", "xyz"), "before abc xyz after", "before *** *** after"),
+    ],
+)
+def test_overlapping_and_repeated_credentials_are_masked_from_the_original_text(
+    capsys, secrets, value, expected
+):
+    setup_logging("INFO", service_name="svc", sensitive_values=secrets)
+    get_logger("svc").error("failed", value=value)
+
+    assert _run_events(capsys)[0]["value"] == expected
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [({"step": 1}, {"step": 2}), ([1, 2], [3]), (None, False), (0, "")],
+)
+def test_colliding_redacted_keys_preserve_each_value(capsys, left, right):
+    setup_logging("INFO", service_name="svc", sensitive_values=("first-token", "second-token"))
+    get_logger("svc").error("failed", nested={"first-token": left, "second-token": right})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert "first-token" not in output
+    assert "second-token" not in output
+    assert record["nested"] == {"***": [left, right]}
+
+
+def test_redacted_key_collision_preserves_an_existing_placeholder_field(capsys):
+    setup_logging("INFO", service_name="svc", sensitive_values=("first-token", "second-token"))
+    get_logger("svc").error(
+        "failed", nested={"first-token": "first", "***": "original", "second-token": "second"}
+    )
+
+    assert _run_events(capsys)[0]["nested"] == {"***": ["first", "original", "second"]}
+
+
+def test_colliding_redacted_url_keys_preserve_each_value(capsys):
+    setup_logging("INFO", service_name="svc", redact_urls=True)
+    get_logger("svc").error(
+        "failed", nested={"https://first.example/api": 1, "https://second.example/api": 2}
+    )
+
+    assert _run_events(capsys)[0]["nested"] == {"<redacted-url>": [1, 2]}

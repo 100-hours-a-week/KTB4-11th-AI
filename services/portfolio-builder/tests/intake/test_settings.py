@@ -6,6 +6,10 @@ BASE = {
     "postgres_dsn": "postgresql+psycopg://ktb:test@localhost/ktb_test",
     "queue_url": "https://sqs.example/settings.fifo",
     "jev_api_key": "secret",
+    "jev_base_uri": "https://openrouter.ai/api/v1",
+    "jev_model": "typesafe/jev-1.14",
+    "jev_timeout": 20,
+    "jev_noul_threshold": 0.5,
     "jev_choice_min_confidence": 0.6,
 }
 
@@ -17,7 +21,7 @@ def test_intake_constructs_without_generation_configuration():
     assert isinstance(settings.jev_api_key, SecretStr)
 
 
-@pytest.mark.parametrize("name", ["queue_url", "jev_choice_min_confidence"])
+@pytest.mark.parametrize("name", [name for name in BASE if name != "postgres_dsn"])
 def test_intake_requires_its_own_configuration(name, monkeypatch):
     monkeypatch.delenv(f"PORTFOLIO_BUILDER_COMPETITION_{name.upper()}", raising=False)
     values = {key: value for key, value in BASE.items() if key != name}
@@ -32,6 +36,10 @@ def test_intake_requires_its_own_configuration(name, monkeypatch):
         ("queue_url", ""),
         ("queue_url", "settings.fifo"),
         ("jev_api_key", ""),
+        ("jev_api_key", "   "),
+        ("jev_api_key", None),
+        ("jev_base_uri", ""),
+        ("jev_model", ""),
         ("visibility_timeout", 0),
         ("visibility_timeout", 43201),
         ("jev_timeout", 0),
@@ -59,3 +67,63 @@ def test_intake_uses_its_own_environment_prefix(monkeypatch):
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_VISIBILITY_TIMEOUT", "600")
 
     assert Settings().visibility_timeout == 600
+
+
+def test_jev_and_region_environment_overrides_are_applied(monkeypatch):
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_AWS_REGION", "us-east-1")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_BASE_URI", "https://jev.example/v1")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_MODEL", "custom-jev")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_NOUL_THRESHOLD", "0.7")
+
+    settings = Settings(
+        **{
+            k: v
+            for k, v in BASE.items()
+            if k not in {"jev_base_uri", "jev_model", "jev_noul_threshold"}
+        }
+    )
+
+    assert settings.aws_region == "us-east-1"
+    assert settings.jev_base_uri == "https://jev.example/v1"
+    assert settings.jev_model == "custom-jev"
+    assert settings.jev_noul_threshold == 0.7
+
+
+def test_intake_does_not_use_the_builder_llm_key(monkeypatch):
+    monkeypatch.delenv("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", raising=False)
+    monkeypatch.setenv("PORTFOLIO_BUILDER_LLM_API_KEY", "builder-key")
+
+    with pytest.raises(ValidationError, match="jev_api_key"):
+        Settings(**{k: v for k, v in BASE.items() if k != "jev_api_key"})
+
+
+@pytest.mark.parametrize("character", [chr(i) for i in range(33)] + [chr(127), "가"])
+def test_jev_key_rejects_characters_unsuitable_for_authorization(character):
+    key = f"synthetic{character}credential"
+
+    with pytest.raises(ValidationError) as failure:
+        Settings(**{**BASE, "jev_api_key": key})
+
+    assert "synthetic" not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://synthetic-url-credential@jev.example/v1",
+        "https://user:synthetic-url-credential@jev.example/v1",
+        "https://@jev.example/v1",
+        "https://jev.example/v1?token=synthetic-url-credential",
+        "https://jev.example/v1?",
+        "https://jev.example/v1#synthetic-url-credential",
+        "https://jev.example/v1#",
+        "http://jev.example/v1",
+        "https:///v1",
+        "https://jev.example/v1\n",
+    ],
+)
+def test_jev_base_uri_rejects_credentials_queries_and_invalid_urls(uri):
+    with pytest.raises(ValidationError) as failure:
+        Settings(**{**BASE, "jev_base_uri": uri})
+
+    assert "synthetic-url-credential" not in str(failure.value)
