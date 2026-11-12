@@ -133,6 +133,8 @@ async def publish(valkey: Redis, prices: list[Price]) -> None:
 async def publish_orderbooks(valkey: Redis, orderbooks: list[Orderbook]) -> None:
     async with valkey.pipeline(transaction=False) as pipe:
         for orderbook in orderbooks:
+            if not orderbook.asks and not orderbook.bids:
+                continue
             key = f"orderbook:{orderbook.code}"
             payload = json.dumps(asdict(orderbook))
             pipe.set(key, payload)
