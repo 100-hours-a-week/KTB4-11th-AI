@@ -106,7 +106,11 @@ class JsonFormatter(logging.Formatter):
                 variant
                 for value in sensitive_values
                 if value
-                for variant in (value, repr(value)[1:-1], repr(value.encode())[2:-1])
+                for variant in (
+                    value,
+                    repr(value)[1:-1],
+                    repr(value.encode(errors="backslashreplace"))[2:-1],
+                )
             },
             key=len,
             reverse=True,
@@ -128,10 +132,12 @@ class JsonFormatter(logging.Formatter):
 
         def redact(value: Any) -> Any:
             if isinstance(value, str):
-                for secret in self.secrets:
-                    value = value.replace(secret, "***")
                 if self.urls:
                     value = self.urls.sub("<redacted-url>", value)
+                if self.sensitive:
+                    value = self.sensitive.sub(r"\1=***", value)
+                for secret in self.secrets:
+                    value = value.replace(secret, "***")
             elif isinstance(value, dict):
                 return {redact(key): redact(item) for key, item in value.items()}
             elif isinstance(value, list | tuple):
@@ -139,11 +145,11 @@ class JsonFormatter(logging.Formatter):
             return value
 
         line = json.dumps(
-            redact(payload) if self.secrets or self.urls else payload,
+            redact(payload) if self.secrets or self.urls or self.sensitive else payload,
             ensure_ascii=False,
             default=lambda value: redact(str(value)),
         )
-        return self.sensitive.sub(r"\1=***", line) if self.sensitive else line
+        return line
 
 
 def setup_logging(

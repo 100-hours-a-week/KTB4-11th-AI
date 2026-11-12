@@ -258,3 +258,50 @@ def test_url_paths_are_preserved_without_redaction_option(capsys):
     get_logger("svc").info("request", url=url)
 
     assert _run_events(capsys)[0]["url"] == url
+
+
+@pytest.mark.parametrize(
+    ("secret", "scheme"),
+    [("http", "https"), ("https", "https"), ("://", "https"), ("HTTP", "HTTPS"), ("s://", "https")],
+)
+def test_url_redaction_precedes_overlapping_credential_redaction(capsys, secret, scheme):
+    url = f"{scheme}://jev.example/path-only-credential/api/v1"
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,), redact_urls=True)
+    get_logger("svc").error("failed", url=url, nested={url: [url]})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert "path-only-credential" not in output
+    assert record["url"] == "<redacted-url>"
+    assert record["nested"] == {"<redacted-url>": ["<redacted-url>"]}
+
+
+def test_query_redaction_precedes_overlapping_credential_redaction(capsys):
+    setup_logging(
+        "INFO",
+        service_name="svc",
+        sensitive_values=("crtfc",),
+        sensitive_query_params={"crtfc_key"},
+    )
+    get_logger("svc").error("failed", url="https://jev.example/api?crtfc_key=query-only-credential")
+
+    output = capsys.readouterr().out
+    assert "query-only-credential" not in output
+    assert "crtfc" not in output
+    assert json.loads(output)["url"].endswith("***_key=***")
+
+
+def test_unencodable_sensitive_value_does_not_disable_logging(capsys):
+    secret = "synthetic\ud800credential"
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,))
+    get_logger("svc").error(
+        "failed",
+        credential=secret,
+        representation=repr(secret),
+        encoded=secret.encode(errors="backslashreplace"),
+    )
+
+    record = _run_events(capsys)[0]
+    assert record["credential"] == "***"
+    assert record["representation"] == "'***'"
+    assert record["encoded"] == "b'***'"
