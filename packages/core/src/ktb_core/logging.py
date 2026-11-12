@@ -168,7 +168,12 @@ class JsonFormatter(logging.Formatter):
                 parts.append(value[position:])
                 return "".join(parts)
             elif isinstance(value, dict):
-                return {redact(key): redact(item) for key, item in value.items()}
+                grouped: dict[Any, list[Any]] = {}
+                for key, item in value.items():
+                    grouped.setdefault(redact(key), []).append(redact(item))
+                return {
+                    key: items[0] if len(items) == 1 else items for key, items in grouped.items()
+                }
             elif isinstance(value, list | tuple):
                 return [redact(item) for item in value]
             return value

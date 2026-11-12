@@ -348,3 +348,36 @@ def test_overlapping_and_repeated_credentials_are_masked_from_the_original_text(
     get_logger("svc").error("failed", value=value)
 
     assert _run_events(capsys)[0]["value"] == expected
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [({"step": 1}, {"step": 2}), ([1, 2], [3]), (None, False), (0, "")],
+)
+def test_colliding_redacted_keys_preserve_each_value(capsys, left, right):
+    setup_logging("INFO", service_name="svc", sensitive_values=("first-token", "second-token"))
+    get_logger("svc").error("failed", nested={"first-token": left, "second-token": right})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert "first-token" not in output
+    assert "second-token" not in output
+    assert record["nested"] == {"***": [left, right]}
+
+
+def test_redacted_key_collision_preserves_an_existing_placeholder_field(capsys):
+    setup_logging("INFO", service_name="svc", sensitive_values=("first-token", "second-token"))
+    get_logger("svc").error(
+        "failed", nested={"first-token": "first", "***": "original", "second-token": "second"}
+    )
+
+    assert _run_events(capsys)[0]["nested"] == {"***": ["first", "original", "second"]}
+
+
+def test_colliding_redacted_url_keys_preserve_each_value(capsys):
+    setup_logging("INFO", service_name="svc", redact_urls=True)
+    get_logger("svc").error(
+        "failed", nested={"https://first.example/api": 1, "https://second.example/api": 2}
+    )
+
+    assert _run_events(capsys)[0]["nested"] == {"<redacted-url>": [1, 2]}
