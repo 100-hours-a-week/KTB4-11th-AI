@@ -6,7 +6,7 @@ from ktb_aws.sqs import Message
 from pydantic import SecretStr
 
 
-def run_worker(monkeypatch, received):
+def run_worker(monkeypatch, received, failure=None):
     from portfolio_builder.competition import __main__ as entry
 
     builder = SimpleNamespace(
@@ -19,7 +19,7 @@ def run_worker(monkeypatch, received):
         queue_url="https://sqs.example/settings",
         visibility_timeout=600,
         aws_region="ap-northeast-2",
-        jev_api_key=None,
+        jev_api_key=SecretStr("jev-key"),
     )
     engine = Mock()
     queue = Mock()
@@ -30,17 +30,23 @@ def run_worker(monkeypatch, received):
     monkeypatch.setattr(entry.sa, "create_engine", lambda _: engine)
     monkeypatch.setattr(entry.boto3, "client", lambda *args, **kwargs: Mock())
     monkeypatch.setattr(entry, "SqsQueue", lambda *args: queue)
-    monkeypatch.setattr(entry, "process_message", lambda *args: events.append("intake"))
+
+    def process(*args):
+        events.append("intake")
+        if failure is not None:
+            raise failure
+
+    monkeypatch.setattr(entry, "process_message", process)
     monkeypatch.setattr(
         entry, "generate_missing_portfolios", lambda *args: events.append("generate")
     )
 
-    with pytest.raises(KeyboardInterrupt):
+    with pytest.raises(type(failure) if failure else KeyboardInterrupt):
         entry.main()
 
     engine.dispose.assert_called_once()
     queue.receive.assert_called_with(visibility=600)
-    assert intake.jev_api_key is builder.llm_api_key
+    assert intake.jev_api_key.get_secret_value() == "jev-key"
     return events
 
 
@@ -50,3 +56,42 @@ def test_sqs_intake_is_followed_by_initial_generation(monkeypatch):
 
 def test_committed_pending_settings_recover_even_if_the_queue_is_empty(monkeypatch):
     assert run_worker(monkeypatch, []) == ["generate"]
+
+
+def test_jev_credit_failure_stops_the_worker_before_generation(monkeypatch):
+    from portfolio_builder.competition.canonical import JevAccessError
+
+    assert run_worker(monkeypatch, [Message("id", "{}", "receipt")], JevAccessError(402)) == [
+        "intake"
+    ]
+
+
+def test_missing_jev_key_prevents_polling_even_when_a_builder_key_exists(monkeypatch, capsys):
+    import json
+
+    from portfolio_builder.competition import __main__ as entry
+
+    monkeypatch.setattr(
+        entry,
+        "Settings",
+        lambda: SimpleNamespace(log_level="INFO", llm_api_key=SecretStr("builder-key")),
+    )
+    monkeypatch.setenv("PORTFOLIO_BUILDER_LLM_API_KEY", "builder-key")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL", "https://sqs.example/settings")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_CHOICE_MIN_CONFIDENCE", "0.5")
+    monkeypatch.delenv("PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY", raising=False)
+
+    def unexpected_client(*args, **kwargs):
+        pytest.fail("a missing Jev key must stop the worker before polling")
+
+    monkeypatch.setattr(entry.boto3, "client", unexpected_client)
+
+    with pytest.raises(SystemExit) as stopped:
+        entry.main()
+
+    assert stopped.value.code == 1
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert record["message"] == "competition_configuration_invalid"
+    assert record["fields"] == ["jev_api_key"]
+    assert "builder-key" not in output

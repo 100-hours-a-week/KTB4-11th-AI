@@ -138,4 +138,4 @@ depends_on = ["portfolio_builder", "portfolio_builder.builder", "ktb_core"]
 
 [[modules]]
 path = "portfolio_builder.competition.__main__"
-depends_on = ["portfolio_builder", "portfolio_builder.backend", "portfolio_builder.builder", "ktb_core", "ktb_aws"]
+depends_on = ["portfolio_builder", "portfolio_builder.backend", "portfolio_builder.builder", "portfolio_builder.competition", "ktb_core", "ktb_aws"]

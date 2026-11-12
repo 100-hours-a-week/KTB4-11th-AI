@@ -34,6 +34,13 @@ class JevError(Exception):
     pass
 
 
+class JevAccessError(JevError):
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        self.reason = "insufficient_credit" if status_code == 402 else "authentication_failed"
+        super().__init__(f"Jev access failed: {self.reason} (HTTP {status_code})")
+
+
 def ask(
     base_uri: str,
     model: str,
@@ -52,6 +59,8 @@ def ask(
         headers={"Authorization": f"Bearer {api_key.get_secret_value()}"},
         timeout=timeout,
     )
+    if response.status_code in {401, 402, 403}:
+        raise JevAccessError(response.status_code)
     body = response.raise_for_status().json()
     answers = body.get("answers")
     if not isinstance(answers, dict):
@@ -266,6 +275,9 @@ def classify_additional_request(
         if isinstance(form, str):
             return form, version, True
         return form.to_json(), version, True
+    except JevAccessError as error:
+        log.error("jev_access_failed", status_code=error.status_code, reason=error.reason)
+        raise
     except Exception as error:
         log.error("canonicalisation_failed", error_type=type(error).__name__)
         return additional_request, None, False

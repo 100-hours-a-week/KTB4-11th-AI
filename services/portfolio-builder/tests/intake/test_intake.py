@@ -1,10 +1,13 @@
 import json
+from functools import partial
 from unittest.mock import Mock
 
+import httpx
 import pytest
 import sqlalchemy as sa
 from ktb_aws.sqs import Message
 from portfolio_builder import backend as intake
+from portfolio_builder.competition import canonical
 from portfolio_builder.settings import CompetitionSettings as Settings
 
 AGENT = {
@@ -153,3 +156,25 @@ def test_failed_persistence_does_not_acknowledge(engine, settings, monkeypatch):
         intake.process_message(_message(), queue, engine, settings, Mock())
 
     queue.delete.assert_not_called()
+
+
+@pytest.mark.parametrize("status", [401, 402, 403])
+def test_jev_access_failure_rolls_back_settings_without_acknowledging(
+    engine, settings, monkeypatch, status
+):
+    def respond(request):
+        assert request.headers["authorization"] == "Bearer secret"
+        return httpx.Response(status, json={"error": "unavailable"})
+
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(canonical, "ask", partial(canonical.ask, client=client))
+        queue, log = Mock(), Mock()
+
+        with pytest.raises(canonical.JevAccessError):
+            intake.process_message(_message(), queue, engine, settings, log)
+
+    queue.delete.assert_not_called()
+    with engine.connect() as conn:
+        assert (
+            conn.execute(sa.text("SELECT count(*) FROM competition_participants")).scalar_one() == 0
+        )

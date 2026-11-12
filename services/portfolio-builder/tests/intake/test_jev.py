@@ -2,7 +2,7 @@ import json
 
 import httpx
 import pytest
-from portfolio_builder.competition.canonical import JevError, ask
+from portfolio_builder.competition.canonical import JevError, ask, classify_additional_request
 from pydantic import SecretStr
 
 BASE_URI = "https://jev.example/api/v1"
@@ -127,6 +127,33 @@ def test_raises_on_an_http_error_status(server):
             {"q": {"type": "noul", "instructions": "a"}},
             client=client,
         )
+
+
+@pytest.mark.parametrize("status", [401, 402, 403])
+def test_access_failures_stop_classification_without_using_raw_text(server, status):
+    _, responses, client = server
+    responses.append((status, {"error": "provider response must not be logged"}))
+    events = []
+
+    class Log:
+        def error(self, event, **fields):
+            events.append((event, fields))
+
+    def request(state, questions):
+        return ask(BASE_URI, MODEL, SecretStr("jev-key"), state, questions, client=client)
+
+    with pytest.raises(JevError):
+        classify_additional_request(None, request, MODEL, 0.5, 0.6, "원문", (), Log())
+
+    assert events == [
+        (
+            "jev_access_failed",
+            {
+                "status_code": status,
+                "reason": "insufficient_credit" if status == 402 else "authentication_failed",
+            },
+        )
+    ]
 
 
 def test_raises_when_the_response_has_no_answers_object(server):

@@ -57,12 +57,19 @@ class CompetitionSettings(BaseSettings):
     queue_url: str = Field(min_length=1)
     visibility_timeout: int = Field(default=300, gt=0, le=43200)
     aws_region: str = "ap-northeast-2"
-    jev_api_key: SecretStr | None = Field(default=None, min_length=1)
-    jev_base_uri: str = "https://openrouter.ai/api/v1"
-    jev_model: str = "typesafe/jev-1.14"
+    jev_api_key: SecretStr = Field(min_length=1)
+    jev_base_uri: str = "https://api.typesafe.ai/v1"
+    jev_model: str = "jev-1.14.0"
     jev_timeout: int = Field(default=20, gt=0)
     jev_noul_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
     jev_choice_min_confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("jev_api_key")
+    @classmethod
+    def validate_jev_api_key(cls, value: SecretStr) -> SecretStr:
+        if not value.get_secret_value().strip():
+            raise ValueError("Jev API key is required")
+        return value
 
     @field_validator("queue_url")
     @classmethod
