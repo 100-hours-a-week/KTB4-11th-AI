@@ -137,6 +137,7 @@ reach the datastores or the harness-only prices.
 | `buy-and-hold` | runner | equal weights once, then holds |
 | `jev-stub` | runner | Jev-shaped adapter with a momentum stub; needs `market.daily_bars` |
 | `docker-agent` | `agent-worker` | Docker Agent with the variant's tools plus `get_portfolio` and `submit_portfolio` |
+| `production-portfolios` | runner | portfolios production already generated, read from `HARNESS_PRODUCTION_PORTFOLIOS_FILE` and applied at each `created_at`; local only, since no model runs |
 
 A decision system that needs a capability the variant lacks exits with code 4. Nothing
 falls back silently.
@@ -204,7 +205,7 @@ the same spec.
 
 | Prefix | Service | Required | Common optional |
 | --- | --- | --- | --- |
-| `HARNESS_` | `harness run` | `SPEC_FILE`, `PRICES_URL`, `CLOCK_FILE` | `RESULTS_DIR` (`results`), `RUN_ID`, `INFORMATION_VARIANT` (`none`), `MARKET_URL`, `NEWS_URL`, `FEATURES_URL`, `DISCLOSURES_URL`, `DECISION_SYSTEM` (`equal-weight`), `DECISION_TIMEOUT_SECONDS` (900), `CODE_COMMIT`, `IMAGE_DIGEST` |
+| `HARNESS_` | `harness run` | `SPEC_FILE`, `PRICES_URL`, `CLOCK_FILE` | `RESULTS_DIR` (`results`), `RUN_ID`, `INFORMATION_VARIANT` (`none`), `MARKET_URL`, `NEWS_URL`, `FEATURES_URL`, `DISCLOSURES_URL`, `DECISION_SYSTEM` (`equal-weight`), `PRODUCTION_PORTFOLIOS_FILE`, `DECISION_TIMEOUT_SECONDS` (900), `CODE_COMMIT`, `IMAGE_DIGEST` |
 | `HARNESS_` | runner with `docker-agent` | also `AGENT_WORKER_URL`, `SUBMISSION_URL` | `SUBMISSION_PORT` (8100) |
 | `HARNESS_AGENT_` | `harness-agent-worker` | `MODEL_PROVIDER`, `MODEL` | `API_KEY_FILE` with `API_KEY_ENV`, `MODEL_BASE_URL`, `MAX_TOKENS`, `INSTRUCTION_FILE`, `BINARY`, `RUN_ARGS` (`run --exec --yolo`), `PORT` (8200) |
 | `HARNESS_FEATURES_` | `harness-features` | `MARKET_URL` (the PIT market server), `PUBLIC_URL` | `PORT` (8000) |
