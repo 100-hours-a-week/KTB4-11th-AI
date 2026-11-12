@@ -149,7 +149,7 @@ def test_gpu_calls_release_the_database_connection(monkeypatch):
     try:
         result = controller.search(engine, "005930", SearchRequest(query="risk"), settings)
         assert result.latest_returned == 1
-        assert calls == ["embed", "rerank", "rerank"]
+        assert calls == ["embed", "rerank"]
         assert engine.pool.checkedout() == 0
     finally:
         engine.dispose()
@@ -182,3 +182,78 @@ def test_narrative_search_accepts_any_well_formed_detail_type(detail_type):
 def test_narrative_search_rejects_malformed_detail_type(detail_type):
     with pytest.raises(ValidationError):
         SearchRequest(query="risk", detail_type=detail_type)
+
+
+def test_latest_and_history_rerank_overlap_and_keep_independent_top_k(monkeypatch):
+    from dataclasses import replace
+    from threading import Barrier
+
+    from disclosure_retrieval.queries import Report
+    from sqlalchemy.pool import QueuePool
+
+    settings = Settings(
+        DISCLOSURE_INFERENCE_BACKEND="modal",
+        DISCLOSURE_EMBEDDING_DIMENSIONS=1024,
+        DISCLOSURE_EMBEDDING_MAX_TOKENS=16384,
+        DISCLOSURE_MODAL_QUERY_URL="https://query.modal.run",
+        DISCLOSURE_MODAL_RERANK_URL="https://rerank.modal.run",
+        DISCLOSURE_MODAL_KEY="key",
+        DISCLOSURE_MODAL_SECRET="secret",
+    )
+    report = Report(
+        "report", "005930", 2025, "annual", date(2025, 12, 31), date(2026, 3, 1), "ready", "ready"
+    )
+    latest = [replace(evidence("latest"), chunk_id=n) for n in (1, 2)]
+    history = [replace(evidence("history"), chunk_id=n) for n in (3, 4)]
+    barrier = Barrier(2, timeout=5)
+
+    def rerank(query, candidates, settings):
+        barrier.wait()
+        assert engine.pool.checkedout() == 0
+        return [
+            {"chunk_id": row["chunk_id"], "score": 0.9, "logit_difference": 2.0}
+            for row in reversed(candidates)
+        ]
+
+    monkeypatch.setattr(controller, "report_rows", lambda *args: [report.__dict__])
+    monkeypatch.setattr(controller, "search_counts", lambda *args: (2, 2))
+    monkeypatch.setattr(controller.inference, "embed_query", lambda *args: [1.0] + [0.0] * 1023)
+    monkeypatch.setattr(controller.inference, "rerank", rerank)
+    monkeypatch.setattr(
+        controller,
+        "search_reports",
+        lambda *args: SearchResult(
+            [report], latest, history, latest_searched=2, history_searched=2
+        ),
+    )
+    engine = sa.create_engine("sqlite://", poolclass=QueuePool, pool_size=1, max_overflow=0)
+    try:
+        result = controller.search(
+            engine, "005930", SearchRequest(query="risk", include_history=True, top_k=1), settings
+        )
+    finally:
+        engine.dispose()
+    assert [row.chunk_id for row in result.latest_evidence] == [2]
+    assert [row.chunk_id for row in result.historical_evidence] == [4]
+    assert result.latest_returned == result.history_returned == 1
+    assert result.latest_searched == result.history_searched == 2
+
+
+def test_unindexed_reports_do_not_call_inference(monkeypatch):
+    from disclosure_retrieval.queries import Report
+
+    report = Report(
+        "report", "005930", 2025, "annual", date(2025, 12, 31), date(2026, 3, 1), "ready", "pending"
+    )
+    monkeypatch.setattr(controller, "report_rows", lambda *args: [report.__dict__])
+    monkeypatch.setattr(controller, "search_counts", lambda *args: (0, 0))
+    monkeypatch.setattr(
+        controller, "embed_query", lambda *args: pytest.fail("unexpected inference")
+    )
+    engine = sa.create_engine("sqlite://")
+    try:
+        result = controller.search(engine, "005930", SearchRequest(query="risk"), Settings())
+    finally:
+        engine.dispose()
+    assert result.reports == [report]
+    assert result.latest_evidence == result.historical_evidence == []

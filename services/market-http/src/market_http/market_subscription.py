@@ -23,74 +23,150 @@ logger = logging.getLogger(__name__)
 CHANNEL_PREFIXES = {"market:prices": "price", "market:orderbooks": "orderbook"}
 CHANNELS = tuple(CHANNEL_PREFIXES)
 QUEUE_CAPACITY = 256
+ROTATE_AFTER_SECONDS = 11 * 60 * 60
+ROTATION_TIMEOUT_SECONDS = 60
 
 
 class MarketSubscription:
     def __init__(
-        self, valkey: Redis, metrics: MarketMetrics | None = None, *, task_id: str | None = None
+        self,
+        valkey: Redis,
+        metrics: MarketMetrics | None = None,
+        *,
+        task_id: str | None = None,
+        rotate_after: float = ROTATE_AFTER_SECONDS,
     ) -> None:
         self._valkey = valkey
         self._metrics = metrics
         self._task_id = task_id
         self._subscribers: dict[str, set[asyncio.Queue[MarketEvent | None]]] = defaultdict(set)
+        self._rotate_after = rotate_after
         self._task: asyncio.Task[None] | None = None
+        self._active: PubSub | None = None
 
     @asynccontextmanager
     async def run(self) -> AsyncGenerator[None]:
+        fields, observer = self._listener()
+        logger.info("market_subscription_starting", extra={"fields": fields})
+        try:
+            pubsub = await self._connect(observer)
+        except asyncio.CancelledError:
+            logger.info(
+                "market_subscription_stopped",
+                extra={"fields": {**fields, "reason": "startup_cancelled"}},
+            )
+            raise
+        except Exception as error:
+            observer.transition("reconnect_failed", reason="startup_connect_failed", error=error)
+            logger.error(
+                "market_subscription_start_failed",
+                extra={"fields": {**fields, "error_type": type(error).__name__}},
+            )
+            raise
+        observer.ready()
+        self._active = pubsub
+        listener = self._start_listener(pubsub, fields, observer)
+        task = asyncio.create_task(
+            self._supervise(listener, pubsub, fields, observer),
+            name=f"market-subscription-{fields['listener_id']}",
+        )
+        self._task = task
+        try:
+            yield
+        finally:
+            stopping = self._task is task
+            self._task = None
+            self._active = None
+            self._close_all_subscribers("shutdown")
+            task.cancel()
+            listener.cancel()
+            await asyncio.gather(task, listener, return_exceptions=True)
+            await pubsub.aclose()
+            if stopping:
+                logger.info(
+                    "market_subscription_stopped",
+                    extra={"fields": {**fields, "reason": "shutdown"}},
+                )
+
+    def _listener(self) -> tuple[dict[str, object], SubscriptionObserver]:
         fields = {"pid": os.getpid(), "listener_id": uuid4().hex, "channels": list(CHANNELS)}
         observer = SubscriptionObserver(
             listener_id=fields["listener_id"],
             task_id=self._task_id,
             queues=self._metrics.queues if self._metrics is not None else None,
         )
-        logger.info("market_subscription_starting", extra={"fields": fields})
-        async with self._valkey.pubsub() as pubsub:
-            if isinstance(pubsub, PubSub):
-                observe_pubsub(pubsub, observer)
-            try:
-                await pubsub.subscribe(*CHANNELS)
-                pending = set(CHANNELS)
-                while pending:
-                    acknowledgement = await pubsub.get_message(
-                        ignore_subscribe_messages=False, timeout=None
-                    )
-                    if acknowledgement and acknowledgement["type"] == "subscribe":
-                        pending.discard(acknowledgement["channel"])
-            except asyncio.CancelledError:
-                logger.info(
-                    "market_subscription_stopped",
-                    extra={"fields": {**fields, "reason": "startup_cancelled"}},
+        return fields, observer
+
+    async def _connect(self, observer: SubscriptionObserver) -> PubSub:
+        pubsub = self._valkey.pubsub()
+        if isinstance(pubsub, PubSub):
+            observe_pubsub(pubsub, observer)
+        try:
+            await pubsub.subscribe(*CHANNELS)
+            pending = set(CHANNELS)
+            while pending:
+                acknowledgement = await pubsub.get_message(
+                    ignore_subscribe_messages=False, timeout=None
                 )
-                raise
-            except Exception as error:
+                if acknowledgement and acknowledgement["type"] == "subscribe":
+                    pending.discard(acknowledgement["channel"])
+        except BaseException:
+            await pubsub.aclose()
+            raise
+        return pubsub
+
+    async def _supervise(
+        self,
+        listener: asyncio.Task[None],
+        pubsub: PubSub,
+        fields: dict[str, object],
+        observer: SubscriptionObserver,
+    ) -> None:
+        delay = self._rotate_after
+        try:
+            while True:
+                await asyncio.wait({listener}, timeout=delay)
+                if listener.done():
+                    return
+                next_fields, next_observer = self._listener()
                 observer.transition(
-                    "reconnect_failed", reason="startup_connect_failed", error=error
+                    "rotating",
+                    reason="before_iam_expiry",
+                    next_listener_id=next_fields["listener_id"],
                 )
-                logger.error(
-                    "market_subscription_start_failed",
-                    extra={"fields": {**fields, "error_type": type(error).__name__}},
+                try:
+                    async with asyncio.timeout(ROTATION_TIMEOUT_SECONDS):
+                        next_pubsub = await self._connect(next_observer)
+                except Exception as error:
+                    observer.transition("rotation_failed", reason="connect_failed", error=error)
+                    delay = ROTATION_TIMEOUT_SECONDS
+                    continue
+                if self._active is not pubsub:
+                    await next_pubsub.aclose()
+                    return
+                self._active = next_pubsub
+                previous = listener
+                listener = self._start_listener(next_pubsub, next_fields, next_observer)
+                previous.cancel()
+                await asyncio.gather(previous, return_exceptions=True)
+                next_observer.transition(
+                    "rotated",
+                    reason="before_iam_expiry",
+                    previous_listener_id=fields["listener_id"],
                 )
-                raise
-            observer.ready()
-            task = asyncio.create_task(
-                self._listen(pubsub, fields, observer),
-                name=f"market-subscription-{fields['listener_id']}",
-            )
-            self._task = task
-            task.add_done_callback(partial(self._listener_finished, fields=fields))
-            try:
-                yield
-            finally:
-                stopping = self._task is task
-                self._task = None
-                self._close_all_subscribers("shutdown")
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                if stopping:
-                    logger.info(
-                        "market_subscription_stopped",
-                        extra={"fields": {**fields, "reason": "shutdown"}},
-                    )
+                pubsub, fields, observer = next_pubsub, next_fields, next_observer
+                delay = self._rotate_after
+        finally:
+            listener.cancel()
+            await asyncio.gather(listener, return_exceptions=True)
+            await pubsub.aclose()
+
+    def _start_listener(
+        self, pubsub: PubSub, fields: dict[str, object], observer: SubscriptionObserver
+    ) -> asyncio.Task[None]:
+        listener = asyncio.create_task(self._listen(pubsub, fields, observer))
+        listener.add_done_callback(partial(self._listener_finished, fields=fields))
+        return listener
 
     @staticmethod
     def _listener_finished(task: asyncio.Task[None], *, fields: dict[str, object]) -> None:
@@ -130,7 +206,7 @@ class MarketSubscription:
     ) -> None:
         try:
             async for message in pubsub.listen():
-                if self._task is None:
+                if self._active is not pubsub:
                     break
                 if message["type"] == "subscribe" and message["channel"] in CHANNELS:
                     observer.acknowledge(message["channel"])
@@ -151,7 +227,8 @@ class MarketSubscription:
                     subscriber_key = f"{CHANNEL_PREFIXES[channel]}:{code}"
                 except (KeyError, TypeError, ValueError):
                     logger.warning(
-                        "market subscription received invalid event", extra={"channel": channel}
+                        "market subscription received invalid event",
+                        extra={"fields": {**fields, "channel": channel}},
                     )
                     continue
                 event = MarketEvent(data, time.monotonic(), datetime.now(UTC), payload_bytes)
@@ -160,11 +237,13 @@ class MarketSubscription:
                         self._close_subscriber(queue, "overflow")
                     else:
                         queue.put_nowait(event)
-            if self._task is not None:
+            if self._active is pubsub:
                 logger.warning("market_subscription_ended", extra={"fields": fields})
         finally:
-            self._task = None
-            self._close_all_subscribers("listener_end")
+            if self._active is pubsub:
+                self._active = None
+                self._task = None
+                self._close_all_subscribers("listener_end")
             await pubsub.aclose()
 
     @staticmethod

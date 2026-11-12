@@ -96,6 +96,20 @@ Run market-syncer before jobs that need corporation reference data. The morning 
 runs news-clusterer, news-graph-builder, then portfolio-builder; see
 `scripts/run-morning-pipeline.sh`. Production schedules live in `infrastructure/systemd/`.
 Report-builder is a long-running worker and its local Compose configuration loads `ai.env`.
+The `competition` profile starts `competition-portfolio-builder` from the builder image.
+It consumes SQS settings, freezes them in PostgreSQL, then generates the initial portfolio.
+It also resumes committed pending settings after a worker restart. The queue and Jev settings
+use `PORTFOLIO_BUILDER_COMPETITION_*`; generation uses ordinary builder settings.
+
+```bash
+docker compose -f compose.local.yaml --profile competition up competition-portfolio-builder
+```
+
+Set the settings queue's redrive/DLQ policy for intake failures. Generation has its own
+participant retry budget. The one-shot builder defaults to common generation.
+`PORTFOLIO_BUILDER_COMPETITION_ENABLED=true` selects participant generation instead,
+after Backend provides explicit nullable account participant IDs and lookup JWT configuration.
+Schedule separate invocations of the same image/command when both modes are required.
 
 ## Repository map
 
@@ -118,7 +132,7 @@ Service source is under `services/<name>/src/<module>/`, with tests alongside it
 | `services/market-collector` | Collect market bars and index quotes into QuestDB and publish popularity rankings to Valkey |
 | `services/market-streamer` | Stream Kiwoom prices, orderbooks, and daily ranking values to Valkey |
 | `services/market-http` | Serve public market snapshots, bars, indices, rankings, and SSE streams |
-| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent |
+| `services/portfolio-builder` | Build portfolios and stock explanations using an OpenRouter agent; `competition-portfolio-builder` consumes settings and performs initial participant generation |
 | `services/portfolio-rebalancer` | Read portfolios and Backend accounts, then publish cancellation/order requests to SQS |
 | `services/report-builder` | Consume SQS report requests, generate reports, and call the Backend |
 | `evaluations/harness` (`harness`) | Evaluation loop, execution simulator, point-in-time information variants, decision adapters, and run records; not a deployed service |
@@ -151,8 +165,30 @@ third-party dependencies.
 - Portfolio-builder stores the agent trace and moves portfolio status from
   `explanation_pending` to `ready` or `explanation_failed`. If the latest portfolio is
   not ready and has a trace, retry explanations before building another portfolio.
-- Rebalancing uses only the latest portfolio, and only when it is `ready`; never fall
-  back to an older ready portfolio. Carry stock explanations as `reason` and `thoughts`.
+- Common rebalancing uses only the latest **common** portfolio, and only when it is `ready`;
+  never fall back to an older ready portfolio. Carry stock explanations as `reason` and
+  `thoughts`.
+- Competition portfolios share the `portfolios` table with the common model portfolio.
+  Ownership is a row in `competition_portfolios`; a portfolio with no such row is the
+  common one, and `find_previous_portfolio`, `load_unexplained`, the rebalancer's latest
+  and leftover queries, and report-builder's evidence lookup all depend on that predicate.
+  The link is written in the same transaction as the portfolio, so no reader can ever
+  observe a competition portfolio that still looks common.
+- **Competition portfolios are generated and stored but not traded.** The rebalancer
+  excludes them, which is the only thing that makes this true — competition portfolios do
+  reach `ready`, so removing that condition would trade one participant's holdings in
+  every user's account. Per-participant trading is separate, later work.
+- `portfolio_builder.backend` owns Backend HTTP/SQS input, preference validation,
+  canonicalization and persistence. Jev prompts live in `competition/prompt.py`.
+  `portfolio_builder.builder` shares agent and explanation execution for common and
+  participant contexts, including initial SQS generation and daily participant runs.
+  Preserve job claims, retry budgets, explanation locks and atomic ownership links.
+  Report-builder uses one explanation pipeline without a common/participant mode flag.
+- A participant's settings are frozen at its first request, as a snapshot in
+  `competition_participants`: later requests for the same participant carry settings that
+  are logged and ignored. Participants whose settings and previous portfolio match share
+  one generated portfolio, tracked in `competition_jobs` and keyed by `generation_key`,
+  whose uniqueness is also what stops the same request generating twice.
 
 ### Market data
 
@@ -290,12 +326,20 @@ failures are logged without another same-day collection run. A delayed startup a
 06:00 runs only if that daily slot has not yet been attempted.
 The daily hour remains configurable through `NEWS_PREPROCESSOR_DISCLOSURE_COLLECTION_HOUR`.
 
-Normal checks resume inclusively from the last successful date. Existing receipt and
-parser-version checks skip stored documents before downloading. No new receipts means
+Original and corrected disclosures keep their distinct receipt IDs and publication dates.
+Collection stores a receipt's parsed document, sections and financial facts once. Writers
+lock the disclosure row before checking for an existing document in a fresh statement;
+a repeated or concurrent save returns False without replacing stored data. A metadata row
+with no document may finish its first complete save. Existing legacy parser rows are not
+deleted by this collection change; no new parser versions are accumulated automatically.
+
+Normal checks resume inclusively from the last successful date. A stored document marks
+its receipt as collected independently of parser version or legacy status, so it is
+skipped before downloading. No new receipts means
 no document fetch, and no filing list means no classification/financial request. Set
 paired `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` / `END_DATE` for manual replay within
 365 days; it does not update automatic progress. Remove date overrides after replay.
-The collection-state table belongs to the merged 0013; collection still owns three
+The collection-state table belongs to 0013; collection still owns three
 migration revisions and no standalone collector, extra timer or pending-work queue.
 
 The existing news-preprocessor service starts the DB-only indexer after success or
@@ -309,10 +353,17 @@ container. Financial and section tools query PostgreSQL directly. Narrative sear
 over HTTPS for query embedding and reranking, returning DB connections before those calls.
 Neither collection nor retrieval generates answers. Backend polling may include an
 optional user `investment_profile` with strict integer `risk_level` 1–5 and `strategy` text;
-receiving this field does not change trading behavior.
+receiving this field does not change trading behavior. Invalid optional profiles are ignored
+and logged without rejecting account snapshots.
 
 Disclosure indexing and portfolio disclosure tools require `DISCLOSURE_ENABLED=true`.
 The default false mode preserves portfolio generation without model configuration and
 lets the indexer exit before DB/model work. Enabled mode validates all model settings
 and retains the mandatory successful disclosure search before portfolio submission.
 Deployment environment and SSM ownership stay with the Cloud configuration.
+
+The disclosure indexer records attempts when claiming work; expired final-attempt leases
+become dead-letter work without another inference call. Its systemd unit does not restart
+automatically. Direct disclosure reads accept as_of and select revisions visible at that
+cutoff. Both CPU disclosure services share stdlib inference transport and vector validation
+in ktb_core.embedding.inference; core still has no GPU or third-party dependency.

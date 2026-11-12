@@ -66,11 +66,10 @@ class DecisionSystem(Protocol):
   library: `list_disclosures`, `search_disclosures` (embedding search plus reranking),
   `get_disclosure_sections` and `get_disclosure_financials`. OpenDART gives only a receipt
   date, so a filing counts when `published_date` is before the clock's KST date; a same-day
-  filing waits for the next day's decisions. Listing and search pass that cutoff as the
-  library's `as_of`. The library's section and financial reads have no date filter, so
-  disclosure-http checks the filing's `published_date` itself: sections of a later filing
-  are 404, and financial facts join `disclosures` on publication date. Clients cannot pass
-  `as_of` or `history_start`.
+  filing waits for the next day's decisions. All four calls pass that cutoff as the
+  library's `as_of`. The library then serves only the latest correction published by the
+  cutoff, so a later filing or a superseded one returns no sections or facts. Listing uses
+  the library's index signature. Clients cannot pass `as_of` or `history_start`.
 - Variants: `none`, `market`, `raw` (market + news), `enriched` (raw + `features`),
   `disclosures` (raw + `disclosure-http`). The `features` server computes returns,
   volatility, moving-average gaps, RSI and volume ratio from the PIT market server only.

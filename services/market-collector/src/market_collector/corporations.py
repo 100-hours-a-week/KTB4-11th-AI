@@ -5,37 +5,45 @@ from ktb_core.krx import KST
 from ktb_core.logging import get_logger
 
 from market_collector.kiwoom.official import ChartClient
+from market_collector.kiwoom.parse import failure_fields, parse_field
 from market_collector.settings import Settings
 from market_collector.store import Store
 
 log = get_logger(__name__)
 
 
+PRICES = ("base_pric", "upl_pric", "lst_pric")
+
+
+def stock_value(source: str, raw: object) -> int | None:
+    text = str(raw).strip().replace(",", "")
+    if not text or text == "-":
+        if source in PRICES:
+            raise ValueError(f"missing {source}")
+        return None
+    if source in ("eps", "bps") and "." in text:
+        return None
+    value = int(text)
+    if source in PRICES:
+        if value == 0:
+            raise ValueError(f"invalid {source}: {text}")
+        value = abs(value)
+    return value
+
+
 def stock_values(raw: dict[str, str]) -> dict[str, int | None]:
-    values = {}
-    for source, target in (
-        ("base_pric", "base_price"),
-        ("upl_pric", "upper_limit_price"),
-        ("lst_pric", "lower_limit_price"),
-        ("eps", "eps"),
-        ("bps", "bps"),
-    ):
-        text = str(raw[source]).strip().replace(",", "")
-        if not text or text == "-":
-            if source in ("base_pric", "upl_pric", "lst_pric"):
-                raise ValueError(f"missing {source}")
-            values[target] = None
-            continue
-        if source in ("eps", "bps") and "." in text:
-            values[target] = None
-            continue
-        value = int(text)
-        if source in ("base_pric", "upl_pric", "lst_pric"):
-            if value == 0:
-                raise ValueError(f"invalid {source}: {text}")
-            value = abs(value)
-        values[target] = value
-    return values
+    return {
+        target: parse_field(
+            raw, source, lambda value, source=source: stock_value(source, value), api_id="ka10001"
+        )
+        for source, target in (
+            ("base_pric", "base_price"),
+            ("upl_pric", "upper_limit_price"),
+            ("lst_pric", "lower_limit_price"),
+            ("eps", "eps"),
+            ("bps", "bps"),
+        )
+    }
 
 
 def collect_corporations(
@@ -58,9 +66,12 @@ def collect_corporations(
                     values.update(stock_name=names[0], sector_name=names[1])
                 store.write_corporation(symbol, day, datetime.now(UTC), values)
                 succeeded += 1
-            except Exception:
+            except Exception as error:
                 log.exception(
-                    "corporation_snapshot_failed", symbol=symbol, trade_date=day.isoformat()
+                    "corporation_snapshot_failed",
+                    **failure_fields(error),
+                    symbol=symbol,
+                    trade_date=day.isoformat(),
                 )
     log.info(
         "corporation_snapshot_complete",

@@ -6,6 +6,7 @@ from kiwoom import Continuation, KiwoomResponse
 from ktb_core.krx import KST
 from market_collector import __main__ as cli
 from market_collector.kiwoom.official import ChartClient
+from market_collector.kiwoom.parse import KiwoomParseError
 from market_collector.settings import Settings
 from redis.cluster import key_slot
 
@@ -38,6 +39,43 @@ def test_index_quote_uses_kiwoom_sector_price_fields():
             "body": {"mrkt_tp": "2", "inds_cd": "201"},
         }
     ]
+
+
+def test_index_quote_empty_change_is_zero_and_keeps_current_value():
+    class EmptyChange:
+        def fetch_page(self, **kwargs):
+            return KiwoomResponse(
+                {"return_code": 0, "cur_prc": "778.35", "pred_pre": "", "flu_rt": "0.00"},
+                Continuation(False, None, "N"),
+                {},
+            )
+
+    quote = ChartClient(EmptyChange()).index_quote("KOSPI200")
+
+    assert quote == {"value": 778.35, "change": 0.0, "rate": 0.0}
+
+
+def test_index_quote_parse_failure_reports_field_request_and_response():
+    class BadChange:
+        def fetch_page(self, **kwargs):
+            return KiwoomResponse(
+                {"return_code": 0, "cur_prc": "+2750.12", "pred_pre": "n/a", "flu_rt": "0.00"},
+                Continuation(False, None, "N"),
+                {},
+            )
+
+    with pytest.raises(KiwoomParseError) as caught:
+        ChartClient(BadChange()).index_quote("KOSPI200")
+
+    assert caught.value.fields == {
+        "api_id": "ka20001",
+        "request": {"mrkt_tp": "2", "inds_cd": "201"},
+        "field": "pred_pre",
+        "raw_value": "n/a",
+        "raw_type": "str",
+        "error_type": "ValueError",
+        "response": {"return_code": 0, "cur_prc": "+2750.12", "pred_pre": "n/a", "flu_rt": "0.00"},
+    }
 
 
 def test_archive_queries_both_indices_after_each_20_stocks_then_popularity(monkeypatch):

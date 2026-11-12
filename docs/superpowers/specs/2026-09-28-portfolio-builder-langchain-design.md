@@ -1,7 +1,7 @@
 # portfolio-builder — LangChain Agent in Python
 
 **Date:** 2026-09-28
-**Status:** Draft for review
+**Status:** Implemented; participant extension linked below
 **Supersedes:** the runtime sections of `2026-09-27-portfolio-builder-design.md` (TypeScript, Pi,
 `openai-codex`, market-analyzer-mcp). That spec and its implementation live only on branch
 `claude/typescript-pi-langchain-migration-e24c71` and were never merged; this service ports its
@@ -11,7 +11,10 @@ behaviour, not its code.
 
 `portfolio-builder` replaces the Python stub on `dev`. It runs once per cron trigger, builds **one
 model portfolio** with a LangChain agent (`create_agent`), stores it as a new version, and exits.
-Every user receives the same model portfolio.
+Common accounts follow the same model portfolio. Participant-specific settings, shared generation,
+claim fencing and scheduled cadence extend this pipeline as specified in the
+[competition design](2026-11-06-ai-vs-ai-competition-design.md). Both contexts reuse the existing
+agent, persistence and explanation pipeline.
 
 The agent starts from a code-assembled briefing (previous portfolio, recent news clusters, the
 KOSPI companies they mention, those companies' themes) and drills down with tools: news clusters,
@@ -33,7 +36,7 @@ the run outcomes (`saved` / `max_turns` / `error`) and the JSON log events.
 - `ktb-market-analyzer`. portfolio-builder no longer depends on it and calls TA-Lib directly.
 - Collecting KOSPI index bars, industry codes, or moving the theme sync into market-collector.
   That is a separate spec (§10); this service reports the measurements that need it as unavailable.
-- Per-user portfolios, hard portfolio constraints, deployment mechanics.
+- Deployment mechanics. Participant portfolios and constraints follow the linked competition design.
 
 ## 2. Decisions
 

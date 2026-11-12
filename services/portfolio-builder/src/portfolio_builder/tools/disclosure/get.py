@@ -1,6 +1,7 @@
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime
 from typing import Literal, Self
+from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from disclosure_retrieval.financials import read_financials
@@ -13,6 +14,7 @@ from portfolio_builder.tools.result import json_result
 
 class GetSectionsArgs(BaseModel):
     stock_code: str = Field(pattern=r"^\d{6}$")
+    as_of: date = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).date())
     receipt_id: str = Field(min_length=1, max_length=32, pattern=r"^[A-Za-z0-9-]+$")
     document_name: str | None = Field(default=None, max_length=260)
     topic: str | None = Field(default=None, max_length=40)
@@ -22,6 +24,7 @@ class GetSectionsArgs(BaseModel):
 
 class GetFinancialsArgs(BaseModel):
     stock_code: str = Field(pattern=r"^\d{6}$")
+    as_of: date = Field(default_factory=lambda: datetime.now(ZoneInfo("Asia/Seoul")).date())
     period_end: date | None = None
     business_year: int | None = Field(default=None, ge=2015, le=2100)
     scope: Literal["CFS", "OFS"] | None = None
@@ -45,6 +48,7 @@ def get_disclosure_sections(
     limit: int = 50,
     *,
     engine: sa.Engine,
+    as_of: date | None = None,
 ) -> str:
     try:
         with engine.connect() as conn:
@@ -52,6 +56,7 @@ def get_disclosure_sections(
                 conn,
                 stock_code,
                 receipt_id,
+                as_of=as_of,
                 document_name=document_name,
                 topic=topic,
                 heading=heading,
@@ -72,12 +77,14 @@ def get_disclosure_financials(
     limit: int = 200,
     *,
     engine: sa.Engine,
+    as_of: date | None = None,
 ) -> str:
     try:
         with engine.connect() as conn:
             facts = read_financials(
                 conn,
                 stock_code,
+                as_of=as_of,
                 period_end=period_end,
                 business_year=business_year,
                 scope=scope,

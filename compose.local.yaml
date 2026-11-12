@@ -1,6 +1,10 @@
 name: ktb4-ai
 
 x-disclosure-model-environment: &disclosure-model-environment
+  DISCLOSURE_INDEXER_CHUNK_BYTES: ${DISCLOSURE_INDEXER_CHUNK_BYTES:-2400}
+  DISCLOSURE_INDEXER_OVERLAP_BYTES: ${DISCLOSURE_INDEXER_OVERLAP_BYTES:-300}
+  DISCLOSURE_INDEXER_INPUT_BYTES: ${DISCLOSURE_INDEXER_INPUT_BYTES:-12000}
+  DISCLOSURE_INDEXER_CONTEXT_BYTES: ${DISCLOSURE_INDEXER_CONTEXT_BYTES:-12000}
   DISCLOSURE_EMBEDDING_BASE_REPO: ${DISCLOSURE_EMBEDDING_BASE_REPO:-perplexity-ai/pplx-embed-v2-context-9b-preview}
   DISCLOSURE_EMBEDDING_BASE_REVISION: ${DISCLOSURE_EMBEDDING_BASE_REVISION:-e2c06a779d45e8db53066735be1b98ffe3412ca3}
   DISCLOSURE_EMBEDDING_ADAPTER_REPO: ${DISCLOSURE_EMBEDDING_ADAPTER_REPO:-Dongju-00/stockspoon-pplx-embed-v2-context-9b}
@@ -31,7 +35,7 @@ services:
       start_period: 10s
 
   questdb:
-    image: questdb/questdb:10.0.1
+    image: questdb/questdb:10.2.0
     environment:
       QDB_PG_USER: ${QUESTDB_USER:?QUESTDB_USER must be set}
       QDB_PG_PASSWORD: ${QUESTDB_PASSWORD:?QUESTDB_PASSWORD must be set}
@@ -187,7 +191,6 @@ services:
       DISCLOSURE_MODAL_DOCUMENT_URL: ${DISCLOSURE_MODAL_DOCUMENT_URL:-}
       DISCLOSURE_INDEXER_TIMEOUT: ${DISCLOSURE_INDEXER_TIMEOUT:-150}
       DISCLOSURE_INDEXER_LEASE_SECONDS: ${DISCLOSURE_INDEXER_LEASE_SECONDS:-600}
-      DISCLOSURE_INDEXER_CONTEXT_BYTES: ${DISCLOSURE_INDEXER_CONTEXT_BYTES:-12000}
       DISCLOSURE_EMBEDDING_BASE_URI: ${DISCLOSURE_EMBEDDING_BASE_URI:-}
       DISCLOSURE_EMBEDDING_API_KEY: ${DISCLOSURE_EMBEDDING_API_KEY:-}
       DISCLOSURE_EMBEDDING_MODEL: ${DISCLOSURE_EMBEDDING_MODEL:-}
@@ -325,6 +328,10 @@ services:
       PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS: ${PORTFOLIO_BUILDER_NEWS_WINDOW_DAYS:-7}
       PORTFOLIO_BUILDER_MAX_TURNS: ${PORTFOLIO_BUILDER_MAX_TURNS:-150}
       PORTFOLIO_BUILDER_LOG_LEVEL: ${PORTFOLIO_BUILDER_LOG_LEVEL:-INFO}
+      PORTFOLIO_BUILDER_COMPETITION_ENABLED: ${PORTFOLIO_BUILDER_COMPETITION_ENABLED:-false}
+      PORTFOLIO_BUILDER_BACKEND_BASE_URI: ${PORTFOLIO_BUILDER_BACKEND_BASE_URI:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_SECRET: ${PORTFOLIO_BUILDER_BACKEND_JWT_SECRET:-}
+      PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER: ${PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -333,6 +340,26 @@ services:
       news-http:
         condition: service_started
     restart: "no"
+
+  competition-portfolio-builder:
+    profiles: ["competition"]
+    build:
+      context: .
+      dockerfile: docker/portfolio-builder.Dockerfile
+    command: competition-portfolio-builder
+    env_file: ai.env
+    environment:
+      PORTFOLIO_BUILDER_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI: http://market-http:8000
+      PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI: http://news-http:8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      market-http:
+        condition: service_healthy
+      news-http:
+        condition: service_started
+    restart: unless-stopped
 
   portfolio-rebalancer:
     profiles: ["jobs"]

@@ -68,6 +68,118 @@ environment variable does not deploy different GPU weights. Incompatible serving
 identities are rejected. Changing embedding metadata creates a different index space;
 old vectors are not silently reused.
 
+## Accuracy and failed-index recovery
+
+Modal indexes every nonblank narrative section, including `topic=other`. A topic is
+metadata, not an eligibility filter. Asset-disposal text from the real OpenDART parser
+is covered by a regression test. The `content-kind-v2` signature creates new indexing
+work for documents previously indexed under the narrower topic rule.
+
+A document containing no narrative text finishes with `status=empty`, `active=false`.
+It creates no vectors, makes no inference call, and is not reported as ready. Retrieval
+returns its `empty` state and no narrative candidates. Repeating the job does not retry
+these documents. Migration 0016 includes this state; collection revisions are unchanged.
+
+Index selection uses the exact signature computed by the same core function in the
+indexer and retrieval settings. It includes chunk/input/context budgets, query prefix,
+token budget and the model identity. Both Compose files forward the same budget settings
+to indexer and builder. The signature now includes `max_tokens`; older signatures require
+indexing before retrieval uses them. A same-model index with another signature is not
+searchable. An empty index from another signature cannot hide recovered ready evidence;
+a current-signature empty index still reports an intentional empty result.
+
+Only the newest parsed document ID for a receipt is eligible. Matching original bytes
+alone no longer permits an older parser's output after a parser upgrade. Until the newest
+parsed document is indexed, retrieval reports pending and makes no inference call.
+
+For A → B → A configuration rollback, the job reactivates the existing ready A index
+without regenerating vectors. The activation and deactivation are one transaction under
+row locks. An interrupted activation rolls back both changes and retains the ready vectors
+for retry. PostgreSQL tests cover model, chunk budget, query prefix, token budget and Modal
+context-budget rollback, including interruption with inference forbidden.
+
+Financial reads select the latest stored filing in each company/year/report-type/period
+family before filtering accounts and consolidation scope. The family normalizes legacy
+periodic detail codes. An unavailable, failed, or not-yet-parsed latest filing does not
+silently fall back to an older amount. Results include the filing title, publication
+date and `previous_receipt_id`. This field identifies the nearest earlier stored filing
+in the same family, not an official DART correction link. An uncollected predecessor
+cannot be identified. Independent companies, periods, and report families remain separate.
+
+Normal indexing preserves the configured failure limit and does not automatically revive
+`dead_letter` work. After fixing an inference outage, explicitly retry named receipts:
+
+```bash
+uv run disclosure-indexer --retry-receipt RECEIPT_ID
+```
+
+Repeat the option for multiple receipts. This resets only dead-letter indexes for the
+current signature and latest parsed version of each named receipt. The run processes
+only the named receipts, leaving unrelated pending work untouched. It does not take over
+an active processing lease. Disabled indexing rejects the recovery command before DB
+access. Logs record the reset count; successful repeated recovery neither duplicates
+chunks nor calls inference again. This change does not run recovery against any deployed DB.
+
+## Parsed-section selection and activation locks
+
+Direct section reads join the existing `disclosure_sections.document_id` to the latest
+`disclosure_documents.id` for the requested receipt before applying topic, heading,
+physical-file or result-limit filters. The document must have ready extraction status.
+Parser version strings and source hashes are not substitutes for the document ID.
+Historical rows remain stored, but an empty or failed latest extraction never falls back
+to older text. Existing database columns are modeled in retrieval metadata; no migration
+or collector change is needed. SQLite and PostgreSQL regressions cover parser changes,
+changed source under the same parser, old matches taking the limit, and empty latest data.
+Three additional SQLite guard tests reject partial sections in non-ready latest documents.
+
+Concurrent different-signature completion was reproduced in PostgreSQL with SQLSTATE
+`40P01`: each transaction held its own index row while updating the other's active flag.
+Claim, ready-index restoration and completion now acquire the filing row before index
+rows. A fresh claim check runs after that lock, including the latest parsed document and
+lease state. Completion checks current document ownership again before writing vectors.
+Peer deactivation updates only active rows, leaving other processing work untouched.
+A coordinated two-worker PostgreSQL regression now completes both signatures without a
+DB error and preserves exactly one active index. Inference remains outside DB locks.
+
+## Runtime failure limits and historical reads
+
+A new indexing attempt is recorded in the same transaction as the processing claim,
+before inference starts. OOM, SIGKILL and service timeout therefore consume the same
+budget as a handled request failure. A last-attempt processing lease that expires is
+moved to `dead_letter` on the next run, logged, and never calls inference again. Normal
+failure handling uses the already-recorded attempt rather than incrementing twice.
+Atomic reactivation of ready vectors does not spend an inference attempt.
+
+The indexer has no systemd automatic restart. It still starts after the existing news
+job completes or finally fails, including a manual news run; this is the selected collection
+and indexing flow. Subsequent scheduled runs retry bounded failed work. The explicit receipt
+recovery command remains available after an outage. Disabled startup reads only the enable
+flag and logging level, then exits before validating DSN, chunk budgets or model settings.
+`run_agent` also defaults disclosure work to false; enabled callers must opt in explicitly.
+
+All three disclosure tools accept `as_of`; direct section and financial reads apply the
+publication cutoff before choosing a revision. Omitting it uses today's KST date.
+A section receipt must be ready and the latest visible revision in its filing family.
+A later correction cannot appear in a historical read or its predecessor metadata.
+Latest failed/unavailable data still suppresses stale earlier amounts instead of guessing.
+Periodic revision families do not split on incidental detail-code changes. The normalized
+detail-type filter is applied after revision selection, so null legacy codes match their
+periodic type and filters cannot revive a superseded original.
+
+History searches execute four report CTE statements instead of seven: report selection,
+combined preflight counts, latest candidates plus their count, and history candidates plus
+their count. Final counts share the candidate statement's snapshot, so changes during
+inference cannot leave preflight totals attached to different results. Count queries exclude
+unrequested history. Search remains exact cosine over the selected scope; no ANN quality
+or production latency improvement is claimed. Nonempty latest/history reranking calls use
+at most two threads and retain separate top-k results; empty scopes make no request.
+
+The two CPU services now use the same stdlib-only transport and vector validation in
+`ktb_core.embedding.inference`. It handles authenticated same-origin result polling,
+shared deadlines, identity checks and normalized-vector validation. Service-specific
+settings and document/query/reranker response shapes remain local. Core has no GPU or
+third-party HTTP dependency. No inbound HTTP server is introduced.
+
 ## Activation and deployment ownership
 
 `DISCLOSURE_ENABLED` is shared by portfolio-builder and disclosure-indexer and defaults
@@ -125,14 +237,14 @@ Add `investment_profile` to each user, beside `user_id` and `accounts`:
 | Field | Meaning |
 | --- | --- |
 | `investment_profile` | Optional; omitted or null preserves the existing response contract. |
-| `risk_level` | Required strict integer, 1–5. Strings, booleans, and fractional values are rejected. |
+| `risk_level` | When supplied, strict integer 1–5. An invalid optional profile is ignored and logged; account validation remains unchanged. |
 | `strategy` | Optional free text, at most 4,000 characters; defaults to an empty string. |
 
 Levels: 1 conservative, 2 moderately conservative, 3 balanced, 4 moderately aggressive,
 5 aggressive. These correspond to 안정형, 안정추구형, 위험중립형, 적극투자형, 공격투자형.
 
 This is the AI-side receiving contract. The backend must add the field to its response.
-Profiles are parsed and retained, but do not yet affect portfolio generation, orders,
+Valid profiles are parsed and retained. Invalid optional profiles are ignored without rejecting users or accounts. Profiles do not affect portfolio generation, orders,
 or position sizing. The text is not inserted into a model prompt or logged by this change.
 
 ## Verification
@@ -140,10 +252,11 @@ or position sizing. The text is not inserted into a model prompt or logged by th
 - Tests reproduce default deployment without disclosure model settings, reject incomplete
   enabled configuration, and verify a technical-only portfolio can save when disabled.
   Existing enabled-mode tests still require successful disclosure search.
-- Final full suite against the disposable `ktb_disclosure432_test` PostgreSQL database:
-  **1,456 passed, 49 skipped, 2 subtests passed**. Unconfigured optional integrations
+- Final accuracy follow-up suite against disposable `ktb_disclosure_accuracy_test` PostgreSQL:
+  **1,530 passed, 49 skipped, 2 subtests passed**. Migration 0016 was downgraded and
+  upgraded in this test DB to verify the explicit empty state. Unconfigured optional integrations
   account for the skips.
-- The branch includes dev 77fa8ef, including the merged collection fixes and stock-detail
+- The branch includes dev c6838ec, including the merged collection fixes and stock-detail
   changes. Collection revisions 0013–0015 are unchanged; the only index revision is 0016.
 - Python 3.14, existing CI job structure and hash-pinned Docker requirements match dev.
   CI traverses reverse dependencies for workspace services as well as packages, so a

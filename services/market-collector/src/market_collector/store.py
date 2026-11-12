@@ -6,7 +6,7 @@ from typing import Any
 
 from ktb_core.logging import get_logger
 
-__all__ = ["Candle", "CandleRow", "Store"]
+__all__ = ["BarBatch", "Candle", "CandleRow", "Store"]
 
 TIMEFRAMES = frozenset({"1m", "1d"})
 CHECKPOINT_DAYS = 7
@@ -88,13 +88,14 @@ class Store:
             )
             sender.flush()
 
-    def write_candles(self, timeframe: str, rows: Iterable[CandleRow]) -> int:
-        if timeframe not in TIMEFRAMES:
-            raise KeyError(f"unknown timeframe: {timeframe}")
+    def write_bars(self, bars: Sequence[tuple[str, CandleRow]]) -> int:
+        unknown = {timeframe for timeframe, _ in bars} - TIMEFRAMES
+        if unknown:
+            raise KeyError(f"unknown timeframe: {', '.join(sorted(unknown))}")
 
         written = 0
         with self._db.sender() as sender:
-            for candle in rows:
+            for timeframe, candle in bars:
                 sender.row(
                     "bars",
                     symbols={
@@ -184,3 +185,24 @@ class Store:
         with self._db.query(sql, [symbol, timeframe, limit]) as result:
             records = result.to_pandas().to_dict("records")
         return [Candle(**record) for record in reversed(records)]
+
+
+class BarBatch:
+    def __init__(self, store: Store) -> None:
+        self._store = store
+        self._bars: list[tuple[str, CandleRow]] = []
+
+    def __len__(self) -> int:
+        return len(self._bars)
+
+    def write_candles(self, timeframe: str, rows: Iterable[CandleRow]) -> int:
+        if timeframe not in TIMEFRAMES:
+            raise KeyError(f"unknown timeframe: {timeframe}")
+        added = [(timeframe, candle) for candle in rows]
+        self._bars.extend(added)
+        return len(added)
+
+    def flush(self) -> None:
+        bars, self._bars = self._bars, []
+        if bars:
+            self._store.write_bars(sorted(bars, key=lambda bar: bar[1].ts))

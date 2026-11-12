@@ -128,7 +128,7 @@ jobs:
           --health-timeout 3s
           --health-retries 12
       questdb:
-        image: questdb/questdb:10.0.1
+        image: questdb/questdb:10.2.0
         ports:
           - "9000:9000"
         options: >-

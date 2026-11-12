@@ -3,8 +3,7 @@ from datetime import UTC, date, datetime
 import pytest
 import sqlalchemy as sa
 from disclosure_http import app as app_module
-from disclosure_http.app import create_app
-from disclosure_http.filings import published_by
+from disclosure_http.app import create_app, published_by
 from disclosure_http.settings import Settings
 from disclosure_retrieval.inference import InputBudgetError
 from disclosure_retrieval.queries import Evidence, SearchResult
@@ -63,8 +62,9 @@ def test_filings_count_from_the_day_before_the_decision(as_of, expected):
 def test_listing_uses_the_server_cutoff_and_returns_receipts(client, monkeypatch):
     seen = []
 
-    def rows(conn, code, limit, as_of, model, dimensions, detail_type):
+    def rows(conn, code, limit, as_of, *, model, dimensions, signature, detail_type):
         seen.append((code, limit, as_of, detail_type))
+        assert signature == RetrievalSettings().index_signature
         return [REPORT]
 
     monkeypatch.setattr(app_module, "report_rows", rows)
@@ -226,10 +226,10 @@ def test_financials_exclude_filings_from_the_decision_day_on(engine, clock):
     assert [f["receipt_id"] for f in later] == ["half-2026"]
 
 
-def test_sections_of_unpublished_filings_are_not_found(engine, clock):
+def test_sections_of_unpublished_filings_are_empty(engine, clock):
     seed(engine)
     client = make_client(engine, clock)
     visible = client.get("/disclosures/005930/sections?receipt_id=q1-2026").json()
     assert [s["heading"] for s in visible] == ["사업의 내용"]
-    assert client.get("/disclosures/005930/sections?receipt_id=half-2026").status_code == 404
-    assert client.get("/disclosures/000660/sections?receipt_id=q1-2026").status_code == 404
+    assert client.get("/disclosures/005930/sections?receipt_id=half-2026").json() == []
+    assert client.get("/disclosures/000660/sections?receipt_id=q1-2026").json() == []

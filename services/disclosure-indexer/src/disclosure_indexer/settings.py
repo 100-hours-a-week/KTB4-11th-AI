@@ -1,6 +1,6 @@
 from typing import Literal
 
-from ktb_core.embedding.config import embedding_space
+from ktb_core.embedding.config import disclosure_index_signature, embedding_space
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     modal_key: SecretStr | None = Field(default=None, validation_alias="DISCLOSURE_MODAL_KEY")
     modal_secret: SecretStr | None = Field(default=None, validation_alias="DISCLOSURE_MODAL_SECRET")
     modal_document_url: str = Field(default="", validation_alias="DISCLOSURE_MODAL_DOCUMENT_URL")
+
+    @property
+    def index_signature(self) -> str:
+        return disclosure_index_signature(self)
 
     @property
     def index_model(self) -> str:

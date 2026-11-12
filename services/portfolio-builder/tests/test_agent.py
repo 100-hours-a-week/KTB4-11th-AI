@@ -339,7 +339,6 @@ def test_disclosure_disabled_allows_technical_only_portfolio_submission(engine, 
         briefing="brief",
         max_turns=3,
         log=log,
-        disclosure_enabled=False,
     )
     assert result.outcome == "saved"
     assert _count(engine) == 1

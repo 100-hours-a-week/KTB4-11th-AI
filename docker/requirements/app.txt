@@ -29,6 +29,7 @@ boto3==1.43.109 \
     --hash=sha256:703a81baed186d31e27cf50065d25a9faeb704f009e7c56b0f002ca52a328896 \
     --hash=sha256:c829bc3352e1e3922d8fe1db10b697182ac411b64ce5fc3acb0a06a29837417e
     # via
+    #   portfolio-builder
     #   portfolio-rebalancer
     #   report-builder
 botocore==1.43.109 \
@@ -37,6 +38,7 @@ botocore==1.43.109 \
     # via
     #   boto3
     #   ktb-aws
+    #   portfolio-builder
     #   s3transfer
 certifi==2026.10.19 \
     --hash=sha256:035c1e85572b141bf1c3a3eff0e33a8eb74917522f2559075ff8d2fea780a1ae \
@@ -252,6 +254,7 @@ httpx==0.28.1 \
     #   news-graph-builder
     #   news-preprocessor
     #   openrouter
+    #   portfolio-builder
     #   portfolio-rebalancer
     #   report-builder
 httpx2==2.13.1 \

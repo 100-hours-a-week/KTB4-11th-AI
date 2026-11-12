@@ -8,6 +8,7 @@ import sqlalchemy as sa
 from disclosure_retrieval.queries import Evidence, SearchResult
 from disclosure_retrieval.settings import Settings
 from disclosure_retrieval.tables import (
+    disclosure_documents,
     disclosure_financial_facts,
     disclosure_sections,
     disclosures,
@@ -28,6 +29,7 @@ def tools():
             disclosures.insert(),
             {
                 "receipt_id": "receipt-1",
+                "title": "사업보고서",
                 "stock_code": "005930",
                 "business_year": 2025,
                 "kind": "annual",
@@ -36,10 +38,12 @@ def tools():
                 "status": "ready",
             },
         )
+        conn.execute(disclosure_documents.insert(), {"id": 1, "receipt_id": "receipt-1"})
         conn.execute(
             disclosure_sections.insert(),
             {
                 "id": 1,
+                "document_id": 1,
                 "receipt_id": "receipt-1",
                 "document_name": "main.xml",
                 "document_order": 0,
@@ -101,6 +105,9 @@ def test_direct_reads_use_database_without_http_or_gpu(tools):
         )
 
     assert sections["sections"][0]["text"] == "사업 위험 설명"
+    assert facts["facts"][0]["published_date"] == "2026-03-01"
+    assert facts["facts"][0]["title"] == "사업보고서"
+    assert facts["facts"][0]["previous_receipt_id"] is None
     assert facts["facts"][0]["source_value"] == "1,000"
     assert Decimal(facts["facts"][0]["value"]) == 1000
     assert json.loads(
@@ -178,3 +185,33 @@ def test_search_passes_detail_type_filter_to_direct_retrieval(tools):
             {"stock_code": "005930", "query": "합병 위험", "detail_type": "F002"}
         )
     assert run.call_args.args[2].detail_type == "F002"
+
+
+@pytest.mark.parametrize(
+    "name, args, key",
+    [
+        ("get_disclosure_sections", {"receipt_id": "receipt-1"}, "sections"),
+        ("get_disclosure_financials", {"business_year": 2025}, "facts"),
+    ],
+)
+def test_direct_tools_apply_as_of_to_database_reads(tools, name, args, key):
+    before = json.loads(
+        tools[name].invoke(
+            {
+                "stock_code": "005930",
+                "as_of": "2026-02-28",
+                **args,
+            }
+        )
+    )
+    published = json.loads(
+        tools[name].invoke(
+            {
+                "stock_code": "005930",
+                "as_of": "2026-03-01",
+                **args,
+            }
+        )
+    )
+    assert before == {key: []}
+    assert len(published[key]) == 1

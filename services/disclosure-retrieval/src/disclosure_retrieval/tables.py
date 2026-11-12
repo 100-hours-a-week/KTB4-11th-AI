@@ -7,6 +7,7 @@ disclosures = sa.Table(
     metadata,
     sa.Column("receipt_id", sa.Text, primary_key=True),
     sa.Column("stock_code", sa.Text, nullable=False),
+    sa.Column("title", sa.Text, nullable=False),
     sa.Column("business_year", sa.Integer),
     sa.Column("kind", sa.Text, nullable=False),
     sa.Column("detail_type", sa.Text),
@@ -15,9 +16,20 @@ disclosures = sa.Table(
     sa.Column("status", sa.Text, nullable=False),
 )
 
+disclosure_documents = sa.Table(
+    "disclosure_documents",
+    metadata,
+    sa.Column("id", sa.BigInteger, primary_key=True),
+    sa.Column("receipt_id", sa.Text, sa.ForeignKey("disclosures.receipt_id"), nullable=False),
+    sa.Column("extraction_status", sa.Text, nullable=False, server_default="ready"),
+)
+
 disclosure_sections = sa.Table(
     "disclosure_sections",
     metadata,
+    sa.Column(
+        "document_id", sa.BigInteger, sa.ForeignKey("disclosure_documents.id"), nullable=False
+    ),
     sa.Column("id", sa.BigInteger, primary_key=True),
     sa.Column("receipt_id", sa.Text, sa.ForeignKey("disclosures.receipt_id"), nullable=False),
     sa.Column("document_name", sa.Text, nullable=False),

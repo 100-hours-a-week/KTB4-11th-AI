@@ -1,11 +1,18 @@
 from uuid import UUID
 
 import pytest
+import sqlalchemy as sa
 from pydantic import ValidationError
-from report_builder.report import EvidenceError, build_report, load_evidence
+from report_builder.report import (
+    Evidence,
+    EvidenceError,
+    build_report,
+    load_evidence,
+)
 
 FIRST = UUID("00000000-0000-0000-0000-000000000001")
 SECOND = UUID("00000000-0000-0000-0000-000000000002")
+PARTICIPANT_1 = 1
 
 
 class Result:
@@ -71,7 +78,7 @@ def test_loads_only_requested_reasons_and_their_commentary_and_deduplicates_cite
         ],
     )
 
-    evidence = load_evidence(engine, [FIRST, SECOND, FIRST])
+    evidence = load_evidence(engine, [FIRST, SECOND, FIRST], PARTICIPANT_1)
 
     assert [item.id for item in evidence.reasons] == [FIRST, SECOND]
     assert [item.commentary for item in evidence.reasons] == ["portfolio one", "portfolio two"]
@@ -80,17 +87,109 @@ def test_loads_only_requested_reasons_and_their_commentary_and_deduplicates_cite
 
 def test_missing_reason_fails():
     with pytest.raises(EvidenceError, match="missing portfolio reasons"):
-        load_evidence(Engine([], []), [FIRST])
+        load_evidence(Engine([], []), [FIRST], PARTICIPANT_1)
 
 
 def test_missing_cited_summary_fails():
     with pytest.raises(EvidenceError, match="missing cited summaries"):
-        load_evidence(Engine([reason(FIRST, "comment", [9])], []), [FIRST])
+        load_evidence(Engine([reason(FIRST, "comment", [9])], []), [FIRST], PARTICIPANT_1)
 
 
-def test_empty_reason_selection_fails():
-    with pytest.raises(EvidenceError, match="at least one"):
-        load_evidence(Engine([], []), [])
+def test_an_empty_reason_selection_fails_without_querying():
+    with pytest.raises(EvidenceError, match="no investment evidence supplied"):
+        load_evidence(object(), [], PARTICIPANT_1)
+
+
+def test_an_empty_evidence_set_fails_without_calling_the_model():
+    class Unreachable:
+        def invoke(self, messages):
+            raise AssertionError("an empty evidence set must not call the model")
+
+    with pytest.raises(EvidenceError, match="no investment evidence supplied"):
+        build_report(Evidence(reasons=[], news=[]), Unreachable())
+
+
+def _insert_portfolio(engine, commentary="c"):
+    with engine.begin() as conn:
+        return conn.execute(
+            sa.text(
+                "INSERT INTO portfolios (cash_weight, commentary, model) VALUES"
+                " (0.1, :commentary, 'm') RETURNING id"
+            ),
+            {"commentary": commentary},
+        ).scalar_one()
+
+
+def _insert_participant(engine, participant_id):
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO competition_participants"
+                " (participant_id, competition_id, user_id, risk_profile) VALUES"
+                " (:pid, 1, 1, '성장형')"
+            ),
+            {"pid": participant_id},
+        )
+
+
+def _link(engine, participant_id, portfolio_id):
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO competition_portfolios (participant_id, portfolio_id) VALUES"
+                " (:pid, :pf)"
+            ),
+            {"pid": participant_id, "pf": portfolio_id},
+        )
+
+
+def _insert_reason(engine, reason_id, portfolio_id):
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "INSERT INTO portfolio_reasons"
+                " (id, portfolio_id, company_id, side, reason, reasonings) VALUES"
+                " (:id, :pf, '00126380', 'buy', 'r', '[]')"
+            ),
+            {"id": str(reason_id), "pf": portfolio_id},
+        )
+
+
+def test_a_reason_belonging_to_another_participant_is_reported_as_missing(engine):
+    other_participant = _insert_portfolio(engine, commentary="다른 참가자")
+    _insert_participant(engine, 2)
+    _link(engine, 2, other_participant)
+    _insert_participant(engine, PARTICIPANT_1)
+    reason_id = FIRST
+    _insert_reason(engine, reason_id, other_participant)
+
+    with pytest.raises(EvidenceError, match="missing portfolio reasons"):
+        load_evidence(engine, [reason_id], PARTICIPANT_1)
+
+
+def test_a_reason_belonging_to_the_requesting_participant_resolves(engine):
+    _insert_participant(engine, PARTICIPANT_1)
+    mine = _insert_portfolio(engine, commentary="내 포트폴리오")
+    _link(engine, PARTICIPANT_1, mine)
+    reason_id = FIRST
+    _insert_reason(engine, reason_id, mine)
+
+    evidence = load_evidence(engine, [reason_id], PARTICIPANT_1)
+
+    assert [item.id for item in evidence.reasons] == [reason_id]
+    assert evidence.reasons[0].commentary == "내 포트폴리오"
+
+
+def test_a_reason_on_an_unlinked_common_portfolio_resolves(engine):
+    _insert_participant(engine, PARTICIPANT_1)
+    common = _insert_portfolio(engine, commentary="공통 포트폴리오")
+    reason_id = FIRST
+    _insert_reason(engine, reason_id, common)
+
+    evidence = load_evidence(engine, [reason_id], PARTICIPANT_1)
+
+    assert [item.id for item in evidence.reasons] == [reason_id]
+    assert evidence.reasons[0].commentary == "공통 포트폴리오"
 
 
 class StubRunnable:
@@ -130,8 +229,11 @@ def test_build_report_keeps_reason_commentary_pairs_and_supplied_news():
 
 @pytest.mark.parametrize("answer", [{"thoughts": []}, {"thoughts": [{"title": "", "text": "x"}]}])
 def test_malformed_or_empty_thoughts_fail(answer):
-    from report_builder.report import Evidence
-
-    evidence = Evidence(reasons=[], news=[])
+    evidence = Evidence.model_validate(
+        {
+            "reasons": [{"id": str(FIRST), "reason": "R1", "reasonings": [], "commentary": "C1"}],
+            "news": [],
+        }
+    )
     with pytest.raises((ValidationError, ValueError)):
         build_report(evidence, StubRunnable(answer))

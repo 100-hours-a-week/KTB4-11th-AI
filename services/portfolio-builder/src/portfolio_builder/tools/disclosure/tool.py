@@ -32,7 +32,9 @@ def disclosure_tools(engine: sa.Engine, settings: Settings) -> list[BaseTool]:
             name="get_disclosure_sections",
             description=(
                 "Read sections of an identified filing directly from the database, without GPU. "
-                "Use receipt_id from search evidence; filter by heading, topic or document_name."
+                "Use receipt_id from search evidence; filter by heading, topic or document_name. "
+                "Use as_of for the same publication cutoff as search; defaults to today in KST. "
+                "Only the latest ready revision at that cutoff is readable."
             ),
             args_schema=GetSectionsArgs,
         ),
@@ -42,6 +44,7 @@ def disclosure_tools(engine: sa.Engine, settings: Settings) -> list[BaseTool]:
             description=(
                 "Read exact financial facts directly from the database, without GPU. "
                 "Specify business_year or period_end; CFS is consolidated, OFS is separate. "
+                "Use as_of for the same publication cutoff as search; defaults to today in KST. "
                 "Keep source_value, currency and scope; a null amount is unknown, not zero."
             ),
             args_schema=GetFinancialsArgs,

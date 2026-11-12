@@ -3,9 +3,14 @@ from typing import Annotated
 
 import sqlalchemy as sa
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 
 from portfolio_builder.agent.trace import TraceEntry
-from portfolio_builder.database import portfolio_exits, portfolio_holdings, portfolios
+from portfolio_builder.database import (
+    portfolio_exits,
+    portfolio_holdings,
+    portfolios,
+)
 from portfolio_builder.errors import PortfolioRejected
 from portfolio_builder.news_client import NewsClient
 
@@ -79,7 +84,7 @@ def validate_portfolio(submission: Submission, previous: frozenset[str]) -> list
     return errors
 
 
-def normalize_weights(submission: Submission) -> Submission:
+def normalize_weights[S: Submission](submission: S) -> S:
     total = sum(h.weight for h in submission.holdings) + submission.cash_weight
     return submission.model_copy(
         update={
@@ -91,41 +96,55 @@ def normalize_weights(submission: Submission) -> Submission:
     )
 
 
-def save_portfolio(
-    engine: sa.Engine, submission: Submission, model: str, news_client: NewsClient
-) -> int:
+def validate_citations(submission: Submission, news_client: NewsClient) -> None:
     cited = sorted(
         {c for item in [*submission.holdings, *submission.exits] for c in item.cited_cluster_ids}
     )
     missing = [c for c in cited if not news_client.has_cluster(c)]
     if missing:
         raise PortfolioRejected([f"cited_cluster_ids not found: {', '.join(map(str, missing))}"])
+
+
+def insert_portfolio(
+    conn: sa.Connection,
+    submission: Submission,
+    model: str,
+    acknowledged_constraints: dict | None = None,
+) -> int:
     try:
-        with engine.begin() as conn:
-            portfolio_id = conn.execute(
-                sa.insert(portfolios)
-                .values(
-                    cash_weight=submission.cash_weight,
-                    commentary=submission.commentary,
-                    model=model,
-                )
-                .returning(portfolios.c.id)
-            ).scalar_one()
-            if submission.holdings:
-                conn.execute(
-                    sa.insert(portfolio_holdings),
-                    [{"portfolio_id": portfolio_id, **h.model_dump()} for h in submission.holdings],
-                )
-            if submission.exits:
-                conn.execute(
-                    sa.insert(portfolio_exits),
-                    [{"portfolio_id": portfolio_id, **e.model_dump()} for e in submission.exits],
-                )
-            return portfolio_id
-    except sa.exc.IntegrityError as error:
+        portfolio_id = conn.execute(
+            sa.insert(portfolios)
+            .values(
+                cash_weight=submission.cash_weight,
+                commentary=submission.commentary,
+                model=model,
+                acknowledged_constraints=acknowledged_constraints,
+            )
+            .returning(portfolios.c.id)
+        ).scalar_one()
+        if submission.holdings:
+            conn.execute(
+                sa.insert(portfolio_holdings),
+                [{"portfolio_id": portfolio_id, **h.model_dump()} for h in submission.holdings],
+            )
+        if submission.exits:
+            conn.execute(
+                sa.insert(portfolio_exits),
+                [{"portfolio_id": portfolio_id, **e.model_dump()} for e in submission.exits],
+            )
+        return portfolio_id
+    except IntegrityError as error:
         diag = getattr(error.orig, "diag", None)
         detail = getattr(diag, "message_detail", None) or str(error.orig)
         raise PortfolioRejected([detail]) from error
+
+
+def save_portfolio(
+    engine: sa.Engine, submission: Submission, model: str, news_client: NewsClient
+) -> int:
+    validate_citations(submission, news_client)
+    with engine.begin() as conn:
+        return insert_portfolio(conn, submission, model)
 
 
 def save_trace(engine: sa.Engine, portfolio_id: int, trace: list[TraceEntry]) -> None:
@@ -141,6 +160,9 @@ def mark_explanation_failed(engine: sa.Engine, portfolio_id: int) -> None:
     with engine.begin() as conn:
         conn.execute(
             sa.update(portfolios)
-            .where(portfolios.c.id == portfolio_id)
-            .values(status="explanation_failed")
+            .where(portfolios.c.id == portfolio_id, portfolios.c.status != "ready")
+            .values(
+                status="explanation_failed",
+                explanation_attempts=portfolios.c.explanation_attempts + 1,
+            )
         )

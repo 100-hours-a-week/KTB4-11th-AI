@@ -1,4 +1,6 @@
 import threading
+from collections.abc import Callable
+from functools import partial
 from typing import Annotated
 
 from ktb_core.logging import StructuredLogger
@@ -29,29 +31,23 @@ class SubmitPortfolioArgs(BaseModel):
     tool_call_id: Annotated[str, InjectedToolCallId]
 
 
-def submit_portfolio(
-    holdings: list[Holding],
-    exits: list[Exit],
-    cash_weight: float,
-    commentary: str,
+def commit_submission[S: Submission](
+    submission: S,
     tool_call_id: str,
     *,
-    submitter: PortfolioSubmitter,
-    previous: frozenset[str],
+    validate: Callable[[S], list[str]],
+    save: Callable[[S], int],
     log: StructuredLogger,
     lock: threading.Lock,
     saved: list[int],
 ) -> Command:
-    submission = Submission(
-        holdings=holdings, exits=exits, cash_weight=cash_weight, commentary=commentary
-    )
     with lock:
         if saved:
             raise ToolError(f"portfolio already saved as {saved[0]}; the run is over")
-        errors = validate_portfolio(submission, previous)
+        errors = validate(submission)
         if not errors:
             try:
-                saved.append(submitter.submit(normalize_weights(submission)))
+                saved.append(save(normalize_weights(submission)))
             except PortfolioRejected as rejected:
                 errors = rejected.errors
         if errors:
@@ -68,11 +64,34 @@ def submit_portfolio(
     )
 
 
+def submit_portfolio(
+    holdings: list[Holding],
+    exits: list[Exit],
+    cash_weight: float,
+    commentary: str,
+    tool_call_id: str,
+    *,
+    submitter: PortfolioSubmitter,
+    previous: frozenset[str],
+    log: StructuredLogger,
+    lock: threading.Lock,
+    saved: list[int],
+) -> Command:
+    return commit_submission(
+        Submission(holdings=holdings, exits=exits, cash_weight=cash_weight, commentary=commentary),
+        tool_call_id,
+        validate=partial(validate_portfolio, previous=previous),
+        save=submitter.submit,
+        log=log,
+        lock=lock,
+        saved=saved,
+    )
+
+
 def submit_tool(
     submitter: PortfolioSubmitter, previous: frozenset[str], log: StructuredLogger
 ) -> BaseTool:
     return StructuredTool.from_function(
-        # ToolNode runs one message's tool calls in parallel; the lock keeps a run to one row.
         bind(
             submit_portfolio,
             submitter=submitter,

@@ -77,6 +77,44 @@ def test_explain_defaults(monkeypatch):
     assert settings.explain_max_tokens == 16000
 
 
+def test_competition_settings_default_to_unset(monkeypatch):
+    _populate(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.competition_stale_running_seconds == 3600
+    assert settings.competition_max_attempts == 3
+
+
+def test_the_existing_cron_settings_still_load_without_any_competition_variable(monkeypatch):
+    _populate(monkeypatch)
+
+    assert Settings().llm_model
+
+
+def test_competition_variables_are_read_from_the_environment(monkeypatch):
+    _populate(
+        monkeypatch,
+        PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL="q",
+        PORTFOLIO_BUILDER_COMPETITION_MAX_ATTEMPTS="5",
+    )
+
+    settings = Settings()
+
+    assert settings.competition_max_attempts == 5
+
+
+def test_scheduled_participants_are_disabled_until_backend_contract_is_available(monkeypatch):
+    _populate(monkeypatch)
+    assert Settings().competition_enabled is False
+
+
+def test_scheduled_participants_require_backend_lookup_configuration(monkeypatch):
+    _populate(monkeypatch, PORTFOLIO_BUILDER_COMPETITION_ENABLED="true")
+    with pytest.raises(ValidationError, match="backend"):
+        Settings()
+
+
 def test_submitter_defaults_to_the_database(monkeypatch):
     _populate(monkeypatch)
 
@@ -103,4 +141,19 @@ def test_rejects_an_unknown_submitter(monkeypatch):
     _populate(monkeypatch, PORTFOLIO_BUILDER_SUBMITTER="queue")
 
     with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_evaluation_submitter_refuses_competition_mode(monkeypatch):
+    _populate(
+        monkeypatch,
+        PORTFOLIO_BUILDER_SUBMITTER="evaluation",
+        PORTFOLIO_BUILDER_EVALUATION_OUTPUT_DIR="/evaluation",
+        PORTFOLIO_BUILDER_COMPETITION_ENABLED="true",
+        PORTFOLIO_BUILDER_BACKEND_BASE_URI="http://backend",
+        PORTFOLIO_BUILDER_BACKEND_JWT_SECRET="s" * 32,
+        PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER="issuer",
+    )
+
+    with pytest.raises(ValidationError, match="competition mode"):
         Settings()

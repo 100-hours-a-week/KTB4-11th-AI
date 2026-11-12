@@ -43,7 +43,6 @@ def dependencies(monkeypatch):
         {"competition_id": "bad"},
         {"participant_id": None},
         {"user_id": "bad"},
-        {"portfolio_reason_ids": []},
         {"portfolio_reason_ids": ["bad-uuid"]},
     ],
 )
@@ -67,11 +66,12 @@ def test_invalid_message_is_not_deleted(changes, dependencies):
     auth.request.assert_not_called()
 
 
-def test_posts_report_and_deletes_after_success(dependencies):
+@pytest.mark.parametrize("participant_id", [34, 78])
+def test_posts_report_and_deletes_after_success(participant_id, dependencies):
     auth, engine, structured = dependencies
     sqs = Mock()
     message = {
-        "Body": json.dumps(MESSAGE),
+        "Body": json.dumps({**MESSAGE, "participant_id": participant_id}),
         "ReceiptHandle": "receipt",
         "_queue_url": "https://sqs.example/queue",
     }
@@ -82,7 +82,11 @@ def test_posts_report_and_deletes_after_success(dependencies):
         "POST",
         "/api/v1/competitions/12/report",
         "56",
-        json={"news": [{"title": "N", "summary": "S"}], "thoughts": [{"title": "T", "text": "X"}]},
+        json={
+            "participant_id": participant_id,
+            "news": [{"title": "N", "summary": "S"}],
+            "thoughts": [{"title": "T", "text": "X"}],
+        },
     )
     sqs.delete_message.assert_called_once_with(
         QueueUrl="https://sqs.example/queue", ReceiptHandle="receipt"
@@ -145,3 +149,35 @@ def test_openrouter_uses_one_attempt_with_a_240_second_timeout(monkeypatch):
 
     assert result is runnable
     constructor.assert_called_once_with(model="model", api_key="secret", timeout=240, max_retries=0)
+
+
+def test_missing_evidence_fails_without_posting_or_deleting_and_logs(monkeypatch):
+    log = Mock()
+    monkeypatch.setattr(worker, "logger", log)
+    auth = Mock()
+    auth.request.return_value = Mock(status_code=200)
+    sqs = Mock()
+
+    worker.process_message(
+        {
+            "Body": json.dumps({**MESSAGE, "portfolio_reason_ids": []}),
+            "ReceiptHandle": "receipt",
+            "_queue_url": "https://sqs.example/queue",
+        },
+        sqs,
+        auth,
+        Mock(),
+        Mock(),
+    )
+
+    auth.request.assert_not_called()
+    sqs.delete_message.assert_not_called()
+    log.error.assert_called_once_with(
+        "report_request_failed",
+        error_type="EvidenceError",
+        competition_id=12,
+        participant_id=34,
+        user_id=56,
+        reason="missing_evidence",
+        error="no investment evidence supplied",
+    )

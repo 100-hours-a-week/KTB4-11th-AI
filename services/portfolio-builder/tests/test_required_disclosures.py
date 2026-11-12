@@ -43,6 +43,7 @@ def execute(replies, payload, saved, log=None):
         briefing="brief",
         max_turns=len(replies),
         log=log or Recorder(),
+        disclosure_enabled=True,
     )
 
 

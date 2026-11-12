@@ -5,8 +5,14 @@ from typing import Protocol
 from ktb_core.logging import get_logger
 
 from market_collector.kiwoom.official import Page
-from market_collector.kiwoom.parse import DailyBar, MinuteBar, parse_daily_bar, parse_minute_bar
-from market_collector.store import CandleRow, Store
+from market_collector.kiwoom.parse import (
+    DailyBar,
+    KiwoomParseError,
+    MinuteBar,
+    parse_daily_bar,
+    parse_minute_bar,
+)
+from market_collector.store import BarBatch, CandleRow
 
 __all__ = ["ChartSource", "reconcile_candles", "to_candle_rows"]
 
@@ -42,7 +48,7 @@ def to_candle_rows(bars: Sequence[Bar], symbol: str, src: str = "rest") -> list[
 
 def reconcile_candles(
     client: ChartSource,
-    store: Store,
+    batch: BarBatch,
     symbol: str,
     timeframe: str,
     base_dt: str,
@@ -65,7 +71,16 @@ def reconcile_candles(
             if timeframe == "1d"
             else client.minute_page(symbol, 1, next_key)
         )
-        page_bars = [parse(row) for row in page.rows]
+        try:
+            page_bars = [parse(row) for row in page.rows]
+        except KiwoomParseError as error:
+            error.context.update(
+                api_id="ka10081" if timeframe == "1d" else "ka10080",
+                symbol=symbol,
+                timeframe=timeframe,
+                next_key=next_key,
+            )
+            raise
         bars_by_ts.update({bar.ts: bar for bar in page_bars})
 
         if not page.has_more or (latest is None and len(bars_by_ts) >= LIMITS[timeframe]):
@@ -88,6 +103,6 @@ def reconcile_candles(
     if latest is None:
         bars = bars[-LIMITS[timeframe] :]
     rows = to_candle_rows(bars, symbol)
-    written = store.write_candles(timeframe, rows)
+    written = batch.write_candles(timeframe, rows)
     log.info("candles_reconciled", count=written, timeframe=timeframe, symbol=symbol)
     return written

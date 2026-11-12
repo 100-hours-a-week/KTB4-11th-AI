@@ -3,13 +3,22 @@ import sqlalchemy as sa
 from portfolio_builder.briefing.dto import PreviousPortfolio
 
 
-def find_previous_portfolio(conn: sa.Connection) -> PreviousPortfolio | None:
+def find_previous_portfolio(
+    conn: sa.Connection, participant_id: int | None = None
+) -> PreviousPortfolio | None:
+    ownership = (
+        "NOT EXISTS (SELECT 1 FROM competition_portfolios cp WHERE cp.portfolio_id = p.id)"
+        if participant_id is None
+        else "EXISTS (SELECT 1 FROM competition_portfolios cp"
+        " WHERE cp.portfolio_id = p.id AND cp.participant_id = :participant_id)"
+    )
     portfolio = (
         conn.execute(
             sa.text(
-                "SELECT id, created_at, cash_weight, commentary FROM portfolios"
-                " ORDER BY created_at DESC, id DESC LIMIT 1"
-            )
+                "SELECT p.id, p.created_at, p.cash_weight, p.commentary FROM portfolios p"
+                f" WHERE {ownership} ORDER BY p.id DESC LIMIT 1"
+            ),
+            {"participant_id": participant_id},
         )
         .mappings()
         .first()

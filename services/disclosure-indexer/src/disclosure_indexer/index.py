@@ -1,4 +1,3 @@
-import hashlib
 import json
 from collections.abc import Mapping
 from typing import Any
@@ -8,7 +7,7 @@ import sqlalchemy as sa
 from ktb_core.embedding.config import model_identity
 from ktb_core.logging import get_logger
 
-from disclosure_indexer.chunks import CHUNK_VERSION, chunk_sections
+from disclosure_indexer.chunks import chunk_sections
 from disclosure_indexer.embed import embed_vectors
 from disclosure_indexer.inference import embed_documents
 from disclosure_indexer.settings import Settings
@@ -52,21 +51,11 @@ def narrative_groups(
     report: Mapping[str, Any], settings: Settings
 ) -> tuple[list[dict], list[dict]]:
     chunks, groups = [], []
-    topics = {
-        "litigation",
-        "outlook",
-        "risk",
-        "contracts",
-        "notes",
-        "research",
-        "production",
-        "business",
-    }
     for document in report["documents"]:
         sections = [
             s
             for s in document["sections"]
-            if s.get("content_kind") == "narrative" and s["topic"] in topics
+            if s.get("content_kind") == "narrative" and s["text"].strip()
         ]
         local = chunk_sections(sections, settings.chunk_bytes, settings.overlap_bytes)
         texts = embedding_inputs(report, local, settings.input_bytes)
@@ -99,7 +88,9 @@ def chunk_column_type(conn: sa.Connection, table: str = "disclosure_chunks") -> 
     ).scalar()
 
 
-def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
+def index_documents(
+    engine: sa.Engine, settings: Settings, *, retry_receipts: tuple[str, ...] = ()
+) -> dict[str, int]:
     modal = settings.inference_backend == "modal"
     table = "disclosure_narrative_chunks" if modal else "disclosure_chunks"
     expected = f"halfvec({settings.dimensions})"
@@ -109,26 +100,8 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
         raise RuntimeError(
             f"disclosure embedding column mismatch: configured={expected}, database={declared}"
         )
-    config = {
-        "chunker": CHUNK_VERSION,
-        "input_format": "metadata-header-v2",
-        "chunk_bytes": settings.chunk_bytes,
-        "overlap_bytes": settings.overlap_bytes,
-        "input_bytes": settings.input_bytes,
-        "model": settings.index_model,
-        "dimensions": settings.dimensions,
-        "query_instruction": settings.query_instruction,
-    }
     identity = model_identity("embedding") if modal else {}
-    if modal:
-        config.update(
-            identity=identity,
-            grouping="file-byte-context-v1",
-            context_bytes=settings.context_bytes,
-            narrative_rule="topic-and-kind-v1",
-        )
-        config.pop("query_instruction")
-    signature = hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+    signature = settings.index_signature
     with engine.begin() as conn:
         conn.execute(
             sa.text(
@@ -148,7 +121,56 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                 "identity": json.dumps(identity),
             },
         )
-    result = {"ready": 0, "failed": 0, "chunks": 0}
+    requeued = []
+    if retry_receipts:
+        with engine.begin() as conn:
+            requeued = (
+                conn.execute(
+                    sa.text("""
+                    UPDATE disclosure_indexes i
+                    SET status='pending', attempts=0, error=NULL, owner=NULL, lease_until=NULL
+                    FROM disclosure_documents d
+                    WHERE i.document_id=d.id AND i.signature=:signature
+                        AND i.status='dead_letter'
+                        AND d.receipt_id=ANY(CAST(:receipts AS text[]))
+                        AND d.id=(SELECT max(v.id) FROM disclosure_documents v
+                                  WHERE v.receipt_id=d.receipt_id)
+                    RETURNING i.id
+                """),
+                    {"signature": signature, "receipts": list(retry_receipts)},
+                )
+                .scalars()
+                .all()
+            )
+        log.info("disclosure_indexes_requeued", receipts=retry_receipts, count=len(requeued))
+    result = {"ready": 0, "empty": 0, "failed": 0, "chunks": 0, "requeued": len(requeued)}
+    with engine.begin() as conn:
+        expired = (
+            conn.execute(
+                sa.text("""
+            UPDATE disclosure_indexes i
+            SET status='dead_letter', error='LeaseExpired', owner=NULL, lease_until=NULL
+            FROM disclosure_documents d
+            WHERE i.document_id=d.id AND i.signature=:signature
+                AND i.attempts >= :max_attempts
+                AND (i.status IN ('pending','failed')
+                     OR (i.status='processing' AND i.lease_until < now()))
+                AND (cardinality(CAST(:receipts AS text[]))=0
+                     OR d.receipt_id=ANY(CAST(:receipts AS text[])))
+            RETURNING i.id
+        """),
+                {
+                    "signature": signature,
+                    "max_attempts": settings.max_attempts,
+                    "receipts": list(retry_receipts),
+                },
+            )
+            .scalars()
+            .all()
+        )
+    result["failed"] += len(expired)
+    for index_id in expired:
+        log.warning("disclosure_index_dead_letter", index_id=index_id, reason="attempts_exhausted")
     attempted = []
     for _ in range(settings.document_limit):
         owner = str(uuid4())
@@ -156,24 +178,30 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
             row = (
                 conn.execute(
                     sa.text("""
-                        SELECT i.id, d.documents, r.company_name, r.stock_code,
-                            r.business_year, r.kind, r.period_end
+                        SELECT i.id, d.documents, d.receipt_id, r.company_name,
+                            r.stock_code, r.business_year, r.kind, r.period_end
                         FROM disclosure_indexes i
                         JOIN disclosure_documents d ON d.id = i.document_id
                         JOIN disclosures r ON r.receipt_id = d.receipt_id
-                        WHERE i.signature = :signature
+                        WHERE i.signature = :signature AND r.status='ready'
+                            AND d.id=(SELECT max(v.id) FROM disclosure_documents v
+                                      WHERE v.receipt_id=d.receipt_id)
+                            AND (cardinality(CAST(:retry_receipts AS text[]))=0
+                                 OR d.receipt_id=ANY(CAST(:retry_receipts AS text[])))
                             AND i.attempts < :max_attempts
                             AND (
                                 i.status IN ('pending', 'failed')
+                                OR (i.status='ready' AND NOT i.active)
                                 OR (i.status = 'processing' AND i.lease_until < now())
                             )
                             AND NOT (i.id = ANY(CAST(:attempted AS bigint[])))
                         ORDER BY i.id
-                        FOR UPDATE OF i SKIP LOCKED
+                        FOR UPDATE OF r SKIP LOCKED
                         LIMIT 1
                     """),
                     {
                         "signature": signature,
+                        "retry_receipts": list(retry_receipts),
                         "attempted": attempted,
                         "max_attempts": settings.max_attempts,
                     },
@@ -185,9 +213,45 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                 break
             index_id = row["id"]
             attempted.append(index_id)
+            current_status = conn.execute(
+                sa.text("""
+                SELECT status FROM disclosure_indexes
+                WHERE id=:id AND attempts < :max_attempts
+                    AND document_id=(SELECT max(id) FROM disclosure_documents
+                                     WHERE receipt_id=:receipt)
+                    AND EXISTS (SELECT 1 FROM disclosures
+                                WHERE receipt_id=:receipt AND status='ready')
+                    AND (status IN ('pending','failed') OR (status='ready' AND NOT active)
+                         OR (status='processing' AND lease_until < now()))
+                FOR UPDATE
+            """),
+                {
+                    "id": index_id,
+                    "receipt": row["receipt_id"],
+                    "max_attempts": settings.max_attempts,
+                },
+            ).scalar()
+            if current_status is None:
+                continue
+            if current_status == "ready":
+                conn.execute(
+                    sa.text(
+                        "UPDATE disclosure_indexes SET active=false WHERE "
+                        "document_id=(SELECT document_id FROM disclosure_indexes WHERE id=:id) "
+                        "AND dimensions=:dimensions AND id != :id AND active"
+                    ),
+                    {"id": index_id, "dimensions": settings.dimensions},
+                )
+                conn.execute(
+                    sa.text("UPDATE disclosure_indexes SET active=true WHERE id=:id"),
+                    {"id": index_id},
+                )
+                result["ready"] += 1
+                log.info("disclosure_index_reactivated", index_id=index_id)
+                continue
             conn.execute(
                 sa.text(
-                    "UPDATE disclosure_indexes SET status='processing', "
+                    "UPDATE disclosure_indexes SET status='processing', attempts=attempts+1, "
                     "owner=CAST(:owner AS uuid), "
                     "lease_until=now()+make_interval(secs=>:lease), error=NULL WHERE "
                     "id=:id"
@@ -243,13 +307,22 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                             settings.max_tokens,
                         )
                     )
+            status = "ready" if chunks else "empty"
             with engine.begin() as conn:
+                conn.execute(
+                    sa.text(
+                        "SELECT receipt_id FROM disclosures WHERE receipt_id=:receipt FOR UPDATE"
+                    ),
+                    {"receipt": row["receipt_id"]},
+                ).scalar_one()
                 owned = conn.execute(
                     sa.text(
                         "SELECT id FROM disclosure_indexes WHERE id=:id AND "
-                        "owner=CAST(:owner AS uuid) AND status='processing' FOR UPDATE"
+                        "owner=CAST(:owner AS uuid) AND status='processing' "
+                        "AND document_id=(SELECT max(id) FROM disclosure_documents "
+                        "WHERE receipt_id=:receipt) FOR UPDATE"
                     ),
-                    {"id": index_id, "owner": owner},
+                    {"id": index_id, "owner": owner, "receipt": row["receipt_id"]},
                 ).scalar()
                 if owned is None:
                     raise RuntimeError("index lease lost")
@@ -288,27 +361,28 @@ def index_documents(engine: sa.Engine, settings: Settings) -> dict[str, int]:
                     sa.text(
                         "UPDATE disclosure_indexes SET active=false WHERE "
                         "document_id=(SELECT document_id FROM disclosure_indexes WHERE "
-                        "id=:id) AND dimensions=:dimensions AND id != :id"
+                        "id=:id) AND dimensions=:dimensions AND id != :id AND active"
                     ),
                     {"id": index_id, "dimensions": settings.dimensions},
                 )
                 conn.execute(
                     sa.text(
-                        "UPDATE disclosure_indexes SET status='ready', active=true, "
+                        "UPDATE disclosure_indexes SET status=:status, active=:active, "
                         "attempts=0, owner=NULL, lease_until=NULL WHERE id=:id"
                     ),
-                    {"id": index_id},
+                    {"id": index_id, "status": status, "active": status == "ready"},
                 )
-            result["ready"] += 1
+            if status == "empty":
+                log.info("disclosure_index_empty", index_id=index_id)
+            result[status] += 1
             result["chunks"] += len(chunks)
         except Exception as error:
             with engine.begin() as conn:
                 conn.execute(
                     sa.text("""
                         UPDATE disclosure_indexes
-                        SET attempts = LEAST(attempts + 1, :max_attempts),
-                            status = CASE
-                                WHEN attempts + 1 >= :max_attempts THEN 'dead_letter'
+                        SET status = CASE
+                                WHEN attempts >= :max_attempts THEN 'dead_letter'
                                 ELSE 'failed'
                             END,
                             error = :error, owner = NULL, lease_until = NULL

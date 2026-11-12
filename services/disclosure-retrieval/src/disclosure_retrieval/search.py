@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Self
@@ -60,6 +61,7 @@ class SearchRequest(BaseModel):
             detail_type=self.detail_type,
             model=settings.index_model,
             dimensions=settings.dimensions,
+            signature=settings.index_signature,
             max_distance=self.max_distance
             if self.max_distance is not None
             else settings.max_distance,
@@ -80,7 +82,13 @@ def disclosures(
     cutoff = as_of or datetime.now(ZoneInfo("Asia/Seoul")).date()
     with engine.connect() as conn:
         rows = report_rows(
-            conn, stock_code, limit, cutoff, settings.index_model, settings.dimensions
+            conn,
+            stock_code,
+            limit,
+            cutoff,
+            settings.index_model,
+            settings.dimensions,
+            settings.index_signature,
         )
     return [to_report(row) for row in rows]
 
@@ -99,6 +107,7 @@ def search(
             body.as_of,
             settings.index_model,
             settings.dimensions,
+            settings.index_signature,
             body.detail_type,
         )
         counts = search_counts(conn, stock_code, selected, params) if selected else (0, 0)
@@ -122,16 +131,35 @@ def search(
     with engine.connect() as conn:
         result = search_reports(conn, stock_code, selected, vector, params)
     if settings.inference_backend == "modal":
-        for attribute, count in (
-            ("latest_evidence", "latest_returned"),
-            ("historical_evidence", "history_returned"),
-        ):
-            candidates = getattr(result, attribute)
-            scores = inference.rerank(
-                body.query,
-                [{"chunk_id": row.chunk_id, "text": row.embedding_text} for row in candidates],
-                settings,
-            )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            pending = []
+            for attribute, count in (
+                ("latest_evidence", "latest_returned"),
+                ("historical_evidence", "history_returned"),
+            ):
+                candidates = getattr(result, attribute)
+                if candidates:
+                    pending.append(
+                        (
+                            attribute,
+                            count,
+                            candidates,
+                            executor.submit(
+                                inference.rerank,
+                                body.query,
+                                [
+                                    {"chunk_id": row.chunk_id, "text": row.embedding_text}
+                                    for row in candidates
+                                ],
+                                settings,
+                            ),
+                        )
+                    )
+            scored = [
+                (attribute, count, candidates, future.result())
+                for attribute, count, candidates, future in pending
+            ]
+        for attribute, count, candidates, scores in scored:
             by_id = {row.chunk_id: row for row in candidates}
             ranked = [
                 replace(

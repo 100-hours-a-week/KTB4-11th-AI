@@ -10,36 +10,46 @@ WITH ranked AS (
         r.period_end, r.published_date, r.status,
         row_number() OVER (
             PARTITION BY r.stock_code, r.kind,
-                COALESCE(r.detail_type, CASE r.kind
-                    WHEN 'annual' THEN 'A001' WHEN 'half' THEN 'A002'
-                    WHEN 'q1' THEN 'A003' WHEN 'q3' THEN 'A003' END),
+                CASE WHEN r.kind IN ('annual', 'half', 'q1', 'q3')
+                    THEN r.business_year END,
+                CASE WHEN r.kind NOT IN ('annual', 'half', 'q1', 'q3')
+                    THEN r.detail_type END,
                 r.period_end, CASE WHEN r.period_end IS NULL THEN r.receipt_id END
             ORDER BY r.published_date DESC, r.receipt_id DESC
         ) AS revision
     FROM disclosures r
     WHERE r.stock_code = :stock AND r.published_date <= :as_of
-        AND (CAST(:detail_type AS text) IS NULL OR r.detail_type = :detail_type)
 ), reports AS (
     SELECT r.receipt_id, r.stock_code, r.title, r.business_year, r.kind, r.detail_type,
         r.period_end, r.published_date, r.status, i.id AS index_id,
         CASE
             WHEN i.id IS NULL THEN 'pending'
-            WHEN i.model = :model AND i.dimensions = :dimensions THEN 'ready'
+            WHEN i.status = 'empty' AND i.signature = :signature THEN 'empty'
+            WHEN i.model = :model AND i.dimensions = :dimensions
+                AND i.signature = :signature THEN 'ready'
             ELSE 'other_space'
         END AS index_state
     FROM ranked r
     LEFT JOIN LATERAL (
-        SELECT idx.id, idx.model, idx.dimensions
+        SELECT idx.id, idx.model, idx.dimensions, idx.status, idx.signature
         FROM disclosure_indexes idx
         JOIN disclosure_documents d ON d.id = idx.document_id
-        WHERE d.receipt_id = r.receipt_id AND idx.active AND idx.status = 'ready'
-            AND d.source_hash = (SELECT v.source_hash FROM disclosure_documents v
+        WHERE d.receipt_id = r.receipt_id
+            AND ((idx.active AND idx.status = 'ready')
+                 OR (idx.status = 'empty' AND idx.signature = :signature
+                     AND idx.model = :model AND idx.dimensions = :dimensions))
+            AND d.id = (SELECT v.id FROM disclosure_documents v
                         WHERE v.receipt_id = r.receipt_id ORDER BY v.id DESC LIMIT 1)
-        ORDER BY (idx.model = :model AND idx.dimensions = :dimensions) DESC,
+        ORDER BY (idx.signature = :signature AND idx.model = :model
+                  AND idx.dimensions = :dimensions) DESC, idx.active DESC,
                  d.id DESC, idx.id DESC
         LIMIT 1
     ) i ON true
     WHERE r.revision = 1
+        AND (CAST(:detail_type AS text) IS NULL
+             OR COALESCE(r.detail_type, CASE r.kind
+                 WHEN 'annual' THEN 'A001' WHEN 'half' THEN 'A002'
+                 WHEN 'q1' THEN 'A003' WHEN 'q3' THEN 'A003' END) = :detail_type)
 )
 """
 
@@ -69,18 +79,25 @@ SEARCH_SQL = """
     ORDER BY best_distance, receipt_id
     LIMIT :document_limit
 )
-SELECT e.*
-FROM eligible e
-JOIN document_rank d USING (receipt_id)
+SELECT e.*, totals.searched
+FROM (SELECT count(*) AS searched FROM filtered_chunks) totals
+LEFT JOIN LATERAL (
+    SELECT e.*
+    FROM eligible e
+    JOIN document_rank d USING (receipt_id)
+    ORDER BY e.distance, e.receipt_id, e.chunk_id
+    LIMIT :top_k
+) e ON true
 ORDER BY e.distance, e.receipt_id, e.chunk_id
-LIMIT :top_k
 """
 
 SEARCHED_SQL = """
-SELECT count(*)
+SELECT count(*) FILTER (WHERE {latest_scope}) AS latest_searched,
+    count(*) FILTER (WHERE :include_history AND {history_scope}) AS history_searched
 FROM reports r
 JOIN {chunk_table} c ON c.index_id = r.index_id
-WHERE r.index_state = 'ready' AND {scope}
+WHERE r.index_state = 'ready'
+    AND ({latest_scope} OR (:include_history AND {history_scope}))
 """
 
 LATEST_SCOPE = "r.receipt_id = ANY(CAST(:latest AS text[]))"
@@ -98,6 +115,7 @@ class SearchParams:
     model: str
     dimensions: int
     max_distance: float | None
+    signature: str
     detail_type: str | None = None
 
 
@@ -159,6 +177,7 @@ def report_rows(
     as_of: date,
     model: str,
     dimensions: int,
+    signature: str,
     detail_type: str | None = None,
 ) -> list[dict[str, object]]:
     rows = conn.execute(
@@ -171,6 +190,7 @@ def report_rows(
             "as_of": as_of,
             "model": model,
             "dimensions": dimensions,
+            "signature": signature,
             "limit": limit,
             "detail_type": detail_type,
         },
@@ -223,6 +243,7 @@ def search_reports(
         "as_of": params.as_of,
         "model": params.model,
         "dimensions": params.dimensions,
+        "signature": params.signature,
         "detail_type": params.detail_type,
         "vector": json.dumps(vector),
         "max_distance": params.max_distance,
@@ -234,17 +255,21 @@ def search_reports(
     if params.include_history:
         scopes.append(("history", "historical_evidence", HISTORY_SCOPE, params.history_limit))
     for name, attribute, scope, document_limit in scopes:
-        rows = conn.execute(
-            sa.text(
-                REPORTS_SQL
-                + SEARCH_SQL.format(scope=scope, chunk_table=table, embedding_text=embedding_text)
-            ),
-            {**bound, "document_limit": document_limit},
-        ).mappings()
-        evidence = [_to_evidence(row) for row in rows]
-        searched = conn.execute(
-            sa.text(REPORTS_SQL + SEARCHED_SQL.format(scope=scope, chunk_table=table)), bound
-        ).scalar_one()
+        rows = (
+            conn.execute(
+                sa.text(
+                    REPORTS_SQL
+                    + SEARCH_SQL.format(
+                        scope=scope, chunk_table=table, embedding_text=embedding_text
+                    )
+                ),
+                {**bound, "document_limit": document_limit},
+            )
+            .mappings()
+            .all()
+        )
+        evidence = [_to_evidence(row) for row in rows if row["chunk_id"] is not None]
+        searched = rows[0]["searched"]
         setattr(result, attribute, evidence)
         setattr(result, f"{name}_searched", searched)
         setattr(result, f"{name}_returned", len(evidence))
@@ -260,18 +285,18 @@ def search_counts(
         "as_of": params.as_of,
         "model": params.model,
         "dimensions": params.dimensions,
+        "signature": params.signature,
         "detail_type": params.detail_type,
         "latest": [r["receipt_id"] for r in selected],
         "start": params.history_start or date.min,
     }
-    counts = []
-    for scope in (LATEST_SCOPE, HISTORY_SCOPE):
-        if scope == HISTORY_SCOPE and not params.include_history:
-            counts.append(0)
-            continue
-        counts.append(
-            conn.execute(
-                sa.text(REPORTS_SQL + SEARCHED_SQL.format(scope=scope, chunk_table=table)), bound
-            ).scalar_one()
-        )
+    counts = conn.execute(
+        sa.text(
+            REPORTS_SQL
+            + SEARCHED_SQL.format(
+                latest_scope=LATEST_SCOPE, history_scope=HISTORY_SCOPE, chunk_table=table
+            )
+        ),
+        {**bound, "include_history": params.include_history},
+    ).one()
     return counts[0], counts[1]

@@ -10,10 +10,11 @@ from redis import Redis
 
 from market_collector.corporations import collect_corporations
 from market_collector.kiwoom.official import ChartClient, build_client
+from market_collector.kiwoom.parse import failure_fields
 from market_collector.popularity import SessionCache, popular_codes
 from market_collector.reconcile import reconcile_candles
 from market_collector.settings import Settings
-from market_collector.store import Store
+from market_collector.store import BarBatch, Store
 from market_collector.symbols import load_symbols
 from market_collector.valkey import connect_valkey
 
@@ -21,6 +22,7 @@ log = get_logger(__name__)
 SETTLE = timedelta(seconds=5)
 CLOSE_DELAY = timedelta(minutes=5)
 PASS_BUDGET = 60.0
+BATCH_ROWS = 50_000
 
 
 def collect_market_data(
@@ -37,24 +39,30 @@ def collect_market_data(
     with questdb.connect(settings.questdb_conf) as db:
         store = Store(db)
         latest = store.latest_bar_timestamps(symbols)
+        batch = BarBatch(store)
         written = 0
-        for index, symbol in enumerate(symbols, 1):
-            for timeframe in timeframes:
-                written += reconcile_candles(
-                    client, store, symbol, timeframe, base_dt, latest.get((symbol, timeframe))
-                )
-            if index % 20 == 0:
-                for name in ("KOSPI", "KOSPI200"):
-                    try:
-                        quote = client.index_quote(name)
-                        valkey.set(
-                            f"index:{name}",
-                            json.dumps(
-                                {"name": name, **quote, "ts": datetime.now(KST).isoformat()}
-                            ),
-                        )
-                    except Exception:
-                        log.exception("index_update_failed", name=name)
+        try:
+            for index, symbol in enumerate(symbols, 1):
+                for timeframe in timeframes:
+                    written += reconcile_candles(
+                        client, batch, symbol, timeframe, base_dt, latest.get((symbol, timeframe))
+                    )
+                if len(batch) >= BATCH_ROWS:
+                    batch.flush()
+                if index % 20 == 0:
+                    for name in ("KOSPI", "KOSPI200"):
+                        try:
+                            quote = client.index_quote(name)
+                            valkey.set(
+                                f"index:{name}",
+                                json.dumps(
+                                    {"name": name, **quote, "ts": datetime.now(KST).isoformat()}
+                                ),
+                            )
+                        except Exception as error:
+                            log.exception("index_update_failed", **failure_fields(error), name=name)
+        finally:
+            batch.flush()
 
         try:
             codes = popular_codes(db, symbols, now, session_cache)
@@ -123,8 +131,10 @@ def run(
                     daily=at == pending[-1],
                     session_cache=session_cache,
                 )
-            except Exception:
-                log.exception("archive_pass_failed", scheduled=at.isoformat())
+            except Exception as error:
+                log.exception(
+                    "archive_pass_failed", **failure_fields(error), scheduled=at.isoformat()
+                )
                 close_failed = at == pending[-1]
             elapsed = (clock() - started).total_seconds()
             if elapsed > PASS_BUDGET:

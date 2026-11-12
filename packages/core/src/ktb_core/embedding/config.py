@@ -62,3 +62,27 @@ def model_identity(kind: str) -> dict:
 def embedding_space() -> str:
     identity = json.dumps(model_identity("embedding"), sort_keys=True).encode()
     return "modal:" + hashlib.sha256(identity).hexdigest()
+
+
+def disclosure_index_signature(settings) -> str:
+    modal = settings.inference_backend == "modal"
+    config = {
+        "chunker": "sections-byte-budget-v1",
+        "input_format": "metadata-header-v2",
+        "chunk_bytes": settings.chunk_bytes,
+        "overlap_bytes": settings.overlap_bytes,
+        "input_bytes": settings.input_bytes,
+        "model": settings.index_model,
+        "dimensions": settings.dimensions,
+        "max_tokens": settings.max_tokens,
+    }
+    if modal:
+        config.update(
+            identity=model_identity("embedding"),
+            grouping="file-byte-context-v1",
+            context_bytes=settings.context_bytes,
+            narrative_rule="content-kind-v2",
+        )
+    else:
+        config["query_instruction"] = settings.query_instruction
+    return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()

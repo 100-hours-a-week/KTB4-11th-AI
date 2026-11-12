@@ -3,11 +3,14 @@ import threading
 
 import pytest
 import sqlalchemy as sa
+from portfolio_builder.briefing.repository import find_previous_portfolio
 from portfolio_builder.errors import PortfolioRejected, ToolError
 from portfolio_builder.submitters import DatabaseSubmitter
 from portfolio_builder.tools.submit import submit_tool
 
 SAMSUNG = "00126380"
+HYNIX = "00164779"
+LGES = "01515323"
 VALID = {
     "holdings": [
         {"company_id": SAMSUNG, "weight": 3, "reason": "HBM 공급 확대", "cited_cluster_ids": [1]}
@@ -107,6 +110,34 @@ def test_concurrent_submits_write_one_portfolio(engine, news_client):
 
     assert sorted(outcomes) == ["refused", "refused", "refused", "saved"]
     assert len(_rows(engine)) == 1
+
+
+def test_no_declared_constraints_store_null(engine, news_client):
+    tool = submit_tool(DatabaseSubmitter(engine, "m", news_client), frozenset(), Recorder())
+
+    tool.invoke(_call(VALID))
+
+    with engine.connect() as conn:
+        assert (
+            conn.execute(sa.text("SELECT acknowledged_constraints FROM portfolios")).scalar_one()
+            is None
+        )
+
+
+def test_a_submission_with_no_participant_id_inserts_no_link_row(engine, news_client):
+    tool = submit_tool(DatabaseSubmitter(engine, "m", news_client), frozenset(), Recorder())
+
+    tool.invoke(_call(VALID))
+
+    [(portfolio_id, _)] = _rows(engine)
+    with engine.connect() as conn:
+        link_count = conn.execute(
+            sa.text("SELECT count(*) FROM competition_portfolios")
+        ).scalar_one()
+        previous = find_previous_portfolio(conn)
+    assert link_count == 0
+    assert previous is not None
+    assert previous.portfolio["id"] == portfolio_id
 
 
 class Collecting:

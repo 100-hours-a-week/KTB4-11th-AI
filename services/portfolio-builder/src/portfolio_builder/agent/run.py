@@ -40,7 +40,7 @@ def run_agent(
     briefing: str,
     max_turns: int,
     log: StructuredLogger,
-    disclosure_enabled: bool = True,
+    disclosure_enabled: bool = False,
 ) -> RunResult:
     required_technicals = RequireTechnicals(log)
     required_disclosures = RequireDisclosures(log) if disclosure_enabled else None

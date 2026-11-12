@@ -98,4 +98,6 @@ STOCK_DETAIL_EXAMPLE = {
     ],
 }
 
+STOCK_MATCH_EXAMPLE = {"code": "005930", "name": "삼성전자", "sector": "전기전자"}
+
 HEALTH_EXAMPLE = {"status": "ok"}

@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 from market_collector.kiwoom.parse import (
+    KiwoomParseError,
     classify_session,
     parse_daily_bar,
     parse_daily_ts,
@@ -102,3 +103,31 @@ def test_open_and_close_are_not_confused():
     bar = parse_minute_bar(MINUTE_ROW)
 
     assert bar.open != bar.close
+
+
+@pytest.mark.parametrize(
+    ("value", "raw_value", "raw_type", "error_type"),
+    [
+        (..., None, "missing", "KeyError"),
+        (None, None, "NoneType", "AttributeError"),
+        ("", "", "str", "ValueError"),
+    ],
+)
+def test_bar_parse_failure_distinguishes_missing_null_and_empty(
+    value, raw_value, raw_type, error_type
+):
+    row = {key: item for key, item in MINUTE_ROW.items() if key != "trde_qty"}
+    if value is not ...:
+        row["trde_qty"] = value
+
+    with pytest.raises(KiwoomParseError) as caught:
+        parse_minute_bar(row)
+
+    fields = caught.value.fields
+    assert (fields["field"], fields["raw_value"], fields["raw_type"]) == (
+        "trde_qty",
+        raw_value,
+        raw_type,
+    )
+    assert fields["error_type"] == error_type
+    assert "trde_qty" not in fields["response"] or fields["response"]["trde_qty"] is value

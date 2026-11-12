@@ -1,10 +1,10 @@
 import logging
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 import sqlalchemy as sa
-from disclosure_retrieval.financials import FinancialFact
+from disclosure_retrieval.financials import FinancialFact, read_financials
 from disclosure_retrieval.inference import InputBudgetError
 from disclosure_retrieval.queries import report_rows
 from disclosure_retrieval.search import SearchRequest, search
@@ -12,9 +12,8 @@ from disclosure_retrieval.sections import Section, read_sections
 from disclosure_retrieval.settings import Settings as RetrievalSettings
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request
 from ktb_core.clock_file import read_clock
+from ktb_core.krx import KST
 from pydantic import BaseModel, ValidationError
-
-from disclosure_http.filings import is_published, published_by, read_published_financials
 
 log = logging.getLogger(__name__)
 StockCode = Annotated[str, Path(pattern=r"^[0-9]{6}$")]
@@ -32,6 +31,10 @@ class Report(BaseModel):
     published_date: date
     status: str
     index_state: str
+
+
+def published_by(as_of: datetime) -> date:
+    return as_of.astimezone(KST).date() - timedelta(days=1)
 
 
 def _cutoff(request: Request) -> date:
@@ -73,7 +76,14 @@ def create_app(
     ) -> list[Report]:
         with engine.connect() as conn:
             rows = report_rows(
-                conn, code, limit, cutoff, retrieval.index_model, retrieval.dimensions, detail_type
+                conn,
+                code,
+                limit,
+                cutoff,
+                model=retrieval.index_model,
+                dimensions=retrieval.dimensions,
+                signature=retrieval.index_signature,
+                detail_type=detail_type,
             )
         return [Report.model_validate(row) for row in rows]
 
@@ -117,8 +127,8 @@ def create_app(
         operation_id="get_disclosure_sections",
         summary="Read sections of one filing",
         description="Use receipt_id from list_disclosures or search evidence; filter by"
-        " heading, topic or document_name. Filings published on or after the decision date"
-        " are not found.",
+        " heading, topic or document_name. A filing published on or after the decision date,"
+        " or corrected before it, has no sections here.",
     )
     def get_disclosure_sections(
         code: StockCode,
@@ -130,12 +140,11 @@ def create_app(
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> list[Section]:
         with engine.connect() as conn:
-            if not is_published(conn, code, receipt_id, cutoff):
-                raise HTTPException(404, "no such filing before the decision date")
             return read_sections(
                 conn,
                 code,
                 receipt_id,
+                as_of=cutoff,
                 document_name=document_name,
                 topic=topic,
                 heading=heading,
@@ -162,10 +171,10 @@ def create_app(
         if business_year is None and period_end is None:
             raise HTTPException(422, "give business_year or period_end")
         with engine.connect() as conn:
-            return read_published_financials(
+            return read_financials(
                 conn,
                 code,
-                cutoff,
+                as_of=cutoff,
                 period_end=period_end,
                 business_year=business_year,
                 scope=scope,

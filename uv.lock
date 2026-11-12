@@ -1641,7 +1641,11 @@ name = "portfolio-builder"
 version = "0.1.0"
 source = { editable = "services/portfolio-builder" }
 dependencies = [
+    { name = "boto3" },
+    { name = "botocore" },
     { name = "disclosure-retrieval" },
+    { name = "httpx" },
+    { name = "ktb-aws" },
     { name = "ktb-core" },
     { name = "langchain" },
     { name = "langchain-core" },
@@ -1657,7 +1661,11 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", specifier = ">=1.35" },
+    { name = "botocore", specifier = ">=1.40" },
     { name = "disclosure-retrieval", editable = "services/disclosure-retrieval" },
+    { name = "httpx", specifier = ">=0.28" },
+    { name = "ktb-aws", editable = "packages/aws" },
     { name = "ktb-core", editable = "packages/core" },
     { name = "langchain", specifier = ">=1.4.2" },
     { name = "langchain-core", specifier = ">=1.6.5" },

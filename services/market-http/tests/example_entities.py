@@ -11,7 +11,7 @@ from market_http.controllers.rankings import RankingItem, RankingResponse
 from market_http.repositories.bars import Bar
 from market_http.repositories.orderbooks import Orderbook, OrderbookLevel
 from market_http.repositories.prices import Price
-from market_http.repositories.stocks import StockDetail
+from market_http.repositories.stocks import StockDetail, StockMatch
 from market_http.repositories.themes import StockTheme, Theme, ThemeGroup, ThemeStock
 
 PRICE = Price(
@@ -82,6 +82,7 @@ STOCK_DETAIL = StockDetail(
         StockTheme(code="550", name="반도체_생산", is_major=True),
     ],
 )
+STOCK_MATCH = StockMatch(code="005930", name="삼성전자", sector="전기전자")
 HEALTH = HealthResponse(status="ok")
 
 ENTITIES = {
@@ -95,6 +96,7 @@ ENTITIES = {
     "THEME_STOCK_EXAMPLE": THEME_STOCK,
     "STOCK_THEME_EXAMPLE": STOCK_THEME,
     "STOCK_DETAIL_EXAMPLE": STOCK_DETAIL,
+    "STOCK_MATCH_EXAMPLE": STOCK_MATCH,
     "HEALTH_EXAMPLE": HEALTH,
 }
 

@@ -44,7 +44,7 @@ collection toggle are removed.
 
 The first automatic run selects the latest 1000 unique KOSPI200 receipts from the
 last 365 days, including short and long filings. It fetches and parses only receipts
-not already stored with the current parser version. Fewer than 1000 available receipts
+without a stored parsed document, regardless of parser version. Fewer than 1000 available receipts
 are reported honestly; records are not padded or duplicated.
 
 `disclosure_collection_state` has one `opendart` row:
@@ -106,10 +106,11 @@ new stored documents; no GPU request is added by this collection checkpoint.
 ## Explicit date replay
 
 Set both `NEWS_PREPROCESSOR_DISCLOSURE_START_DATE` and `END_DATE` as ISO dates to
-reprocess a specific period, including old parser versions. Missing pairs, reversed
+recover missing receipts in a specific period. Stored documents remain unchanged even
+when their parser version is old. Missing pairs, reversed
 ranges, future end dates and start dates more than 365 days ago are rejected. Replay
 runs at any hour, has no 1000 cap, and does not change automatic collection dates.
-Already-current receipts remain skipped.
+Already-stored receipts remain skipped.
 
 Both initial and replay listings use latest-first, non-overlapping windows of at most
 90 days and normal API pagination. The 1000 cap applies only to the first automatic
@@ -273,11 +274,11 @@ was injected into production to test logging.
 
 ## Verification
 
-- Full suite against a dedicated PostgreSQL test database: **1,309 passed, 49 skipped,
+- Full suite against a dedicated PostgreSQL test database: **1,329 passed, 49 skipped,
   2 subtests passed**.
 - Tests cover all thirteen filing types,
   short/long routing through normal scraping, API failure without partial rows,
-  database failure rolling back every related row, parser-version deduplication,
+  database failure rolling back every related row, receipt-only deduplication,
   missing documents, unknown fiscal metadata and archive hashes. Historical additions
   cover the initial 1000-receipt cap, uncapped replay and incremental checks, duplicates
   and nonmembers across pagination, date bounds and empty listings. Database tests
@@ -285,12 +286,11 @@ was injected into production to test logging.
   arrivals during a failed initial pass, no same-day retry after three listing failures,
   next-day recovery after a 05:59 failure, first starts after 06:00, a three-day gap,
   checkpoint failure after document commit, manual replay leaving automatic state
-  unchanged, and historical parser-version replacement.
+  unchanged, and historical replay preserving stored parser results.
 - Listing and short-document failures are verified to stop at exactly three HTTP
   requests. DART status failures also stop at three; a third-attempt success returns
   without logging a final failure. Settings reject attempt limits above three.
-- The unique migration head is 0015 after merging dev 416aabb. Real PostgreSQL
-  upgrade → rollback to dev 0012 → upgrade preserves theme_corporations rows.
+- The unique migration head remains 0015 on dev c6838ec; this change adds no migration.
 - Malformed JSON, missing fields, corrupted ZIP members and uncompressed size limits
   exhaust three requests; normal no-data responses return once. Empty and
   directory-only ZIPs are rejected before either short or long filings can be saved;
@@ -304,3 +304,36 @@ was injected into production to test logging.
 Tests use fixed API responses and a dedicated local database. No production service,
 GPU inference or SQS operation was executed. The actual metadata-only OpenDART listing
 check above is separate from the fixed-response test suite.
+
+## Receipt-once storage policy (2026-11-04)
+
+Original and corrected filings remain independent records keyed by their receipt IDs.
+Their publication dates remain unchanged for downstream as_of selection. Repeated daily
+listing or manual date replay skips any receipt with a stored document, even after a parser
+upgrade or legacy status change. A failed fetch/parse/save with no committed document can
+still be retried through the existing schedule and historical-date path.
+
+Storage enforces the same policy after the pre-download check. It first inserts the receipt
+metadata if absent, locks the receipt row, and reads document existence in a new SQL
+statement. Under the service's default READ COMMITTED isolation, a concurrent winner's
+committed document is visible after a primary-key conflict wait. A loser returns False
+without changing metadata, documents, sections or facts. Only a receipt with no document
+reaches the first document INSERT; the document-version UPSERT is removed. Children and
+metadata commit or roll back together. No model call, migration, current-document pointer,
+or production data cleanup is introduced. Defensive read selection for historical parser
+rows already in a database remains compatible; this change prevents new accumulation.
+
+Regression tests cover changed source/parser replay including A → B → A, no repeated
+download for old parsers, concurrent saves producing one complete set, metadata-only
+recovery, original/correction retention with different publication dates, and existing
+API/DB failure rollback. This issue/PR is separate from #432 indexing/retrieval and #430
+GPU serving. No external API, operational DB or GPU execution is part of these tests.
+
+The receipt-once implementation passed the full local suite with 1,329 tests, 49 optional
+integration skips and 2 subtests. A separate combined check used the new collector with
+#432's actual PostgreSQL retrieval/indexing functions: two receipts and two document
+fetches were retained; as_of before correction returned the original CFS amount 1,000,
+and as_of after correction returned 2,000. Section cutoffs matched, both documents indexed
+once, and a repeated indexing pass made zero additional embedding calls. API responses
+and vectors were mocked; PostgreSQL operations were real. No live GPU or production data
+was used. Issue #488 tracks the independent collection PR.
