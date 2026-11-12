@@ -72,6 +72,27 @@ class CompetitionSettings(BaseSettings):
             raise ValueError("Jev API key must contain only visible ASCII characters")
         return value
 
+    @field_validator("jev_base_uri")
+    @classmethod
+    def validate_jev_base_uri(cls, value: str) -> str:
+        try:
+            parsed = urlsplit(value)
+            valid = (
+                parsed.scheme == "https"
+                and bool(parsed.hostname)
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.port != 0
+                and "?" not in value
+                and "#" not in value
+                and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("Jev base URI must be HTTPS without userinfo, query or fragment")
+        return value
+
     @field_validator("queue_url")
     @classmethod
     def validate_queue_url(cls, value: str) -> str:

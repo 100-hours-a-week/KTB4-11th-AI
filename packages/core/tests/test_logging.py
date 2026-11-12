@@ -224,3 +224,15 @@ def test_configured_secrets_are_masked_in_library_logs(capsys):
     logging.getLogger("httpcore").warning("%s %s", "first-credential", "second-credential")
 
     assert _run_events(capsys)[0]["message"] == "*** ***"
+
+
+def test_configured_secrets_are_masked_in_dictionary_keys(capsys):
+    secret = "synthetic-field-credential"
+    setup_logging("INFO", service_name="svc", sensitive_values=(secret,))
+    get_logger("svc").error("failed", **{secret: "value", "nested": {secret: [{secret: secret}]}})
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert secret not in output
+    assert record["***"] == "value"
+    assert record["nested"] == {"***": [{"***": "***"}]}

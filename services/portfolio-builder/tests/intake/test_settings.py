@@ -6,8 +6,8 @@ BASE = {
     "postgres_dsn": "postgresql+psycopg://ktb:test@localhost/ktb_test",
     "queue_url": "https://sqs.example/settings.fifo",
     "jev_api_key": "secret",
-    "jev_base_uri": "https://api.typesafe.ai/v1",
-    "jev_model": "jev-1.14.0",
+    "jev_base_uri": "https://openrouter.ai/api/v1",
+    "jev_model": "typesafe/jev-1.14",
     "jev_timeout": 20,
     "jev_noul_threshold": 0.5,
     "jev_choice_min_confidence": 0.6,
@@ -105,3 +105,25 @@ def test_jev_key_rejects_characters_unsuitable_for_authorization(character):
         Settings(**{**BASE, "jev_api_key": key})
 
     assert "synthetic" not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://synthetic-url-credential@jev.example/v1",
+        "https://user:synthetic-url-credential@jev.example/v1",
+        "https://@jev.example/v1",
+        "https://jev.example/v1?token=synthetic-url-credential",
+        "https://jev.example/v1?",
+        "https://jev.example/v1#synthetic-url-credential",
+        "https://jev.example/v1#",
+        "http://jev.example/v1",
+        "https:///v1",
+        "https://jev.example/v1\n",
+    ],
+)
+def test_jev_base_uri_rejects_credentials_queries_and_invalid_urls(uri):
+    with pytest.raises(ValidationError) as failure:
+        Settings(**{**BASE, "jev_base_uri": uri})
+
+    assert "synthetic-url-credential" not in str(failure.value)

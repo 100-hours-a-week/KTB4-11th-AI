@@ -129,7 +129,7 @@ class JsonFormatter(logging.Formatter):
                 for secret in self.secrets:
                     value = value.replace(secret, "***")
             elif isinstance(value, dict):
-                return {key: redact(item) for key, item in value.items()}
+                return {redact(key): redact(item) for key, item in value.items()}
             elif isinstance(value, list | tuple):
                 return [redact(item) for item in value]
             return value

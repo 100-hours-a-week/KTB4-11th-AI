@@ -87,6 +87,55 @@ def test_worker_masks_credentials_in_protocol_error_logs(monkeypatch, capsys):
     assert "jev-key" not in output
 
 
+def test_lowercase_environment_credentials_are_loaded_and_masked(monkeypatch, capsys):
+    import json
+    import os
+    from uuid import uuid4
+
+    from portfolio_builder.competition import __main__ as entry
+
+    jev_key, builder_key = uuid4().hex, uuid4().hex
+    values = {
+        "PORTFOLIO_BUILDER_POSTGRES_DSN": "postgresql+psycopg://unused",
+        "PORTFOLIO_BUILDER_MARKET_HTTP_BASE_URI": "https://market.example",
+        "PORTFOLIO_BUILDER_NEWS_HTTP_BASE_URI": "https://news.example",
+        "PORTFOLIO_BUILDER_LLM_API_KEY": builder_key,
+        "PORTFOLIO_BUILDER_LLM_MODEL": "test-model",
+        "PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL": "https://sqs.example/settings",
+        "PORTFOLIO_BUILDER_COMPETITION_JEV_API_KEY": jev_key,
+        "PORTFOLIO_BUILDER_COMPETITION_JEV_BASE_URI": "https://openrouter.ai/api/v1",
+        "PORTFOLIO_BUILDER_COMPETITION_JEV_MODEL": "typesafe/jev-1.14",
+        "PORTFOLIO_BUILDER_COMPETITION_JEV_TIMEOUT": "20",
+        "PORTFOLIO_BUILDER_COMPETITION_JEV_NOUL_THRESHOLD": "0.5",
+        "PORTFOLIO_BUILDER_COMPETITION_JEV_CHOICE_MIN_CONFIDENCE": "0.5",
+    }
+    for name in list(os.environ):
+        if name.upper().startswith("PORTFOLIO_BUILDER_"):
+            monkeypatch.delenv(name)
+    for name, value in values.items():
+        monkeypatch.setenv(name.lower(), value)
+    engine, queue = Mock(), Mock()
+    queue.receive.side_effect = [[Message("id", "{}", "receipt")], KeyboardInterrupt]
+    monkeypatch.setattr(entry.sa, "create_engine", lambda _: engine)
+    monkeypatch.setattr(entry.boto3, "client", lambda *args, **kwargs: Mock())
+    monkeypatch.setattr(entry, "SqsQueue", lambda *args: queue)
+    monkeypatch.setattr(entry.time, "sleep", lambda _: None)
+
+    def fail(message, queue, engine, intake, logger):
+        assert intake.jev_api_key.get_secret_value() == jev_key
+        raise httpx.LocalProtocolError(f"Illegal header values: {jev_key} {builder_key}")
+
+    monkeypatch.setattr(entry, "process_message", fail)
+    with pytest.raises(KeyboardInterrupt):
+        entry.main()
+
+    output = capsys.readouterr().out
+    assert jev_key not in output
+    assert builder_key not in output
+    assert json.loads(output)["message"] == "competition_cycle_failed"
+    engine.dispose.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "jev_key",
     [
@@ -113,8 +162,8 @@ def test_invalid_jev_key_prevents_polling_even_when_a_builder_key_exists(
     monkeypatch.setenv("PORTFOLIO_BUILDER_LLM_API_KEY", "builder-key")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_QUEUE_URL", "https://sqs.example/settings")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_CHOICE_MIN_CONFIDENCE", "0.5")
-    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_BASE_URI", "https://api.typesafe.ai/v1")
-    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_MODEL", "jev-1.14.0")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_BASE_URI", "https://openrouter.ai/api/v1")
+    monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_MODEL", "typesafe/jev-1.14")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_TIMEOUT", "20")
     monkeypatch.setenv("PORTFOLIO_BUILDER_COMPETITION_JEV_NOUL_THRESHOLD", "0.5")
     if jev_key is None:
@@ -137,3 +186,43 @@ def test_invalid_jev_key_prevents_polling_even_when_a_builder_key_exists(
     assert record["fields"] == ["jev_api_key"]
     assert "builder-key" not in output
     assert "synthetic" not in output
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        "https://user:synthetic-url-credential@openrouter.ai/api/v1",
+        "https://openrouter.ai/api/v1?token=synthetic-url-credential",
+    ],
+)
+def test_credentials_in_base_uri_stop_before_queue_access(monkeypatch, capsys, uri):
+    import json
+
+    from portfolio_builder.competition import __main__ as entry
+
+    monkeypatch.setattr(
+        entry, "Settings", lambda: SimpleNamespace(log_level="INFO", llm_api_key=SecretStr("key"))
+    )
+    values = {
+        "QUEUE_URL": "https://sqs.example/settings",
+        "JEV_API_KEY": "dedicated-credential",
+        "JEV_BASE_URI": uri,
+        "JEV_MODEL": "typesafe/jev-1.14",
+        "JEV_TIMEOUT": "20",
+        "JEV_NOUL_THRESHOLD": "0.5",
+        "JEV_CHOICE_MIN_CONFIDENCE": "0.5",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(f"PORTFOLIO_BUILDER_COMPETITION_{name}", value)
+
+    def unexpected_client(*args, **kwargs):
+        pytest.fail("an invalid base URI must fail before queue access")
+
+    monkeypatch.setattr(entry.boto3, "client", unexpected_client)
+    with pytest.raises(SystemExit) as stopped:
+        entry.main()
+
+    output = capsys.readouterr().out
+    assert stopped.value.code == 1
+    assert json.loads(output)["fields"] == ["jev_base_uri"]
+    assert "synthetic-url-credential" not in output
