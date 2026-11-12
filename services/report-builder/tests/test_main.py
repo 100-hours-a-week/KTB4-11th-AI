@@ -14,7 +14,7 @@ def test_bootstrap_accepts_queue_name_or_url(monkeypatch, queue_setting):
         "BACKEND_BASE_URI": "https://backend.example.com",
         "BACKEND_JWT_SECRET": "x" * 32,
         "BACKEND_JWT_ISSUER": "backend",
-        "SQS_QUEUE_URL": queue_setting,
+        "QUEUE_URL": queue_setting,
     }.items():
         monkeypatch.setenv(f"REPORT_BUILDER_{name}", value)
     sqs = Mock()
