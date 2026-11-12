@@ -39,6 +39,7 @@ def main() -> None:
             intake.jev_api_key.get_secret_value(),
             settings.llm_api_key.get_secret_value(),
         ),
+        redact_urls=True,
     )
     queue = SqsQueue(
         boto3.client(

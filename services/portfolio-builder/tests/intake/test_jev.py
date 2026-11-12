@@ -1,4 +1,5 @@
 import json
+import logging
 from socketserver import BaseRequestHandler, TCPServer
 from threading import Thread
 from uuid import uuid4
@@ -7,6 +8,7 @@ import httpx
 import pytest
 from ktb_core.logging import JsonFormatter, get_logger
 from portfolio_builder.competition.canonical import JevError, ask, classify_additional_request
+from portfolio_builder.settings import CompetitionSettings
 from pydantic import SecretStr
 
 BASE_URI = "https://jev.example/api/v1"
@@ -185,6 +187,45 @@ def test_classification_failure_logs_the_exception_and_propagates(caplog):
     logged = json.loads(JsonFormatter("competition-portfolio-builder").format(record))
     assert logged["error_type"] == "RuntimeError"
     assert "RuntimeError: Jev temporarily unavailable" in logged["exception"]
+
+
+def test_path_credentials_are_masked_in_httpx_and_exception_logs(server, caplog):
+    _, responses, client = server
+    marker = uuid4().hex
+    settings = CompetitionSettings(
+        queue_url="https://sqs.example/settings",
+        jev_api_key="ordinary-credential",
+        jev_base_uri=f"https://jev.example/{marker}/api/v1",
+        jev_model=MODEL,
+        jev_timeout=20,
+        jev_noul_threshold=0.5,
+        jev_choice_min_confidence=0.5,
+    )
+    responses.append((401, {"error": "unauthorized"}))
+    caplog.set_level(logging.INFO, logger="httpx")
+
+    def request(state, questions):
+        return ask(
+            settings.jev_base_uri,
+            settings.jev_model,
+            settings.jev_api_key,
+            state,
+            questions,
+            client=client,
+        )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        classify_additional_request(
+            None, request, MODEL, 0.5, 0.5, "원문", (), get_logger(__name__)
+        )
+
+    formatter = JsonFormatter("competition-portfolio-builder", redact_urls=True)
+    output = "\n".join(formatter.format(record) for record in caplog.records)
+    assert any(record.name == "httpx" for record in caplog.records)
+    assert marker not in output
+    assert "401" in output
+    assert "HTTPStatusError" in output
+    assert "Traceback" in output
 
 
 @pytest.mark.parametrize("character", ["\n", "\r", "\x00", "가"])

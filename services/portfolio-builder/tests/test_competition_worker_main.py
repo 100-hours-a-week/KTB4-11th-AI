@@ -87,6 +87,28 @@ def test_worker_masks_credentials_in_protocol_error_logs(monkeypatch, capsys):
     assert "jev-key" not in output
 
 
+@pytest.mark.parametrize("path", ["/{marker}/api/v1", "/folder'/{marker}/v1"])
+def test_worker_masks_url_path_credentials_in_http_error_logs(monkeypatch, capsys, path):
+    import json
+    from uuid import uuid4
+
+    marker = uuid4().hex
+    response = httpx.Response(
+        401,
+        request=httpx.Request("POST", f"https://jev.example{path.format(marker=marker)}/systemone"),
+    )
+    with pytest.raises(httpx.HTTPStatusError) as failure:
+        response.raise_for_status()
+
+    assert run_worker(monkeypatch, [Message("id", "{}", "receipt")], failure.value) == ["intake"]
+
+    output = capsys.readouterr().out
+    record = json.loads(output)
+    assert marker not in output
+    assert "401" in record["exception"]
+    assert record["error_type"] == "HTTPStatusError"
+
+
 def test_lowercase_environment_credentials_are_loaded_and_masked(monkeypatch, capsys):
     import json
     import os

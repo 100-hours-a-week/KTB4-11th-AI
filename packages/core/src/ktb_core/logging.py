@@ -94,11 +94,13 @@ class JsonFormatter(logging.Formatter):
         sensitive_query_params: Collection[str] = (),
         *,
         sensitive_values: Collection[str] = (),
+        redact_urls: bool = False,
     ) -> None:
         super().__init__()
         self.service_name = service_name
         names = "|".join(map(re.escape, sensitive_query_params))
         self.sensitive = re.compile(rf"({names})=[^&\s\"'\\]+") if names else None
+        self.urls = re.compile(r"https?://\S+", re.IGNORECASE) if redact_urls else None
         self.secrets = sorted(
             {
                 variant
@@ -128,6 +130,8 @@ class JsonFormatter(logging.Formatter):
             if isinstance(value, str):
                 for secret in self.secrets:
                     value = value.replace(secret, "***")
+                if self.urls:
+                    value = self.urls.sub("<redacted-url>", value)
             elif isinstance(value, dict):
                 return {redact(key): redact(item) for key, item in value.items()}
             elif isinstance(value, list | tuple):
@@ -135,7 +139,7 @@ class JsonFormatter(logging.Formatter):
             return value
 
         line = json.dumps(
-            redact(payload) if self.secrets else payload,
+            redact(payload) if self.secrets or self.urls else payload,
             ensure_ascii=False,
             default=lambda value: redact(str(value)),
         )
@@ -148,10 +152,16 @@ def setup_logging(
     service_name: str,
     sensitive_query_params: Collection[str] = (),
     sensitive_values: Collection[str] = (),
+    redact_urls: bool = False,
 ) -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(
-        JsonFormatter(service_name, sensitive_query_params, sensitive_values=sensitive_values)
+        JsonFormatter(
+            service_name,
+            sensitive_query_params,
+            sensitive_values=sensitive_values,
+            redact_urls=redact_urls,
+        )
     )
 
     root = logging.getLogger()

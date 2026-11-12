@@ -236,3 +236,25 @@ def test_configured_secrets_are_masked_in_dictionary_keys(capsys):
     assert secret not in output
     assert record["***"] == "value"
     assert record["nested"] == {"***": [{"***": "***"}]}
+
+
+def test_url_redaction_masks_library_messages_and_structured_urls(capsys):
+    url = "https://jev.example/path-only-credential/api/v1"
+    setup_logging("INFO", service_name="svc", redact_urls=True)
+    logging.getLogger("httpx").info('HTTP Request: POST %s "HTTP/1.1 401"', url)
+    get_logger("svc").error("failed", url=url, nested={url: [url]})
+
+    output = capsys.readouterr().out
+    request, field = [json.loads(line) for line in output.splitlines()]
+    assert "path-only-credential" not in output
+    assert "401" in request["message"]
+    assert field["url"] == "<redacted-url>"
+    assert field["nested"] == {"<redacted-url>": ["<redacted-url>"]}
+
+
+def test_url_paths_are_preserved_without_redaction_option(capsys):
+    url = "https://jev.example/api/v1"
+    setup_logging("INFO", service_name="svc")
+    get_logger("svc").info("request", url=url)
+
+    assert _run_events(capsys)[0]["url"] == url
