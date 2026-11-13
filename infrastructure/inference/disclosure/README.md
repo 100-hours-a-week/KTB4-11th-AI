@@ -38,5 +38,4 @@ limitation, not a measured zero startup duration:
 uv run --no-project --with modal==1.3.5 python infrastructure/inference/disclosure/platform_timings.py --app disclosure-inference --class-name Embedder --method query_embedding
 ```
 
-See docs/operations/disclosure-timing.md for measurement definitions and live results.
 CPU tests use fake models; GPU model dependencies are imported only when a model loads.
