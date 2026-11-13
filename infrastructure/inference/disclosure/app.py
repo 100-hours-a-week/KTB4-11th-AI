@@ -8,6 +8,7 @@ from typing import NoReturn
 import modal
 from disclosure_inference.contracts import IdentityMismatch, InvalidRequest, Manifest
 from disclosure_inference.runtime import EmbeddingRuntime, RerankerRuntime
+from observability import InferenceTiming, request_timing
 from weights import download_weights
 
 HERE = Path(__file__).parent
@@ -38,9 +39,10 @@ image = (
     .add_local_file(SERVICE_PROJECT, "/root/inference_pyproject.toml", copy=True)
     .add_local_python_source("disclosure_inference", copy=True)
     .add_local_file(HERE / "weights.py", "/root/weights.py", copy=True)
+    .add_local_file(HERE / "observability.py", "/root/observability.py", copy=True)
 )
 
-app = modal.App("disclosure-inference")
+app = modal.App(os.environ.get("DISCLOSURE_INFERENCE_APP", "disclosure-inference"))
 embedding_image = image.run_function(download_weights, kwargs={"kind": "embedding"}).env(
     {"HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
 )
@@ -75,7 +77,13 @@ def _reject(error: Exception) -> NoReturn:
 class Embedder:
     @modal.enter(snap=True)
     def load(self) -> None:
+        self.observation = InferenceTiming("embedding")
         self.runtime = EmbeddingRuntime(MANIFEST)
+        self.observation.loaded()
+
+    @modal.enter(snap=False)
+    def ready(self) -> None:
+        self.observation.ready()
 
     @modal.method()
     def measure(self, documents: list[list[str]], task: str) -> dict[str, object]:
@@ -88,14 +96,24 @@ class Embedder:
     @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
     def document_embeddings(self, payload: dict) -> dict[str, object]:
         try:
-            return self.runtime.document_embeddings(payload)
+            with request_timing(self, payload, "document_embedding") as fields:
+                call_id = modal.current_function_call_id()
+                if isinstance(call_id, str):
+                    fields["function_call_id"] = call_id
+                result = self.runtime.document_embeddings(payload)
+                return {**result, "timing": fields}
         except Exception as error:
             return _reject(error)
 
     @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
     def query_embedding(self, payload: dict) -> dict[str, object]:
         try:
-            return self.runtime.query_embedding(payload)
+            with request_timing(self, payload, "query_embedding") as fields:
+                call_id = modal.current_function_call_id()
+                if isinstance(call_id, str):
+                    fields["function_call_id"] = call_id
+                result = self.runtime.query_embedding(payload)
+                return {**result, "timing": fields}
         except Exception as error:
             return _reject(error)
 
@@ -115,7 +133,13 @@ class Embedder:
 class Reranker:
     @modal.enter(snap=True)
     def load(self) -> None:
+        self.observation = InferenceTiming("reranker")
         self.runtime = RerankerRuntime(MANIFEST)
+        self.observation.loaded()
+
+    @modal.enter(snap=False)
+    def ready(self) -> None:
+        self.observation.ready()
 
     @modal.method()
     def measure(self, query: str, candidates: list[dict]) -> dict[str, object]:
@@ -128,6 +152,11 @@ class Reranker:
     @modal.fastapi_endpoint(method="POST", docs=False, requires_proxy_auth=True)
     def rerank(self, payload: dict) -> dict[str, object]:
         try:
-            return self.runtime.rerank(payload)
+            with request_timing(self, payload, "rerank") as fields:
+                call_id = modal.current_function_call_id()
+                if isinstance(call_id, str):
+                    fields["function_call_id"] = call_id
+                result = self.runtime.rerank(payload)
+                return {**result, "timing": fields}
         except Exception as error:
             return _reject(error)

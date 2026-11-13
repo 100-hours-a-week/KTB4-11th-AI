@@ -1,5 +1,16 @@
 # Disclosure inference on Modal
 
+## Timing logs
+
+Modal emits JSON model-loading, container-ready and inference events. HTTP responses
+include optional timing metadata with request, function-call, container and initialization
+IDs. Fresh, restored and warm requests are distinguished; historical model loading is
+not counted again after a snapshot restore. Handler and application startup timings
+exclude platform scheduling/boot. Full platform cold_start_ms remains null when unavailable.
+
+DISCLOSURE_INFERENCE_APP selects a separate test app name; its default keeps the existing
+name. Stop isolated test apps after verification. Deploying new code invalidates snapshots.
+
 CPU services call authenticated HTTPS endpoints. Modal serves two independently scaled
 models on 24GB GPUs (L4, with A10 as an availability fallback):
 Context-9B with score10 LoRA for documents/queries, and Qwen3-Reranker-4B with the verified
