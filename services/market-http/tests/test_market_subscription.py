@@ -814,7 +814,7 @@ def test_shutdown_during_recovery_closes_connections_and_clients(monkeypatch, ph
     asyncio.run(scenario())
 
 
-def test_unexpected_recovery_error_stops_without_retrying_or_leaking_clients(monkeypatch):
+def test_unexpected_recovery_error_stops_without_retrying_or_leaking_clients(monkeypatch, caplog):
     monkeypatch.setattr("market_http.market_subscription.RECONNECT_DELAY_SECONDS", 0)
 
     async def scenario():
@@ -843,6 +843,19 @@ def test_unexpected_recovery_error_stops_without_retrying_or_leaking_clients(mon
                     assert subscription._task is None
                     assert len(valkey.pubsubs) == 2
                     assert all(pubsub.closed for pubsub in valkey.pubsubs)
+            await asyncio.sleep(0)
+            failures = [
+                r for r in caplog.records if r.message == "market_subscription_supervisor_failed"
+            ]
+            assert len(failures) == 1
+            failure = failures[0]
+            assert failure.fields["error_type"] == "ValueError"
+            assert failure.fields["listener_id"] == task.get_name().removeprefix(
+                "market-subscription-"
+            )
+            assert failure.exc_info[0] is ValueError
+            assert str(failure.exc_info[1]) == "invalid configuration"
+            assert failure.exc_info[2] is not None
 
     asyncio.run(scenario())
 
@@ -922,3 +935,33 @@ def test_recovery_duration_includes_failed_attempts_and_resets_for_next_failure(
         asyncio.run(scenario())
     recovered = [r for r in caplog.records if r.message == "market_subscription_recovered"]
     assert [r.fields["recovery_seconds"] for r in recovered] == [12.0, 3.0]
+
+
+@pytest.mark.parametrize("outcome", ["completed", "cancelled"])
+def test_supervisor_does_not_log_failure_on_completion_or_cancellation(caplog, outcome):
+    async def scenario():
+        async with asyncio.timeout(2):
+            valkey = FakeValkey()
+            subscription = MarketSubscription(valkey)
+            if outcome == "completed":
+                pubsub = valkey.pubsub()
+
+                async def ended_listen():
+                    return
+                    yield
+
+                pubsub.listen = ended_listen
+                valkey.pubsub = lambda: pubsub
+            async with subscription.run():
+                task = subscription._task
+                if outcome == "completed":
+                    await task
+                else:
+                    await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert task.done()
+            assert task.cancelled() == (outcome == "cancelled")
+            assert all(pubsub.closed for pubsub in valkey.pubsubs)
+
+    asyncio.run(scenario())
+    assert not any(r.message == "market_subscription_supervisor_failed" for r in caplog.records)

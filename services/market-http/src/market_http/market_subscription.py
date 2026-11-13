@@ -74,6 +74,7 @@ class MarketSubscription:
             self._supervise(listener, pubsub, fields, observer),
             name=f"market-subscription-{fields['listener_id']}",
         )
+        task.add_done_callback(partial(self._supervisor_finished, fields=fields))
         self._task = task
         try:
             yield
@@ -212,6 +213,15 @@ class MarketSubscription:
             logger.error(
                 "market subscription listener failed",
                 extra={"fields": {**fields, "error_type": type(error).__name__}},
+            )
+
+    @staticmethod
+    def _supervisor_finished(task: asyncio.Task[None], *, fields: dict[str, object]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            logger.error(
+                "market_subscription_supervisor_failed",
+                extra={"fields": {**fields, "error_type": type(error).__name__}},
+                exc_info=(type(error), error, error.__traceback__),
             )
 
     @asynccontextmanager
