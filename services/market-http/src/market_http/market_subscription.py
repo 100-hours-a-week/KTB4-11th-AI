@@ -164,7 +164,8 @@ class MarketSubscription:
                         reason="connect_failed",
                         error=error,
                     )
-                    retry_delay = min(retry_delay * 2, MAX_RECONNECT_DELAY_SECONDS)
+                    if recovering:
+                        retry_delay = min(retry_delay * 2, MAX_RECONNECT_DELAY_SECONDS)
                     delay = ROTATION_TIMEOUT_SECONDS
                     continue
                 recovery_details = (
