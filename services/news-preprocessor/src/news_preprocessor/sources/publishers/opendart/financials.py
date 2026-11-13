@@ -39,7 +39,6 @@ def financial_rows(payload: list[dict[str, Any]], scope: str) -> list[dict[str, 
             continue
         source_value = entry.get("thstrm_amount") or ""
         value, normalized = normalize_amount(source_value)
-        ordinal = entry.get("ord") or ""
         rows.append(
             {
                 "scope": scope,
@@ -47,7 +46,9 @@ def financial_rows(payload: list[dict[str, Any]], scope: str) -> list[dict[str, 
                 "account_id": (entry.get("account_id") or "").strip(),
                 "account_name": (entry.get("account_nm") or "").strip(),
                 "currency": (entry.get("currency") or "").strip(),
-                "ordinal": int(ordinal) if ordinal.strip().isdigit() else position,
+                "ordinal": position,
+                "source_ordinal": str(entry["ord"]) if entry.get("ord") is not None else None,
+                "account_detail": entry.get("account_detail") or None,
                 "source_value": source_value,
                 "value": value,
                 "normalized": normalized,

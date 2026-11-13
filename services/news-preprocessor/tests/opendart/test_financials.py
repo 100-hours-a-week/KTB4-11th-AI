@@ -57,7 +57,8 @@ def test_rows_carry_the_scope_statement_and_account_identity():
     assert row["account_id"] == "ifrs-full_Assets"
     assert row["account_name"] == "자산총계"
     assert row["currency"] == "KRW"
-    assert row["ordinal"] == 1
+    assert row["ordinal"] == 0
+    assert row["source_ordinal"] == "1"
 
 
 def test_an_entry_without_a_statement_type_is_skipped():
@@ -70,3 +71,30 @@ def test_a_non_numeric_ordinal_falls_back_to_position():
     )
 
     assert [row["ordinal"] for row in rows] == [0, 1]
+
+
+def test_sce_repeated_account_ordinals_preserve_each_component():
+    payload = [
+        {**ASSETS, "sj_div": "SCE", "ord": "3", "account_detail": detail, "thstrm_amount": amount}
+        for detail, amount in (("자본금", "100"), ("이익잉여금", "200"), ("자본 합계", "300"))
+    ]
+    rows = financial_rows(payload, "CFS")
+    assert [row["ordinal"] for row in rows] == [0, 1, 2]
+    assert [row["source_ordinal"] for row in rows] == ["3", "3", "3"]
+    assert [row["account_detail"] for row in rows] == ["자본금", "이익잉여금", "자본 합계"]
+    assert [row["value"] for row in rows] == [Decimal("100"), Decimal("200"), Decimal("300")]
+
+
+def test_missing_and_repeated_ordinals_never_collide_with_response_positions():
+    rows = financial_rows(
+        [
+            {**ASSETS, "ord": "2"},
+            {**ASSETS, "ord": ""},
+            {**ASSETS, "ord": "2"},
+            {**ASSETS, "ord": 2},
+        ],
+        "OFS",
+    )
+    assert [row["ordinal"] for row in rows] == [0, 1, 2, 3]
+    assert [row["source_ordinal"] for row in rows] == ["2", "", "2", "2"]
+    assert all(row["account_detail"] is None for row in rows)

@@ -25,6 +25,8 @@ class FinancialFact:
     source_value: str
     value: Decimal | None
     normalized: bool
+    account_detail: str | None = None
+    source_ordinal: str | None = None
 
 
 def read_financials(
@@ -56,6 +58,8 @@ def read_financials(
             facts.c.statement_type,
             facts.c.account_id,
             facts.c.account_name,
+            facts.c.account_detail,
+            facts.c.source_ordinal,
             facts.c.currency,
             facts.c.source_value,
             facts.c.value,

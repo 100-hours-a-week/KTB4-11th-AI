@@ -347,3 +347,21 @@ def test_nonperiodic_financial_detail_types_remain_separate(sqlite_financials):
     rows = read_financials(conn, "005930", business_year=2025)
     assert {row.receipt_id for row in rows} == {"audit", "other-audit"}
     assert all(row.previous_receipt_id is None for row in rows)
+
+
+def test_financial_read_preserves_component_detail_and_source_order(sqlite_financials):
+    conn = sqlite_financials
+    insert_filing(
+        conn, "components", date(2026, 3, 1), [("CFS", "equity", "100"), ("CFS", "equity", "200")]
+    )
+    for ordinal, detail in enumerate(("자본금", "이익잉여금")):
+        conn.execute(
+            disclosure_financial_facts.update()
+            .where(disclosure_financial_facts.c.ordinal == ordinal)
+            .values(account_detail=detail, source_ordinal="3", statement_type="SCE")
+        )
+    rows = read_financials(conn, "005930", business_year=2025)
+    assert [(row.account_detail, row.source_ordinal, row.value) for row in rows] == [
+        ("자본금", "3", Decimal("100")),
+        ("이익잉여금", "3", Decimal("200")),
+    ]
