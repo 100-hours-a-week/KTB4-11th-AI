@@ -1,5 +1,6 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Self
@@ -7,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from ktb_core.embedding.config import model_identity
+from ktb_core.embedding.timing import timing
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from disclosure_retrieval import inference
@@ -96,81 +98,87 @@ def disclosures(
 def search(
     engine: sa.Engine, stock_code: str, body: SearchRequest, settings: Settings
 ) -> SearchResult:
-    if not re.fullmatch(r"[0-9]{6}", stock_code):
-        raise ValueError("stock_code must contain six digits")
-    params = body.search_params(settings)
-    with engine.connect() as conn:
-        selected = report_rows(
-            conn,
-            stock_code,
-            body.latest_limit,
-            body.as_of,
-            settings.index_model,
-            settings.dimensions,
-            settings.index_signature,
-            body.detail_type,
-        )
-        counts = search_counts(conn, stock_code, selected, params) if selected else (0, 0)
-    if counts == (0, 0):
-        return SearchResult(
-            reports=[to_report(row) for row in selected], latest_evidence=[], historical_evidence=[]
-        )
-    if settings.inference_backend == "modal":
-        vector = inference.embed_query(body.query, settings)
-        params = replace(params, top_k=50)
-    else:
-        vector = embed_query(
-            settings.query_instruction + body.query,
-            settings.embedding_base_uri,
-            settings.embedding_model,
-            settings.dimensions,
-            settings.embedding_api_key.get_secret_value() if settings.embedding_api_key else None,
-            settings.timeout,
-            settings.max_tokens,
-        )
-    with engine.connect() as conn:
-        result = search_reports(conn, stock_code, selected, vector, params)
-    if settings.inference_backend == "modal":
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            pending = []
-            for attribute, count in (
-                ("latest_evidence", "latest_returned"),
-                ("historical_evidence", "history_returned"),
-            ):
-                candidates = getattr(result, attribute)
-                if candidates:
-                    pending.append(
-                        (
-                            attribute,
-                            count,
-                            candidates,
-                            executor.submit(
-                                inference.rerank,
-                                body.query,
-                                [
-                                    {"chunk_id": row.chunk_id, "text": row.embedding_text}
-                                    for row in candidates
-                                ],
-                                settings,
-                            ),
+    with timing("search", stock_code=stock_code):
+        if not re.fullmatch(r"[0-9]{6}", stock_code):
+            raise ValueError("stock_code must contain six digits")
+        params = body.search_params(settings)
+        with timing("report_selection"), engine.connect() as conn:
+            selected = report_rows(
+                conn,
+                stock_code,
+                body.latest_limit,
+                body.as_of,
+                settings.index_model,
+                settings.dimensions,
+                settings.index_signature,
+                body.detail_type,
+            )
+            counts = search_counts(conn, stock_code, selected, params) if selected else (0, 0)
+        if counts == (0, 0):
+            return SearchResult(
+                reports=[to_report(row) for row in selected],
+                latest_evidence=[],
+                historical_evidence=[],
+            )
+        if settings.inference_backend == "modal":
+            vector = inference.embed_query(body.query, settings)
+            params = replace(params, top_k=50)
+        else:
+            vector = embed_query(
+                settings.query_instruction + body.query,
+                settings.embedding_base_uri,
+                settings.embedding_model,
+                settings.dimensions,
+                settings.embedding_api_key.get_secret_value()
+                if settings.embedding_api_key
+                else None,
+                settings.timeout,
+                settings.max_tokens,
+            )
+        with timing("vector_search"), engine.connect() as conn:
+            result = search_reports(conn, stock_code, selected, vector, params)
+        if settings.inference_backend == "modal":
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                pending = []
+                for attribute, count in (
+                    ("latest_evidence", "latest_returned"),
+                    ("historical_evidence", "history_returned"),
+                ):
+                    candidates = getattr(result, attribute)
+                    if candidates:
+                        pending.append(
+                            (
+                                attribute,
+                                count,
+                                candidates,
+                                executor.submit(
+                                    copy_context().run,
+                                    inference.rerank,
+                                    body.query,
+                                    [
+                                        {"chunk_id": row.chunk_id, "text": row.embedding_text}
+                                        for row in candidates
+                                    ],
+                                    settings,
+                                ),
+                            )
                         )
+                scored = [
+                    (attribute, count, candidates, future.result())
+                    for attribute, count, candidates, future in pending
+                ]
+            for attribute, count, candidates, scores in scored:
+                by_id = {row.chunk_id: row for row in candidates}
+                ranked = [
+                    replace(
+                        by_id[row["chunk_id"]],
+                        method="cosine+qwen3-reranker",
+                        reranker_score=row["score"],
+                        reranker_logit_difference=row["logit_difference"],
+                        reranker_adapter_sha256=model_identity("reranker")["adapter_sha256"],
                     )
-            scored = [
-                (attribute, count, candidates, future.result())
-                for attribute, count, candidates, future in pending
-            ]
-        for attribute, count, candidates, scores in scored:
-            by_id = {row.chunk_id: row for row in candidates}
-            ranked = [
-                replace(
-                    by_id[row["chunk_id"]],
-                    method="cosine+qwen3-reranker",
-                    reranker_score=row["score"],
-                    reranker_logit_difference=row["logit_difference"],
-                    reranker_adapter_sha256=model_identity("reranker")["adapter_sha256"],
-                )
-                for row in scores[: body.top_k]
-            ]
-            setattr(result, attribute, ranked)
-            setattr(result, count, len(ranked))
-    return result
+                    for row in scores[: body.top_k]
+                ]
+                setattr(result, attribute, ranked)
+                setattr(result, count, len(ranked))
+        return result
