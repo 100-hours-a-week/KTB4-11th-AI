@@ -1,5 +1,6 @@
 import re
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Self
@@ -7,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import sqlalchemy as sa
 from ktb_core.embedding.config import model_identity
+from ktb_core.embedding.timing import timing
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from disclosure_retrieval import inference
@@ -93,13 +95,14 @@ def disclosures(
     return [to_report(row) for row in rows]
 
 
+@timing("search")
 def search(
     engine: sa.Engine, stock_code: str, body: SearchRequest, settings: Settings
 ) -> SearchResult:
     if not re.fullmatch(r"[0-9]{6}", stock_code):
         raise ValueError("stock_code must contain six digits")
     params = body.search_params(settings)
-    with engine.connect() as conn:
+    with timing("report_selection"), engine.connect() as conn:
         selected = report_rows(
             conn,
             stock_code,
@@ -113,7 +116,9 @@ def search(
         counts = search_counts(conn, stock_code, selected, params) if selected else (0, 0)
     if counts == (0, 0):
         return SearchResult(
-            reports=[to_report(row) for row in selected], latest_evidence=[], historical_evidence=[]
+            reports=[to_report(row) for row in selected],
+            latest_evidence=[],
+            historical_evidence=[],
         )
     if settings.inference_backend == "modal":
         vector = inference.embed_query(body.query, settings)
@@ -128,7 +133,7 @@ def search(
             settings.timeout,
             settings.max_tokens,
         )
-    with engine.connect() as conn:
+    with timing("vector_search"), engine.connect() as conn:
         result = search_reports(conn, stock_code, selected, vector, params)
     if settings.inference_backend == "modal":
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -145,6 +150,7 @@ def search(
                             count,
                             candidates,
                             executor.submit(
+                                copy_context().run,
                                 inference.rerank,
                                 body.query,
                                 [

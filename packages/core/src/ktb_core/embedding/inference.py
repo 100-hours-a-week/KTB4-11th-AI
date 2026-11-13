@@ -4,6 +4,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from uuid import uuid4
+
+from ktb_core.embedding.timing import server_timings, timing
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -47,28 +50,38 @@ class InputBudgetError(ValueError):
 
 
 def request_inference(url: str, payload: dict, settings) -> dict:
-    if not settings.modal_key or not settings.modal_secret:
-        raise RuntimeError("Modal credentials are missing")
-    try:
-        result = post_json(
-            url,
-            payload,
-            {
-                "Content-Type": "application/json",
-                "Modal-Key": settings.modal_key.get_secret_value(),
-                "Modal-Secret": settings.modal_secret.get_secret_value(),
-            },
-            settings.timeout,
-        )
-    except urllib.error.HTTPError as error:
-        if error.code == 422:
-            raise InputBudgetError("inference input exceeds the model budget") from None
-        raise RuntimeError("Modal inference request failed") from None
-    except (OSError, ValueError):
-        raise RuntimeError("Modal inference request failed") from None
-    if not isinstance(result, dict) or result.get("identity") != payload["identity"]:
-        raise RuntimeError("Modal inference identity mismatch")
-    return result
+    request_id = uuid4().hex
+    stage = (
+        "document_embedding"
+        if "documents" in payload
+        else "rerank"
+        if "candidates" in payload
+        else "query_embedding"
+    )
+    with timing(stage, request_id=request_id, **server_timings({}, request_id)) as fields:
+        if not settings.modal_key or not settings.modal_secret:
+            raise RuntimeError("Modal credentials are missing")
+        try:
+            result = post_json(
+                url,
+                {**payload, "request_id": request_id},
+                {
+                    "Content-Type": "application/json",
+                    "Modal-Key": settings.modal_key.get_secret_value(),
+                    "Modal-Secret": settings.modal_secret.get_secret_value(),
+                },
+                settings.timeout,
+            )
+        except urllib.error.HTTPError as error:
+            if error.code == 422:
+                raise InputBudgetError("inference input exceeds the model budget") from None
+            raise RuntimeError("Modal inference request failed") from None
+        except (OSError, ValueError):
+            raise RuntimeError("Modal inference request failed") from None
+        if not isinstance(result, dict) or result.get("identity") != payload["identity"]:
+            raise RuntimeError("Modal inference identity mismatch")
+        fields.update(server_timings(result, request_id))
+        return result
 
 
 def validate_vector(value: object, dimensions: int) -> list[float]:
