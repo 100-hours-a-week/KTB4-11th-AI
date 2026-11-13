@@ -56,6 +56,8 @@ disclosure_financial_facts = sa.Table(
     sa.Column("statement_type", sa.Text, nullable=False),
     sa.Column("account_id", sa.Text, nullable=False),
     sa.Column("account_name", sa.Text, nullable=False),
+    sa.Column("account_detail", sa.Text),
+    sa.Column("source_ordinal", sa.Text),
     sa.Column("currency", sa.Text, nullable=False),
     sa.Column("ordinal", sa.Integer, nullable=False),
     sa.Column("source_value", sa.Text, nullable=False),

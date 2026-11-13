@@ -143,6 +143,50 @@ def ingest(engine, client, settings):
     return scrape(engine, OpenDart(client, "test", {STOCK}, settings=settings))
 
 
+def test_repeated_sce_ordinals_save_all_components_and_remain_readable(company_engine, settings):
+    api = DartAPI()
+
+    def handler(request):
+        response = api.handler(request)
+        if request.url.path.endswith("fnlttSinglAcntAll.json"):
+            return httpx.Response(
+                200,
+                json={
+                    "status": "000",
+                    "list": [
+                        {
+                            "sj_div": "SCE",
+                            "account_id": "dart_EquityAtBeginningOfPeriod",
+                            "account_nm": "기초자본",
+                            "currency": "USD",
+                            "ord": "3",
+                            "account_detail": detail,
+                            "thstrm_amount": value,
+                        }
+                        for detail, value in (("자본금", "100"), ("이익잉여금", "200"))
+                    ],
+                },
+            )
+        return response
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        assert ingest(company_engine, client, settings).succeed == [RECEIPT]
+        assert ingest(company_engine, client, settings).succeed == []
+    with company_engine.connect() as conn:
+        rows = conn.execute(
+            sa.text(
+                "SELECT scope,ordinal,source_ordinal,account_detail,source_value "
+                "FROM disclosure_financial_facts WHERE receipt_id=:receipt ORDER BY scope,ordinal"
+            ),
+            {"receipt": RECEIPT},
+        ).all()
+    assert rows == [
+        (scope, ordinal, "3", detail, value)
+        for scope in ("CFS", "OFS")
+        for ordinal, detail, value in ((0, "자본금", "100"), (1, "이익잉여금", "200"))
+    ]
+
+
 def stored(engine):
     with engine.connect() as conn:
         return (
