@@ -12,6 +12,8 @@ from uuid import uuid4
 
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
+from redis.exceptions import ConnectionError as RedisConnectionError
+from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from market_http.events import MarketEvent
 from market_http.observability.prometheus import MarketMetrics
@@ -25,6 +27,8 @@ CHANNELS = tuple(CHANNEL_PREFIXES)
 QUEUE_CAPACITY = 256
 ROTATE_AFTER_SECONDS = 11 * 60 * 60
 ROTATION_TIMEOUT_SECONDS = 60
+RECONNECT_DELAY_SECONDS = 1
+MAX_RECONNECT_DELAY_SECONDS = 30
 
 
 class MarketSubscription:
@@ -123,22 +127,40 @@ class MarketSubscription:
         observer: SubscriptionObserver,
     ) -> None:
         delay = self._rotate_after
+        retry_delay = RECONNECT_DELAY_SECONDS
         try:
             while True:
                 await asyncio.wait({listener}, timeout=delay)
-                if listener.done():
-                    return
+                recovering = listener.done()
+                if recovering:
+                    if listener.cancelled():
+                        return
+                    error = listener.exception()
+                    if not isinstance(error, (RedisConnectionError, RedisTimeoutError)):
+                        return
+                    observer.transition("reconnect_started", reason="listener_failed", error=error)
+                    await asyncio.sleep(retry_delay)
                 next_fields, next_observer = self._listener()
-                observer.transition(
-                    "rotating",
-                    reason="before_iam_expiry",
-                    next_listener_id=next_fields["listener_id"],
-                )
+                if not recovering:
+                    observer.transition(
+                        "rotating",
+                        reason="before_iam_expiry",
+                        next_listener_id=next_fields["listener_id"],
+                    )
                 try:
                     async with asyncio.timeout(ROTATION_TIMEOUT_SECONDS):
                         next_pubsub = await self._connect(next_observer)
                 except Exception as error:
-                    observer.transition("rotation_failed", reason="connect_failed", error=error)
+                    if recovering and not isinstance(
+                        error, (RedisConnectionError, RedisTimeoutError, OSError)
+                    ):
+                        raise
+                    observer.transition(
+                        "reconnect_failed" if recovering else "rotation_failed",
+                        reason="connect_failed",
+                        error=error,
+                    )
+                    retry_delay = min(retry_delay * 2, MAX_RECONNECT_DELAY_SECONDS)
                     delay = ROTATION_TIMEOUT_SECONDS
                     continue
                 if self._active is not pubsub:
@@ -146,17 +168,23 @@ class MarketSubscription:
                     return
                 self._active = next_pubsub
                 previous = listener
+                previous_listener_id = fields["listener_id"]
                 listener = self._start_listener(next_pubsub, next_fields, next_observer)
+                pubsub, fields, observer = next_pubsub, next_fields, next_observer
                 previous.cancel()
                 await asyncio.gather(previous, return_exceptions=True)
-                next_observer.transition(
-                    "rotated",
-                    reason="before_iam_expiry",
-                    previous_listener_id=fields["listener_id"],
+                observer.transition(
+                    "recovered" if recovering else "rotated",
+                    reason="listener_restarted" if recovering else "before_iam_expiry",
+                    previous_listener_id=previous_listener_id,
                 )
-                pubsub, fields, observer = next_pubsub, next_fields, next_observer
                 delay = self._rotate_after
+                retry_delay = RECONNECT_DELAY_SECONDS
         finally:
+            if self._active is pubsub:
+                self._active = None
+                self._task = None
+                self._close_all_subscribers("listener_end")
             listener.cancel()
             await asyncio.gather(listener, return_exceptions=True)
             await pubsub.aclose()
@@ -204,6 +232,7 @@ class MarketSubscription:
     async def _listen(
         self, pubsub: PubSub, fields: dict[str, object], observer: SubscriptionObserver
     ) -> None:
+        recoverable = False
         try:
             async for message in pubsub.listen():
                 if self._active is not pubsub:
@@ -239,8 +268,11 @@ class MarketSubscription:
                         queue.put_nowait(event)
             if self._active is pubsub:
                 logger.warning("market_subscription_ended", extra={"fields": fields})
+        except (RedisConnectionError, RedisTimeoutError):
+            recoverable = True
+            raise
         finally:
-            if self._active is pubsub:
+            if self._active is pubsub and not recoverable:
                 self._active = None
                 self._task = None
                 self._close_all_subscribers("listener_end")
