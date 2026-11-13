@@ -128,6 +128,7 @@ class MarketSubscription:
     ) -> None:
         delay = self._rotate_after
         retry_delay = RECONNECT_DELAY_SECONDS
+        recovery_started_at: float | None = None
         try:
             while True:
                 await asyncio.wait({listener}, timeout=delay)
@@ -138,6 +139,8 @@ class MarketSubscription:
                     error = listener.exception()
                     if not isinstance(error, (RedisConnectionError, RedisTimeoutError)):
                         return
+                    if recovery_started_at is None:
+                        recovery_started_at = time.monotonic()
                     observer.transition("reconnect_started", reason="listener_failed", error=error)
                     await asyncio.sleep(retry_delay)
                 next_fields, next_observer = self._listener()
@@ -163,6 +166,11 @@ class MarketSubscription:
                     retry_delay = min(retry_delay * 2, MAX_RECONNECT_DELAY_SECONDS)
                     delay = ROTATION_TIMEOUT_SECONDS
                     continue
+                recovery_details = (
+                    {"recovery_seconds": round(time.monotonic() - recovery_started_at, 3)}
+                    if recovery_started_at is not None
+                    else {}
+                )
                 if self._active is not pubsub:
                     await next_pubsub.aclose()
                     return
@@ -177,7 +185,9 @@ class MarketSubscription:
                     "recovered" if recovering else "rotated",
                     reason="listener_restarted" if recovering else "before_iam_expiry",
                     previous_listener_id=previous_listener_id,
+                    **recovery_details,
                 )
+                recovery_started_at = None
                 delay = self._rotate_after
                 retry_delay = RECONNECT_DELAY_SECONDS
         finally:

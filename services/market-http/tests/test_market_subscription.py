@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from market_http.market_subscription import MarketSubscription
@@ -737,6 +738,7 @@ def test_redis_listener_failure_reconnects_after_both_acks(monkeypatch, caplog, 
     recovered = [r for r in caplog.records if r.message == "market_subscription_recovered"]
     assert len(recovered) == 1
     assert recovered[0].fields["reason"] == "listener_restarted"
+    assert recovered[0].fields["recovery_seconds"] >= 0
 
 
 def test_failed_recovery_retries_with_capped_backoff_and_closes_failed_pubsubs(monkeypatch):
@@ -865,3 +867,58 @@ def test_shutdown_during_connection_handoff_closes_new_pubsub_before_listener_st
             assert subscription._task is None
 
     asyncio.run(scenario())
+
+
+def test_recovery_duration_includes_failed_attempts_and_resets_for_next_failure(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr("market_http.market_subscription.RECONNECT_DELAY_SECONDS", 0)
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(
+        "market_http.market_subscription.time", SimpleNamespace(monotonic=lambda: clock.now)
+    )
+
+    async def scenario():
+        async with asyncio.timeout(2):
+            valkey = FakeValkey()
+            create = valkey.pubsub
+
+            def flaky_pubsub():
+                pubsub = create()
+                attempt = len(valkey.pubsubs)
+                if attempt in (2, 3):
+                    clock.now = {2: 104.0, 3: 109.0}[attempt]
+
+                    async def fail_subscribe(*channels):
+                        raise RedisConnectionError("still unavailable")
+
+                    pubsub.subscribe = fail_subscribe
+                elif attempt == 4:
+                    clock.now = 112.0
+                elif attempt == 5:
+                    clock.now = 203.0
+                return pubsub
+
+            valkey.pubsub = flaky_pubsub
+            subscription = MarketSubscription(valkey)
+            async with subscription.run():
+                for index, started_at in enumerate((100.0, 200.0), start=1):
+                    clock.now = started_at
+                    await subscription._active.messages.put(RedisConnectionError("lost"))
+                    while (
+                        len(
+                            [
+                                r
+                                for r in caplog.records
+                                if r.message == "market_subscription_recovered"
+                            ]
+                        )
+                        < index
+                    ):
+                        await asyncio.sleep(0)
+            assert all(pubsub.closed for pubsub in valkey.pubsubs)
+
+    with caplog.at_level("INFO"):
+        asyncio.run(scenario())
+    recovered = [r for r in caplog.records if r.message == "market_subscription_recovered"]
+    assert [r.fields["recovery_seconds"] for r in recovered] == [12.0, 3.0]
