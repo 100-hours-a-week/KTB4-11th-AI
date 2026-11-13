@@ -9,7 +9,9 @@ articles = sa.Table(
     sa.Column("source", sa.Text, nullable=False),
     sa.Column("url", sa.Text, nullable=False),
     sa.Column("title", sa.Text, nullable=False),
+    sa.Column("body", sa.Text, nullable=False),
     sa.Column("published_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("fetched_at", sa.DateTime(timezone=True), nullable=False),
 )
 
 clusters = sa.Table(

@@ -3,7 +3,6 @@ from collections.abc import Callable
 from functools import partial
 from typing import Annotated
 
-import sqlalchemy as sa
 from ktb_core.logging import StructuredLogger
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
@@ -11,15 +10,14 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from portfolio_builder.errors import PortfolioRejected, ToolError
-from portfolio_builder.news_client import NewsClient
 from portfolio_builder.portfolio import (
     Exit,
     Holding,
     Submission,
     normalize_weights,
-    save_portfolio,
     validate_portfolio,
 )
+from portfolio_builder.submitters import PortfolioSubmitter
 from portfolio_builder.tools.binding import bind
 
 
@@ -73,10 +71,8 @@ def submit_portfolio(
     commentary: str,
     tool_call_id: str,
     *,
-    engine: sa.Engine,
+    submitter: PortfolioSubmitter,
     previous: frozenset[str],
-    model: str,
-    news_client: NewsClient,
     log: StructuredLogger,
     lock: threading.Lock,
     saved: list[int],
@@ -85,7 +81,7 @@ def submit_portfolio(
         Submission(holdings=holdings, exits=exits, cash_weight=cash_weight, commentary=commentary),
         tool_call_id,
         validate=partial(validate_portfolio, previous=previous),
-        save=partial(save_portfolio, engine, model=model, news_client=news_client),
+        save=submitter.submit,
         log=log,
         lock=lock,
         saved=saved,
@@ -93,19 +89,13 @@ def submit_portfolio(
 
 
 def submit_tool(
-    engine: sa.Engine,
-    previous: frozenset[str],
-    model: str,
-    news_client: NewsClient,
-    log: StructuredLogger,
+    submitter: PortfolioSubmitter, previous: frozenset[str], log: StructuredLogger
 ) -> BaseTool:
     return StructuredTool.from_function(
         bind(
             submit_portfolio,
-            engine=engine,
+            submitter=submitter,
             previous=previous,
-            model=model,
-            news_client=news_client,
             log=log,
             lock=threading.Lock(),
             saved=[],

@@ -15,8 +15,9 @@ from portfolio_builder.explain import (
     save_explanations,
 )
 from portfolio_builder.news_client import NewsClient
-from portfolio_builder.portfolio import mark_explanation_failed, save_trace
+from portfolio_builder.portfolio import mark_explanation_failed
 from portfolio_builder.settings import Settings
+from portfolio_builder.submitters import create_submitter
 
 
 def main() -> None:
@@ -38,8 +39,12 @@ def main() -> None:
         model_factory = functools.partial(
             ChatOpenRouter, model=settings.llm_model, api_key=settings.llm_api_key
         )
+        evaluating = settings.submitter == "evaluation"
+        submitter = create_submitter(
+            settings, engine, news_client, f"openrouter/{settings.llm_model}"
+        )
         try:
-            unexplained = load_unexplained(engine)
+            unexplained = None if evaluating else load_unexplained(engine)
             if unexplained is None:
                 briefing = load_briefing(engine, news_client, settings.news_window_days)
                 log.info(
@@ -74,10 +79,12 @@ def main() -> None:
                 portfolio_id, trace = unexplained
                 outcome, error = "reexplained", None
                 log.info("reexplain", portfolio_id=portfolio_id)
-            if portfolio_id is not None:
+            if portfolio_id is not None and evaluating:
+                submitter.save_trace(portfolio_id, trace)
+            elif portfolio_id is not None:
                 try:
                     if unexplained is None:
-                        save_trace(engine, portfolio_id, trace)
+                        submitter.save_trace(portfolio_id, trace)
                     explainer = ChatOpenRouter(
                         model=settings.llm_model,
                         api_key=settings.llm_api_key,

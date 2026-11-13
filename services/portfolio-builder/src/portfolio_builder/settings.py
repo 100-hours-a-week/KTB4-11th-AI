@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     backend_base_uri: str = ""
     backend_jwt_secret: SecretStr | None = Field(default=None, min_length=32)
     backend_jwt_issuer: str = ""
+    submitter: Literal["database", "evaluation"] = "database"
+    evaluation_output_dir: str | None = None
 
     @field_validator("backend_jwt_secret", mode="before")
     @classmethod
@@ -48,6 +50,14 @@ class Settings(BaseSettings):
                 )
         return self
 
+    @model_validator(mode="after")
+    def evaluation_submitter_configuration(self) -> Self:
+        if (self.submitter == "evaluation") != (self.evaluation_output_dir is not None):
+            raise ValueError("evaluation_output_dir is set exactly when submitter is evaluation")
+        if self.submitter == "evaluation" and self.competition_enabled:
+            raise ValueError("competition mode writes participant portfolios to the database")
+        return self
+
 
 class CompetitionSettings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -57,12 +67,41 @@ class CompetitionSettings(BaseSettings):
     queue_url: str = Field(min_length=1)
     visibility_timeout: int = Field(default=300, gt=0, le=43200)
     aws_region: str = "ap-northeast-2"
-    jev_api_key: SecretStr | None = Field(default=None, min_length=1)
-    jev_base_uri: str = "https://openrouter.ai/api/v1"
-    jev_model: str = "typesafe/jev-1.14"
-    jev_timeout: int = Field(default=20, gt=0)
-    jev_noul_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+    jev_api_key: SecretStr = Field(min_length=1)
+    jev_base_uri: str = Field(min_length=1)
+    jev_model: str = Field(min_length=1)
+    jev_timeout: int = Field(gt=0)
+    jev_noul_threshold: float = Field(ge=0.0, le=1.0)
     jev_choice_min_confidence: float = Field(ge=0.0, le=1.0)
+
+    @field_validator("jev_api_key")
+    @classmethod
+    def validate_jev_api_key(cls, value: SecretStr) -> SecretStr:
+        key = value.get_secret_value()
+        if not key or any(ord(character) < 33 or ord(character) > 126 for character in key):
+            raise ValueError("Jev API key must contain only visible ASCII characters")
+        return value
+
+    @field_validator("jev_base_uri")
+    @classmethod
+    def validate_jev_base_uri(cls, value: str) -> str:
+        try:
+            parsed = urlsplit(value)
+            valid = (
+                parsed.scheme == "https"
+                and bool(parsed.hostname)
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.port != 0
+                and "?" not in value
+                and "#" not in value
+                and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in value)
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("Jev base URI must be HTTPS without userinfo, query or fragment")
+        return value
 
     @field_validator("queue_url")
     @classmethod

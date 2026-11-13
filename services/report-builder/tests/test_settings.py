@@ -9,7 +9,7 @@ REQUIRED = {
     "REPORT_BUILDER_BACKEND_BASE_URI": "http://backend:8080",
     "REPORT_BUILDER_BACKEND_JWT_SECRET": "x" * 32,
     "REPORT_BUILDER_BACKEND_JWT_ISSUER": "stockspoon-ai",
-    "REPORT_BUILDER_SQS_QUEUE_URL": "https://sqs.example/queue",
+    "REPORT_BUILDER_QUEUE_URL": "https://sqs.example/queue",
 }
 
 
@@ -27,6 +27,7 @@ def test_settings_defaults(monkeypatch):
     assert settings.llm_timeout == 240
     assert settings.backend_timeout == 10
     assert settings.log_level == "INFO"
+    assert settings.queue_url == "https://sqs.example/queue"
 
 
 @pytest.mark.parametrize("missing", sorted(REQUIRED))

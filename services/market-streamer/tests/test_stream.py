@@ -211,6 +211,20 @@ def test_parse_orderbook_rejects_negative_quantities():
         parse_orderbook(entry, TODAY)
 
 
+def test_publish_orderbooks_keeps_last_valid_snapshot_over_empty_one(valkey_url):
+    empty = {**ORDERBOOK, "values": {**ORDERBOOK["values"], **{str(i): "0" for i in range(41, 81)}}}
+
+    async def scenario():
+        valkey = Redis.from_url(valkey_url, decode_responses=True)
+        await publish_orderbooks(valkey, [parse_orderbook(ORDERBOOK, TODAY)])
+        await publish_orderbooks(valkey, [parse_orderbook(empty, TODAY)])
+        stored = await valkey.get("orderbook:005930")
+        await valkey.aclose()
+        return stored
+
+    assert json.loads(asyncio.run(scenario())) == asdict(parse_orderbook(ORDERBOOK, TODAY))
+
+
 @pytest.mark.parametrize("entry", [ORDERBOOK, SPARSE_CAPTURE])
 def test_publish_orderbooks_sets_and_publishes_identical_payload(valkey_url, entry):
     async def scenario():

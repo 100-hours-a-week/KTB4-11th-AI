@@ -34,3 +34,53 @@ def find_cluster_articles(
     if before is not None:
         query = query.where(sa.tuple_(articles.c.published_at, articles.c.id) < sa.tuple_(*before))
     return [Article(**row._mapping) for row in conn.execute(query)]
+
+
+@dataclass(frozen=True)
+class PublishedArticle:
+    id: int
+    title: str
+    body: str
+    url: str
+    source: str
+    published_at: datetime
+
+
+def find_published_articles(
+    conn: sa.Connection,
+    since: datetime,
+    until: datetime,
+    *,
+    fetched_by_until: bool,
+    query: str | None,
+    limit: int,
+    before: tuple[datetime, int] | None,
+) -> list[PublishedArticle]:
+    statement = (
+        sa.select(
+            articles.c.id,
+            articles.c.title,
+            articles.c.body,
+            articles.c.url,
+            articles.c.source,
+            articles.c.published_at,
+        )
+        .where(articles.c.published_at > since, articles.c.published_at <= until)
+        .order_by(articles.c.published_at.desc(), articles.c.id.desc())
+        .limit(limit)
+    )
+    if fetched_by_until:
+        statement = statement.where(articles.c.fetched_at <= until)
+    if query:
+        pattern = "%" + query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        statement = statement.where(
+            sa.or_(
+                articles.c.title.ilike(pattern, escape="\\"),
+                articles.c.body.ilike(pattern, escape="\\"),
+            )
+        )
+    if before is not None:
+        statement = statement.where(
+            sa.tuple_(articles.c.published_at, articles.c.id) < sa.tuple_(*before)
+        )
+    return [PublishedArticle(**row._mapping) for row in conn.execute(statement)]

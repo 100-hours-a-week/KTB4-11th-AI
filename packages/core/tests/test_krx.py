@@ -8,6 +8,7 @@ from ktb_core.krx import (
     MARKET_CLOSE,
     MARKET_OPEN,
     is_trading_day,
+    last_closed_date,
 )
 
 
@@ -35,3 +36,17 @@ def test_regular_session_is_0900_to_1530_seoul_time():
     opening = datetime(2026, 10, 13, 0, 0, tzinfo=UTC).astimezone(KST)
     assert opening.time() == MARKET_OPEN
     assert opening.isoformat() == "2026-10-13T09:00:00+09:00"
+
+
+@pytest.mark.parametrize(
+    ("as_of", "expected"),
+    [
+        (datetime(2026, 7, 6, 15, 29, tzinfo=KST), date(2026, 7, 5)),
+        (datetime(2026, 7, 6, 15, 30, tzinfo=KST), date(2026, 7, 6)),
+        (datetime(2026, 7, 6, 8, 0, tzinfo=KST), date(2026, 7, 5)),
+        (datetime(2026, 7, 6, 6, 30, tzinfo=UTC), date(2026, 7, 6)),
+        (datetime(2026, 7, 6, 16, 0, tzinfo=UTC), date(2026, 7, 6)),
+    ],
+)
+def test_last_closed_date_uses_the_kst_close(as_of, expected):
+    assert last_closed_date(as_of) == expected

@@ -113,3 +113,47 @@ def test_scheduled_participants_require_backend_lookup_configuration(monkeypatch
     _populate(monkeypatch, PORTFOLIO_BUILDER_COMPETITION_ENABLED="true")
     with pytest.raises(ValidationError, match="backend"):
         Settings()
+
+
+def test_submitter_defaults_to_the_database(monkeypatch):
+    _populate(monkeypatch)
+
+    settings = Settings()
+
+    assert settings.submitter == "database"
+    assert settings.evaluation_output_dir is None
+
+
+def test_evaluation_submitter_needs_an_output_dir(monkeypatch):
+    _populate(monkeypatch, PORTFOLIO_BUILDER_SUBMITTER="evaluation")
+    with pytest.raises(ValidationError):
+        Settings()
+
+    monkeypatch.setenv("PORTFOLIO_BUILDER_EVALUATION_OUTPUT_DIR", "/evaluation")
+    assert Settings().evaluation_output_dir == "/evaluation"
+
+    monkeypatch.setenv("PORTFOLIO_BUILDER_SUBMITTER", "database")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_rejects_an_unknown_submitter(monkeypatch):
+    _populate(monkeypatch, PORTFOLIO_BUILDER_SUBMITTER="queue")
+
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_evaluation_submitter_refuses_competition_mode(monkeypatch):
+    _populate(
+        monkeypatch,
+        PORTFOLIO_BUILDER_SUBMITTER="evaluation",
+        PORTFOLIO_BUILDER_EVALUATION_OUTPUT_DIR="/evaluation",
+        PORTFOLIO_BUILDER_COMPETITION_ENABLED="true",
+        PORTFOLIO_BUILDER_BACKEND_BASE_URI="http://backend",
+        PORTFOLIO_BUILDER_BACKEND_JWT_SECRET="s" * 32,
+        PORTFOLIO_BUILDER_BACKEND_JWT_ISSUER="issuer",
+    )
+
+    with pytest.raises(ValidationError, match="competition mode"):
+        Settings()

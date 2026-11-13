@@ -1,4 +1,5 @@
 import functools
+import os
 import time
 
 import boto3
@@ -7,6 +8,7 @@ from botocore.config import Config
 from ktb_aws.sqs import SqsQueue
 from ktb_core.logging import get_logger, setup_logging
 from langchain_openrouter import ChatOpenRouter
+from pydantic import ValidationError
 
 from portfolio_builder.backend import process_message
 from portfolio_builder.builder import generate_missing_portfolios
@@ -17,11 +19,28 @@ logger = get_logger(__name__)
 
 
 def main() -> None:
-    settings = Settings()
-    intake = IntakeSettings()
-    if intake.jev_api_key is None:
-        intake.jev_api_key = settings.llm_api_key
-    setup_logging(settings.log_level, service_name="competition-portfolio-builder")
+    setup_logging(
+        os.environ.get("PORTFOLIO_BUILDER_LOG_LEVEL", "INFO"),
+        service_name="competition-portfolio-builder",
+    )
+    try:
+        settings = Settings()
+        intake = IntakeSettings()
+    except ValidationError as error:
+        logger.error(
+            "competition_configuration_invalid",
+            fields=[".".join(map(str, item["loc"])) for item in error.errors()],
+        )
+        raise SystemExit(1) from None
+    setup_logging(
+        settings.log_level,
+        service_name="competition-portfolio-builder",
+        sensitive_values=(
+            intake.jev_api_key.get_secret_value(),
+            settings.llm_api_key.get_secret_value(),
+        ),
+        redact_urls=True,
+    )
     queue = SqsQueue(
         boto3.client(
             "sqs",

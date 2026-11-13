@@ -123,8 +123,6 @@ def _classify(
     log: StructuredLogger,
     resolved: ParticipantSettings,
 ) -> tuple[Any, str | None, bool]:
-    if settings.jev_api_key is None:
-        raise ValueError("Jev credential is required during classification")
     ask = partial(
         canonical.ask,
         settings.jev_base_uri,

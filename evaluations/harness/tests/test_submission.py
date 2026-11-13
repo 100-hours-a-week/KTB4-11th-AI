@@ -1,0 +1,153 @@
+import json
+from datetime import datetime
+
+import pytest
+from fastapi.testclient import TestClient
+from harness.contracts import DecisionContext, DecisionFailed, PortfolioProposal, PortfolioState
+from harness.information import NoInformation
+from harness.production import RecordedPortfolios, proposal_from_production
+from harness.submission import SubmissionDesk, create_submission_app
+from ktb_core.krx import KST
+
+CONTEXT = DecisionContext(
+    datetime(2026, 7, 6, 8, tzinfo=KST),
+    PortfolioState(1_000.0, {"005930": 3}, {}),
+    ("000660", "005930"),
+)
+VALID = {"holdings": [{"code": "005930", "weight": 2}], "cash_weight": 1}
+
+
+@pytest.fixture
+def desk():
+    return SubmissionDesk()
+
+
+@pytest.fixture
+def client(desk):
+    return TestClient(create_submission_app(desk, "http://runner:8100"))
+
+
+def post(client, body, decision_id="d1"):
+    return client.post("/portfolio", json=body, headers={"X-Decision-Id": decision_id})
+
+
+def test_portfolio_shows_the_account_without_prices(desk, client):
+    desk.open("d1", CONTEXT)
+    body = client.get("/portfolio", headers={"X-Decision-Id": "d1"}).json()
+    assert body == {
+        "as_of": "2026-07-06T08:00:00+09:00",
+        "universe": ["000660", "005930"],
+        "cash": 1000.0,
+        "holdings": {"005930": 3},
+        "pending_order_values": {},
+    }
+
+
+def test_one_submission_is_accepted_and_duplicates_are_refused(desk, client):
+    desk.open("d1", CONTEXT)
+    assert post(client, VALID).status_code == 200
+    duplicate = post(client, {**VALID, "cash_weight": 0})
+    assert duplicate.status_code == 409
+    assert duplicate.json()["status"] == "duplicate"
+    window = desk.close()
+    assert window.accepted == PortfolioProposal({"005930": 2.0}, 1.0)
+    assert [a.status for a in window.attempts] == ["accepted", "duplicate"]
+
+
+def test_invalid_submissions_report_every_error_and_allow_a_fix(desk, client):
+    desk.open("d1", CONTEXT)
+    bad = {
+        "holdings": [
+            {"code": "999999", "weight": 1},
+            {"code": "005930", "weight": -1},
+            {"code": "005930", "weight": 1},
+        ],
+        "cash_weight": 0,
+    }
+    response = post(client, bad)
+    assert response.status_code == 422
+    errors = response.json()["errors"]
+    assert "005930: appears more than once" in errors
+    assert "999999: not in the universe" in errors
+    assert post(client, {"holdings": "x"}).status_code == 422
+    assert (
+        client.post("/portfolio", content=b"{", headers={"X-Decision-Id": "d1"}).status_code == 422
+    )
+    assert post(client, VALID).status_code == 200
+    assert [a.status for a in desk.close().attempts] == [
+        "invalid",
+        "invalid",
+        "invalid",
+        "accepted",
+    ]
+
+
+def test_stale_or_missing_decision_ids_are_refused(desk, client):
+    assert post(client, VALID).status_code == 409
+    desk.open("d1", CONTEXT)
+    assert post(client, VALID, "old").status_code == 409
+    assert client.post("/portfolio", json=VALID).status_code == 409
+    assert client.get("/portfolio", headers={"X-Decision-Id": "old"}).status_code == 409
+    assert desk.close().attempts == []
+
+
+def test_only_one_window_is_open(desk):
+    desk.open("d1", CONTEXT)
+    with pytest.raises(RuntimeError):
+        desk.open("d2", CONTEXT)
+    desk.close()
+    with pytest.raises(RuntimeError):
+        desk.close()
+
+
+def test_openapi_describes_the_desk_tools_and_server(client):
+    spec = client.get("/openapi.json").json()
+    assert spec["servers"] == [{"url": "http://runner:8100"}]
+    operations = {op["operationId"]: op for path in spec["paths"].values() for op in path.values()}
+    assert set(operations) == {"get_portfolio", "submit_portfolio"}
+    body = operations["submit_portfolio"]["requestBody"]["content"]["application/json"]["schema"]
+    assert body["required"] == ["holdings", "cash_weight"]
+    assert set(body["properties"]["holdings"]["items"]["properties"]) == {
+        "code",
+        "weight",
+        "reason",
+    }
+    assert all("parameters" not in op for op in operations.values())
+
+
+def test_production_submissions_map_to_stock_codes():
+    submission = {
+        "holdings": [{"company_id": "00126380", "weight": 0.6, "cited_cluster_ids": [1]}],
+        "exits": [{"company_id": "00164779", "reason": "r", "cited_cluster_ids": []}],
+        "cash_weight": 0.4,
+        "commentary": "c",
+    }
+    codes = {"00126380": "005930", "00164779": "000660"}
+    assert proposal_from_production(submission, codes) == PortfolioProposal({"005930": 0.6}, 0.4)
+    with pytest.raises(DecisionFailed) as failed:
+        proposal_from_production(submission, {})
+    assert failed.value.kind == "invalid_submission"
+
+
+def test_recorded_portfolios_replay_production_decisions(tmp_path):
+    portfolios = [
+        {
+            "id": 3,
+            "created_at": "2026-10-02T07:05:40+00:00",
+            "model": "openrouter/m",
+            "cash_weight": 0.2,
+            "holdings": [{"company_id": "00126380", "stock_code": "005930", "weight": 0.8}],
+        }
+    ]
+    path = tmp_path / "portfolios.json"
+    path.write_text(json.dumps(portfolios))
+    system = RecordedPortfolios(path)
+    state = PortfolioState(1.0, {}, {})
+    audit: dict[str, object] = {}
+    decided = datetime(2026, 10, 2, 16, 5, 40, tzinfo=KST)
+    proposal = system.decide(DecisionContext(decided, state, ("005930",)), NoInformation(), audit)
+    assert proposal == PortfolioProposal({"005930": 0.8}, 0.2)
+    assert audit == {"portfolio_id": 3, "model": "openrouter/m"}
+    with pytest.raises(DecisionFailed) as failed:
+        system.decide(DecisionContext(decided.replace(hour=17), state, ()), NoInformation(), {})
+    assert failed.value.kind == "no_submission"

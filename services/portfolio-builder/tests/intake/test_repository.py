@@ -1,3 +1,4 @@
+import pytest
 import sqlalchemy as sa
 from portfolio_builder.backend import store_settings
 from portfolio_builder.competition.canonical import classify_additional_request
@@ -6,7 +7,7 @@ MODEL = "openrouter/m"
 
 
 class _NullLog:
-    def error(self, event, **fields):
+    def exception(self, event, **fields):
         pass
 
 
@@ -143,7 +144,7 @@ def test_a_redelivered_first_message_cannot_classify_twice(engine, _request):
     assert settings_b.classified
 
 
-def test_a_classification_failure_stores_the_raw_text_and_leaves_it_unclassified(engine, _request):
+def test_a_classification_failure_rolls_back_the_settings(engine, _request):
     def raising_ask(state, questions):
         raise RuntimeError("jev is down")
 
@@ -159,11 +160,13 @@ def test_a_classification_failure_stores_the_raw_text_and_leaves_it_unclassified
             _NullLog(),
         )
 
-    settings, _ = store_settings(engine, _request(additional_request="원문"), classify)
+    with pytest.raises(RuntimeError, match="jev is down"):
+        store_settings(engine, _request(additional_request="원문"), classify)
 
-    assert settings.canonical_form == "원문"
-    assert settings.canonical_version is None
-    assert not settings.classified
+    with engine.connect() as conn:
+        assert (
+            conn.execute(sa.text("SELECT count(*) FROM competition_participants")).scalar_one() == 0
+        )
 
 
 def test_a_theme_code_in_both_lists_ends_up_excluded_only(engine, _request):
