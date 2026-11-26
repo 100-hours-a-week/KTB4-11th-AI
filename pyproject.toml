@@ -1,3 +1,6 @@
+[tool.uv]
+constraint-dependencies = ["soupsieve>=4.0.0"]
+
 [tool.uv.workspace]
 members = ["packages/*", "services/*", "evaluations/harness"]
 
